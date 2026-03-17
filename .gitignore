@@ -1,0 +1,33 @@
+# Generated outputs
+*.mp4
+*.wav
+*.ts
+*.mp3
+*.flac
+
+# Model files
+*.safetensors
+*.bin
+*.gguf
+*.pt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.tmp
+*.log
+
+# Environment
+.env
