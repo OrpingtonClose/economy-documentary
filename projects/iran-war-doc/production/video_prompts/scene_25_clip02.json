@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_25_clip02",
+  "scene_number": 25,
+  "scene_title": "CHINA'S BUFFER",
+  "clip_index": 2,
+  "start_sec_in_scene": 50,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "South Korea highlighted in warning orange. dramatic cinematic lighting, high contrast shadows. Global map rotation; close on regional color changes; agricultural field wide handheld; back to map. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+  "visual_action_raw": "South Korea highlighted in warning orange",
+  "narration_trigger": "\"South Korea had nine days of LNG\"",
+  "world": "neutral",
+  "color_palette": [
+    "#0A1020",
+    "#E8D090",
+    "#1840A0",
+    "#D09030"
+  ],
+  "transition_to_next": "cut"
+}

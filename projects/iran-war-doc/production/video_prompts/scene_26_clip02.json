@@ -1,0 +1,19 @@
+{
+  "clip_id": "scene_26_clip02",
+  "scene_number": 26,
+  "scene_title": "THE LEDGER CLOSES",
+  "clip_index": 2,
+  "start_sec_in_scene": 22,
+  "target_duration_sec": 10,
+  "ltx_clips_needed": 2,
+  "prompt": "Quick cut: tanker ETF chart climbing. dramatic cinematic lighting, high contrast shadows. High aerial on Strait; rapid associative cuts (each 5\u20138 seconds); return to aerial; gentle cuts to street; final pull back. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+  "visual_action_raw": "Quick cut: tanker ETF chart climbing",
+  "narration_trigger": "\"ninety-eight percent... the pre-positioning of a war\"",
+  "world": "neutral",
+  "color_palette": [
+    "#8090A0",
+    "#D08030",
+    "#1A2A4A"
+  ],
+  "transition_to_next": "cut"
+}

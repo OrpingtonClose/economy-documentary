@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_20_clip01",
+  "scene_number": 20,
+  "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+  "clip_index": 1,
+  "start_sec_in_scene": 20,
+  "target_duration_sec": 30,
+  "ltx_clips_needed": 6,
+  "prompt": "Camera along back wall; members from behind; tablets visible on table. dramatic cinematic lighting, high contrast shadows. Tracking along the back wall of hearing room; cut to brokerage screen; cut to town hall. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+  "visual_action_raw": "Camera along back wall; members from behind; tablets visible on table",
+  "narration_trigger": "\"vote on defense budgets, contractor authorizations, war resolutions\"",
+  "world": "neutral",
+  "color_palette": [
+    "#ECEEFC",
+    "#F0ECD8",
+    "#4A5068",
+    "#0A1020"
+  ],
+  "transition_to_next": "cut"
+}

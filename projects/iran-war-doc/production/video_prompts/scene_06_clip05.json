@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_06_clip05",
+  "scene_number": 6,
+  "scene_title": "THE TANKER TRADE",
+  "clip_index": 5,
+  "start_sec_in_scene": 105,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Back to supertanker aerial; camera slowly cranes down toward the hull. dramatic cinematic lighting, high contrast shadows. Aerial overhead held on tanker; locked office shot; map visual abstract; aerial crane down to tanker hull. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+  "visual_action_raw": "Back to supertanker aerial; camera slowly cranes down toward the hull",
+  "narration_trigger": "\"The money moved first. The missiles followed.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#6080A0",
+    "#8A4020",
+    "#3060A0",
+    "#E8C060"
+  ],
+  "transition_to_next": "Camera reaches hull level; hard cut to Scene 7 (congressional holdings)"
+}

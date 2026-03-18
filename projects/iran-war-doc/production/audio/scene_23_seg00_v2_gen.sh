@@ -1,0 +1,23 @@
+#!/bin/bash
+
+python3 -c "
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import soundfile as sf
+
+model_path = '/workspace/models/Qwen3-TTS'
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map='auto', trust_remote_code=True)
+
+text = '''The Strait of Hormuz is twenty-one miles wide at its narrowest navigable point. It is a piece of geography that has determined energy geopolitics for fifty years. Through that twenty-one miles flows, in normal times, approximately twenty percent of the world\'s daily oil supply and one-fifth of global liquefied natural gas. Qatar\'s LNG, which European utilities depend on to fill storage before winter, exits through the Strait. Saudi Aramco\'s exports exit through the Strait. The UAE\'s production exits through the Strait. In normal times, the risk premium for transiting the Strait — the additional insurance cost above the baseline — is a fraction of a percentage point of a vessel\'s hull value. By mid-March 2026, according to the Insurance Journal\'s reporting of March seventeenth, maritime insurance premiums for Strait transit had surged more than one thousand percent. The risk premium had become five percent of hull value. Transit cost for a single VLCC supertanker: four million dollars per crossing. The Strait of Hormuz had become the most expensive waterway on earth by a margin that was not close.'''
+speaker = 'male_narrator_02'
+
+# Generate speech
+inputs = tokenizer(f'<|speaker|>{speaker}<|text|>{text}<|endoftext|>', return_tensors='pt').to(model.device)
+with torch.no_grad():
+    outputs = model.generate(**inputs, max_new_tokens=4096)
+audio = outputs  # Decode to audio tensor
+
+sf.write('/home/user/workspace/iran-war-doc/production/audio/scene_23_seg00_v2.wav', audio.cpu().numpy(), 24000)
+print(f'Generated: /home/user/workspace/iran-war-doc/production/audio/scene_23_seg00_v2.wav')
+"

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_03_clip00",
+  "scene_number": 3,
+  "scene_title": "THE HUMAN SCALE",
+  "clip_index": 0,
+  "start_sec_in_scene": 0,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Woman at pump; camera at nozzle level looking up at her face. warm amber light fading to harsh fluorescent, lived-in textures, human scale. Street-level at pump, handheld slight drift; aerial on storage tanks; locked wide for server room; back to street handheld. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+  "visual_action_raw": "Woman at pump; camera at nozzle level looking up at her face",
+  "narration_trigger": "\"Gas prices began their next climb\"",
+  "world": "street",
+  "color_palette": [
+    "#F0E8C0",
+    "#F8F0D8",
+    "#40A878",
+    "#1A2A1A"
+  ],
+  "transition_to_next": "cut"
+}

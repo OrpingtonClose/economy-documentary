@@ -1,0 +1,1947 @@
+{
+  "narration": {
+    "scene_01_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 91,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg00_v1.wav"
+    },
+    "scene_01_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 63,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg01_v1.wav"
+    },
+    "scene_01_seg02_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 111,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg02_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg02_v3.wav"
+    },
+    "scene_01_seg03_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg03_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg03_v1.wav"
+    },
+    "scene_01_seg04_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 86,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg04_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_01_seg04_v2.wav"
+    },
+    "scene_02_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 116,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg00_v2.wav"
+    },
+    "scene_02_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 109,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg01_v1.wav"
+    },
+    "scene_02_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 90,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg02_v2.wav"
+    },
+    "scene_02_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 95,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_02_seg03_v3.wav"
+    },
+    "scene_03_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 131,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg00_v1.wav"
+    },
+    "scene_03_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 64,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg01_v1.wav"
+    },
+    "scene_03_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 108,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg02_v2.wav"
+    },
+    "scene_03_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 56,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg03_v3.wav"
+    },
+    "scene_03_seg04_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 29,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg04_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_03_seg04_v1.wav"
+    },
+    "scene_04_seg00_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 88,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg00_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg00_v3.wav"
+    },
+    "scene_04_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 84,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg01_v2.wav"
+    },
+    "scene_04_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 84,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg02_v2.wav"
+    },
+    "scene_04_seg03_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 88,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg03_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg03_v1.wav"
+    },
+    "scene_04_seg04_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 49,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg04_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_04_seg04_v3.wav"
+    },
+    "scene_05_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 137,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg00_v2.wav"
+    },
+    "scene_05_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 104,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg01_v2.wav"
+    },
+    "scene_05_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 96,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg02_v1.wav"
+    },
+    "scene_05_seg03_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 83,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg03_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_05_seg03_v2.wav"
+    },
+    "scene_06_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 111,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg00_v1.wav"
+    },
+    "scene_06_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 134,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg01_v2.wav"
+    },
+    "scene_06_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 73,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg02_v1.wav"
+    },
+    "scene_06_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 89,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_06_seg03_v3.wav"
+    },
+    "scene_07_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 136,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg00_v1.wav"
+    },
+    "scene_07_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 103,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg01_v1.wav"
+    },
+    "scene_07_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 96,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg02_v2.wav"
+    },
+    "scene_07_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 88,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_07_seg03_v3.wav"
+    },
+    "scene_08_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 81,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg00_v1.wav"
+    },
+    "scene_08_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 135,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg01_v2.wav"
+    },
+    "scene_08_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 92,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg02_v2.wav"
+    },
+    "scene_08_seg03_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 97,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg03_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_08_seg03_v1.wav"
+    },
+    "scene_09_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 105,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg00_v2.wav"
+    },
+    "scene_09_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 116,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg01_v1.wav"
+    },
+    "scene_09_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 114,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg02_v2.wav"
+    },
+    "scene_09_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 65,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_09_seg03_v3.wav"
+    },
+    "scene_10_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 110,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg00_v1.wav"
+    },
+    "scene_10_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 100,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg01_v2.wav"
+    },
+    "scene_10_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 68,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg02_v2.wav"
+    },
+    "scene_10_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 123,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_10_seg03_v3.wav"
+    },
+    "scene_11_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 96,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg00_v2.wav"
+    },
+    "scene_11_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 57,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg01_v2.wav"
+    },
+    "scene_11_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 96,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg02_v1.wav"
+    },
+    "scene_11_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 66,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_11_seg03_v3.wav"
+    },
+    "scene_12_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 125,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg00_v1.wav"
+    },
+    "scene_12_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 115,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg01_v1.wav"
+    },
+    "scene_12_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 110,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg02_v2.wav"
+    },
+    "scene_12_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 76,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_12_seg03_v3.wav"
+    },
+    "scene_13_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 96,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg00_v2.wav"
+    },
+    "scene_13_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 113,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg01_v2.wav"
+    },
+    "scene_13_seg02_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 87,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg02_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg02_v3.wav"
+    },
+    "scene_13_seg03_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 71,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg03_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_13_seg03_v1.wav"
+    },
+    "scene_14_seg00_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 94,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg00_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg00_v3.wav"
+    },
+    "scene_14_seg01_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 78,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg01_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg01_v3.wav"
+    },
+    "scene_14_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 105,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg02_v1.wav"
+    },
+    "scene_14_seg03_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 18,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg03_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_14_seg03_v1.wav"
+    },
+    "scene_15_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 167,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg00_v1.wav"
+    },
+    "scene_15_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 99,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg01_v2.wav"
+    },
+    "scene_15_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 74,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_15_seg02_v1.wav"
+    },
+    "scene_16_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 130,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg00_v2.wav"
+    },
+    "scene_16_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 97,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg01_v1.wav"
+    },
+    "scene_16_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 81,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg02_v2.wav"
+    },
+    "scene_16_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 83,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_16_seg03_v3.wav"
+    },
+    "scene_17_seg00_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 110,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg00_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg00_v3.wav"
+    },
+    "scene_17_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 140,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg01_v1.wav"
+    },
+    "scene_17_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 63,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg02_v2.wav"
+    },
+    "scene_17_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 76,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_17_seg03_v3.wav"
+    },
+    "scene_18_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 107,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg00_v1.wav"
+    },
+    "scene_18_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 106,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg01_v2.wav"
+    },
+    "scene_18_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 104,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg02_v1.wav"
+    },
+    "scene_18_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 109,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_18_seg03_v3.wav"
+    },
+    "scene_19_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 115,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg00_v2.wav"
+    },
+    "scene_19_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 141,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg01_v1.wav"
+    },
+    "scene_19_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 119,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg02_v2.wav"
+    },
+    "scene_19_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 71,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_19_seg03_v3.wav"
+    },
+    "scene_20_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 86,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg00_v1.wav"
+    },
+    "scene_20_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 109,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg01_v2.wav"
+    },
+    "scene_20_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 105,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg02_v1.wav"
+    },
+    "scene_20_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 94,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_20_seg03_v3.wav"
+    },
+    "scene_21_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 134,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg00_v2.wav"
+    },
+    "scene_21_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 115,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg01_v2.wav"
+    },
+    "scene_21_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 86,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg02_v1.wav"
+    },
+    "scene_21_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 94,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_21_seg03_v3.wav"
+    },
+    "scene_22_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 130,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg00_v1.wav"
+    },
+    "scene_22_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 97,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg01_v2.wav"
+    },
+    "scene_22_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 106,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg02_v1.wav"
+    },
+    "scene_22_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 83,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_22_seg03_v3.wav"
+    },
+    "scene_23_seg00_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 178,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg00_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg00_v2.wav"
+    },
+    "scene_23_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 99,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg01_v1.wav"
+    },
+    "scene_23_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 112,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg02_v2.wav"
+    },
+    "scene_23_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 88,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_23_seg03_v3.wav"
+    },
+    "scene_24_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 104,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg00_v1.wav"
+    },
+    "scene_24_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 92,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg01_v2.wav"
+    },
+    "scene_24_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 111,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg02_v1.wav"
+    },
+    "scene_24_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 76,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_24_seg03_v3.wav"
+    },
+    "scene_25_seg00_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 116,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg00_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg00_v3.wav"
+    },
+    "scene_25_seg01_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 113,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg01_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg01_v2.wav"
+    },
+    "scene_25_seg02_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 110,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg02_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg02_v1.wav"
+    },
+    "scene_25_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 81,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_25_seg03_v3.wav"
+    },
+    "scene_26_seg00_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 6,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg00_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg00_v1.wav"
+    },
+    "scene_26_seg01_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 140,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg01_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg01_v1.wav"
+    },
+    "scene_26_seg02_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 113,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg02_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg02_v2.wav"
+    },
+    "scene_26_seg03_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 3,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg03_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg03_v3.wav"
+    },
+    "scene_26_seg04_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 140,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg04_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg04_v1.wav"
+    },
+    "scene_26_seg05_v3": {
+      "status": "pending",
+      "voice": "V3",
+      "words": 121,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg05_v3_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg05_v3.wav"
+    },
+    "scene_26_seg06_v2": {
+      "status": "pending",
+      "voice": "V2",
+      "words": 79,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg06_v2_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg06_v2.wav"
+    },
+    "scene_26_seg07_v1": {
+      "status": "pending",
+      "voice": "V1",
+      "words": 4,
+      "script": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg07_v1_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/audio/scene_26_seg07_v1.wav"
+    }
+  },
+  "video": {
+    "scene_01_clip00": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 8,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip00.mp4"
+    },
+    "scene_01_clip01": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 12,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip01.mp4"
+    },
+    "scene_01_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip02.mp4"
+    },
+    "scene_01_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip03.mp4"
+    },
+    "scene_01_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip04.mp4"
+    },
+    "scene_01_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_01_clip05.mp4"
+    },
+    "scene_02_clip00": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip00.mp4"
+    },
+    "scene_02_clip01": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip01.mp4"
+    },
+    "scene_02_clip02": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip02.mp4"
+    },
+    "scene_02_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip03.mp4"
+    },
+    "scene_02_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip04.mp4"
+    },
+    "scene_02_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip05.mp4"
+    },
+    "scene_02_clip06": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_02_clip06.mp4"
+    },
+    "scene_03_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip00.mp4"
+    },
+    "scene_03_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip01.mp4"
+    },
+    "scene_03_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip02.mp4"
+    },
+    "scene_03_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip03.mp4"
+    },
+    "scene_03_clip04": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip04.mp4"
+    },
+    "scene_03_clip05": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_03_clip05.mp4"
+    },
+    "scene_04_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip00.mp4"
+    },
+    "scene_04_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip01.mp4"
+    },
+    "scene_04_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip02.mp4"
+    },
+    "scene_04_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip03.mp4"
+    },
+    "scene_04_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip04.mp4"
+    },
+    "scene_04_clip05": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_04_clip05.mp4"
+    },
+    "scene_05_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 22,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip00.mp4"
+    },
+    "scene_05_clip01": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 28,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip01.mp4"
+    },
+    "scene_05_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip02.mp4"
+    },
+    "scene_05_clip03": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip03.mp4"
+    },
+    "scene_05_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip04.mp4"
+    },
+    "scene_05_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip05.mp4"
+    },
+    "scene_05_clip06": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_05_clip06.mp4"
+    },
+    "scene_06_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip00.mp4"
+    },
+    "scene_06_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip01.mp4"
+    },
+    "scene_06_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip02.mp4"
+    },
+    "scene_06_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip03.mp4"
+    },
+    "scene_06_clip04": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip04.mp4"
+    },
+    "scene_06_clip05": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_06_clip05.mp4"
+    },
+    "scene_07_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip00.mp4"
+    },
+    "scene_07_clip01": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip01.mp4"
+    },
+    "scene_07_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip02.mp4"
+    },
+    "scene_07_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip03.mp4"
+    },
+    "scene_07_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip04.mp4"
+    },
+    "scene_07_clip05": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_07_clip05.mp4"
+    },
+    "scene_08_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip00.mp4"
+    },
+    "scene_08_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip01.mp4"
+    },
+    "scene_08_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip02.mp4"
+    },
+    "scene_08_clip03": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip03.mp4"
+    },
+    "scene_08_clip04": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip04.mp4"
+    },
+    "scene_08_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip05.mp4"
+    },
+    "scene_08_clip06": {
+      "status": "pending",
+      "ltx_count": 7,
+      "target_dur": 35,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_08_clip06.mp4"
+    },
+    "scene_09_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 22,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip00.mp4"
+    },
+    "scene_09_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 23,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip01.mp4"
+    },
+    "scene_09_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip02.mp4"
+    },
+    "scene_09_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip03.mp4"
+    },
+    "scene_09_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip04.mp4"
+    },
+    "scene_09_clip05": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip05.mp4"
+    },
+    "scene_09_clip06": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_09_clip06.mp4"
+    },
+    "scene_10_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip00.mp4"
+    },
+    "scene_10_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip01.mp4"
+    },
+    "scene_10_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 13,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip02.mp4"
+    },
+    "scene_10_clip03": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip03.mp4"
+    },
+    "scene_10_clip04": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 22,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip04.mp4"
+    },
+    "scene_10_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip05.mp4"
+    },
+    "scene_10_clip06": {
+      "status": "pending",
+      "ltx_count": 1,
+      "target_dur": 5,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_10_clip06.mp4"
+    },
+    "scene_11_clip00": {
+      "status": "pending",
+      "ltx_count": 7,
+      "target_dur": 35,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip00.mp4"
+    },
+    "scene_11_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip01.mp4"
+    },
+    "scene_11_clip02": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip02.mp4"
+    },
+    "scene_11_clip03": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip03.mp4"
+    },
+    "scene_11_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip04.mp4"
+    },
+    "scene_11_clip05": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_11_clip05.mp4"
+    },
+    "scene_12_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip00.mp4"
+    },
+    "scene_12_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip01.mp4"
+    },
+    "scene_12_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip02.mp4"
+    },
+    "scene_12_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip03.mp4"
+    },
+    "scene_12_clip04": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip04.mp4"
+    },
+    "scene_12_clip05": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_12_clip05.mp4"
+    },
+    "scene_13_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip00.mp4"
+    },
+    "scene_13_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip01.mp4"
+    },
+    "scene_13_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip02.mp4"
+    },
+    "scene_13_clip03": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip03.mp4"
+    },
+    "scene_13_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip04.mp4"
+    },
+    "scene_13_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_13_clip05.mp4"
+    },
+    "scene_14_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip00.mp4"
+    },
+    "scene_14_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip01.mp4"
+    },
+    "scene_14_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip02.mp4"
+    },
+    "scene_14_clip03": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip03.mp4"
+    },
+    "scene_14_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_14_clip04.mp4"
+    },
+    "scene_15_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip00.mp4"
+    },
+    "scene_15_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip01.mp4"
+    },
+    "scene_15_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip02.mp4"
+    },
+    "scene_15_clip03": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip03.mp4"
+    },
+    "scene_15_clip04": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip04.mp4"
+    },
+    "scene_15_clip05": {
+      "status": "pending",
+      "ltx_count": 7,
+      "target_dur": 35,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_15_clip05.mp4"
+    },
+    "scene_16_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 18,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip00.mp4"
+    },
+    "scene_16_clip01": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 12,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip01.mp4"
+    },
+    "scene_16_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip02.mp4"
+    },
+    "scene_16_clip03": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip03.mp4"
+    },
+    "scene_16_clip04": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip04.mp4"
+    },
+    "scene_16_clip05": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip05.mp4"
+    },
+    "scene_16_clip06": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_16_clip06.mp4"
+    },
+    "scene_17_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip00.mp4"
+    },
+    "scene_17_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip01.mp4"
+    },
+    "scene_17_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip02.mp4"
+    },
+    "scene_17_clip03": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip03.mp4"
+    },
+    "scene_17_clip04": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_17_clip04.mp4"
+    },
+    "scene_18_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip00.mp4"
+    },
+    "scene_18_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip01.mp4"
+    },
+    "scene_18_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip02.mp4"
+    },
+    "scene_18_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip03.mp4"
+    },
+    "scene_18_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip04.mp4"
+    },
+    "scene_18_clip05": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_18_clip05.mp4"
+    },
+    "scene_19_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip00.mp4"
+    },
+    "scene_19_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip01.mp4"
+    },
+    "scene_19_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip02.mp4"
+    },
+    "scene_19_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip03.mp4"
+    },
+    "scene_19_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip04.mp4"
+    },
+    "scene_19_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_19_clip05.mp4"
+    },
+    "scene_20_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip00.mp4"
+    },
+    "scene_20_clip01": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip01.mp4"
+    },
+    "scene_20_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip02.mp4"
+    },
+    "scene_20_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip03.mp4"
+    },
+    "scene_20_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip04.mp4"
+    },
+    "scene_20_clip05": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_20_clip05.mp4"
+    },
+    "scene_21_clip00": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip00.mp4"
+    },
+    "scene_21_clip01": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip01.mp4"
+    },
+    "scene_21_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip02.mp4"
+    },
+    "scene_21_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip03.mp4"
+    },
+    "scene_21_clip04": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip04.mp4"
+    },
+    "scene_21_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_21_clip05.mp4"
+    },
+    "scene_22_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip00.mp4"
+    },
+    "scene_22_clip01": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip01.mp4"
+    },
+    "scene_22_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip02.mp4"
+    },
+    "scene_22_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip03.mp4"
+    },
+    "scene_22_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip04.mp4"
+    },
+    "scene_22_clip05": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_22_clip05.mp4"
+    },
+    "scene_23_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip00.mp4"
+    },
+    "scene_23_clip01": {
+      "status": "pending",
+      "ltx_count": 6,
+      "target_dur": 30,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip01.mp4"
+    },
+    "scene_23_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip02.mp4"
+    },
+    "scene_23_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip03.mp4"
+    },
+    "scene_23_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip04.mp4"
+    },
+    "scene_23_clip05": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_23_clip05.mp4"
+    },
+    "scene_24_clip00": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip00.mp4"
+    },
+    "scene_24_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip01.mp4"
+    },
+    "scene_24_clip02": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip02.mp4"
+    },
+    "scene_24_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip03.mp4"
+    },
+    "scene_24_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip04.mp4"
+    },
+    "scene_24_clip05": {
+      "status": "pending",
+      "ltx_count": 1,
+      "target_dur": 5,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_24_clip05.mp4"
+    },
+    "scene_25_clip00": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip00.mp4"
+    },
+    "scene_25_clip01": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip01.mp4"
+    },
+    "scene_25_clip02": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip02.mp4"
+    },
+    "scene_25_clip03": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip03.mp4"
+    },
+    "scene_25_clip04": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip04.mp4"
+    },
+    "scene_25_clip05": {
+      "status": "pending",
+      "ltx_count": 1,
+      "target_dur": 5,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_25_clip05.mp4"
+    },
+    "scene_26_clip00": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 12,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip00_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip00.mp4"
+    },
+    "scene_26_clip01": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip01_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip01.mp4"
+    },
+    "scene_26_clip02": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip02_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip02.mp4"
+    },
+    "scene_26_clip03": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 23,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip03_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip03.mp4"
+    },
+    "scene_26_clip04": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip04_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip04.mp4"
+    },
+    "scene_26_clip05": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip05_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip05.mp4"
+    },
+    "scene_26_clip06": {
+      "status": "pending",
+      "ltx_count": 2,
+      "target_dur": 10,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip06_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip06.mp4"
+    },
+    "scene_26_clip07": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip07_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip07.mp4"
+    },
+    "scene_26_clip08": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip08_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip08.mp4"
+    },
+    "scene_26_clip09": {
+      "status": "pending",
+      "ltx_count": 4,
+      "target_dur": 20,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip09_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip09.mp4"
+    },
+    "scene_26_clip10": {
+      "status": "pending",
+      "ltx_count": 5,
+      "target_dur": 25,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip10_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip10.mp4"
+    },
+    "scene_26_clip11": {
+      "status": "pending",
+      "ltx_count": 3,
+      "target_dur": 15,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip11_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip11.mp4"
+    },
+    "scene_26_clip12": {
+      "status": "pending",
+      "ltx_count": 1,
+      "target_dur": 5,
+      "script": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip12_gen.sh",
+      "output": "/home/user/workspace/iran-war-doc/production/clips/scene_26_clip12.mp4"
+    }
+  },
+  "assembly": {},
+  "final": false
+}

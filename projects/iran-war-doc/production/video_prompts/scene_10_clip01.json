@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_10_clip01",
+  "scene_number": 10,
+  "scene_title": "THE PARDON",
+  "clip_index": 1,
+  "start_sec_in_scene": 20,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera moves past closed doors \u2014 the architecture of regulation. dramatic cinematic lighting, high contrast shadows. Slow corridor walk; locked at door with dark room; cut to server room (locked); cut to newspaper (held). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+  "visual_action_raw": "Camera moves past closed doors \u2014 the architecture of regulation",
+  "narration_trigger": "\"pardoned. By the Trump administration.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8ECF4",
+    "#C08040",
+    "#080808",
+    "#30C0D8"
+  ],
+  "transition_to_next": "cut"
+}

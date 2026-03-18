@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_21_clip05",
+  "scene_number": 21,
+  "scene_title": "THE BUYBACK IRONY",
+  "clip_index": 5,
+  "start_sec_in_scene": 115,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Government contract document being signed; thick stack of papers. dramatic cinematic lighting, high contrast shadows. Timeline visualization is wide and analytical; rapid close-up on gap; floor-level moving through factory; locked on signing. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+  "visual_action_raw": "Government contract document being signed; thick stack of papers",
+  "narration_trigger": "\"private profit, public cost\"",
+  "world": "neutral",
+  "color_palette": [
+    "#FEFEFE",
+    "#D8A030",
+    "#9A2010",
+    "#F0ECDC"
+  ],
+  "transition_to_next": "Contract signature; fade to black; Act 7 opens with a weather-report aesthetic"
+}

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_18_clip02",
+  "scene_number": 18,
+  "scene_title": "THE WHITE HOUSE MEETING",
+  "clip_index": 2,
+  "start_sec_in_scene": 45,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Corporate boardroom: figures reviewing presentation; ascending chart shapes. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Telephoto on limousine arrival; wide boardroom interior; close on stock chart. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+  "visual_action_raw": "Corporate boardroom: figures reviewing presentation; ascending chart shapes",
+  "narration_trigger": "\"THAAD: ninety-six to four hundred per year\"",
+  "world": "ledger",
+  "color_palette": [
+    "#D8D4D0",
+    "#F0ECEC",
+    "#E0E0F0",
+    "#0A1420"
+  ],
+  "transition_to_next": "cut"
+}

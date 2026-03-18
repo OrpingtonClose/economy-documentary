@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_13_clip04",
+  "scene_number": 13,
+  "scene_title": "THE FRACTURE",
+  "clip_index": 4,
+  "start_sec_in_scene": 85,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Both screens showing same story in different languages. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Wide overhead on circular table; media monitoring room locked; street-level handheld on couple. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+  "visual_action_raw": "Both screens showing same story in different languages",
+  "narration_trigger": "\"watching the US dismantle it in real time\"",
+  "world": "ledger",
+  "color_palette": [
+    "#E8ECF4",
+    "#2060A0",
+    "#2A2A2A",
+    "#D8D0C0"
+  ],
+  "transition_to_next": "cut"
+}

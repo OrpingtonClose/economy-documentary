@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_05_clip04",
+  "scene_number": 5,
+  "scene_title": "EIGHT WEEKS EARLY",
+  "clip_index": 4,
+  "start_sec_in_scene": 85,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Bloomberg terminal: a steeply climbing line on a chart. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Locked close-ups on screens and hands; wide establishing on London trading floor; locked on Bloomberg chart; street-level handheld on truck driver. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+  "visual_action_raw": "Bloomberg terminal: a steeply climbing line on a chart",
+  "narration_trigger": "\"five-point-eight million Brent call options\"",
+  "world": "ledger",
+  "color_palette": [
+    "#1A2840",
+    "#D0F0C8",
+    "#0A1020",
+    "#F0ECDC"
+  ],
+  "transition_to_next": "cut"
+}

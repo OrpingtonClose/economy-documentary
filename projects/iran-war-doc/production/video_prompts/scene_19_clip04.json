@@ -1,0 +1,19 @@
+{
+  "clip_id": "scene_19_clip04",
+  "scene_number": 19,
+  "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+  "clip_index": 4,
+  "start_sec_in_scene": 85,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Camera holds on two spaces in alternation \u2014 same suits, both spaces. dramatic cinematic lighting, high contrast shadows. Through-glass observation of acquisition office; cut to PE lobby; back to government; five-node abstract visualization. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+  "visual_action_raw": "Camera holds on two spaces in alternation \u2014 same suits, both spaces",
+  "narration_trigger": "\"He remained in his role.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E4ECF8",
+    "#E8D8A0",
+    "#F0E870"
+  ],
+  "transition_to_next": "cut"
+}

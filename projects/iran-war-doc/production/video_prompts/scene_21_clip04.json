@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_21_clip04",
+  "scene_number": 21,
+  "scene_title": "THE BUYBACK IRONY",
+  "clip_index": 4,
+  "start_sec_in_scene": 90,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera moves from running lines into empty dark bays. dramatic cinematic lighting, high contrast shadows. Timeline visualization is wide and analytical; rapid close-up on gap; floor-level moving through factory; locked on signing. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+  "visual_action_raw": "Camera moves from running lines into empty dark bays",
+  "narration_trigger": "\"being paid to fix the problem their financial engineering created\"",
+  "world": "neutral",
+  "color_palette": [
+    "#FEFEFE",
+    "#D8A030",
+    "#9A2010",
+    "#F0ECDC"
+  ],
+  "transition_to_next": "cut"
+}

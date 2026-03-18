@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_22_clip02",
+  "scene_number": 22,
+  "scene_title": "THE SPR GAMBLE",
+  "clip_index": 2,
+  "start_sec_in_scene": 55,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Cut to surface: flat Gulf Coast; pump infrastructure; ordinary surface. warm amber light fading to harsh fluorescent, lived-in textures, human scale. Wide on cavern interior; surface exterior wide; locked on monitoring interface; street-level at pump. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+  "visual_action_raw": "Cut to surface: flat Gulf Coast; pump infrastructure; ordinary surface",
+  "narration_trigger": "\"two hundred and forty-three million barrels \u2014 thirty-five percent\"",
+  "world": "street",
+  "color_palette": [
+    "#E0D8A0",
+    "#1A1A10",
+    "#F4ECD0",
+    "#F0E8C8"
+  ],
+  "transition_to_next": "cut"
+}

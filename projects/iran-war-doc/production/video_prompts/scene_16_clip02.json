@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_16_clip02",
+  "scene_number": 16,
+  "scene_title": "THE PIPELINE",
+  "clip_index": 2,
+  "start_sec_in_scene": 30,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Caribbean-colored third node; turquoise; light arrives dimmer. dramatic cinematic lighting, high contrast shadows. Abstract visualization with nodes activating sequentially; camera tracks the light; pull back to full network; cut to records interface. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+  "visual_action_raw": "Caribbean-colored third node; turquoise; light arrives dimmer",
+  "narration_trigger": "\"Ziba Leisure Ltd., Saint Kitts\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8C020",
+    "#E8D8A0",
+    "#40C0B0",
+    "#7090A0"
+  ],
+  "transition_to_next": "cut"
+}

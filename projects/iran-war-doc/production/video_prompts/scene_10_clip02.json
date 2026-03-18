@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_10_clip02",
+  "scene_number": 10,
+  "scene_title": "THE PARDON",
+  "clip_index": 2,
+  "start_sec_in_scene": 45,
+  "target_duration_sec": 13,
+  "ltx_clips_needed": 3,
+  "prompt": "One door at end: ajar, light off, dark room beyond. dramatic cinematic lighting, high contrast shadows. Slow corridor walk; locked at door with dark room; cut to server room (locked); cut to newspaper (held). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+  "visual_action_raw": "One door at end: ajar, light off, dark room beyond",
+  "narration_trigger": "\"DOJ launched its investigation on March eleventh\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8ECF4",
+    "#C08040",
+    "#080808",
+    "#30C0D8"
+  ],
+  "transition_to_next": "cut"
+}

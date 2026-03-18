@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_01_clip02",
+  "scene_number": 1,
+  "scene_title": "THE NUMBER",
+  "clip_index": 2,
+  "start_sec_in_scene": 20,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Pull back to full trading floor at dawn, blue-white, inhuman scale. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Extreme close-up on digits, pull to eye, pull to room; then crash-cut to gas station street level; aerial crane on tanker. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+  "visual_action_raw": "Pull back to full trading floor at dawn, blue-white, inhuman scale",
+  "narration_trigger": "\"more than NASA's annual budget\"",
+  "world": "ledger",
+  "color_palette": [
+    "#C8D8EC",
+    "#40C0D8",
+    "#3A4A5A",
+    "#E8C060"
+  ],
+  "transition_to_next": "cut"
+}

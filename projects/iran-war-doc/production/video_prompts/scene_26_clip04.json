@@ -1,0 +1,19 @@
+{
+  "clip_id": "scene_26_clip04",
+  "scene_number": 26,
+  "scene_title": "THE LEDGER CLOSES",
+  "clip_index": 4,
+  "start_sec_in_scene": 55,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Quick cut: abstract network visualization pulsing. dramatic cinematic lighting, high contrast shadows. High aerial on Strait; rapid associative cuts (each 5\u20138 seconds); return to aerial; gentle cuts to street; final pull back. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+  "visual_action_raw": "Quick cut: abstract network visualization pulsing",
+  "narration_trigger": "\"one-point-seven billion... Binance... IRGC\"",
+  "world": "neutral",
+  "color_palette": [
+    "#8090A0",
+    "#D08030",
+    "#1A2A4A"
+  ],
+  "transition_to_next": "cut"
+}

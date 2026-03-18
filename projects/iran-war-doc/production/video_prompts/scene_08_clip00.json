@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_08_clip00",
+  "scene_number": 8,
+  "scene_title": "THE $1.7 BILLION DOOR",
+  "clip_index": 0,
+  "start_sec_in_scene": 0,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Abstract network visualization; nodes and edges pulsing. dramatic cinematic lighting, high contrast shadows. Abstract visualization starts wide, slow zoom; cut to domestic close-up of hands; cut to wide street market. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+  "visual_action_raw": "Abstract network visualization; nodes and edges pulsing",
+  "narration_trigger": "\"March twelfth, 2026.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#050810",
+    "#40C0F0",
+    "#8090A0",
+    "#E0C080"
+  ],
+  "transition_to_next": "cut"
+}

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_04_clip01",
+  "scene_number": 4,
+  "scene_title": "THE DAILY BURN",
+  "clip_index": 1,
+  "start_sec_in_scene": 25,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera reaches lone analyst at her desk; she does not look up. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Long forward tracking shot in budget space; aerial crane on overpass; street-level static for Main Street. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+  "visual_action_raw": "Camera reaches lone analyst at her desk; she does not look up",
+  "narration_trigger": "\"Vietnam annual war budget in less than two weeks\"",
+  "world": "ledger",
+  "color_palette": [
+    "#ECEEF4",
+    "#B0C4DC",
+    "#4A5060",
+    "#D08820"
+  ],
+  "transition_to_next": "cut"
+}

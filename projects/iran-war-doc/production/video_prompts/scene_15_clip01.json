@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_15_clip01",
+  "scene_number": 15,
+  "scene_title": "THE BISHOPS AVENUE",
+  "clip_index": 1,
+  "start_sec_in_scene": 20,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera drops to garden-wall level; large properties visible behind gates. dramatic cinematic lighting, high contrast shadows. Aerial drone descending to street level; wall-level moving; settle on gate; cut to hotel facade; return to gate. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+  "visual_action_raw": "Camera drops to garden-wall level; large properties visible behind gates",
+  "narration_trigger": "\"Billionaire's Row\"",
+  "world": "neutral",
+  "color_palette": [
+    "#C8D080",
+    "#9A9490",
+    "#B8C8D8",
+    "#F4F0EC"
+  ],
+  "transition_to_next": "cut"
+}

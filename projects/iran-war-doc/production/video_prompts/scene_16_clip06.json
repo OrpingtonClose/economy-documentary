@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_16_clip06",
+  "scene_number": 16,
+  "scene_title": "THE PIPELINE",
+  "clip_index": 6,
+  "start_sec_in_scene": 105,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Pull back on the five-node network; all nodes visible simultaneously; the chain as a whole. dramatic cinematic lighting, high contrast shadows. Abstract visualization with nodes activating sequentially; camera tracks the light; pull back to full network; cut to records interface. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+  "visual_action_raw": "Pull back on the five-node network; all nodes visible simultaneously; the chain as a whole",
+  "narration_trigger": "\"a success of fragmentation.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8C020",
+    "#E8D8A0",
+    "#40C0B0",
+    "#7090A0"
+  ],
+  "transition_to_next": "Hold on full five-node network; fade to black; Scene 17 opens"
+}

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_25_clip05",
+  "scene_number": 25,
+  "scene_title": "CHINA'S BUFFER",
+  "clip_index": 5,
+  "start_sec_in_scene": 105,
+  "target_duration_sec": 5,
+  "ltx_clips_needed": 1,
+  "prompt": "Back to global map: China deep blue, US amber; both in frame; hold. dramatic cinematic lighting, high contrast shadows. Global map rotation; close on regional color changes; agricultural field wide handheld; back to map. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+  "visual_action_raw": "Back to global map: China deep blue, US amber; both in frame; hold",
+  "narration_trigger": "\"a choice made in advance, collected during it\"",
+  "world": "neutral",
+  "color_palette": [
+    "#0A1020",
+    "#E8D090",
+    "#1840A0",
+    "#D09030"
+  ],
+  "transition_to_next": "Global map with US amber and China blue; dissolve to black; Scene 26"
+}

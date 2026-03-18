@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_15_clip04",
+  "scene_number": 15,
+  "scene_title": "THE BISHOPS AVENUE",
+  "clip_index": 4,
+  "start_sec_in_scene": 80,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Cut to: luxury hotel facade in daylight; doorman; revolving door. dramatic cinematic lighting, high contrast shadows. Aerial drone descending to street level; wall-level moving; settle on gate; cut to hotel facade; return to gate. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+  "visual_action_raw": "Cut to: luxury hotel facade in daylight; doorman; revolving door",
+  "narration_trigger": "\"Hilton Frankfurt... hotels in Mallorca... Dubai villa\"",
+  "world": "neutral",
+  "color_palette": [
+    "#C8D080",
+    "#9A9490",
+    "#B8C8D8",
+    "#F4F0EC"
+  ],
+  "transition_to_next": "cut"
+}

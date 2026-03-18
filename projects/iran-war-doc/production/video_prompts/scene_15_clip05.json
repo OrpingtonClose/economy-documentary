@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_15_clip05",
+  "scene_number": 15,
+  "scene_title": "THE BISHOPS AVENUE",
+  "clip_index": 5,
+  "start_sec_in_scene": 105,
+  "target_duration_sec": 35,
+  "ltx_clips_needed": 7,
+  "prompt": "Back to The Bishops Avenue gate: quiet; curtained windows; 6-second hold. dramatic cinematic lighting, high contrast shadows. Aerial drone descending to street level; wall-level moving; settle on gate; cut to hotel facade; return to gate. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+  "visual_action_raw": "Back to The Bishops Avenue gate: quiet; curtained windows; 6-second hold",
+  "narration_trigger": "\"The war was fought around his assets, not over them.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#C8D080",
+    "#9A9490",
+    "#B8C8D8",
+    "#F4F0EC"
+  ],
+  "transition_to_next": "Hold on the closed gate; dissolve to black; Scene 16 opens on a map of financial flows"
+}

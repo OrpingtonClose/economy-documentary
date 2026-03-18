@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_23_clip05",
+  "scene_number": 23,
+  "scene_title": "THE MOST EXPENSIVE WATERWAY",
+  "clip_index": 5,
+  "start_sec_in_scene": 110,
+  "target_duration_sec": 10,
+  "ltx_clips_needed": 2,
+  "prompt": "Wide shot of the partially full shelves \u2014 small, quiet, supply chain evidence. dramatic cinematic lighting, high contrast shadows. Aerial on Strait, push down to ship; underwriting office wide and mid-close; supermarket aisle wide. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+  "visual_action_raw": "Wide shot of the partially full shelves \u2014 small, quiet, supply chain evidence",
+  "narration_trigger": "\"chokepoint amplification\"",
+  "world": "neutral",
+  "color_palette": [
+    "#F0E0A0",
+    "#4080A0",
+    "#3060A0",
+    "#E0ECFC"
+  ],
+  "transition_to_next": "Partially full shelves; hard cut to Scene 24"
+}

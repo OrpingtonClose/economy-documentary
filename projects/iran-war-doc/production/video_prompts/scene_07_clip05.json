@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_07_clip05",
+  "scene_number": 7,
+  "scene_title": "THE LEGAL INSIDE TRADE",
+  "clip_index": 5,
+  "start_sec_in_scene": 110,
+  "target_duration_sec": 30,
+  "ltx_clips_needed": 6,
+  "prompt": "Welder at work; sparks falling; he is not watching the market. warm amber light fading to harsh fluorescent, lived-in textures, human scale. Slow tracking along the hearing room table; locked on monitor screen; handheld on factory floor (slight breathing). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+  "visual_action_raw": "Welder at work; sparks falling; he is not watching the market",
+  "narration_trigger": "\"money does not smell\"",
+  "world": "street",
+  "color_palette": [
+    "#ECEEFC",
+    "#0A1020",
+    "#28C860",
+    "#F0ECD8"
+  ],
+  "transition_to_next": "Welder's sparks; fade to black; Act 3 opens with a different kind of financial network"
+}

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_17_clip01",
+  "scene_number": 17,
+  "scene_title": "THE IMMUNITY",
+  "clip_index": 1,
+  "start_sec_in_scene": 25,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera holds split frame without cutting. dramatic cinematic lighting, high contrast shadows. Split composition held, then slow drift; final locked shot on padlock. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+  "visual_action_raw": "Camera holds split frame without cutting",
+  "narration_trigger": "\"The London property is still there.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#C8C090",
+    "#B0A090",
+    "#D0C8B0",
+    "#F0F0F0"
+  ],
+  "transition_to_next": "cut"
+}

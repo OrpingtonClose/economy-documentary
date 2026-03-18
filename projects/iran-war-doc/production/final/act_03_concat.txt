@@ -1,0 +1,4 @@
+file '/home/user/workspace/iran-war-doc/production/scenes/scene_08.mp4'
+file '/home/user/workspace/iran-war-doc/production/scenes/scene_09.mp4'
+file '/home/user/workspace/iran-war-doc/production/scenes/scene_10.mp4'
+file '/home/user/workspace/iran-war-doc/production/scenes/scene_11.mp4'

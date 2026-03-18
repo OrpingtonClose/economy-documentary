@@ -1,0 +1,23 @@
+#!/bin/bash
+
+python3 -c "
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import soundfile as sf
+
+model_path = '/workspace/models/Qwen3-TTS'
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, device_map='auto', trust_remote_code=True)
+
+text = '''The family at the gas station, absorbing seventy cents more per gallon and three-point-six billion dollars per month in aggregate consumer extraction. The truck driver spreading out three months of fuel receipts, watching the trend line he already knew. The small business owner doing math behind the counter, finding that the numbers no longer add up the same way. The twenty-five percent of Americans living inside Goldman Sachs\'s recession probability window — one in four, chosen not by their decisions but by the transmission mechanism of a conflict they did not choose. The South Korean households with nine days of LNG. The Asian farming communities absorbing a sixteen percent surge in fertilizer costs from sulfur price pass-through. The future American taxpayers who will refill the Strategic Petroleum Reserve at one hundred dollars per barrel — twenty billion dollars, deferred, accruing.'''
+speaker = 'male_narrator_01'
+
+# Generate speech
+inputs = tokenizer(f'<|speaker|>{speaker}<|text|>{text}<|endoftext|>', return_tensors='pt').to(model.device)
+with torch.no_grad():
+    outputs = model.generate(**inputs, max_new_tokens=4096)
+audio = outputs  # Decode to audio tensor
+
+sf.write('/home/user/workspace/iran-war-doc/production/audio/scene_26_seg04_v1.wav', audio.cpu().numpy(), 24000)
+print(f'Generated: /home/user/workspace/iran-war-doc/production/audio/scene_26_seg04_v1.wav')
+"

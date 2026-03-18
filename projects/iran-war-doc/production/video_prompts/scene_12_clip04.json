@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_12_clip04",
+  "scene_number": 12,
+  "scene_title": "THE PRICE AT THE PUMP DECIDES",
+  "clip_index": 4,
+  "start_sec_in_scene": 80,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Camera at far end of table; both sides in frame. dramatic cinematic lighting, high contrast shadows. Wide drifting along car line (handheld); locked at end of diplomatic table; wide on tanker at sea. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+  "visual_action_raw": "Camera at far end of table; both sides in frame",
+  "narration_trigger": "\"seven to ten million barrels at one hundred dollars\"",
+  "world": "neutral",
+  "color_palette": [
+    "#F4EDD0",
+    "#E0E8F0",
+    "#A0A8B0",
+    "#D0CCC0"
+  ],
+  "transition_to_next": "cut"
+}

@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_07_clip00",
+  "scene_number": 7,
+  "scene_title": "THE LEGAL INSIDE TRADE",
+  "clip_index": 0,
+  "start_sec_in_scene": 0,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Empty Congressional hearing room; staffer organizing papers at horseshoe table. dramatic cinematic lighting, high contrast shadows. Slow tracking along the hearing room table; locked on monitor screen; handheld on factory floor (slight breathing). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+  "visual_action_raw": "Empty Congressional hearing room; staffer organizing papers at horseshoe table",
+  "narration_trigger": "\"the part that is legal\"",
+  "world": "neutral",
+  "color_palette": [
+    "#ECEEFC",
+    "#0A1020",
+    "#28C860",
+    "#F0ECD8"
+  ],
+  "transition_to_next": "cut"
+}

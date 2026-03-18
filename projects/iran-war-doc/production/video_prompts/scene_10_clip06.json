@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_10_clip06",
+  "scene_number": 10,
+  "scene_title": "THE PARDON",
+  "clip_index": 6,
+  "start_sec_in_scene": 105,
+  "target_duration_sec": 5,
+  "ltx_clips_needed": 1,
+  "prompt": "Newspaper page, shape visible, date in header region; eleven days. dramatic cinematic lighting, high contrast shadows. Slow corridor walk; locked at door with dark room; cut to server room (locked); cut to newspaper (held). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+  "visual_action_raw": "Newspaper page, shape visible, date in header region; eleven days",
+  "narration_trigger": "\"absurd.\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8ECF4",
+    "#C08040",
+    "#080808",
+    "#30C0D8"
+  ],
+  "transition_to_next": "Hold on newspaper; dissolve to black; Act 4 opens"
+}

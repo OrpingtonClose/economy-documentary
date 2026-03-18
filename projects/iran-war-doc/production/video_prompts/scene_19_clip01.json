@@ -1,0 +1,19 @@
+{
+  "clip_id": "scene_19_clip01",
+  "scene_number": 19,
+  "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+  "clip_index": 1,
+  "start_sec_in_scene": 25,
+  "target_duration_sec": 20,
+  "ltx_clips_needed": 4,
+  "prompt": "Through glass: conference room; signatures being applied to pages. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Through-glass observation of acquisition office; cut to PE lobby; back to government; five-node abstract visualization. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+  "visual_action_raw": "Through glass: conference room; signatures being applied to pages",
+  "narration_trigger": "\"Deputy Secretary of Defense \u2014 Steve Feinberg\"",
+  "world": "ledger",
+  "color_palette": [
+    "#E4ECF8",
+    "#E8D8A0",
+    "#F0E870"
+  ],
+  "transition_to_next": "cut"
+}

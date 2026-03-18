@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_13_clip01",
+  "scene_number": 13,
+  "scene_title": "THE FRACTURE",
+  "clip_index": 1,
+  "start_sec_in_scene": 20,
+  "target_duration_sec": 25,
+  "ltx_clips_needed": 5,
+  "prompt": "Visible posture of disagreement around the table; some seats empty. dramatic cinematic lighting, high contrast shadows. Wide overhead on circular table; media monitoring room locked; street-level handheld on couple. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+  "visual_action_raw": "Visible posture of disagreement around the table; some seats empty",
+  "narration_trigger": "\"NATO allies called publicly to reverse\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E8ECF4",
+    "#2060A0",
+    "#2A2A2A",
+    "#D8D0C0"
+  ],
+  "transition_to_next": "cut"
+}

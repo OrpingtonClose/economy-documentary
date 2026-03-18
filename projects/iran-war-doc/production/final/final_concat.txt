@@ -1,0 +1,7 @@
+file '/home/user/workspace/iran-war-doc/production/final/act_01_the_price_tag.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_02_the_smart_money.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_03_the_crypto_pipeline.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_04_the_russia_deal.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_05_billionaires_row.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_06_the_defense_payday.mp4'
+file '/home/user/workspace/iran-war-doc/production/final/act_07_the_bill.mp4'

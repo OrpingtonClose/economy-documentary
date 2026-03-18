@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_11_clip00",
+  "scene_number": 11,
+  "scene_title": "THE SECOND PAYMASTER",
+  "clip_index": 0,
+  "start_sec_in_scene": 0,
+  "target_duration_sec": 35,
+  "ltx_clips_needed": 7,
+  "prompt": "Dual-flow abstract visualization; opposite directions in single frame. dramatic cinematic lighting, high contrast shadows. Abstract visualization held and pulled back; street pull-back to frame both gas stations. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+  "visual_action_raw": "Dual-flow abstract visualization; opposite directions in single frame",
+  "narration_trigger": "\"what this means and does not mean\"",
+  "world": "neutral",
+  "color_palette": [
+    "#80B8F0",
+    "#E8A020",
+    "#F8F8F8",
+    "#F0ECD8"
+  ],
+  "transition_to_next": "cut"
+}

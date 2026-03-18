@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_02_clip01",
+  "scene_number": 2,
+  "scene_title": "THE INVOICE",
+  "clip_index": 1,
+  "start_sec_in_scene": 15,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Paper receipt continues to fall; each keystroke is loud. dramatic cinematic lighting, high contrast shadows. Locked close-ups; no camera movement until the school hallway where handheld breathes slightly. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+  "visual_action_raw": "Paper receipt continues to fall; each keystroke is loud",
+  "narration_trigger": "\"Three-point-five million dollars\"",
+  "world": "neutral",
+  "color_palette": [
+    "#E0ECFF",
+    "#F8F0A0",
+    "#F0E8C0",
+    "#404040"
+  ],
+  "transition_to_next": "cut"
+}

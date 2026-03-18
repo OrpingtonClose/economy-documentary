@@ -1,0 +1,20 @@
+{
+  "clip_id": "scene_07_clip02",
+  "scene_number": 7,
+  "scene_title": "THE LEGAL INSIDE TRADE",
+  "clip_index": 2,
+  "start_sec_in_scene": 55,
+  "target_duration_sec": 15,
+  "ltx_clips_needed": 3,
+  "prompt": "Brokerage portfolio on monitor: aerospace positions, all green. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Slow tracking along the hearing room table; locked on monitor screen; handheld on factory floor (slight breathing). cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+  "visual_action_raw": "Brokerage portfolio on monitor: aerospace positions, all green",
+  "narration_trigger": "\"every single one of those trades was legal.\"",
+  "world": "ledger",
+  "color_palette": [
+    "#ECEEFC",
+    "#0A1020",
+    "#28C860",
+    "#F0ECD8"
+  ],
+  "transition_to_next": "cut"
+}
