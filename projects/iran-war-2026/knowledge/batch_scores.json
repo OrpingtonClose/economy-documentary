@@ -1,0 +1,250 @@
+[
+  {
+    "id": "1",
+    "s": 7,
+    "c": [
+      "military_operations",
+      "domestic_politics"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "2",
+    "s": 6,
+    "c": [
+      "geopolitical_alliances",
+      "israel_lebanon"
+    ],
+    "t": "analytical"
+  },
+  {
+    "id": "3",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "economic_impact",
+      "geopolitical_alliances"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "4",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "economic_impact",
+      "civilian_casualties"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "5",
+    "s": 10,
+    "c": [
+      "historical_context",
+      "geopolitical_alliances"
+    ],
+    "t": "analytical"
+  },
+  {
+    "id": "6",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "strait_of_hormuz",
+      "economic_impact"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "7",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "civilian_casualties",
+      "geopolitical_alliances"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "8",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "economic_impact",
+      "domestic_politics"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "9",
+    "s": 8,
+    "c": [
+      "military_operations",
+      "israel_lebanon"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "10",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "strait_of_hormuz",
+      "economic_impact"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "11",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "civilian_casualties",
+      "domestic_politics"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "12",
+    "s": 8,
+    "c": [
+      "strait_of_hormuz",
+      "military_operations"
+    ],
+    "t": "analytical"
+  },
+  {
+    "id": "13",
+    "s": 7,
+    "c": [
+      "military_operations",
+      "economic_impact"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "14",
+    "s": 7,
+    "c": [
+      "military_operations",
+      "israel_lebanon"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "15",
+    "s": 6,
+    "c": [
+      "geopolitical_alliances",
+      "domestic_politics"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "16",
+    "s": 8,
+    "c": [
+      "military_operations",
+      "strait_of_hormuz"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "17",
+    "s": 8,
+    "c": [
+      "strait_of_hormuz",
+      "military_operations"
+    ],
+    "t": "analytical"
+  },
+  {
+    "id": "18",
+    "s": 8,
+    "c": [
+      "economic_impact"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "19",
+    "s": 7,
+    "c": [
+      "military_operations",
+      "geopolitical_alliances"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "20",
+    "s": 9,
+    "c": [
+      "military_operations",
+      "economic_impact",
+      "civilian_casualties"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "21",
+    "s": 6,
+    "c": [
+      "domestic_politics",
+      "military_operations"
+    ],
+    "t": "propagandistic"
+  },
+  {
+    "id": "22",
+    "s": 7,
+    "c": [
+      "information_war",
+      "strait_of_hormuz"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "23",
+    "s": 7,
+    "c": [
+      "strait_of_hormuz",
+      "military_operations"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "24",
+    "s": 7,
+    "c": [
+      "military_operations",
+      "economic_impact"
+    ],
+    "t": "neutral"
+  },
+  {
+    "id": "25",
+    "s": 6,
+    "c": [
+      "geopolitical_alliances",
+      "information_war"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "26",
+    "s": 7,
+    "c": [
+      "military_operations"
+    ],
+    "t": "alarming"
+  },
+  {
+    "id": "27",
+    "s": 6,
+    "c": [
+      "military_operations"
+    ],
+    "t": "alarming"
+  }
+]

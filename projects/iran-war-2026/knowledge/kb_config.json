@@ -1,0 +1,4 @@
+{
+  "kb_id": "053d79fb-6b89-4cba-bd81-0422b2eab0c0",
+  "token": "${STAGING_JWT_TOKEN}"
+}

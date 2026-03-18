@@ -1,0 +1,15 @@
+# Tensions escalate over Strait of Hormuz
+Channel: ABC News
+Published: 
+Views: 56,048 | Likes: 0
+URL: https://www.youtube.com/watch?v=6CHLhTk9TJE
+
+## Description
+Iran vows to block the key shipping route, and President Donald Trump criticizes U.S. allies for refusing to help keep it open.
+
+## Full Transcript
+Channel: ABC News
+Title: Tensions escalate over Strait of Hormuz
+Published: 
+
+This morning, Israel says they've killed Iran's security chief Ali Larijani, one of the remaining faces of the regime. Just days ago, in a show of defiance, he appeared in a public march when a strike landed nearby. Killed alongside him, GM Resar Solemani, the head of the Basie, the religious militia responsible for the brutal suppression of protesters. Meanwhile, Iran unleashed a wave of new attacks across the region overnight. A drone struck this hotel in Baghdad, not far from the US embassy, setting off a fiery explosion. And another attack targeted the US embassy itself. Iraqi officials say air defense systems shot down a rocket nearby. Multiple waves of Iranian attacks. Officials call it the most intense assault since the war began with at least five drones used. And this morning, new concerns over Iran's targeting of radar systems, which act as early detection for air defense in the region. New satellite images appear to show that Iran has hit these sites multiple times with precision. The before on the left and on the right holds visible in the roofs. The third week of war and Iran is still able to cause chaos. Its blockade of the vital shipping lane at the straight of Hormuz, deepening the oil crisis. President Trump may have gone to war without key US allies. Now he's blasting them for refusing to help reopen the strait. Trump himself says his calls for allied support are a loyalty test. I'm almost doing it in some cases, not because we need them, but because I want to find out how they react. >> America's allies insist it's not their fight. Italy is calling for diplomacy, while other NATO members are backing out entirely. Germany has refused to send help, saying, "It's not our war. >> We can't be every at every place to to support a war which we didn't start it." >> And the British prime minister sharing a similar sentiment. >> We will not be drawn into the wider war. But Trump is pressing forward, claiming America can go it alone. >> We're the strongest nation in the world. We have the strongest military by far in the world. We don't need them. >> The president has also claimed he discussed the war with a former US president. He refused to reveal which one. Former presidents Clinton, Obama, and Biden have told ABC News they have not spoken with them recently. And Trump confirmed that it wasn't Bush. And the war's second front in Lebanon is widening. Thousands of Israeli troops have now moved into southern Lebanon to take on Hezbollah. The UN is calling for deescalation and they're sounding the alarm over the 1 million Lebanese who've now been forced from their homes. Robin. >> All right, James. or thanks to you for your reporting.

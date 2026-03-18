@@ -1,0 +1,530 @@
+{
+  "metadata": {
+    "project": "Iran War 2026 Documentary",
+    "created": "2026-03-18T04:42:03.985277+00:00",
+    "pipeline": "YouTube Extraction -> Deep Search Refinement (staging.deep-search.uk)",
+    "staging_kb_id": "053d79fb-6b89-4cba-bd81-0422b2eab0c0",
+    "model_used": "mistral-large-thinking",
+    "total_videos_discovered": 486,
+    "videos_with_transcripts": 27,
+    "total_transcript_chars": 612259
+  },
+  "documentary": {
+    "title": "Epic Fury: The War That Wasn\u2019t Supposed to Happen",
+    "thesis": "The US-Iran War of 2026 was not an inevitable conflict but a catastrophic failure of diplomacy, intelligence, and political leadership, driven by miscalculation, hubris, and a disregard for the human cost. This documentary examines how a single operation spiraled into a global crisis, exposing the fragility of international stability and the dangers of unchecked military adventurism.",
+    "arcs": [
+      {
+        "name": "The Spark: Operation Epic Fury",
+        "description": "Explores the planning, execution, and immediate aftermath of the US-Israeli operation that assassinated Supreme Leader Khamenei, setting the stage for war. Examines the intelligence failures, political motivations, and the lack of contingency planning that turned a targeted strike into a regional conflagration.",
+        "tone": "Tense, investigative, urgent",
+        "key_moments": [
+          "The secret White House meeting where the operation was greenlit despite dissent from intelligence officials",
+          "The moment Khamenei\u2019s convoy was hit, captured by Iranian state media and broadcast globally",
+          "The first 24 hours: Iran\u2019s immediate retaliation, the Strait of Hormuz closure, and the US scrambling to respond"
+        ]
+      },
+      {
+        "name": "The Domino Effect: Global Shockwaves",
+        "description": "Traces how Iran\u2019s closure of the Strait of Hormuz sent oil markets into chaos, triggering a global economic downturn. Analyzes the cascading effects on supply chains, financial markets, and geopolitical alliances, including NATO\u2019s refusal to intervene and the Gulf states\u2019 unexpected attacks on Iran.",
+        "tone": "Anxious, analytical, sweeping",
+        "key_moments": [
+          "The live CNBC broadcast of oil prices spiking to $100/barrel within hours of the closure",
+          "The emergency UN Security Council meeting where NATO allies publicly distanced themselves from the US",
+          "The surprise missile strikes by Saudi Arabia and the UAE on Iranian military installations, escalating the conflict"
+        ]
+      },
+      {
+        "name": "The Human Cost: Collateral Damage",
+        "description": "Focuses on the personal stories of those caught in the crossfire\u20141,300+ Iranian civilians killed, 13 US troops lost, and the broader humanitarian crisis unfolding in Lebanon and the Gulf. Highlights the disconnect between political decisions and their real-world consequences.",
+        "tone": "Somber, intimate, heartbreaking",
+        "key_moments": [
+          "The funeral of an Iranian family of five killed in a US airstrike, captured by a local journalist",
+          "The last letters and videos of the 13 US soldiers killed in Iran\u2019s initial retaliation",
+          "The refugee crisis in Lebanon as Israel\u2019s invasion displaces hundreds of thousands"
+        ]
+      },
+      {
+        "name": "The Whistleblower: A Voice of Dissent",
+        "description": "Centers on the US counterterrorism official who resigned in protest, arguing that Iran posed no credible threat. Examines the intelligence reports and internal debates that were ignored or suppressed in the lead-up to the war, and the official\u2019s struggle to be heard in a climate of fear and nationalism.",
+        "tone": "Revelatory, tense, morally urgent",
+        "key_moments": [
+          "The leaked memo detailing Iran\u2019s lack of aggressive intent, dismissed by the White House",
+          "The official\u2019s resignation letter going viral, sparking public outrage and conspiracy theories",
+          "The congressional hearing where the official testifies, facing hostile questioning from lawmakers"
+        ]
+      },
+      {
+        "name": "The Isolation: America Alone",
+        "description": "Explores the diplomatic fallout as NATO allies refuse to support the US, leaving it politically and militarily isolated. Investigates the fractures in the transatlantic alliance, the rise of anti-American sentiment globally, and the US\u2019s struggle to rally support for a war many saw as unjustified.",
+        "tone": "Isolated, critical, foreboding",
+        "key_moments": [
+          "The German chancellor\u2019s speech condemning the operation as a violation of international law",
+          "The viral social media campaign #NotOurWar, spreading across Europe and the Middle East",
+          "The US\u2019s failed attempt to invoke NATO\u2019s Article 5, met with silence from allies"
+        ]
+      },
+      {
+        "name": "The Fog of War: Misinformation and Propaganda",
+        "description": "Delves into the role of misinformation, propaganda, and media manipulation in shaping public perception of the war. Compares US, Iranian, and global media narratives, and examines how both sides used disinformation to justify their actions and demonize the enemy.",
+        "tone": "Skeptical, probing, unsettling",
+        "key_moments": [
+          "The doctored video released by the US claiming to show Iranian missiles targeting US bases",
+          "Iran\u2019s state media broadcasting fake footage of US soldiers surrendering in Lebanon",
+          "The viral deepfake of President Biden declaring a full-scale invasion of Iran, sparking panic"
+        ]
+      },
+      {
+        "name": "The Aftermath: What Comes Next?",
+        "description": "Looks ahead to the long-term consequences of the war: the potential collapse of the Iranian regime, the destabilization of the Middle East, and the global recession looming on the horizon. Questions whether the world has learned anything from this crisis or is doomed to repeat it.",
+        "tone": "Reflective, cautionary, uncertain",
+        "key_moments": [
+          "The first protests in Tehran calling for the end of the Islamic Republic, met with violent crackdowns",
+          "The emergency G20 summit where world leaders debate a bailout for the global economy",
+          "The final scene: a US veteran of the war, now homeless, reflecting on whether it was all worth it"
+        ]
+      }
+    ],
+    "opening_hook": "The documentary opens with a black screen. The sound of a heartbeat grows louder, then suddenly cuts to the deafening roar of a missile strike. The screen flashes to a live feed from Iranian state TV: the smoldering wreckage of Supreme Leader Khamenei\u2019s convoy. A news anchor\u2019s voice, trembling, announces, \u2018The Supreme Leader has been martyred.\u2019 The camera then cuts to a US military briefing room, where a general calmly states, \u2018Operation Epic Fury is a success.\u2019 The heartbeat returns, now faster, as the title of the documentary appears in bold red letters: EPIC FURY: THE WAR THAT WASN\u2019T SUPPOSED TO HAPPEN.",
+    "closing_message": "The US-Iran War of 2026 was not an accident of history\u2014it was a choice. A choice made in the shadows, without public debate, without clear objectives, and without a plan for what came next. This war was sold as a necessary strike against a dangerous enemy, but it was built on a foundation of fear, misinformation, and political expediency. The question we must ask ourselves now is not how it happened, but whether we have the courage to ensure it never happens again. The next war is always closer than we think."
+  },
+  "scored_videos": [
+    {
+      "video_id": "F2BwOgKfh8Y",
+      "title": "Hegseth, Pentagon update on Iran war after troops killed in Iraq",
+      "channel": "LiveNOW from FOX",
+      "published": "",
+      "views": 977348,
+      "transcript_length": 100000,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations",
+        "domestic_politics"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=F2BwOgKfh8Y"
+    },
+    {
+      "video_id": "IlU7Sxumh8Y",
+      "title": "Iran Under Attack from Within | Jerusalem Dateline - March 13, 2026",
+      "channel": "CBN News",
+      "published": "",
+      "views": 693629,
+      "transcript_length": 22861,
+      "relevance_score": 6,
+      "categories": [
+        "geopolitical_alliances",
+        "israel_lebanon"
+      ],
+      "tone": "analytical",
+      "url": "https://www.youtube.com/watch?v=IlU7Sxumh8Y"
+    },
+    {
+      "video_id": "rKpX-nCGn_k",
+      "title": "War With Iran Full Episode: Wed, Mar 11, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 544651,
+      "transcript_length": 24150,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "economic_impact",
+        "geopolitical_alliances"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=rKpX-nCGn_k"
+    },
+    {
+      "video_id": "wxcvG-X8gx8",
+      "title": "War with Iran Full Episode: Wednesday, March 4, 2026 l ABC News Live",
+      "channel": "ABC News",
+      "published": "",
+      "views": 526571,
+      "transcript_length": 22865,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "economic_impact",
+        "civilian_casualties"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=wxcvG-X8gx8"
+    },
+    {
+      "video_id": "IKWMrpQOh7Y",
+      "title": "The Iran War: How America, Israel and Iran Got Here | The Ezra Klein Show",
+      "channel": "The Ezra Klein Show and 2 more",
+      "published": "",
+      "views": 506464,
+      "transcript_length": 86817,
+      "relevance_score": 10,
+      "categories": [
+        "historical_context",
+        "geopolitical_alliances"
+      ],
+      "tone": "analytical",
+      "url": "https://www.youtube.com/watch?v=IKWMrpQOh7Y"
+    },
+    {
+      "video_id": "kqkTcdAp0v4",
+      "title": "War With Iran Full Episode: Mon, Mar 9, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 411432,
+      "transcript_length": 21363,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "strait_of_hormuz",
+        "economic_impact"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=kqkTcdAp0v4"
+    },
+    {
+      "video_id": "TEhyQ9mdQlI",
+      "title": "War With Iran Full Episode: Thu, Mar 12, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 376674,
+      "transcript_length": 21871,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "civilian_casualties",
+        "geopolitical_alliances"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=TEhyQ9mdQlI"
+    },
+    {
+      "video_id": "5zg8hmBWcDI",
+      "title": "War With Iran Full Episode: Tue, Mar 10, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 367881,
+      "transcript_length": 23086,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "economic_impact",
+        "domestic_politics"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=5zg8hmBWcDI"
+    },
+    {
+      "video_id": "hBJz-Ur5ypc",
+      "title": "US-Iran War: Iran Launches Multiple Ballistic Missiles at Israel | WION Breaking",
+      "channel": "WION",
+      "published": "",
+      "views": 355203,
+      "transcript_length": 2938,
+      "relevance_score": 8,
+      "categories": [
+        "military_operations",
+        "israel_lebanon"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=hBJz-Ur5ypc"
+    },
+    {
+      "video_id": "9682Rr84t2s",
+      "title": "War With Iran Full Episode: Fri, Mar 13, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 281617,
+      "transcript_length": 23049,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "strait_of_hormuz",
+        "economic_impact"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=9682Rr84t2s"
+    },
+    {
+      "video_id": "9taBl64sCWM",
+      "title": "War with Iran: ABC News Live Full Episode - Friday March 6, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 247168,
+      "transcript_length": 19110,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "civilian_casualties",
+        "domestic_politics"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=9taBl64sCWM"
+    },
+    {
+      "video_id": "ZVu88ZaIN1g",
+      "title": "Why the US Navy Is Letting Iran's Hormuz Blockade Destroy Itself",
+      "channel": "Navy Decoded",
+      "published": "",
+      "views": 233478,
+      "transcript_length": 16054,
+      "relevance_score": 8,
+      "categories": [
+        "strait_of_hormuz",
+        "military_operations"
+      ],
+      "tone": "analytical",
+      "url": "https://www.youtube.com/watch?v=ZVu88ZaIN1g"
+    },
+    {
+      "video_id": "XMnqMiz1XjM",
+      "title": "War with Iran: What You Need To Know \u2013 Wednesday, March 4, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 212923,
+      "transcript_length": 9546,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations",
+        "economic_impact"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=XMnqMiz1XjM"
+    },
+    {
+      "video_id": "9evR4wQr9LU",
+      "title": "WAR UPDATE Day 16: Iran Missile HITS Israel AGAIN Today as U.S. Claims Iran Military is Decimated",
+      "channel": "CBN News",
+      "published": "",
+      "views": 201766,
+      "transcript_length": 33189,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations",
+        "israel_lebanon"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=9evR4wQr9LU"
+    },
+    {
+      "video_id": "ovDc6v4iBAk",
+      "title": "WAR UPDATE Day 14: Iran's Still a Threat to Region as Trump Threatens More Severe Attacks",
+      "channel": "CBN News",
+      "published": "",
+      "views": 142902,
+      "transcript_length": 34933,
+      "relevance_score": 6,
+      "categories": [
+        "geopolitical_alliances",
+        "domestic_politics"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=ovDc6v4iBAk"
+    },
+    {
+      "video_id": "YIWcd52aKb0",
+      "title": "US strikes Tehran as Supreme Leader vows to continue Strait of Hormuz blockade",
+      "channel": "Channel 4 News",
+      "published": "",
+      "views": 141714,
+      "transcript_length": 22433,
+      "relevance_score": 8,
+      "categories": [
+        "military_operations",
+        "strait_of_hormuz"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=YIWcd52aKb0"
+    },
+    {
+      "video_id": "zMS3_5O8kF0",
+      "title": "Why it's so hard for US to regain Strait of Hormuz from Iran | BBC News",
+      "channel": "BBC News",
+      "published": "",
+      "views": 136663,
+      "transcript_length": 7163,
+      "relevance_score": 8,
+      "categories": [
+        "strait_of_hormuz",
+        "military_operations"
+      ],
+      "tone": "analytical",
+      "url": "https://www.youtube.com/watch?v=zMS3_5O8kF0"
+    },
+    {
+      "video_id": "ZjtPHHPToKE",
+      "title": "Iran war costing $1.5 billion per day: What You Need To Know \u2013 Thursday, March 12, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 80178,
+      "transcript_length": 8898,
+      "relevance_score": 8,
+      "categories": [
+        "economic_impact"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=ZjtPHHPToKE"
+    },
+    {
+      "video_id": "gXN61qs4i9Y",
+      "title": "Global National: March 13, 2026 | US, Israel, Iran step up attacks, war enters 14th day",
+      "channel": "Global News",
+      "published": "",
+      "views": 77491,
+      "transcript_length": 20084,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations",
+        "geopolitical_alliances"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=gXN61qs4i9Y"
+    },
+    {
+      "video_id": "aJsx3UIcDf0",
+      "title": "War With Iran Full Episode: Mon, Mar 16, 2026",
+      "channel": "ABC News",
+      "published": "",
+      "views": 73927,
+      "transcript_length": 18962,
+      "relevance_score": 9,
+      "categories": [
+        "military_operations",
+        "economic_impact",
+        "civilian_casualties"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=aJsx3UIcDf0"
+    },
+    {
+      "video_id": "J96zHnIot0U",
+      "title": "President Trump speaks about war with Iran",
+      "channel": "FOX 26 Houston",
+      "published": "",
+      "views": 70493,
+      "transcript_length": 26768,
+      "relevance_score": 6,
+      "categories": [
+        "domestic_politics",
+        "military_operations"
+      ],
+      "tone": "propagandistic",
+      "url": "https://www.youtube.com/watch?v=J96zHnIot0U"
+    },
+    {
+      "video_id": "7T9LaXaxtzU",
+      "title": "After Warplane Crash Lie, US Now Lying On Strait Of Hormuz Blockade As Oil Prices Spike?",
+      "channel": "Hindustan Times",
+      "published": "",
+      "views": 66788,
+      "transcript_length": 3832,
+      "relevance_score": 7,
+      "categories": [
+        "information_war",
+        "strait_of_hormuz"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=7T9LaXaxtzU"
+    },
+    {
+      "video_id": "6CHLhTk9TJE",
+      "title": "Tensions escalate over Strait of Hormuz",
+      "channel": "ABC News",
+      "published": "",
+      "views": 56048,
+      "transcript_length": 2689,
+      "relevance_score": 7,
+      "categories": [
+        "strait_of_hormuz",
+        "military_operations"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=6CHLhTk9TJE"
+    },
+    {
+      "video_id": "Q3Sds46JckI",
+      "title": "Global National: March 15, 2026 | US-Iran war enters 3rd week with no end in sight",
+      "channel": "Global News",
+      "published": "",
+      "views": 49133,
+      "transcript_length": 18773,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations",
+        "economic_impact"
+      ],
+      "tone": "neutral",
+      "url": "https://www.youtube.com/watch?v=Q3Sds46JckI"
+    },
+    {
+      "video_id": "1fgQVOQSHzo",
+      "title": "TEHRAN\u2019S SHOCK WARNING: Iran\u2019s Envoy Says \u2018Aggressors Must Pay\u2019 In Escalating War  | US-Iran War",
+      "channel": "Times Now World",
+      "published": "",
+      "views": 19388,
+      "transcript_length": 2843,
+      "relevance_score": 6,
+      "categories": [
+        "geopolitical_alliances",
+        "information_war"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=1fgQVOQSHzo"
+    },
+    {
+      "video_id": "x8zAF7xfGpw",
+      "title": "IRAN TARGETS US WAR MACHINE: USS Gerald R. Ford Carrier Bases In Crosshairs | US-Iran War",
+      "channel": "Times Now World",
+      "published": "",
+      "views": 12736,
+      "transcript_length": 3542,
+      "relevance_score": 7,
+      "categories": [
+        "military_operations"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=x8zAF7xfGpw"
+    },
+    {
+      "video_id": "DQFRZF0mWrQ",
+      "title": "US Iran War Updates - March 16, 2026",
+      "channel": "Raw News And Politics",
+      "published": "",
+      "views": 7303,
+      "transcript_length": 14440,
+      "relevance_score": 6,
+      "categories": [
+        "military_operations"
+      ],
+      "tone": "alarming",
+      "url": "https://www.youtube.com/watch?v=DQFRZF0mWrQ"
+    }
+  ],
+  "category_distribution": {
+    "military_operations": 21,
+    "economic_impact": 9,
+    "geopolitical_alliances": 7,
+    "strait_of_hormuz": 7,
+    "domestic_politics": 5,
+    "civilian_casualties": 4,
+    "israel_lebanon": 3,
+    "information_war": 2,
+    "historical_context": 1
+  },
+  "knowledge_gaps": [
+    {
+      "topic": "Precise timeline and triggers of Operation Epic Fury",
+      "query": "detailed timeline of hypothetical US-Iran conflict 2026 triggers and initial military actions site:.mil OR site:.gov OR site:thinktank.org",
+      "importance": "Understanding the exact sequence of events leading to the conflict is critical to establish causality and avoid misattribution of blame. Without this, the documentary risks oversimplifying a complex geopolitical escalation."
+    },
+    {
+      "topic": "Intelligence failures or miscalculations preceding the operation",
+      "query": "US intelligence assessments on Iran 2024-2026 declassified reports OR expert analyses of pre-war misjudgments",
+      "importance": "Identifying intelligence gaps or errors can reveal systemic flaws in decision-making, providing lessons for future conflict prevention. This is essential for a nuanced portrayal of the war's origins."
+    },
+    {
+      "topic": "Iran\u2019s military preparedness and asymmetric response strategies in 2026",
+      "query": "Iran military capabilities 2026 asymmetric warfare tactics OR Iranian Revolutionary Guard Corps (IRGC) 2026 doctrine site:.edu OR site:defensejournal.org",
+      "importance": "Iran\u2019s military doctrine and unconventional tactics would shape the conflict\u2019s early dynamics. Researching this ensures the documentary doesn\u2019t underestimate Iran\u2019s strategic depth or overlook its ability to counter US advantages."
+    }
+  ]
+}

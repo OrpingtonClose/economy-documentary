@@ -1,0 +1,23 @@
+{
+  "extraction_date": "2026-03-18T03:50:21.382344+00:00",
+  "total_videos": 486,
+  "videos_with_transcripts": 27,
+  "videos_with_comments": 0,
+  "total_transcript_chars": 616865,
+  "total_comments": 0,
+  "transcript_success_rate": "5.6%",
+  "errors": [
+    "YouTube Data API connector (external-tool) auth expired - switched to yt-dlp for search",
+    "YouTube rate-limited transcript requests after ~30 successful extractions",
+    "yt-dlp subtitle download also blocked (bot detection)",
+    "Retry with 3-second delays did not recover additional transcripts",
+    "Apify comment extraction skipped (no working connector)"
+  ],
+  "notes": [
+    "Search discovery via yt-dlp worked well (486 unique videos from 24 queries)",
+    "27 high-quality transcripts obtained before rate limiting (615K+ chars)",
+    "Sources include ABC News, BBC, FOX, CNN, Ezra Klein Show, Channel 4, CBN News",
+    "Comments extraction skipped due to connector auth issues",
+    "Transcript extraction limited by YouTube anti-bot rate limiting"
+  ]
+}
