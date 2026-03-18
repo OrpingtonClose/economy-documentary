@@ -1,0 +1,78 @@
+{
+  "title": "Epic Fury: The War That Wasn\u2019t Supposed to Happen",
+  "thesis": "The US-Iran War of 2026 was not an inevitable conflict but a catastrophic failure of diplomacy, intelligence, and political leadership, driven by miscalculation, hubris, and a disregard for the human cost. This documentary examines how a single operation spiraled into a global crisis, exposing the fragility of international stability and the dangers of unchecked military adventurism.",
+  "arcs": [
+    {
+      "name": "The Spark: Operation Epic Fury",
+      "description": "Explores the planning, execution, and immediate aftermath of the US-Israeli operation that assassinated Supreme Leader Khamenei, setting the stage for war. Examines the intelligence failures, political motivations, and the lack of contingency planning that turned a targeted strike into a regional conflagration.",
+      "tone": "Tense, investigative, urgent",
+      "key_moments": [
+        "The secret White House meeting where the operation was greenlit despite dissent from intelligence officials",
+        "The moment Khamenei\u2019s convoy was hit, captured by Iranian state media and broadcast globally",
+        "The first 24 hours: Iran\u2019s immediate retaliation, the Strait of Hormuz closure, and the US scrambling to respond"
+      ]
+    },
+    {
+      "name": "The Domino Effect: Global Shockwaves",
+      "description": "Traces how Iran\u2019s closure of the Strait of Hormuz sent oil markets into chaos, triggering a global economic downturn. Analyzes the cascading effects on supply chains, financial markets, and geopolitical alliances, including NATO\u2019s refusal to intervene and the Gulf states\u2019 unexpected attacks on Iran.",
+      "tone": "Anxious, analytical, sweeping",
+      "key_moments": [
+        "The live CNBC broadcast of oil prices spiking to $100/barrel within hours of the closure",
+        "The emergency UN Security Council meeting where NATO allies publicly distanced themselves from the US",
+        "The surprise missile strikes by Saudi Arabia and the UAE on Iranian military installations, escalating the conflict"
+      ]
+    },
+    {
+      "name": "The Human Cost: Collateral Damage",
+      "description": "Focuses on the personal stories of those caught in the crossfire\u20141,300+ Iranian civilians killed, 13 US troops lost, and the broader humanitarian crisis unfolding in Lebanon and the Gulf. Highlights the disconnect between political decisions and their real-world consequences.",
+      "tone": "Somber, intimate, heartbreaking",
+      "key_moments": [
+        "The funeral of an Iranian family of five killed in a US airstrike, captured by a local journalist",
+        "The last letters and videos of the 13 US soldiers killed in Iran\u2019s initial retaliation",
+        "The refugee crisis in Lebanon as Israel\u2019s invasion displaces hundreds of thousands"
+      ]
+    },
+    {
+      "name": "The Whistleblower: A Voice of Dissent",
+      "description": "Centers on the US counterterrorism official who resigned in protest, arguing that Iran posed no credible threat. Examines the intelligence reports and internal debates that were ignored or suppressed in the lead-up to the war, and the official\u2019s struggle to be heard in a climate of fear and nationalism.",
+      "tone": "Revelatory, tense, morally urgent",
+      "key_moments": [
+        "The leaked memo detailing Iran\u2019s lack of aggressive intent, dismissed by the White House",
+        "The official\u2019s resignation letter going viral, sparking public outrage and conspiracy theories",
+        "The congressional hearing where the official testifies, facing hostile questioning from lawmakers"
+      ]
+    },
+    {
+      "name": "The Isolation: America Alone",
+      "description": "Explores the diplomatic fallout as NATO allies refuse to support the US, leaving it politically and militarily isolated. Investigates the fractures in the transatlantic alliance, the rise of anti-American sentiment globally, and the US\u2019s struggle to rally support for a war many saw as unjustified.",
+      "tone": "Isolated, critical, foreboding",
+      "key_moments": [
+        "The German chancellor\u2019s speech condemning the operation as a violation of international law",
+        "The viral social media campaign #NotOurWar, spreading across Europe and the Middle East",
+        "The US\u2019s failed attempt to invoke NATO\u2019s Article 5, met with silence from allies"
+      ]
+    },
+    {
+      "name": "The Fog of War: Misinformation and Propaganda",
+      "description": "Delves into the role of misinformation, propaganda, and media manipulation in shaping public perception of the war. Compares US, Iranian, and global media narratives, and examines how both sides used disinformation to justify their actions and demonize the enemy.",
+      "tone": "Skeptical, probing, unsettling",
+      "key_moments": [
+        "The doctored video released by the US claiming to show Iranian missiles targeting US bases",
+        "Iran\u2019s state media broadcasting fake footage of US soldiers surrendering in Lebanon",
+        "The viral deepfake of President Biden declaring a full-scale invasion of Iran, sparking panic"
+      ]
+    },
+    {
+      "name": "The Aftermath: What Comes Next?",
+      "description": "Looks ahead to the long-term consequences of the war: the potential collapse of the Iranian regime, the destabilization of the Middle East, and the global recession looming on the horizon. Questions whether the world has learned anything from this crisis or is doomed to repeat it.",
+      "tone": "Reflective, cautionary, uncertain",
+      "key_moments": [
+        "The first protests in Tehran calling for the end of the Islamic Republic, met with violent crackdowns",
+        "The emergency G20 summit where world leaders debate a bailout for the global economy",
+        "The final scene: a US veteran of the war, now homeless, reflecting on whether it was all worth it"
+      ]
+    }
+  ],
+  "opening_hook": "The documentary opens with a black screen. The sound of a heartbeat grows louder, then suddenly cuts to the deafening roar of a missile strike. The screen flashes to a live feed from Iranian state TV: the smoldering wreckage of Supreme Leader Khamenei\u2019s convoy. A news anchor\u2019s voice, trembling, announces, \u2018The Supreme Leader has been martyred.\u2019 The camera then cuts to a US military briefing room, where a general calmly states, \u2018Operation Epic Fury is a success.\u2019 The heartbeat returns, now faster, as the title of the documentary appears in bold red letters: EPIC FURY: THE WAR THAT WASN\u2019T SUPPOSED TO HAPPEN.",
+  "closing_message": "The US-Iran War of 2026 was not an accident of history\u2014it was a choice. A choice made in the shadows, without public debate, without clear objectives, and without a plan for what came next. This war was sold as a necessary strike against a dangerous enemy, but it was built on a foundation of fear, misinformation, and political expediency. The question we must ask ourselves now is not how it happened, but whether we have the courage to ensure it never happens again. The next war is always closer than we think."
+}
