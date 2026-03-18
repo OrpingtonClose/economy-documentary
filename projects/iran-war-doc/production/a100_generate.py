@@ -83,14 +83,15 @@ def generate_clip_via_cli(prompt: str, output_path: str, seed: int, image_path: 
     ]
 
     # Add image conditioning for frame-chaining
+    # CLI format: --image PATH FRAME_IDX STRENGTH [CRF]
     if image_path and os.path.exists(image_path):
-        cmd.extend(["--images", f"{image_path},0,1.0,33"])
+        cmd.extend(["--image", image_path, "0", "1.0", "33"])
 
     log.info(f"Running: {' '.join(cmd[:6])}... → {output_path}")
     t0 = time.time()
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         elapsed = time.time() - t0
 
         if proc.returncode == 0 and os.path.exists(output_path):
@@ -100,10 +101,12 @@ def generate_clip_via_cli(prompt: str, output_path: str, seed: int, image_path: 
         else:
             log.error(f"  ✗ Failed (exit {proc.returncode}) after {elapsed:.1f}s")
             if proc.stderr:
-                log.error(f"  stderr: {proc.stderr[-500:]}")
+                log.error(f"  stderr: {proc.stderr[-2000:]}")
+            if proc.stdout:
+                log.error(f"  stdout (last 500): {proc.stdout[-500:]}")
             return False
     except subprocess.TimeoutExpired:
-        log.error(f"  ✗ Timeout after 600s")
+        log.error(f"  ✗ Timeout after 900s")
         return False
 
 
