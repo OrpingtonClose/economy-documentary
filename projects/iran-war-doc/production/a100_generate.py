@@ -226,7 +226,13 @@ def main():
     parser.add_argument("--output-dir", default="/workspace/outputs", help="Output directory for clips")
     parser.add_argument("--test-only", action="store_true", help="Generate only first clip as test")
     parser.add_argument("--resume", action="store_true", help="Skip already-generated clips")
+    parser.add_argument("--gpu", type=int, default=None, help="GPU index for multi-GPU machines (sets CUDA_VISIBLE_DEVICES)")
     args = parser.parse_args()
+
+    # Pin to specific GPU on multi-GPU machines
+    if args.gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
+        log.info(f"Pinned to GPU {args.gpu}")
 
     os.makedirs(args.output_dir, exist_ok=True)
 

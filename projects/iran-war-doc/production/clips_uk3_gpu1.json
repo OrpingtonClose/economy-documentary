@@ -1,0 +1,359 @@
+[
+  {
+    "clip_id": "scene_16_clip05",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 5,
+    "start_sec_in_scene": 75,
+    "target_duration_sec": 30,
+    "ltx_clips_needed": 6,
+    "prompt": "Companies House interface: search being conducted; results appearing. dramatic cinematic lighting, high contrast shadows. Abstract visualization with nodes activating sequentially; camera tracks the light; pull back to full network; cut to records interface. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "visual_action_raw": "Companies House interface: search being conducted; results appearing",
+    "narration_trigger": "\"Ali Ansari. UK-sanctioned. Cypriot passport.\"",
+    "world": "neutral",
+    "color_palette": [
+      "#E8C020",
+      "#E8D8A0",
+      "#40C0B0",
+      "#7090A0"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_04_clip00",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 0,
+    "start_sec_in_scene": 0,
+    "target_duration_sec": 25,
+    "ltx_clips_needed": 5,
+    "prompt": "Wide tracking shot entering vast empty government budget space. dramatic cinematic lighting, high contrast shadows. Long forward tracking shot in budget space; aerial crane on overpass; street-level static for Main Street. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "visual_action_raw": "Wide tracking shot entering vast empty government budget space",
+    "narration_trigger": "\"one-point-five billion dollars per day\"",
+    "world": "neutral",
+    "color_palette": [
+      "#ECEEF4",
+      "#B0C4DC",
+      "#4A5060",
+      "#D08820"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_08_clip01",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 1,
+    "start_sec_in_scene": 20,
+    "target_duration_sec": 25,
+    "ltx_clips_needed": 5,
+    "prompt": "Camera zooms slowly into network; one cluster receiving multiple flows. dramatic cinematic lighting, high contrast shadows. Abstract visualization starts wide, slow zoom; cut to domestic close-up of hands; cut to wide street market. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "visual_action_raw": "Camera zooms slowly into network; one cluster receiving multiple flows",
+    "narration_trigger": "\"one-point-seven billion dollars\"",
+    "world": "neutral",
+    "color_palette": [
+      "#050810",
+      "#40C0F0",
+      "#8090A0",
+      "#E0C080"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_12_clip04",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 4,
+    "start_sec_in_scene": 80,
+    "target_duration_sec": 25,
+    "ltx_clips_needed": 5,
+    "prompt": "Camera at far end of table; both sides in frame. dramatic cinematic lighting, high contrast shadows. Wide drifting along car line (handheld); locked at end of diplomatic table; wide on tanker at sea. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "visual_action_raw": "Camera at far end of table; both sides in frame",
+    "narration_trigger": "\"seven to ten million barrels at one hundred dollars\"",
+    "world": "neutral",
+    "color_palette": [
+      "#F4EDD0",
+      "#E0E8F0",
+      "#A0A8B0",
+      "#D0CCC0"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_17_clip00",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 0,
+    "start_sec_in_scene": 0,
+    "target_duration_sec": 25,
+    "ltx_clips_needed": 5,
+    "prompt": "Split frame: luxury property + devastated urban landscape. dramatic cinematic lighting, high contrast shadows. Split composition held, then slow drift; final locked shot on padlock. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "visual_action_raw": "Split frame: luxury property + devastated urban landscape",
+    "narration_trigger": "\"ninety-five and two hundred billion dollars\"",
+    "world": "neutral",
+    "color_palette": [
+      "#C8C090",
+      "#B0A090",
+      "#D0C8B0",
+      "#F0F0F0"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_24_clip01",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 1,
+    "start_sec_in_scene": 20,
+    "target_duration_sec": 25,
+    "ltx_clips_needed": 5,
+    "prompt": "Two monitors; camera moves closer to analyst writing. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Analyst desk mid-close; abstract visualization wide; small business street-level. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "visual_action_raw": "Two monitors; camera moves closer to analyst writing",
+    "narration_trigger": "\"twenty-five percent recession probability\"",
+    "world": "ledger",
+    "color_palette": [
+      "#E8D0A0",
+      "#A0C0E0",
+      "#9A2010",
+      "#D09030"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_03_clip02",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 2,
+    "start_sec_in_scene": 40,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Wide shot: full gas station forecourt, multiple cars, mid-morning light. warm amber light fading to harsh fluorescent, lived-in textures, human scale. Street-level at pump, handheld slight drift; aerial on storage tanks; locked wide for server room; back to street handheld. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "visual_action_raw": "Wide shot: full gas station forecourt, multiple cars, mid-morning light",
+    "narration_trigger": "\"three-point-six billion extra dollars\"",
+    "world": "street",
+    "color_palette": [
+      "#F0E8C0",
+      "#F8F0D8",
+      "#40A878",
+      "#1A2A1A"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_06_clip03",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 3,
+    "start_sec_in_scene": 55,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Maritime route map (visual/abstract): traffic lines radiating from Gulf. dramatic cinematic lighting, high contrast shadows. Aerial overhead held on tanker; locked office shot; map visual abstract; aerial crane down to tanker hull. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "visual_action_raw": "Maritime route map (visual/abstract): traffic lines radiating from Gulf",
+    "narration_trigger": "\"more ton-miles traveled by every barrel\"",
+    "world": "neutral",
+    "color_palette": [
+      "#6080A0",
+      "#8A4020",
+      "#3060A0",
+      "#E8C060"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_11_clip04",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 4,
+    "start_sec_in_scene": 75,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Pull back: both flows originate from the same central node. dramatic cinematic lighting, high contrast shadows. Abstract visualization held and pulled back; street pull-back to frame both gas stations. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "visual_action_raw": "Pull back: both flows originate from the same central node",
+    "narration_trigger": "\"direct, structural opposition to each other\"",
+    "world": "neutral",
+    "color_palette": [
+      "#80B8F0",
+      "#E8A020",
+      "#F8F8F8",
+      "#F0ECD8"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_15_clip02",
+    "scene_number": 15,
+    "scene_title": "THE BISHOPS AVENUE",
+    "clip_index": 2,
+    "start_sec_in_scene": 45,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Moving at gate level; stone pillars, privacy, scale. dramatic cinematic lighting, high contrast shadows. Aerial drone descending to street level; wall-level moving; settle on gate; cut to hotel facade; return to gate. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+    "visual_action_raw": "Moving at gate level; stone pillars, privacy, scale",
+    "narration_trigger": "\"thirty-three-point-seven million pounds\"",
+    "world": "neutral",
+    "color_palette": [
+      "#C8D080",
+      "#9A9490",
+      "#B8C8D8",
+      "#F4F0EC"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_19_clip03",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 3,
+    "start_sec_in_scene": 65,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Back to government office; same suits, same briefcases, different setting. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. Through-glass observation of acquisition office; cut to PE lobby; back to government; five-node abstract visualization. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "visual_action_raw": "Back to government office; same suits, same briefcases, different setting",
+    "narration_trigger": "\"He recused himself from specific conflicts.\"",
+    "world": "ledger",
+    "color_palette": [
+      "#E4ECF8",
+      "#E8D8A0",
+      "#F0E870"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_21_clip03",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 3,
+    "start_sec_in_scene": 70,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Manufacturing floor: running lines visible; empty bays beyond. dramatic cinematic lighting, high contrast shadows. Timeline visualization is wide and analytical; rapid close-up on gap; floor-level moving through factory; locked on signing. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "visual_action_raw": "Manufacturing floor: running lines visible; empty bays beyond",
+    "narration_trigger": "\"market rewarded the buyback\"",
+    "world": "neutral",
+    "color_palette": [
+      "#FEFEFE",
+      "#D8A030",
+      "#9A2010",
+      "#F0ECDC"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_24_clip02",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 2,
+    "start_sec_in_scene": 45,
+    "target_duration_sec": 20,
+    "ltx_clips_needed": 4,
+    "prompt": "Abstract forecast line: moderate climb flattens, begins to angle down. dramatic cinematic lighting, high contrast shadows. Analyst desk mid-close; abstract visualization wide; small business street-level. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "visual_action_raw": "Abstract forecast line: moderate climb flattens, begins to angle down",
+    "narration_trigger": "\"zero-point-seven percent \u2014 half the previous estimate\"",
+    "world": "neutral",
+    "color_palette": [
+      "#E8D0A0",
+      "#A0C0E0",
+      "#9A2010",
+      "#D09030"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_02_clip00",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 0,
+    "start_sec_in_scene": 0,
+    "target_duration_sec": 15,
+    "ltx_clips_needed": 3,
+    "prompt": "Calculator keystrokes; paper receipt beginning to curl. dramatic cinematic lighting, high contrast shadows. Locked close-ups; no camera movement until the school hallway where handheld breathes slightly. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "visual_action_raw": "Calculator keystrokes; paper receipt beginning to curl",
+    "narration_trigger": "\"Center for Strategic and International Studies\"",
+    "world": "neutral",
+    "color_palette": [
+      "#E0ECFF",
+      "#F8F0A0",
+      "#F0E8C0",
+      "#404040"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_08_clip04",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 4,
+    "start_sec_in_scene": 85,
+    "target_duration_sec": 15,
+    "ltx_clips_needed": 3,
+    "prompt": "Cut to: elderly woman's hands at kitchen table, phone in hand. warm amber light fading to harsh fluorescent, lived-in textures, human scale. Abstract visualization starts wide, slow zoom; cut to domestic close-up of hands; cut to wide street market. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "visual_action_raw": "Cut to: elderly woman's hands at kitchen table, phone in hand",
+    "narration_trigger": "\"four hundred and thirty-nine million dollars\"",
+    "world": "street",
+    "color_palette": [
+      "#050810",
+      "#40C0F0",
+      "#8090A0",
+      "#E0C080"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_16_clip02",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 2,
+    "start_sec_in_scene": 30,
+    "target_duration_sec": 15,
+    "ltx_clips_needed": 3,
+    "prompt": "Caribbean-colored third node; turquoise; light arrives dimmer. dramatic cinematic lighting, high contrast shadows. Abstract visualization with nodes activating sequentially; camera tracks the light; pull back to full network; cut to records interface. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "visual_action_raw": "Caribbean-colored third node; turquoise; light arrives dimmer",
+    "narration_trigger": "\"Ziba Leisure Ltd., Saint Kitts\"",
+    "world": "neutral",
+    "color_palette": [
+      "#E8C020",
+      "#E8D8A0",
+      "#40C0B0",
+      "#7090A0"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_26_clip07",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 7,
+    "start_sec_in_scene": 90,
+    "target_duration_sec": 15,
+    "ltx_clips_needed": 3,
+    "prompt": "Return to gas station; woman doing math. warm amber light fading to harsh fluorescent, lived-in textures, human scale. High aerial on Strait; rapid associative cuts (each 5\u20138 seconds); return to aerial; gentle cuts to street; final pull back. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "visual_action_raw": "Return to gas station; woman doing math",
+    "narration_trigger": "\"The family at the gas station\"",
+    "world": "street",
+    "color_palette": [
+      "#8090A0",
+      "#D08030",
+      "#1A2A4A"
+    ],
+    "transition_to_next": "cut"
+  },
+  {
+    "clip_id": "scene_26_clip01",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 1,
+    "start_sec_in_scene": 12,
+    "target_duration_sec": 10,
+    "ltx_clips_needed": 2,
+    "prompt": "Quick cut: trading floor at dawn. cold blue-white institutional lighting, steel and glass surfaces, corporate atmosphere. High aerial on Strait; rapid associative cuts (each 5\u20138 seconds); return to aerial; gentle cuts to street; final pull back. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, anamorphic lens flare, dramatic lighting, high contrast, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "visual_action_raw": "Quick cut: trading floor at dawn",
+    "narration_trigger": "\"hedge funds... three hundred twenty thousand lots\"",
+    "world": "ledger",
+    "color_palette": [
+      "#8090A0",
+      "#D08030",
+      "#1A2A4A"
+    ],
+    "transition_to_next": "cut"
+  }
+]
