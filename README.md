@@ -6,8 +6,8 @@ A fully AI-generated ~99-minute documentary about the 2025 global economy, produ
 
 This repository contains the complete, reproducible pipeline for:
 
-1. **Corpus building** — Discovering and transcribing 546 economy-related YouTube videos into a knowledge base
-2. **Script generation** — Synthesizing transcripts into a 42-scene, 8-act screenplay (`SCENARIO.MD`) with 3 narrator voices
+1. **YouTube extraction** — Discovering 37+ financial channels, fetching 546 videos, extracting transcripts and comments, building a structured knowledge base
+2. **Script generation** — Synthesizing the knowledge base into a 42-scene, 8-act screenplay (`SCENARIO.MD`) with 3 narrator voices
 3. **TTS narration** — Generating 3-voice narration using Qwen3-TTS VoiceDesign on GPU VMs
 4. **Video generation** — Generating 260+ unique video clips using LTX-2.3 22B-dev on A100 80GB GPUs
 5. **Post-production** — Mixing narration with video, stitching 42 scenes into a final documentary
@@ -41,18 +41,459 @@ These are non-negotiable requirements that shaped every design decision:
 
 ---
 
-## Architecture Overview
+## Phase 1: YouTube Extraction Pipeline (Detailed)
+
+The entire documentary is built from a knowledge base extracted from YouTube. This section describes every step, connector, API, and data transformation in the extraction pipeline.
+
+### 1.1 Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    CORPUS PIPELINE                       │
-│                                                         │
-│  YouTube API → Channel Discovery → Video Download →     │
-│  Whisper Transcription → 546 Transcripts →              │
-│  Knowledge Digest → SCENARIO.MD (42 scenes)             │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                    YOUTUBE EXTRACTION PIPELINE                           │
+│                                                                         │
+│  ┌─────────────┐    ┌──────────────┐    ┌──────────────────────────┐   │
+│  │ User's       │    │ YouTube Data │    │ Apify (YouTube Scraper) │   │
+│  │ YouTube     │──→ │ API v3       │    │ via Pipedream connector  │   │
+│  │ Subscriptions│    │ (Pipedream)  │    │ source_id: apify__pipedream│ │
+│  └─────────────┘    └──────┬───────┘    └──────────┬───────────────┘   │
+│                            │                        │                   │
+│         Channel Discovery  │     Transcript/Comment │                   │
+│         Video Listing      │     Extraction         │                   │
+│         Metadata Fetch     │                        │                   │
+│                            ▼                        ▼                   │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                    LOCAL PROCESSING                              │   │
+│  │                                                                 │   │
+│  │  youtube_transcript_api → 546 transcripts (16M chars)          │   │
+│  │  WhisperX large-v3 on GPU → fallback transcription             │   │
+│  │  Comment heuristic filter → 200-500 candidates from 10K+      │   │
+│  │  LLM scoring → expertise / novelty / contrarian / quotability  │   │
+│  └──────────────────────────┬──────────────────────────────────────┘   │
+│                             │                                          │
+│                             ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                 KNOWLEDGE BASE                                  │   │
+│  │                                                                 │   │
+│  │  v5_knowledge.json (1.3MB) — all transcripts + scored comments │   │
+│  │  corpus_digest.json (1.5MB) — LLM-summarized topics            │   │
+│  │  corpus_summary.md — topic frequencies, channel breakdown      │   │
+│  │  corpus_deep_analysis.md (182KB) — narrative threads           │   │
+│  └──────────────────────────┬──────────────────────────────────────┘   │
+│                             │                                          │
+│                             ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                 SCREENPLAY GENERATION                           │   │
+│  │                                                                 │   │
+│  │  v5_script_builder.py → v5_script_expand.py → v5_script_add.py│   │
+│  │  → v5_script_final.py → SCENARIO.MD (42 scenes, 1794 lines)  │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 Channel Discovery
+
+**Goal**: Identify 37+ financial/economy YouTube channels covering the target time period (March 2026).
+
+**Method**: The user maintained a YouTube playlist of economy-related videos. Channel discovery was done by:
+
+1. **Browsing the user's YouTube subscriptions** — Screenshots of the subscription list were parsed to extract channel names
+2. **Manual curation** — Channels were selected for topical relevance (macro economics, commodities, crypto, geopolitics)
+3. **Channel ID resolution** — Channel names were resolved to YouTube channel IDs using the YouTube Data API
+
+**Scripts involved**:
+- `scripts/corpus-building/extract_channels.py` — Initial channel extraction from screenshots
+- `scripts/corpus-building/all_channels.py` — Deduplicated master list (60+ candidates)
+- `scripts/corpus-building/final_channels.py` — Final curated list with channel IDs
+- `scripts/corpus-building/search_channels.py` — Resolves channel names → IDs via YouTube Data API
+
+**Output**: `all_channels.json` — 37 channels with their YouTube channel IDs:
+
+```
+Adam Taggart | Thoughtful Money, Altcoin Daily, Anna Bocca, Azul, Bankless,
+Benjamin Cowen, Bram Kanstein, Coin Bureau Finance, Commodity Culture,
+Conor Harris, David Lin, Econ Lessons, Ed Yardeni, EllioTrades,
+Eurodollar University, Fundamental Investing Institute, Heresy Financial,
+ITM TRADING INC., Joe Blogs, Josh Olszewicz, Ken McElroy Podcast,
+Maggie Lake Talking Markets, Market Insider, Nobel Fest, Oxbow Advisors,
+Polityka Zagraniczna, Projekt: 100X, Rosenberg Research, Soar Financially,
+Stoic Finance, The Ezra Klein Show, The Mark Thompson Show,
+The Meb Faber Show, The Monetary Matters Network, WEALTHTRACK,
+We Study Billionaires, Wealthion
+```
+
+### 1.3 Video Discovery and Listing
+
+**API used**: YouTube Data API v3 via Pipedream connector (`source_id: youtube_data_api__pipedream`)
+
+**Connector tools**:
+- `youtube_data_api-search-videos` — Search for recent videos from specific channels
+- `youtube_data_api-list-videos` — Fetch full metadata (duration, view count, tags) in batches of 50
+- `youtube_data_api-list-playlist-videos` — List videos from channel upload playlists
+- `youtube_data_api-channel-statistics` — Get channel-level stats
+
+**Process**:
+
+1. For each of the 37 channels, fetch the "uploads" playlist ID from the channel resource
+2. Page through the uploads playlist (`list-playlist-videos`, `maxResults=50`) to find videos published within the target date range
+3. Batch-fetch full video metadata (`list-videos`, 50 per API call) for: title, description, duration, view count, comment count, tags, published date
+4. Filter for videos published March 1–13, 2026 (the documentary's focus period)
+5. Also include older "evergreen" content from key channels (e.g., Lyn Alden's macro framework videos)
+
+**API quota usage**: ~250 units per daily run (well under the 10,000 unit/day limit)
+
+**Output**: `economy_videos.json` — 546 video entries with full metadata:
+```json
+{
+  "video_id": "HOLUMfRLaI4",
+  "channel_name": "The Ezra Klein Show",
+  "title": "The Great Lie of War | Ben Rhodes",
+  "published_at": "2026-03-08T12:00:00Z",
+  "duration_seconds": 3847,
+  "view_count": 1240000,
+  "comment_count": 8432,
+  "tags": ["iran", "war", "foreign policy", "ben rhodes"]
+}
+```
+
+### 1.4 Transcript Extraction (Three-Tier Strategy)
+
+Transcripts are the primary data source for the documentary's knowledge base. We use a three-tier extraction strategy, each tier being a fallback for the previous:
+
+#### Tier 1: `youtube_transcript_api` (Python library, free, fast)
+
+**Script**: `scripts/corpus-building/extract_transcripts.py`
+
+Uses the `YouTubeTranscriptApi` library to fetch official captions directly from YouTube:
+
+```python
+from youtube_transcript_api import YouTubeTranscriptApi
+ytt_api = YouTubeTranscriptApi()
+
+# List available transcripts for a video
+transcript_list = ytt_api.list(video_id)
+
+# Prefer English, then translated, then any available
+for t in transcript_list:
+    if t.language_code.startswith('en'):
+        transcript = t.fetch()
+        break
+```
+
+- **Coverage**: ~85% of the 546 videos had English captions available (auto-generated or manual)
+- **Output format**: Text segments with timestamps, joined into a single `full_text` field
+- **Capped at 50,000 chars per video** to prevent oversized entries
+
+#### Tier 2: Apify YouTube Scraper (for videos without accessible captions)
+
+**Connector**: Apify via Pipedream (`source_id: apify__pipedream`)
+
+When `youtube_transcript_api` fails (region-locked, disabled captions, etc.), we use Apify's YouTube Scraper actor:
+
+```python
+# Run Apify actor to scrape transcript
+apify.run_actor(
+    actor_id="youtube-scraper-actor-id",
+    input={
+        "startUrls": [{"url": f"https://www.youtube.com/watch?v={video_id}"}],
+        "maxResults": 1,
+        "downloadSubtitles": True,
+        "subtitlesLanguage": "en",
+    }
+)
+```
+
+- **Coverage**: Recovered ~10% of the videos that Tier 1 missed
+- **Rate limiting**: Apify handles YouTube's anti-scraping measures internally
+
+#### Tier 3: WhisperX Transcription on GPU (final fallback)
+
+**Script**: `scripts/corpus-building/vast_transcribe.py` and `transcribe_pipeline.sh`
+
+For the remaining ~5% of videos where neither captions nor Apify worked, we download the audio and transcribe it locally using WhisperX large-v3 on a GPU VM:
+
+```python
+import whisperx
+
+# Load WhisperX model (once, reuse across all videos)
+model = whisperx.load_model("large-v3", "cuda", compute_type="float16")
+
+# Download audio via yt-dlp (mono, 16kHz, MP3)
+subprocess.run([
+    "yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "9",
+    "--postprocessor-args", "-ac 1 -ar 16000",
+    "-o", audio_path, "--no-playlist", "--quiet",
+    f"https://www.youtube.com/watch?v={video_id}"
+])
+
+# Transcribe
+audio = whisperx.load_audio(audio_path)
+result = model.transcribe(audio, batch_size=16)
+text = " ".join([seg["text"].strip() for seg in result["segments"]])
+```
+
+**yt-dlp throttling** (to avoid YouTube IP bans):
+```python
+# Sleep 10-30s between downloads, rotate player clients
+YT_DLP_OPTS = {
+    'sleep_interval': 10,
+    'max_sleep_interval': 30,
+    'extractor_args': {'youtube': {'player_client': ['web', 'android']}},
+}
+```
+
+- **Run on**: Vast.ai GPU VM (any GPU with ≥8GB VRAM is sufficient for WhisperX)
+- **Speed**: ~5 minutes per 1-hour video on an RTX GPU
+- **Audio is deleted after transcription** to save disk space
+
+#### Transcript output format
+
+All three tiers produce the same output format saved per-video:
+```
+transcripts/{video_id}.txt
+───────────────────────────
+Channel: The Ezra Klein Show
+Title: The Great Lie of War | Ben Rhodes
+
+Welcome back to the show. Today we're looking at the arguments being
+made for the war in Iran and whether they hold up under scrutiny...
+```
+
+**Final stats**: 546 transcripts extracted, totaling ~16 million characters of raw content.
+
+### 1.5 Comment Extraction
+
+**API used**: YouTube Data API v3 via Pipedream connector
+
+**Tools**:
+- `youtube_data_api-create-comment-thread` — (for the channel's own videos, not used in extraction)
+- Comment threads fetched via the YouTube Data API `commentThreads.list` endpoint
+
+**Strategy**:
+
+| Video age | Fetch strategy | Rationale |
+|-----------|---------------|-----------|
+| New (< 3 days) | Full comment pull, all pages | Get complete picture |
+| Recent (< 14 days) | Incremental: newest first, stop at known ID | Only fetch new comments |
+| Old (> 14 days) | Skip unless comment_count changed > 20% | Comments stabilize |
+
+**Comment schema** (per video):
+```json
+{
+  "comment_id": "Ugw...",
+  "parent_id": null,
+  "author": "FormerTrader_NYC",
+  "author_channel_id": "UC...",
+  "text": "I traded crude for 15 years. The physical market...",
+  "like_count": 234,
+  "reply_count": 12,
+  "published_at": "2026-03-10T14:32:00Z",
+  "is_pinned": false
+}
+```
+
+**API quota**: ~3,000-5,000 units per daily run (with `maxResults=100`, one call fetches 100 comments)
+
+### 1.6 Comment Intelligence (Filter → Score → Cluster)
+
+Raw YouTube comments are 95%+ noise ("great video!", "first!", emoji spam). The intelligence pipeline surfaces the valuable 5%:
+
+#### Stage 1: Heuristic Filter (no LLM, no cost)
+
+```python
+def is_potentially_valuable(comment):
+    if comment['like_count'] >= 10:      return True  # Community endorsement
+    if len(comment['text'].split()) >= 40: return True  # Substantial analysis
+    if comment['reply_count'] >= 3:       return True  # Sparked discussion
+    if any(kw in comment['text'].lower() for kw in [
+        'i work in', 'i trade', 'years of experience',
+        'the data shows', 'bloomberg', 'reuters'
+    ]):                                    return True  # Domain expertise signals
+    return False
+```
+
+**Result**: ~10,000 raw comments → 200-500 candidates
+
+#### Stage 2: LLM Scoring (batched, ~$0.05/run)
+
+The 200-500 candidates are batched into a single LLM call, scored 1-10 on four dimensions:
+1. **Domain expertise** — Does the commenter demonstrate professional knowledge?
+2. **Insight novelty** — Does this add information not in the video itself?
+3. **Contrarian value** — Does it challenge the prevailing narrative with evidence?
+4. **Quotability** — Could this be paraphrased in a documentary narration?
+
+Only comments scoring 7+ on any dimension are kept.
+
+#### Stage 3: Research Enrichment (selective, top 10-20 comments only)
+
+For the highest-scoring comments:
+- **Factual claims** → verified via web search (Perplexity Sonar or Exa)
+- **Contrarian takes** → strongest counterargument found via LLM
+- **Data references** → primary source fetched and relevant passage extracted
+- **Expert opinions** → broader context gathered
+
+Example enriched comment:
+```json
+{
+  "author": "FormerTrader_NYC",
+  "text": "I traded crude for 15 years. The physical market has enough SPR capacity to absorb Hormuz for 90 days...",
+  "like_count": 234,
+  "enrichment": {
+    "verification": "SPR claim verified — US SPR at 372M barrels (DOE, March 2026)",
+    "counterargument": "IEA disputes 90-day absorption, cites refinery grade mismatch",
+    "sources": ["https://www.eia.gov/...", "https://www.iea.org/..."]
+  }
+}
+```
+
+#### Stage 4: Cluster and Deduplicate
+
+Group high-scoring comments by topic/stance (e.g., "oil supply → contrarian bullish"), pick the best representative per cluster. This prevents the script from including 7 comments that say the same thing.
+
+### 1.7 Knowledge Base Assembly
+
+**Script**: `scripts/corpus-building/build_knowledge.py`
+
+Combines all extracted data into the final knowledge base:
+
+```python
+knowledge = {
+    "metadata": {
+        "pipeline_version": "v5",
+        "generated_at": "2026-03-13",
+        "stats": {
+            "total_channels": 37,
+            "total_videos_fetched": 546,
+            "videos_with_transcripts": 546,
+            "total_filtered_comments": 2847,
+            "date_range": {"earliest": "2026-02-15", "latest": "2026-03-13"}
+        }
+    },
+    "key_economic_themes": {
+        "iran_war": { ... },          # 12 key videos, political context
+        "oil_shock": { ... },          # Hormuz closure, 94% traffic reduction
+        "private_credit_crisis": { ... }, # BlackRock, $300B contagion
+        "fed_stagflation_bind": { ... },  # Can't cut, can't raise
+        "gold_silver_surge": { ... },     # Gold to $5,200 forecast
+        "bitcoin_crypto": { ... },        # Bitcoin as "last smoke alarm"
+        "us_china_geopolitics": { ... },  # Oil reshaping alliances
+        "europe_energy_crisis": { ... },  # 20% global LNG offline
+        "k_shaped_economy": { ... },      # Recession for bottom 90%
+        "copper_commodities": { ... }     # AI energy supercycle
+    },
+    "documentary_priority_videos": [ ... ],  # 15 highest-value videos
+    "videos": [                              # All 546 videos with transcripts + comments
+        {
+            "video_id": "abc123",
+            "title": "...",
+            "channel_name": "...",
+            "transcript": "...",           # Full text (up to 50K chars)
+            "top_comments": [ ... ]        # Filtered, scored comments
+        }
+    ]
+}
+```
+
+**Key economic themes** identified across the corpus:
+
+| Theme | Videos | Key stat |
+|-------|--------|----------|
+| Iran War | 12 | Strikes began ~March 1, 2026 |
+| Oil Shock / Hormuz | 15 | Ship traffic: 138 → 4 ships/day (-94%) |
+| Private Credit Crisis | 8 | BlackRock $26B fund blocked redemptions |
+| Fed Stagflation Bind | 10 | Can't cut (inflation) or raise (recession) |
+| Gold/Silver Surge | 8 | Gold forecast: $5,200 (Stoeferle) |
+| Bitcoin/Crypto | 6 | BTC = "last functioning smoke alarm" (Gromen) |
+| US-China Geopolitics | 5 | Oil reshaping alliance structure |
+| Europe Energy Crisis | 4 | 20% global LNG offline |
+| K-Shaped Economy | 6 | Recession for bottom 90%, wealth effect for top |
+| Copper Supercycle | 3 | AI energy demand driving deficit |
+
+**File sizes**:
+- `v5_knowledge.json`: 1.37 MB (complete knowledge base)
+- `corpus_digest.json`: 1.55 MB (LLM-summarized)
+- `corpus_summary.md`: 41 KB (topic frequencies)
+- `corpus_deep_analysis.md`: 182 KB (deep narrative analysis)
+
+### 1.8 Persistent Data Store (B2 + Parquet)
+
+For ongoing production (daily updates), the pipeline stores all data in Backblaze B2, queryable via DuckDB:
+
+```
+economy-vid-assets/youtube-data/
+├── catalog.parquet            # Master index (~50KB, single source of truth)
+├── transcripts/{video_id}.json # Timestamped transcript (immutable once fetched)
+├── comments/{video_id}.parquet # All comments per video (appendable)
+├── metadata/{video_id}.json   # Title, description, stats, tags
+└── digests/{date}.json        # Daily LLM-extracted insights
+```
+
+**Queryable from anywhere** (Vast.ai VM, local machine, cron agent):
+```python
+import duckdb
+con = duckdb.connect()
+con.execute("""
+    INSTALL httpfs; LOAD httpfs;
+    CREATE SECRET (TYPE s3,
+        KEY_ID '${B2_KEY_ID}', SECRET '${B2_APP_KEY}',
+        REGION 'us-west-004',
+        ENDPOINT 's3.us-west-004.backblazeb2.com');
+""")
+# Query: which videos from the last 3 days have the most comments?
+con.sql("""
+    SELECT video_id, title, channel_name, comment_count
+    FROM read_parquet('s3://economy-vid-assets/youtube-data/catalog.parquet')
+    WHERE published_at > '2026-03-10'
+    ORDER BY comment_count DESC
+""")
+```
+
+**Estimated storage**: ~1.3 GB/year for 37 channels. Negligible cost at B2 rates ($5/TB/month).
+
+### 1.9 Screenplay Generation (Corpus → SCENARIO.MD)
+
+The knowledge base is transformed into the 42-scene screenplay through a multi-step LLM process:
+
+1. **`v5_script_builder.py`** (103KB) — Takes `v5_knowledge.json`, identifies the 10 key narrative threads, and generates an initial script structure with acts, scenes, and clip assignments. Each clip has a narration line and a visual prompt.
+
+2. **`v5_script_expand.py`** (141KB) — Expands the initial script by adding depth: more data points from transcripts, richer visual descriptions, transitional narration between scenes, three-voice dialogue structure (V1 asks questions, V2 explains, V3 provides perspective).
+
+3. **`v5_script_add.py`** (67KB) — Adds interstitial clips, fills gaps, strengthens transitions between acts, and adds the "CAUSAL BEATS" visual planning tables for each scene.
+
+4. **`v5_script_final.py`** — Final additions to reach 330+ clips. Adds market reaction sequences, regulatory response clips, and closing reflections.
+
+5. **Manual editing** → `corpus/SCENARIO.MD` — The final screenplay: 42 scenes, 8 acts, 1,794 lines, with full visual descriptions and three-voice dialogue blocks.
+
+**Screenplay structure**:
+```markdown
+## ACT I: COLD OPEN — THE IRAN WAR BEGINS
+
+### SCENE 1: "The Morning Coffee"
+[Duration: ~60 seconds]
+
+#### VOICE BLOCKS
+**V1 (Curious Challenger):** What happens when you wake up on a Sunday morning
+and discover your country has gone to war?
+**V2 (Patient Explainer):** The first financial markets to open...
+**V3 (Encouraging Guide):** What's remarkable is how quickly...
+
+#### VISUAL DESCRIPTION
+A hand reaches for a coffee mug on a worn kitchen table...
+
+#### CAUSAL BEATS
+| Time | Narration Trigger | Visual Action |
+|------|-------------------|---------------|
+| 0:00 | "wake up on a Sunday" | Hand reaching for coffee mug |
+| 0:05 | "gone to war" | Newspaper unfolds, headline visible |
+...
+```
+
+---
+
+## Phase 2: Production Pipeline
+
+### 2.1 Architecture Overview
+
+```
 ┌─────────────────────────────────────────────────────────┐
 │                  PRODUCTION PIPELINE                     │
 │                                                         │
@@ -88,210 +529,37 @@ These are non-negotiable requirements that shaped every design decision:
 └─────────────────────────────────────────────────────────┘
 ```
 
----
+### 2.2 Scene Parsing and Prompt Conversion
 
-## Prerequisites
+`SCENARIO.MD` is parsed into `scenes_parsed.json` (42 scenes with voice blocks and visual descriptions), then converted to LTX-2.3 optimized prompts via `convert_prompts_v2.py`:
 
-### Hardware
+- Parses "CAUSAL BEATS" tables from visual descriptions
+- Enriches each beat with environmental details (keyword-matched: kitchen → warm light, trading floor → blue monitors)
+- Adds camera movement (varies by clip index: establishing, push-in, tracking, dolly, pull-back)
+- Appends style string: "Photorealistic cinematic documentary footage shot on Arri Alexa Mini with Cooke anamorphic lenses..."
+- Targets 150-250 words per prompt
 
-- **Minimum**: 1× NVIDIA A100 80GB (or any GPU with ≥48GB VRAM for transformer-only mode)
-- **Recommended**: 6× A100 80GB for parallel generation (~2.5 hours total)
-- **Alternative**: RTX PRO 6000 Blackwell (96GB) — tested and working
+Output: `scene_prompts.json` — 260 clips with enriched prompts.
 
-### Software
+### 2.3 TTS Narration (Qwen3-TTS VoiceDesign)
 
-- Python 3.10+
-- CUDA 12.4+
-- ffmpeg 4.4+
-- `uv` package manager (for LTX-2 repo)
-- `b2` CLI (for Backblaze B2 uploads)
-- SSH client (for VM management)
+**Script**: `scripts/tts/generate_tts.py`
 
-### API Keys Required
+Three narrator voices designed via text description (no reference audio):
 
-| Service | Purpose | How to Get |
-|---------|---------|------------|
-| Vast.ai | GPU VM rental | https://vast.ai — create account, add credits |
-| HuggingFace | Model downloads (Gemma-3-12B, LTX-2.3) | https://huggingface.co/settings/tokens |
-| Backblaze B2 | Video storage | https://www.backblaze.com/b2 — create bucket |
-| YouTube Data API | Corpus building (optional) | Google Cloud Console |
-| Apify | YouTube transcript extraction (optional) | https://apify.com |
-| Frame.io | Review platform (optional) | https://frame.io — OAuth Web App |
+| Voice | Role | Description |
+|-------|------|-------------|
+| V1 | Curious Challenger | Young male, late 20s, conversational, fast-paced, American |
+| V2 | Patient Explainer | 50s male, calm, authoritative, measured, British |
+| V3 | Encouraging Guide | 40s female, warm, reassuring, medium pace, American |
 
----
+Processing: text chunked at ≤4000 chars at sentence boundaries, 0.3s silence between chunks, 1.0s between voice switches. Output: 24kHz WAV, mono.
 
-## Full Reproduction Steps
+### 2.4 Video Generation (LTX-2.3 + Subprocess Isolation)
 
-### Phase 0: Environment Setup
+The biggest technical challenge was fitting both the Gemma-3-12B text encoder (~24GB VRAM) and the 22B transformer (~44GB VRAM) on an 80GB GPU.
 
-```bash
-# Clone this repo
-git clone https://github.com/OrpingtonClose/economy-documentary.git
-cd economy-documentary
-
-# You'll need these environment variables
-export VAST_API_KEY="your_vast_ai_key"
-export HF_TOKEN="your_huggingface_token"
-export B2_KEY_ID="your_b2_key_id"
-export B2_APP_KEY="your_b2_app_key"
-```
-
-### Phase 1: Corpus Building (Optional — corpus is included)
-
-The `corpus/SCENARIO.MD` screenplay is included. To rebuild from scratch:
-
-```bash
-# 1. Discover economy YouTube channels
-python scripts/corpus-building/search_channels.py
-
-# 2. Extract video transcripts via Apify YouTube Scraper
-python scripts/corpus-building/extract_transcripts.py
-
-# 3. Build knowledge digest from 546 transcripts
-python scripts/corpus-building/build_knowledge.py
-
-# 4. Generate SCENARIO.MD screenplay (uses an LLM — we used Claude)
-# This is a multi-step process documented in docs/corpus_deep_analysis.md
-```
-
-### Phase 2: Parse Screenplay → Prompts
-
-```bash
-# Parse SCENARIO.MD into structured JSON (42 scenes with voice blocks)
-# scenes_parsed.json is included in data/
-
-# Convert scenes to LTX-2.3 optimized video prompts (150-250 words each)
-python scripts/generation/convert_prompts_v2.py \
-  --scenes data/scenes_parsed.json \
-  --output data/scene_prompts.json
-```
-
-### Phase 3: Rent and Setup VMs
-
-```bash
-# 1. Rent A100 80GB VMs on Vast.ai (adjust rent_vms.py for your needs)
-python scripts/vm-management/rent_vms.py
-
-# 2. Bootstrap each VM (installs LTX-2, downloads models)
-# Use bootstrap_v2.sh — it handles:
-#   - Clone LTX-2 repo, install ltx-core and ltx-pipelines
-#   - Download ltx-2.3-22b-dev.safetensors (43GB)
-#   - Download Gemma-3-12B text encoder (23GB)
-#   - Authorize B2 CLI
-scp scripts/deployment/bootstrap_v2.sh root@VM_HOST:/root/
-ssh root@VM_HOST 'bash /root/bootstrap_v2.sh'
-
-# 3. Verify the VM is ready
-ssh root@VM_HOST 'source /root/LTX-2/.venv/bin/activate && python3 -c "
-from ltx_pipelines.utils import ModelLedger
-import torch
-gpu = torch.cuda.get_device_name(0)
-vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
-print(f\"READY | {gpu} | {vram:.0f}GB\")"'
-```
-
-### Phase 4: Generate TTS Narration
-
-```bash
-# Upload scripts and data to each VM
-scp scripts/tts/generate_tts.py data/scenes_parsed.json root@VM_HOST:/workspace/scripts/
-
-# Run TTS generation (assign scene ranges to VMs)
-ssh root@VM_HOST '
-  source /workspace/LTX-2/.venv/bin/activate
-  python3 /workspace/scripts/generate_tts.py \
-    --scenes /workspace/scripts/scenes_parsed.json \
-    --output-dir /workspace/tts_output \
-    --model-path /workspace/models/qwen-tts-voicedesign \
-    --start-scene 1 --end-scene 7
-'
-
-# Or use the orchestrator for all 6 VMs at once:
-python scripts/vm-management/orchestrate.py
-```
-
-### Phase 5: Generate Video Clips
-
-```bash
-# Upload video generation scripts
-scp scripts/generation/generate_video_v3.py scripts/generation/encode_text.py \
-    data/scene_prompts.json root@VM_HOST:/workspace/scripts/
-
-# Run video generation (per VM, with assigned scene range)
-ssh root@VM_HOST '
-  source /workspace/LTX-2/.venv/bin/activate
-  nohup python3 /workspace/scripts/generate_video_v3.py \
-    --prompts /workspace/scripts/scene_prompts.json \
-    --output-dir /workspace/video_output \
-    --tts-dir /workspace/tts_output \
-    --start-scene 1 --end-scene 7 \
-    --height 512 --width 768 --num-steps 30 \
-    > /workspace/gen_log.txt 2>&1 &
-'
-
-# Monitor progress
-python scripts/vm-management/orchestrate.py status
-```
-
-### Phase 6: Mix Narration + Video
-
-```bash
-# On each VM, mix TTS audio with video clips
-ssh root@VM_HOST '
-  source /workspace/LTX-2/.venv/bin/activate
-  python3 /workspace/scripts/mix_and_stitch.py \
-    --video-dir /workspace/video_output \
-    --tts-dir /workspace/tts_output \
-    --output-dir /workspace/final_output \
-    --start-scene 1 --end-scene 7
-'
-```
-
-### Phase 7: Collect and Stitch Final Documentary
-
-```bash
-# Collect all 42 mixed scenes from VMs to local workspace
-bash scripts/mixing/collect_and_finalize.sh
-
-# IMPORTANT: Use MPEG-TS intermediate concat to fix timestamps
-# Direct ffmpeg concat causes non-monotonic DTS issues
-# The correct method:
-
-# 1. Re-encode each scene to MPEG-TS
-for i in $(seq -w 1 42); do
-  ffmpeg -y -i final_scenes/scene_${i}_final.mp4 \
-    -c:v libx264 -preset fast -crf 18 \
-    -c:a aac -b:a 192k \
-    -bsf:v h264_mp4toannexb -f mpegts \
-    final_scenes/scene_${i}.ts
-done
-
-# 2. Concatenate via concat protocol
-TS_LIST=$(for i in $(seq -w 1 42); do echo -n "final_scenes/scene_${i}.ts|"; done | sed 's/|$//')
-ffmpeg -y -i "concat:$TS_LIST" \
-  -c:v libx264 -preset medium -crf 18 \
-  -c:a aac -b:a 192k \
-  economy_documentary_final.mp4
-```
-
-### Phase 8: Upload
-
-```bash
-# Upload to Backblaze B2
-b2 file upload economy-vid-assets documentary/economy_documentary_final.mp4 economy_documentary_final.mp4
-
-# Upload to YouTube (via browser or API)
-```
-
----
-
-## Key Technical Insights
-
-### CUDA OOM Solution: Subprocess Isolation
-
-The biggest technical challenge was fitting both the Gemma-3-12B text encoder (~24GB VRAM) and the 22B transformer (~44GB VRAM) on an 80GB GPU. PyTorch does not reliably free GPU memory even after `del` + `torch.cuda.empty_cache()`.
-
-**Solution**: Run text encoding in a **subprocess** (`encode_text.py`). When the subprocess exits, the OS reclaims all GPU memory. The main process then loads the transformer into clean VRAM.
+**Solution**: Run text encoding in a **subprocess** (`encode_text.py`). When the subprocess exits, the OS reclaims all GPU memory.
 
 ```
 Main Process                    Subprocess (encode_text.py)
@@ -301,97 +569,132 @@ Main Process                    Subprocess (encode_text.py)
                                 print("ENCODED_OK")
                                 EXIT → OS frees ALL GPU memory
 Load transformer (~44GB) ←────  
-30-step denoise (~42.8GB peak)
-VAE decode → MP4
+30-step Euler denoise (~42.8GB peak)
+VAE decode → 5.04s clip MP4
 Free transformer
 ──── repeat for next clip ────
 ```
 
-### Timestamp Fix: MPEG-TS Intermediate
+**Parameters**:
+```python
+model           = "ltx-2.3-22b-dev.safetensors"  # 43GB, BF16
+resolution      = (768, 512)
+fps             = 24
+frames_per_clip = 121  # ~5.04 seconds
+denoising_steps = 30
+cfg_scale_video = 3.0
+cfg_scale_audio = 7.0
+stg_scale       = 1.0
+rescale_scale   = 0.7
+stg_blocks      = [28]
+dtype           = torch.bfloat16
+quantization    = None  # MUST be None
+```
 
-Concatenating H.264 MP4 files directly with `ffmpeg -f concat` or `stream_loop` causes **non-monotonic DTS** warnings, resulting in broken timestamps (e.g., a 60-minute documentary reporting as 120 minutes with the second half silent).
+### 2.5 Mixing and Final Stitching
 
-**Fix**: Convert each scene to MPEG-TS format (`-bsf:v h264_mp4toannexb -f mpegts`), then concatenate using the `concat:` protocol. This re-timestamps everything correctly.
+Per-scene mixing: `mix_and_stitch.py` overlays narration on video with ffmpeg.
 
-### LTX-2.3 Prompt Engineering
-
-LTX-2.3 works best with:
-- Single flowing paragraph, present tense, 150-250 words
-- Explicit camera movement described (not just "cinematic")
-- Material textures, lighting conditions, ambient audio mentioned
-- Start directly with action, not scene description
-- One primary action + one camera move per clip
-- The style string: "Photorealistic cinematic documentary footage shot on Arri Alexa Mini with Cooke anamorphic lenses..."
-
-### Qwen3-TTS VoiceDesign
-
-Three narrator voices designed via the VoiceDesign API:
-- **V1** (Curious Challenger): Young male, conversational, slightly fast-paced, American accent
-- **V2** (Patient Explainer): 50s male, calm, authoritative, measured, British accent
-- **V3** (Encouraging Guide): 40s female, warm, reassuring, medium pace, American accent
-
-Text is chunked at ~4000 chars at sentence boundaries, with 0.3s silence between chunks and 1.0s between voice switches.
+Final stitching must use **MPEG-TS intermediate** to avoid timestamp corruption:
+```bash
+# Convert each scene to TS
+ffmpeg -i scene.mp4 -bsf:v h264_mp4toannexb -f mpegts scene.ts
+# Concatenate
+ffmpeg -i "concat:scene_01.ts|scene_02.ts|..." -c:v libx264 final.mp4
+```
 
 ---
 
-## File Structure
+## Prerequisites
 
+### Hardware
+- **Minimum**: 1× NVIDIA A100 80GB (or any GPU with ≥48GB VRAM)
+- **Recommended**: 6× A100 80GB for parallel generation (~2.5 hours total)
+- **WhisperX fallback**: Any GPU with ≥8GB VRAM
+
+### API Keys Required
+
+| Service | Purpose | How to Get |
+|---------|---------|------------|
+| Vast.ai | GPU VM rental | https://vast.ai |
+| HuggingFace | Model downloads | https://huggingface.co/settings/tokens |
+| Backblaze B2 | Video/data storage | https://www.backblaze.com/b2 |
+| YouTube Data API | Channel/video/comment fetching | Google Cloud Console → Pipedream |
+| Apify | YouTube scraping fallback | https://apify.com |
+| Frame.io | Review platform (optional) | https://frame.io |
+
+### Connected Services (Pipedream)
+
+The pipeline uses two Pipedream-connected services:
+- **YouTube Data API** (`source_id: youtube_data_api__pipedream`) — channel discovery, video listing, metadata, comments
+- **Apify** (`source_id: apify__pipedream`) — YouTube scraper for transcript fallback
+
+---
+
+## Full Reproduction Steps
+
+### Phase 0: Environment Setup
+
+```bash
+git clone https://github.com/OrpingtonClose/economy-documentary.git
+cd economy-documentary
+
+export VAST_API_KEY="your_vast_ai_key"
+export HF_TOKEN="your_huggingface_token"
+export B2_KEY_ID="your_b2_key_id"
+export B2_APP_KEY="your_b2_app_key"
 ```
-economy-documentary/
-├── README.md                          # This file
-├── corpus/
-│   └── SCENARIO.MD                    # Full 42-scene screenplay (1,794 lines)
-├── data/
-│   ├── scenes_parsed.json             # 42 scenes with voice_blocks (V1/V2/V3) and visual_description
-│   └── scene_prompts.json             # 260 video clips with enriched LTX-2.3 prompts
-├── docs/
-│   ├── PRODUCTION_SPEC.md             # Complete environment spec (VMs, models, APIs, file layouts)
-│   ├── production_report.md           # Final production summary
-│   ├── ARCHITECTURE.md                # Deep technical architecture doc
-│   ├── TROUBLESHOOTING.md             # Common problems and solutions
-│   ├── youtube_pipeline_spec.md       # YouTube data pipeline architecture
-│   ├── youtube_data_store_architecture.md  # Data store design
-│   ├── corpus_summary.md              # Corpus analysis summary
-│   ├── corpus_deep_analysis.md        # Deep corpus analysis (182KB)
-│   ├── adhd_production_principles.md  # Visual storytelling principles
-│   ├── frameio_shares_api_findings.md # Frame.io V4 API notes
-│   ├── segment_planning.md            # Scene segmentation strategy
-│   ├── v3_plan.md                     # V3 production plan
-│   ├── program.md                     # Program structure
-│   └── SUMMARY.md                     # Project summary
-├── scripts/
-│   ├── generation/                    # Video generation scripts
-│   │   ├── generate_video_v3.py       # FINAL: subprocess text encode + transformer denoise (A100)
-│   │   ├── encode_text.py             # Subprocess text encoder (Gemma-3-12B)
-│   │   ├── convert_prompts_v2.py      # Scene → LTX-2.3 prompt converter (FINAL)
-│   │   ├── v6_generate_v3.py          # V6 gen script (Blackwell VMs, image conditioning)
-│   │   ├── v6_generate_v2.py          # V6 gen with Frame.io upload
-│   │   ├── v6_encode_prompts.py       # V6 prompt encoder with caching
-│   │   └── ... (earlier iterations)
-│   ├── tts/                           # Text-to-speech
-│   │   ├── generate_tts.py            # FINAL: Qwen3-TTS 3-voice narration
-│   │   └── qwen_tts_generate.py       # Earlier TTS implementation
-│   ├── mixing/                        # Audio/video mixing and stitching
-│   │   ├── mix_and_stitch.py          # FINAL: Mix narration + video per scene
-│   │   ├── collect_and_finalize.sh    # Collect scenes from VMs, stitch final
-│   │   └── ... (earlier iterations)
-│   ├── vm-management/                 # VM orchestration
-│   │   ├── orchestrate.py             # Master orchestrator (deploy, start, status)
-│   │   ├── deploy_all.py              # Parallel VM deployment
-│   │   ├── rent_vms.py                # Vast.ai VM rental
-│   │   └── ...
-│   ├── deployment/                    # VM setup and bootstrapping
-│   │   ├── bootstrap_v2.sh            # FINAL: Full VM bootstrap (LTX-2, models, B2)
-│   │   ├── vm_setup.sh                # VM setup (LTX-2 + Qwen3-TTS)
-│   │   ├── vm_finalize.sh             # Verify VM readiness
-│   │   ├── frameio_upload.py          # Frame.io V4 upload with metadata
-│   │   └── ...
-│   └── corpus-building/               # Knowledge base construction
-│       ├── build_knowledge.py         # Transcript → knowledge digest
-│       ├── extract_transcripts.py     # YouTube transcript extraction
-│       ├── search_channels.py         # Channel discovery
-│       ├── v5_script_builder.py       # Screenplay generation
-│       └── ...
+
+### Phase 1: YouTube Extraction
+
+```bash
+# 1. Resolve channel names to YouTube IDs
+python scripts/corpus-building/search_channels.py
+
+# 2. Fetch video listings from all 37 channels
+#    (uses YouTube Data API via Pipedream connector)
+
+# 3. Extract transcripts (3-tier: youtube_transcript_api → Apify → WhisperX)
+python scripts/corpus-building/extract_transcripts.py
+
+# 4. For failed transcripts, use GPU-based WhisperX:
+scp scripts/corpus-building/vast_transcribe.py root@VM:/workspace/
+ssh root@VM 'python3 /workspace/vast_transcribe.py'
+
+# 5. Build knowledge base
+python scripts/corpus-building/build_knowledge.py
+```
+
+### Phase 2: Script Generation
+
+```bash
+# Multi-step LLM process (uses Claude or similar)
+python scripts/corpus-building/v5_script_builder.py   # Initial structure
+python scripts/corpus-building/v5_script_expand.py     # Expand and deepen
+python scripts/corpus-building/v5_script_add.py        # Add interstitials
+python scripts/corpus-building/v5_script_final.py      # Reach 330+ clips
+
+# Output: corpus/SCENARIO.MD — edited manually into final 42-scene screenplay
+```
+
+### Phase 3-8: Production
+
+See `docs/PRODUCTION_SPEC.md` for complete VM setup, generation, mixing, and upload instructions.
+
+```bash
+# Parse screenplay → structured JSON
+# Convert scenes → LTX-2.3 prompts
+python scripts/generation/convert_prompts_v2.py
+
+# Rent VMs, bootstrap, deploy scripts
+python scripts/vm-management/rent_vms.py
+bash scripts/deployment/bootstrap_v2.sh
+
+# Generate TTS + video on VMs
+python scripts/vm-management/orchestrate.py
+
+# Collect and stitch final documentary
+bash scripts/mixing/collect_and_finalize.sh
 ```
 
 ---
@@ -401,7 +704,7 @@ economy-documentary/
 ```python
 # Video Generation
 model              = "ltx-2.3-22b-dev.safetensors"  # 43GB, BF16
-resolution         = (768, 512)                       # Width × Height
+resolution         = (768, 512)
 fps                = 24
 frames_per_clip    = 121                              # ~5.04 seconds
 denoising_steps    = 30
@@ -412,8 +715,7 @@ stg_scale          = 1.0
 rescale_scale      = 0.7
 stg_blocks         = [28]
 dtype              = torch.bfloat16
-quantization       = None                             # MUST be None
-negative_prompt    = "blurry, out of focus, overexposed..."  # Full prompt in generate_video_v3.py
+quantization       = None
 
 # TTS Narration
 model              = "Qwen3-TTS-12Hz-1.7B-VoiceDesign"
@@ -421,8 +723,6 @@ dtype              = torch.bfloat16
 sampling           = {"do_sample": True, "top_k": 50, "top_p": 0.9,
                       "temperature": 0.7, "repetition_penalty": 1.1}
 chunk_size         = 4000  # chars, split at sentence boundaries
-inter_chunk_gap    = 0.3   # seconds
-inter_voice_gap    = 1.0   # seconds
 ```
 
 ---
@@ -431,47 +731,89 @@ inter_voice_gap    = 1.0   # seconds
 
 | Item | Cost |
 |------|------|
-| 6× A100 80GB for ~4 hours | ~$26 ($1.07/hr/GPU × 6 × 4hr) |
-| Model downloads (bandwidth) | ~$0 (free tier) |
-| Backblaze B2 storage | ~$0.005/GB/month |
-| Vast.ai credit buffer | ~$10 extra for failed attempts |
-| **Total** | **~$36** |
+| 6× A100 80GB for ~4 hours | ~$26 |
+| Apify YouTube scraping | ~$5 |
+| YouTube Data API | Free (within 10K units/day) |
+| Backblaze B2 storage | ~$0.01/month |
+| WhisperX transcription (VM time) | ~$2 |
+| **Total** | **~$33** |
+
+---
+
+## File Structure
+
+```
+economy-documentary/
+├── README.md
+├── .env.example                       # Required credentials template
+├── corpus/
+│   └── SCENARIO.MD                    # 42-scene screenplay (1,794 lines)
+├── data/
+│   ├── scenes_parsed.json             # 42 scenes with voice blocks
+│   └── scene_prompts.json             # 260 clips with LTX-2.3 prompts
+├── docs/
+│   ├── ARCHITECTURE.md                # Deep technical architecture
+│   ├── PRODUCTION_SPEC.md             # Complete environment spec
+│   ├── TROUBLESHOOTING.md             # Common problems + solutions
+│   ├── youtube_pipeline_spec.md       # YouTube data pipeline spec
+│   ├── youtube_data_store_architecture.md  # B2+Parquet data store design
+│   ├── corpus_summary.md              # 546-video corpus analysis
+│   ├── corpus_deep_analysis.md        # 182KB deep narrative analysis
+│   ├── production_report.md           # Final production summary
+│   └── ...
+├── scripts/
+│   ├── corpus-building/               # YouTube extraction + script gen
+│   │   ├── search_channels.py         # Channel name → ID resolution
+│   │   ├── extract_transcripts.py     # Tier 1: youtube_transcript_api
+│   │   ├── vast_transcribe.py         # Tier 3: WhisperX on GPU
+│   │   ├── build_knowledge.py         # Assemble knowledge base
+│   │   ├── v5_script_builder.py       # Screenplay generation (step 1)
+│   │   └── ...
+│   ├── generation/                    # LTX-2.3 video generation
+│   │   ├── generate_video_v3.py       # FINAL: subprocess isolation pattern
+│   │   ├── encode_text.py             # Subprocess text encoder
+│   │   ├── convert_prompts_v2.py      # Scene → prompt converter
+│   │   └── ...
+│   ├── tts/                           # Qwen3-TTS narration
+│   │   └── generate_tts.py            # 3-voice VoiceDesign generator
+│   ├── mixing/                        # Audio/video mixing + stitching
+│   │   ├── mix_and_stitch.py          # Per-scene mix
+│   │   └── collect_and_finalize.sh    # Collect from VMs, final stitch
+│   ├── vm-management/                 # Vast.ai orchestration
+│   │   ├── orchestrate.py             # Master orchestrator
+│   │   └── rent_vms.py               # VM rental
+│   └── deployment/                    # VM bootstrap + setup
+│       ├── bootstrap_v2.sh            # Full VM bootstrap
+│       └── frameio_upload.py          # Frame.io V4 upload
+```
 
 ---
 
 ## Known Issues
 
 ### Looping Problem (CRITICAL)
-The current v1 documentary uses **looped video** — 260 unique 5-second clips are repeated to fill ~99 minutes of narration. The user has explicitly declared **looping is NOT permissible**. A proper production needs ~1,194 unique clips (934 more than currently exist) with unique prompts for every 5-second segment. This requires:
-- Generating unique prompts for each narration segment
-- ~$47 in additional Vast.ai credits
-- ~6-8 hours of generation on 6× A100 80GB
+The current documentary uses **looped video** — 260 unique clips repeated to fill ~99 minutes. Looping is NOT permissible. A proper production needs ~1,194 unique clips (934 more). This requires generating unique prompts for each narration segment (~$47 in Vast.ai credits, ~6-8 hours on 6× A100).
 
 ### mix_and_stitch.py Uses stream_loop
-The current mixing script (`mix_and_stitch.py`, line 99-110) uses `ffmpeg -stream_loop` when video is shorter than narration. This must be replaced with a no-loop strategy: either generate enough unique clips to cover narration, or use a freeze-frame / slow dissolve on the final clip.
+Line 99-110 uses `ffmpeg -stream_loop` when video < narration. Must be replaced with a no-loop strategy.
 
 ### Frame.io OAuth
-Frame.io V4 uses OAuth Web App credentials that require browser-based authorization code flow. Server-to-server authentication is not possible. The `frameio_upload.py` script handles token refresh but initial auth must be done manually.
+Frame.io V4 requires browser-based OAuth (Adobe IMS). No server-to-server auth available.
 
 ---
 
 ## LLM Agent Instructions
 
-This repository is designed to be operated by an AI agent. Key points:
-
-1. **Start with `docs/PRODUCTION_SPEC.md`** — it has the complete environment specification
-2. **The screenplay is in `corpus/SCENARIO.MD`** — 42 scenes, 8 acts, 3 narrator voices
-3. **Scene data is pre-parsed** in `data/scenes_parsed.json` and `data/scene_prompts.json`
-4. **Use `scripts/generation/generate_video_v3.py`** as the generation script — it has the subprocess isolation pattern
-5. **Use `scripts/tts/generate_tts.py`** for narration — it handles Qwen3-TTS VoiceDesign
-6. **Use `scripts/deployment/bootstrap_v2.sh`** to set up new VMs
-7. **Critical: Do NOT use FP8, distillation, upscalers, or quantization**
-8. **Critical: Do NOT loop video clips — every clip must be unique**
-9. **Critical: Do NOT stretch video — generate longer and trim**
-10. **The MPEG-TS concat method is required** for final stitching (see Phase 7 above)
+1. **Start with `docs/PRODUCTION_SPEC.md`** for the complete environment spec
+2. **The screenplay is in `corpus/SCENARIO.MD`** — 42 scenes, 8 acts, 3 voices
+3. **YouTube extraction**: `docs/youtube_pipeline_spec.md` and `docs/youtube_data_store_architecture.md` for the full data pipeline
+4. **Use `scripts/generation/generate_video_v3.py`** — has the subprocess isolation pattern
+5. **Use `scripts/tts/generate_tts.py`** — handles Qwen3-TTS VoiceDesign
+6. **Critical: No FP8, distillation, upscalers, quantization, looping, or stretching**
+7. **MPEG-TS concat is required** for final stitching
 
 ---
 
 ## License
 
-This project was created as a personal experiment in AI-generated documentary filmmaking. The generated content (video, audio) is AI-generated. The knowledge corpus was built from publicly available YouTube transcripts.
+Personal experiment in AI-generated documentary filmmaking. Generated content (video, audio) is AI-generated. Knowledge corpus built from publicly available YouTube content.
