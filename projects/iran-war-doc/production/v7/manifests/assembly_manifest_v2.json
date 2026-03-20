@@ -1,0 +1,4330 @@
+{
+  "total_scenes": 26,
+  "total_clips": 912,
+  "total_narration_sec": 4570.64,
+  "b2_base": "https://f004.backblazeb2.com/file/economy-vid-assets/v7_war_economy",
+  "scenes": [
+    {
+      "scene_number": 1,
+      "scene_title": "",
+      "narration_duration": 173.52,
+      "clips": [
+        {
+          "clip_id": "scene_01_clip00",
+          "duration": 8
+        },
+        {
+          "clip_id": "scene_01_clip01",
+          "duration": 12
+        },
+        {
+          "clip_id": "scene_01_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_01_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_01_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_01_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_01_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_01_fill28",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 38.16
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 29.44
+        },
+        {
+          "file": "seg_02_V3.wav",
+          "duration": 55.84
+        },
+        {
+          "file": "seg_03_V1.wav",
+          "duration": 15.68
+        },
+        {
+          "file": "seg_04_V2.wav",
+          "duration": 34.4
+        }
+      ]
+    },
+    {
+      "scene_number": 2,
+      "scene_title": "",
+      "narration_duration": 187.04000000000002,
+      "clips": [
+        {
+          "clip_id": "scene_02_clip00",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_02_clip01",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_02_clip02",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_02_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_02_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_02_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_02_clip06",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_02_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_02_fill30",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 59.52
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 47.28
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 32.8
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 47.44
+        }
+      ]
+    },
+    {
+      "scene_number": 3,
+      "scene_title": "",
+      "narration_duration": 170.32,
+      "clips": [
+        {
+          "clip_id": "scene_03_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_03_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_03_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_03_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_03_clip04",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_03_clip05",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_03_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_03_fill28",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 56.72
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 28.64
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 46.96
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 25.76
+        },
+        {
+          "file": "seg_04_V1.wav",
+          "duration": 12.24
+        }
+      ]
+    },
+    {
+      "scene_number": 4,
+      "scene_title": "",
+      "narration_duration": 161.28,
+      "clips": [
+        {
+          "clip_id": "scene_04_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_04_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_04_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_04_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_04_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_04_clip05",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_04_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_04_fill26",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V3.wav",
+          "duration": 42.4
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 29.6
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 32.56
+        },
+        {
+          "file": "seg_03_V1.wav",
+          "duration": 40.0
+        },
+        {
+          "file": "seg_04_V3.wav",
+          "duration": 16.72
+        }
+      ]
+    },
+    {
+      "scene_number": 5,
+      "scene_title": "",
+      "narration_duration": 180.4,
+      "clips": [
+        {
+          "clip_id": "scene_05_clip00",
+          "duration": 22
+        },
+        {
+          "clip_id": "scene_05_clip01",
+          "duration": 28
+        },
+        {
+          "clip_id": "scene_05_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_05_clip03",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_05_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_05_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_05_clip06",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_05_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_05_fill29",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 55.52
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 40.08
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 44.96
+        },
+        {
+          "file": "seg_03_V2.wav",
+          "duration": 39.84
+        }
+      ]
+    },
+    {
+      "scene_number": 6,
+      "scene_title": "",
+      "narration_duration": 165.92000000000002,
+      "clips": [
+        {
+          "clip_id": "scene_06_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_06_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_06_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_06_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_06_clip04",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_06_clip05",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_06_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_06_fill27",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 46.96
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 51.84
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 31.04
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 36.08
+        }
+      ]
+    },
+    {
+      "scene_number": 7,
+      "scene_title": "",
+      "narration_duration": 164.96,
+      "clips": [
+        {
+          "clip_id": "scene_07_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_07_clip01",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_07_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_07_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_07_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_07_clip05",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_07_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_07_fill26",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 59.44
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 36.96
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 36.24
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 32.32
+        }
+      ]
+    },
+    {
+      "scene_number": 8,
+      "scene_title": "",
+      "narration_duration": 192.72000000000003,
+      "clips": [
+        {
+          "clip_id": "scene_08_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_08_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_08_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_08_clip03",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_08_clip04",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_08_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_08_clip06",
+          "duration": 35
+        },
+        {
+          "clip_id": "scene_08_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_08_fill31",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 33.92
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 69.68
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 37.44
+        },
+        {
+          "file": "seg_03_V1.wav",
+          "duration": 51.68
+        }
+      ]
+    },
+    {
+      "scene_number": 9,
+      "scene_title": "",
+      "narration_duration": 171.12,
+      "clips": [
+        {
+          "clip_id": "scene_09_clip00",
+          "duration": 22
+        },
+        {
+          "clip_id": "scene_09_clip01",
+          "duration": 23
+        },
+        {
+          "clip_id": "scene_09_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_09_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_09_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_09_clip05",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_09_clip06",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_09_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_09_fill27",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 46.16
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 52.64
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 43.68
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 28.64
+        }
+      ]
+    },
+    {
+      "scene_number": 10,
+      "scene_title": "",
+      "narration_duration": 177.6,
+      "clips": [
+        {
+          "clip_id": "scene_10_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_10_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_10_clip02",
+          "duration": 13
+        },
+        {
+          "clip_id": "scene_10_clip03",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_10_clip04",
+          "duration": 22
+        },
+        {
+          "clip_id": "scene_10_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_10_clip06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_10_fill28",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 50.88
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 44.8
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 23.6
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 58.32
+        }
+      ]
+    },
+    {
+      "scene_number": 11,
+      "scene_title": "",
+      "narration_duration": 140.88,
+      "clips": [
+        {
+          "clip_id": "scene_11_clip00",
+          "duration": 35
+        },
+        {
+          "clip_id": "scene_11_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_11_clip02",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_11_clip03",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_11_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_11_clip05",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_11_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_11_fill22",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 40.48
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 28.08
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 39.52
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 32.8
+        }
+      ]
+    },
+    {
+      "scene_number": 12,
+      "scene_title": "",
+      "narration_duration": 187.44,
+      "clips": [
+        {
+          "clip_id": "scene_12_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_12_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_12_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_12_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_12_clip04",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_12_clip05",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_12_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_12_fill31",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 56.88
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 53.76
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 39.36
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 37.44
+        }
+      ]
+    },
+    {
+      "scene_number": 13,
+      "scene_title": "",
+      "narration_duration": 164.32,
+      "clips": [
+        {
+          "clip_id": "scene_13_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_13_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_13_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_13_clip03",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_13_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_13_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_13_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_13_fill26",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 42.56
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 50.32
+        },
+        {
+          "file": "seg_02_V3.wav",
+          "duration": 40.48
+        },
+        {
+          "file": "seg_03_V1.wav",
+          "duration": 30.96
+        }
+      ]
+    },
+    {
+      "scene_number": 14,
+      "scene_title": "",
+      "narration_duration": 129.92,
+      "clips": [
+        {
+          "clip_id": "scene_14_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_14_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_14_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_14_clip03",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_14_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_14_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_14_fill20",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V3.wav",
+          "duration": 38.24
+        },
+        {
+          "file": "seg_01_V3.wav",
+          "duration": 35.68
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 49.52
+        },
+        {
+          "file": "seg_03_V1.wav",
+          "duration": 6.48
+        }
+      ]
+    },
+    {
+      "scene_number": 15,
+      "scene_title": "",
+      "narration_duration": 149.76,
+      "clips": [
+        {
+          "clip_id": "scene_15_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_15_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_15_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_15_clip03",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_15_clip04",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_15_clip05",
+          "duration": 35
+        },
+        {
+          "clip_id": "scene_15_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_15_fill23",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 72.0
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 43.6
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 34.16
+        }
+      ]
+    },
+    {
+      "scene_number": 16,
+      "scene_title": "",
+      "narration_duration": 192.0,
+      "clips": [
+        {
+          "clip_id": "scene_16_clip00",
+          "duration": 18
+        },
+        {
+          "clip_id": "scene_16_clip01",
+          "duration": 12
+        },
+        {
+          "clip_id": "scene_16_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_16_clip03",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_16_clip04",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_16_clip05",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_16_clip06",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_16_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_16_fill31",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 62.96
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 52.64
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 40.0
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 36.4
+        }
+      ]
+    },
+    {
+      "scene_number": 17,
+      "scene_title": "",
+      "narration_duration": 173.76,
+      "clips": [
+        {
+          "clip_id": "scene_17_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_17_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_17_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_17_clip03",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_17_clip04",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_17_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_17_fill29",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V3.wav",
+          "duration": 51.2
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 60.32
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 21.2
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 41.04
+        }
+      ]
+    },
+    {
+      "scene_number": 18,
+      "scene_title": "",
+      "narration_duration": 181.2,
+      "clips": [
+        {
+          "clip_id": "scene_18_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_18_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_18_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_18_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_18_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_18_clip05",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_18_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_18_fill30",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 50.8
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 45.12
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 40.0
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 45.28
+        }
+      ]
+    },
+    {
+      "scene_number": 19,
+      "scene_title": "",
+      "narration_duration": 197.6,
+      "clips": [
+        {
+          "clip_id": "scene_19_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_19_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_19_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_19_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_19_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_19_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_19_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill31",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_19_fill32",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 50.0
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 68.96
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 44.64
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 34.0
+        }
+      ]
+    },
+    {
+      "scene_number": 20,
+      "scene_title": "",
+      "narration_duration": 161.04,
+      "clips": [
+        {
+          "clip_id": "scene_20_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_20_clip01",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_20_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_20_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_20_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_20_clip05",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_20_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_20_fill26",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 36.48
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 42.88
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 43.44
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 38.24
+        }
+      ]
+    },
+    {
+      "scene_number": 21,
+      "scene_title": "",
+      "narration_duration": 180.72,
+      "clips": [
+        {
+          "clip_id": "scene_21_clip00",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_21_clip01",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_21_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_21_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_21_clip04",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_21_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_21_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_21_fill30",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 52.72
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 49.76
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 38.56
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 39.68
+        }
+      ]
+    },
+    {
+      "scene_number": 22,
+      "scene_title": "",
+      "narration_duration": 175.68,
+      "clips": [
+        {
+          "clip_id": "scene_22_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_22_clip01",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_22_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_22_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_22_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_22_clip05",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_22_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_22_fill29",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 59.04
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 32.96
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 41.6
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 42.08
+        }
+      ]
+    },
+    {
+      "scene_number": 23,
+      "scene_title": "",
+      "narration_duration": 202.0,
+      "clips": [
+        {
+          "clip_id": "scene_23_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_23_clip01",
+          "duration": 30
+        },
+        {
+          "clip_id": "scene_23_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_23_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_23_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_23_clip05",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_23_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill31",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill32",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill33",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_23_fill34",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V2.wav",
+          "duration": 70.08
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 46.32
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 45.12
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 40.48
+        }
+      ]
+    },
+    {
+      "scene_number": 24,
+      "scene_title": "",
+      "narration_duration": 160.07999999999998,
+      "clips": [
+        {
+          "clip_id": "scene_24_clip00",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_24_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_24_clip02",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_24_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_24_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_24_clip05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_24_fill26",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 41.92
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 38.32
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 42.48
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 37.36
+        }
+      ]
+    },
+    {
+      "scene_number": 25,
+      "scene_title": "",
+      "narration_duration": 178.8,
+      "clips": [
+        {
+          "clip_id": "scene_25_clip00",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_25_clip01",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_25_clip02",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_25_clip03",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_25_clip04",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_25_clip05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_25_fill29",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V3.wav",
+          "duration": 50.96
+        },
+        {
+          "file": "seg_01_V2.wav",
+          "duration": 42.4
+        },
+        {
+          "file": "seg_02_V1.wav",
+          "duration": 50.0
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 35.44
+        }
+      ]
+    },
+    {
+      "scene_number": 26,
+      "scene_title": "",
+      "narration_duration": 250.56,
+      "clips": [
+        {
+          "clip_id": "scene_26_clip00",
+          "duration": 12
+        },
+        {
+          "clip_id": "scene_26_clip01",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_26_clip02",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_26_clip03",
+          "duration": 23
+        },
+        {
+          "clip_id": "scene_26_clip04",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_26_clip05",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_26_clip06",
+          "duration": 10
+        },
+        {
+          "clip_id": "scene_26_clip07",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_26_clip08",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_26_clip09",
+          "duration": 20
+        },
+        {
+          "clip_id": "scene_26_clip10",
+          "duration": 25
+        },
+        {
+          "clip_id": "scene_26_clip11",
+          "duration": 15
+        },
+        {
+          "clip_id": "scene_26_clip12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill00",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill01",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill02",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill03",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill04",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill05",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill06",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill07",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill08",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill09",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill10",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill11",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill12",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill13",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill14",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill15",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill16",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill17",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill18",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill19",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill20",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill21",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill22",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill23",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill24",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill25",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill26",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill27",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill28",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill29",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill30",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill31",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill32",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill33",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill34",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill35",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill36",
+          "duration": 5
+        },
+        {
+          "clip_id": "scene_26_fill37",
+          "duration": 5
+        }
+      ],
+      "narration_segments": [
+        {
+          "file": "seg_00_V1.wav",
+          "duration": 3.12
+        },
+        {
+          "file": "seg_01_V1.wav",
+          "duration": 56.4
+        },
+        {
+          "file": "seg_02_V2.wav",
+          "duration": 44.08
+        },
+        {
+          "file": "seg_03_V3.wav",
+          "duration": 1.12
+        },
+        {
+          "file": "seg_04_V1.wav",
+          "duration": 60.88
+        },
+        {
+          "file": "seg_05_V3.wav",
+          "duration": 56.24
+        },
+        {
+          "file": "seg_06_V2.wav",
+          "duration": 27.28
+        },
+        {
+          "file": "seg_07_V1.wav",
+          "duration": 1.44
+        }
+      ]
+    }
+  ]
+}

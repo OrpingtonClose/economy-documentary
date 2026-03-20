@@ -1,0 +1,2682 @@
+[
+  {
+    "clip_id": "scene_01_fill00",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "CSIS research building exterior at dusk, institutional architecture, cold grey stone facade, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "In 1968, the American public did not receive a daily invoice for Vietnam. In 2026, the numbers exist."
+  },
+  {
+    "clip_id": "scene_01_fill01",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Goldman Sachs tower reflecting sunset, glass and steel monolith, financial power center, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "In 2026, the numbers exist. They are published."
+  },
+  {
+    "clip_id": "scene_01_fill02",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty analyst workstation with multiple dark monitors, overnight stillness, blue ambient glow, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "They are published. They are in CSIS spreadsheets and Goldman Sachs research notes and CFTC filings."
+  },
+  {
+    "clip_id": "scene_01_fill03",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil tanker bow cutting through dark Atlantic water, white wake spreading, golden hour light, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "They are in CSIS spreadsheets and Goldman Sachs research notes and CFTC filings. The information is not hidden."
+  },
+  {
+    "clip_id": "scene_01_fill04",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Aerial view of port facility at dawn, container cranes motionless, industrial scale, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "The information is not hidden. What is missing is the argument."
+  },
+  {
+    "clip_id": "scene_01_fill05",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Filing cabinet drawer sliding open, institutional grey metal, cold fluorescent corridor, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "What is missing is the argument. Nobody assembled the missile cost alongside the family's gas bill."
+  },
+  {
+    "clip_id": "scene_01_fill06",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Trading floor at closing bell, empty chairs scattered, aftermath atmosphere, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Nobody assembled the missile cost alongside the family's gas bill. Nobody put the tanker ETF return beside the small business owner's margin compression."
+  },
+  {
+    "clip_id": "scene_01_fill07",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Satellite image of smoke column rising from coastline, orbital perspective, earth curvature visible, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Nobody put the tanker ETF return beside the small business owner's margin compression. Nobody connected the defense CEO's net worth to the SPR drawdown."
+  },
+  {
+    "clip_id": "scene_01_fill08",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gas station forecourt at dawn, wet asphalt reflecting canopy lights, suburban stillness, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Nobody connected the defense CEO's net worth to the SPR drawdown. V1: \"This film is that connection."
+  },
+  {
+    "clip_id": "scene_01_fill09",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Spreadsheet printout on desk with coffee ring stain, institutional workspace detail, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "V1: \"This film is that connection. We are going to follow the money."
+  },
+  {
+    "clip_id": "scene_01_fill10",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil pipeline junction valve in desert landscape, industrial infrastructure isolated in sand, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "We are going to follow the money. Both directions."
+  },
+  {
+    "clip_id": "scene_01_fill11",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Financial district canyon of towers at blue hour, cold light between glass facades, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Both directions. And why those two lists of names almost never overlap."
+  },
+  {
+    "clip_id": "scene_01_fill12",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Cargo vessel navigating narrow shipping channel, pilot boat alongside, maritime commerce, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "And why those two lists of names almost never overlap. The most useful question in financial journalism is not 'who did this?' It is 'who benefited?' Not who claimed to benefit."
+  },
+  {
+    "clip_id": "scene_01_fill13",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pentagon exterior at twilight, geometric facade stretching wide, institutional power, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "The most useful question in financial journalism is not 'who did this?' It is 'who benefited?' Not who claimed to benefit. Not who was supposed to."
+  },
+  {
+    "clip_id": "scene_01_fill14",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 20,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Crude oil sample in glass vial held to light, amber liquid detail, commodity essence, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Not who was supposed to. Who actually, measurably, in the filings and the portfolio reports and the earnings calls, benefited."
+  },
+  {
+    "clip_id": "scene_01_fill15",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 21,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Small business owner's hands on counter, morning light through storefront window, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "Who actually, measurably, in the filings and the portfolio reports and the earnings calls, benefited. The answer, in this war, involves eight weeks of pre-positioning in crude oil futures, a Tether stablecoin pipeline through Binance, a London property empire on Billionaire's Row, and an emergency production mandate signed at the White House on Day Five."
+  },
+  {
+    "clip_id": "scene_01_fill16",
+    "scene_number": 1,
+    "scene_title": "THE NUMBER",
+    "clip_index": 22,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Ocean horizon line bisecting frame, tanker silhouette against dawn sky, global scale, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D8EC, #40C0D8, #3A4A5A, #E8C060",
+    "narration_context": "The answer, in this war, involves eight weeks of pre-positioning in crude oil futures, a Tether stablecoin pipeline through Binance, a London property empire on Billionaire's Row, and an emergency production mandate signed at the White House on Day Five. We begin with the invoice."
+  },
+  {
+    "clip_id": "scene_02_fill00",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military warehouse with depleted ammunition racks, empty shelving stretching back, cold overhead light, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "Every THAAD interceptor launched was a contract waiting to be written. The war was simultaneously destroying assets and generating the demand for their replacement."
+  },
+  {
+    "clip_id": "scene_02_fill01",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense factory floor, robotic welding arm assembling guidance housing, sparks in darkness, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "The war was simultaneously destroying assets and generating the demand for their replacement. The beneficiaries of that demand had been building positions for eight weeks before the first shot."
+  },
+  {
+    "clip_id": "scene_02_fill02",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Tomahawk cruise missile body on assembly cradle, precision manufacturing, institutional blue light, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "The beneficiaries of that demand had been building positions for eight weeks before the first shot. V3: \"The Roman historian Vegetius wrote, in the fifth century, that 'whoever wants peace must prepare for war.' What he did not calculate \u2014 what no war theorist ever quite calculates \u2014 is the opportunity cost."
+  },
+  {
+    "clip_id": "scene_02_fill03",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "THAAD interceptor launch rail empty and elevated, military base at dusk, readiness without supply, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "V3: \"The Roman historian Vegetius wrote, in the fifth century, that 'whoever wants peace must prepare for war.' What he did not calculate \u2014 what no war theorist ever quite calculates \u2014 is the opportunity cost. Sixteen-point-five billion dollars in twelve days."
+  },
+  {
+    "clip_id": "scene_02_fill04",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Procurement office desk with stacked bid folders, institutional grey, fluorescent hum, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "Sixteen-point-five billion dollars in twelve days."
+  },
+  {
+    "clip_id": "scene_02_fill05",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Munitions production line at dawn shift start, workers entering clean room, controlled environment, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "Sixteen-point-five billion dollars in twelve days. That is three years of the national school lunch program."
+  },
+  {
+    "clip_id": "scene_02_fill06",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military logistics aircraft cargo bay, empty pallets, cavernous interior, operational void, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "That is three years of the national school lunch program. That is the entire annual budget of the National Institutes of Health."
+  },
+  {
+    "clip_id": "scene_02_fill07",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense contractor quality inspection station, magnified lens over circuit board, precision detail, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "That is the entire annual budget of the National Institutes of Health. That is one thousand four hundred elementary schools, built, equipped, staffed for a year."
+  },
+  {
+    "clip_id": "scene_02_fill08",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty missile storage bunker, concrete walls and blast doors, institutional military architecture, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "That is one thousand four hundred elementary schools, built, equipped, staffed for a year. The missiles flew."
+  },
+  {
+    "clip_id": "scene_02_fill09",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Factory floor conveyor belt carrying unfinished ordnance components, assembly rhythm, low angle looking upward, imposing perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "The missiles flew. The schools were not built."
+  },
+  {
+    "clip_id": "scene_02_fill10",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Government contract binder spine on shelf, leather and brass, institutional weight, telephoto compression, flattened perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "The schools were not built. That is also a decision \u2014 and someone made it."
+  },
+  {
+    "clip_id": "scene_02_fill11",
+    "scene_number": 2,
+    "scene_title": "THE INVOICE",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military airfield at dawn, empty hardstands where aircraft should be, operational gap visible, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0ECFF, #F8F0A0, #F0E8C0, #404040",
+    "narration_context": "That is also a decision \u2014 and someone made it."
+  },
+  {
+    "clip_id": "scene_03_fill00",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Strategic Petroleum Reserve salt cavern entrance, industrial door in Louisiana landscape, golden hour, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "But every barrel released from the SPR is a barrel that will cost approximately one hundred dollars or more to replace."
+  },
+  {
+    "clip_id": "scene_03_fill01",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Underground oil storage facility ceiling dripping, industrial cave, eerie amber illumination, telephoto compression, flattened perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "But every barrel released from the SPR is a barrel that will cost approximately one hundred dollars or more to replace. That is not a solved problem."
+  },
+  {
+    "clip_id": "scene_03_fill02",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "SPR pump station at dawn, pipeline headers and valve manifolds, Gulf Coast industrial, medium shot, gentle dolly forward. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "That is not a solved problem. That is a deferred bill."
+  },
+  {
+    "clip_id": "scene_03_fill03",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Suburban family loading groceries into car, parking lot, afternoon light, domestic routine, high angle looking down, overhead vantage. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "That is a deferred bill. Deferred bills do not disappear."
+  },
+  {
+    "clip_id": "scene_03_fill04",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil futures trading pit, empty after hours, institutional floor littered with paper, bird's-eye overhead composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "Deferred bills do not disappear. The deferred refill cost of the SPR release is approximately twenty billion dollars, payable at a future date, by a future taxpayer, for a decision made in March 2026."
+  },
+  {
+    "clip_id": "scene_03_fill05",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Aerial of Gulf Coast salt dome storage facility, circular access points in marshland, medium wide, handheld with subtle drift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "The deferred refill cost of the SPR release is approximately twenty billion dollars, payable at a future date, by a future taxpayer, for a decision made in March 2026. V3: \"There is a concept in public finance called 'intergenerational equity' \u2014 the principle that the costs of present decisions should not be borne disproportionately by people who were not present for the decision."
+  },
+  {
+    "clip_id": "scene_03_fill06",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Kitchen table with calculator and utility bills, warm lamp light, domestic accounting, tracking shot, smooth lateral glide. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "V3: \"There is a concept in public finance called 'intergenerational equity' \u2014 the principle that the costs of present decisions should not be borne disproportionately by people who were not present for the decision. The SPR release is a textbook case."
+  },
+  {
+    "clip_id": "scene_03_fill07",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gasoline tanker truck departing refinery gate at dawn, supply chain in motion, slow tilt upward revealing full height. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "The SPR release is a textbook case."
+  },
+  {
+    "clip_id": "scene_03_fill08",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Aerial of highway interchange at rush hour, commuter patterns, systemic fuel dependence, wide establishing shot, locked tripod. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "The SPR release is a textbook case. The barrel is gone now."
+  },
+  {
+    "clip_id": "scene_03_fill09",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil refinery cooling towers at sunset, steam rising, energy infrastructure silhouette, slow crane rising to reveal landscape. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "The barrel is gone now. The twenty-billion-dollar refill is somebody else's problem."
+  },
+  {
+    "clip_id": "scene_03_fill10",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Government budget office at night, single desk lamp illuminating deferred cost analysis, steady tracking forward into space. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "The twenty-billion-dollar refill is somebody else's problem. Somebody not yet voting."
+  },
+  {
+    "clip_id": "scene_03_fill11",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Suburban cul-de-sac from above, morning shadows, American domestic landscape at scale, wide shot, imperceptible push in. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "Somebody not yet voting. V1: \"Gas was at three dollars and seventy-two cents a gallon when the Russia sanctions were lifted."
+  },
+  {
+    "clip_id": "scene_03_fill12",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Fuel depot storage tanks in morning fog, cylindrical forms in mist, supply reserves, static locked frame, perfectly still composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "V1: \"Gas was at three dollars and seventy-two cents a gallon when the Russia sanctions were lifted. That specific number \u2014 three-seventy-two \u2014 will matter in Act Four."
+  },
+  {
+    "clip_id": "scene_03_fill13",
+    "scene_number": 3,
+    "scene_title": "THE HUMAN SCALE",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Woman's hands turning car ignition, dashboard glowing, daily fuel dependence moment, extreme close-up, razor-thin focus. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E8C0, #F8F0D8, #40A878, #1A2A1A",
+    "narration_context": "That specific number \u2014 three-seventy-two \u2014 will matter in Act Four."
+  },
+  {
+    "clip_id": "scene_04_fill00",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Options trading screen showing crude oil contracts, blue-green institutional glow on glass, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "Who had their financial positions arranged to benefit from the answer being yes? Because somebody knew."
+  },
+  {
+    "clip_id": "scene_04_fill01",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military cargo plane on night tarmac, engines running, loading in progress, operational pace, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "Because somebody knew. And the paper trail \u2014 in the CFTC filings, in the tanker ETF returns, in the congressional disclosure forms \u2014 says they knew eight weeks in advance."
+  },
+  {
+    "clip_id": "scene_04_fill02",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Vietnam War era military photograph fading into modern equivalent, historical echo, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "And the paper trail \u2014 in the CFTC filings, in the tanker ETF returns, in the congressional disclosure forms \u2014 says they knew eight weeks in advance."
+  },
+  {
+    "clip_id": "scene_04_fill03",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty congressional budget hearing room, microphones at curved desk, accountability void, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "And the paper trail \u2014 in the CFTC filings, in the tanker ETF returns, in the congressional disclosure forms \u2014 says they knew eight weeks in advance. That story begins in Act Two."
+  },
+  {
+    "clip_id": "scene_04_fill04",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense budget document stack on analyst desk, institutional lighting, bureaucratic scale, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "That story begins in Act Two. V3: \"There is an old saying in markets: 'buy the rumor, sell the news.' In the Iran War of 2026, the rumor was the eight-week positioning."
+  },
+  {
+    "clip_id": "scene_04_fill05",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military refueling operation at night, fuel flowing through hoses, operational burn rate, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "V3: \"There is an old saying in markets: 'buy the rumor, sell the news.' In the Iran War of 2026, the rumor was the eight-week positioning. The news was the first missile."
+  },
+  {
+    "clip_id": "scene_04_fill06",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Air Force Academy campus at dawn, institutional buildings, scale of what one day costs, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "The news was the first missile. The people who bought the rumor made the money."
+  },
+  {
+    "clip_id": "scene_04_fill07",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Crude oil futures chart curving sharply upward, monitor glow in dark room, financial acceleration, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "The people who bought the rumor made the money. The people who watched the news paid the bill."
+  },
+  {
+    "clip_id": "scene_04_fill08",
+    "scene_number": 4,
+    "scene_title": "THE DAILY BURN",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Small-town storefront at blue hour, vacancy in window, economic casualty of distant decisions, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #ECEEF4, #B0C4DC, #4A5060, #D08820",
+    "narration_context": "The people who watched the news paid the bill."
+  },
+  {
+    "clip_id": "scene_05_fill00",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "CFTC filing database interface, institutional screen, regulatory data infrastructure, macro detail shot, extreme magnification. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "V2: \"The Breakwave Tanker Shipping ETF \u2014 BWET \u2014 was up ninety-eight percent year-to-date as of February twenty-eighth."
+  },
+  {
+    "clip_id": "scene_05_fill01",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Hedge fund trading desk at dawn, multiple monitors with crude oil positions, pre-market, medium close-up, slow rack focus shift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "V2: \"The Breakwave Tanker Shipping ETF \u2014 BWET \u2014 was up ninety-eight percent year-to-date as of February twenty-eighth. Ninety-eight percent in less than two months, in a fund that tracks operational shipping companies."
+  },
+  {
+    "clip_id": "scene_05_fill02",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Brent crude futures contract printout, institutional desk, financial instrument detail, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "Ninety-eight percent in less than two months, in a fund that tracks operational shipping companies. Gold ETF inflows hit nineteen billion dollars globally \u2014 a record."
+  },
+  {
+    "clip_id": "scene_05_fill03",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil options strike price display, clustered targets visible as data, institutional screen glow, telephoto compression, flattened perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "Gold ETF inflows hit nineteen billion dollars globally \u2014 a record."
+  },
+  {
+    "clip_id": "scene_05_fill04",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "London financial district at pre-dawn, isolated lit windows in dark towers, early positioning, medium shot, gentle dolly forward. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "Gold ETF inflows hit nineteen billion dollars globally \u2014 a record. These numbers, individually, could each be explained by sophisticated macro analysis."
+  },
+  {
+    "clip_id": "scene_05_fill05",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Commodity trader reviewing position reports, single desk lamp, concentrated analysis, high angle looking down, overhead vantage. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "These numbers, individually, could each be explained by sophisticated macro analysis. Together, they describe something specific and consistent: a market that had already processed the probability of a major Persian Gulf conflict and was expressing it in its position book."
+  },
+  {
+    "clip_id": "scene_05_fill06",
+    "scene_number": 5,
+    "scene_title": "EIGHT WEEKS EARLY",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Fuel receipt spread across truck driver's dashboard, three months of price history, personal record, bird's-eye overhead composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #1A2840, #D0F0C8, #0A1020, #F0ECDC",
+    "narration_context": "Together, they describe something specific and consistent: a market that had already processed the probability of a major Persian Gulf conflict and was expressing it in its position book."
+  },
+  {
+    "clip_id": "scene_06_fill00",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gold bullion vault, bars stacked in secure storage, warm metallic glow against cold steel, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "It means that somewhere in the aggregation of millions of trades, information is transmitted. It leaks from briefing rooms into bank accounts."
+  },
+  {
+    "clip_id": "scene_06_fill01",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Supertanker hull from water level, massive steel wall moving through sea, industrial scale, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "It leaks from briefing rooms into bank accounts."
+  },
+  {
+    "clip_id": "scene_06_fill02",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gold ETF trading activity on institutional display, yellow-amber data against dark interface, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "It leaks from briefing rooms into bank accounts. From classified assessments into options positions."
+  },
+  {
+    "clip_id": "scene_06_fill03",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Tanker loading terminal at dusk, crude flowing through articulated arm, maritime industry, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "From classified assessments into options positions. The direction of travel is consistent: information flows from those who have it to those who can profit from it before it becomes public."
+  },
+  {
+    "clip_id": "scene_06_fill04",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Safe deposit vault door, heavy steel mechanism, wealth preservation infrastructure, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "The direction of travel is consistent: information flows from those who have it to those who can profit from it before it becomes public. The money moved first."
+  },
+  {
+    "clip_id": "scene_06_fill05",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Aerial of tanker fleet anchored in formation, maritime staging, multiple vessels waiting, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "The money moved first. The missiles followed."
+  },
+  {
+    "clip_id": "scene_06_fill06",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Commodity exchange floor after hours, empty trading posts, institutional aftermath, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "The missiles followed. And the families paying seventy cents more per gallon never had a chance to get in on the trade."
+  },
+  {
+    "clip_id": "scene_06_fill07",
+    "scene_number": 6,
+    "scene_title": "THE TANKER TRADE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Ship propeller churning dark water, underwater perspective, maritime power and displacement, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #6080A0, #8A4020, #3060A0, #E8C060",
+    "narration_context": "And the families paying seventy cents more per gallon never had a chance to get in on the trade."
+  },
+  {
+    "clip_id": "scene_07_fill00",
+    "scene_number": 7,
+    "scene_title": "THE LEGAL INSIDE TRADE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional office hallway, polished floor, institutional power, closed doors, close-up with shallow depth of field. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+    "narration_context": "It does not carry the scent of the decision that produced it. A stock gain from a war you voted for looks exactly like a stock gain from a war you voted against."
+  },
+  {
+    "clip_id": "scene_07_fill01",
+    "scene_number": 7,
+    "scene_title": "THE LEGAL INSIDE TRADE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Financial disclosure form on government desk, bureaucratic paper, institutional requirement, aerial wide, slow lateral tracking movement. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+    "narration_context": "A stock gain from a war you voted for looks exactly like a stock gain from a war you voted against. The ledger records the profit."
+  },
+  {
+    "clip_id": "scene_07_fill02",
+    "scene_number": 7,
+    "scene_title": "THE LEGAL INSIDE TRADE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense sector stock portfolio display, gains visible as rising curves, institutional screen, macro detail shot, extreme magnification. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+    "narration_context": "The ledger records the profit. The ledger does not record the mechanism."
+  },
+  {
+    "clip_id": "scene_07_fill03",
+    "scene_number": 7,
+    "scene_title": "THE LEGAL INSIDE TRADE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Capitol building dome interior from below, architectural grandeur, governance space, medium close-up, slow rack focus shift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+    "narration_context": "The ledger does not record the mechanism. And that is precisely the point: we have constructed a system in which the financial consequences of a decision are legible, and the decision's relationship to those consequences is deliberately obscured."
+  },
+  {
+    "clip_id": "scene_07_fill04",
+    "scene_number": 7,
+    "scene_title": "THE LEGAL INSIDE TRADE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Welder's sparks reflected in safety visor, blue-collar labor while markets profit, human contrast, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #ECEEFC, #0A1020, #28C860, #F0ECD8",
+    "narration_context": "And that is precisely the point: we have constructed a system in which the financial consequences of a decision are legible, and the decision's relationship to those consequences is deliberately obscured."
+  },
+  {
+    "clip_id": "scene_08_fill00",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Server farm corridor stretching deep, blinking status indicators, crypto infrastructure, medium wide, handheld with subtle drift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "Four hundred and thirty-nine million dollars."
+  },
+  {
+    "clip_id": "scene_08_fill01",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Blockchain transaction visualization, node connections, digital financial architecture, tracking shot, smooth lateral glide. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "Four hundred and thirty-nine million dollars. Using an app on a phone."
+  },
+  {
+    "clip_id": "scene_08_fill02",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Tehran bazaar at dusk, merchant closing shop, ordinary commerce alongside hidden flows, slow tilt upward revealing full height. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "Using an app on a phone. The second: a thirty-eight-year-old Chinese woman who moved two hundred million dollars through the same architecture."
+  },
+  {
+    "clip_id": "scene_08_fill03",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Cryptocurrency exchange server rack, cooling fans visible, digital financial plumbing, wide establishing shot, locked tripod. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "The second: a thirty-eight-year-old Chinese woman who moved two hundred million dollars through the same architecture."
+  },
+  {
+    "clip_id": "scene_08_fill04",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Dubai financial district at night, modern towers lit, Gulf commercial hub, slow crane rising to reveal landscape. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "The second: a thirty-eight-year-old Chinese woman who moved two hundred million dollars through the same architecture. The third: a forty-four-year-old Iranian gold smuggler named in a 2020 UN Security Council report."
+  },
+  {
+    "clip_id": "scene_08_fill05",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Fiber optic cable junction box, technological infrastructure detail, data pathway, steady tracking forward into space. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "The third: a forty-four-year-old Iranian gold smuggler named in a 2020 UN Security Council report. Six hundred and thirty-nine million dollars."
+  },
+  {
+    "clip_id": "scene_08_fill06",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Iranian rial exchange counter in Tehran market, currency under pressure, economic reality, wide shot, imperceptible push in. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "Six hundred and thirty-nine million dollars."
+  },
+  {
+    "clip_id": "scene_08_fill07",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Stablecoin transaction node map glowing on dark monitor, digital financial network, static locked frame, perfectly still composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "Six hundred and thirty-nine million dollars. One Binance account cluster."
+  },
+  {
+    "clip_id": "scene_08_fill08",
+    "scene_number": 8,
+    "scene_title": "THE $1.7 BILLION DOOR",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "UAE port at dawn, dhow boats alongside modern cargo ships, traditional and modern commerce, extreme close-up, razor-thin focus. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #40C0F0, #8090A0, #E0C080",
+    "narration_context": "One Binance account cluster."
+  },
+  {
+    "clip_id": "scene_09_fill00",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Dubai commercial district at dawn, modern glass towers alongside traditional market, dual economy, aerial drone descent, smooth and deliberate. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "The United States was spending one-point-five billion dollars per day bombing a country that had twenty to thirty billion dollars in reserve financing that the bombing could not reach. V3: \"This is the structural problem with economic warfare as a substitute for diplomacy."
+  },
+  {
+    "clip_id": "scene_09_fill01",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Hawala money transfer office, sparse interior, informal financial architecture, pull-back reveal, steady backward dolly. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "V3: \"This is the structural problem with economic warfare as a substitute for diplomacy."
+  },
+  {
+    "clip_id": "scene_09_fill02",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "UAE port facility with Iranian-flagged vessels, commercial interface between sanctions, close-up with shallow depth of field. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "V3: \"This is the structural problem with economic warfare as a substitute for diplomacy. Sanctions compress the formal economy \u2014 they make dollar-clearing, SWIFT transfers, and legitimate trade harder."
+  },
+  {
+    "clip_id": "scene_09_fill03",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Real estate development in Dubai, construction cranes, value storage infrastructure, aerial wide, slow lateral tracking movement. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "Sanctions compress the formal economy \u2014 they make dollar-clearing, SWIFT transfers, and legitimate trade harder. They do not compress the informal economy with the same efficiency."
+  },
+  {
+    "clip_id": "scene_09_fill04",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Shadow banking ledger, handwritten figures, informal financial record-keeping, macro detail shot, extreme magnification. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "They do not compress the informal economy with the same efficiency."
+  },
+  {
+    "clip_id": "scene_09_fill05",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil storage facility in Gulf state, unmarked tanks, commercial opacity, medium close-up, slow rack focus shift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "They do not compress the informal economy with the same efficiency. And modern finance is sufficiently sophisticated that the gap between formal and informal is navigable by anyone with enough capital and enough lawyers."
+  },
+  {
+    "clip_id": "scene_09_fill06",
+    "scene_number": 9,
+    "scene_title": "THE WAR CHEST",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Chinese refinery complex at night, flames from distillation towers, energy processing scale, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #050810, #20A040, #F8F8F8, #081018",
+    "narration_context": "And modern finance is sufficiently sophisticated that the gap between formal and informal is navigable by anyone with enough capital and enough lawyers."
+  },
+  {
+    "clip_id": "scene_10_fill00",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "DOJ headquarters at dusk, institutional facade, enforcement architecture, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "V2: \"The DOJ was not asleep. The enforcement gap is not a story of lazy regulators."
+  },
+  {
+    "clip_id": "scene_10_fill01",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Cryptocurrency mining facility, rows of machines, computational financial infrastructure, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "The enforcement gap is not a story of lazy regulators. It is a story of a regulatory framework designed for the previous generation of financial architecture, being applied to a financial architecture several generations newer."
+  },
+  {
+    "clip_id": "scene_10_fill02",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Regulatory code book thick on institutional desk, legislation struggling to keep pace, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "It is a story of a regulatory framework designed for the previous generation of financial architecture, being applied to a financial architecture several generations newer."
+  },
+  {
+    "clip_id": "scene_10_fill03",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Federal courthouse entrance at dawn, columns and marble, justice architecture, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "It is a story of a regulatory framework designed for the previous generation of financial architecture, being applied to a financial architecture several generations newer. Crypto moves at the speed of code."
+  },
+  {
+    "clip_id": "scene_10_fill04",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Binary data stream visualization on analyst monitor, digital speed versus regulatory pace, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Crypto moves at the speed of code. Regulation moves at the speed of legislation."
+  },
+  {
+    "clip_id": "scene_10_fill05",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional hearing room, witness chair empty, accountability architecture, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Regulation moves at the speed of legislation. The gap between those two speeds is measured in billions of dollars per year."
+  },
+  {
+    "clip_id": "scene_10_fill06",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Crypto exchange dashboard scrolling transactions, speed of digital finance, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "The gap between those two speeds is measured in billions of dollars per year."
+  },
+  {
+    "clip_id": "scene_10_fill07",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Treasury Department exterior at golden hour, neoclassical authority, institutional weight, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "The gap between those two speeds is measured in billions of dollars per year. V3: \"There is a specific kind of institutional irony available only to large democracies \u2014 the irony of a state that simultaneously funds both sides of the same war."
+  },
+  {
+    "clip_id": "scene_10_fill08",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Server room power supply, blinking indicators, always-on financial infrastructure, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "V3: \"There is a specific kind of institutional irony available only to large democracies \u2014 the irony of a state that simultaneously funds both sides of the same war. Not through conspiracy, not through any single identifiable bad actor, but through the accumulation of individually logical decisions: pardon the crypto founder because the legal case was complex and the political benefit was real; delay the investigation because the regulatory gap was known and not yet closed; fail to screen the stablecoin flows because the technology outpaced the compliance architecture; bomb the IRGC because the security justification was sound."
+  },
+  {
+    "clip_id": "scene_10_fill09",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Federal register documents stacked on desk, bureaucratic pace visualized, institutional delay, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Not through conspiracy, not through any single identifiable bad actor, but through the accumulation of individually logical decisions: pardon the crypto founder because the legal case was complex and the political benefit was real; delay the investigation because the regulatory gap was known and not yet closed; fail to screen the stablecoin flows because the technology outpaced the compliance architecture; bomb the IRGC because the security justification was sound. Each decision, individually, rational."
+  },
+  {
+    "clip_id": "scene_10_fill10",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Abandoned compliance office, empty desk with dormant monitors, enforcement gap, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Each decision, individually, rational."
+  },
+  {
+    "clip_id": "scene_10_fill11",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Blockchain explorer display showing transaction flow, digital evidence trail on screen, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Each decision, individually, rational. The aggregate: the United States government was financing the operation it was simultaneously bombing."
+  },
+  {
+    "clip_id": "scene_10_fill12",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "International wire transfer processing center, institutional banking infrastructure, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "The aggregate: the United States government was financing the operation it was simultaneously bombing. Through the financial system."
+  },
+  {
+    "clip_id": "scene_10_fill13",
+    "scene_number": 10,
+    "scene_title": "THE PARDON",
+    "clip_index": 20,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Newspaper front page layout visible through press room window, investigative journalism, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #C08040, #080808, #30C0D8",
+    "narration_context": "Through the financial system."
+  },
+  {
+    "clip_id": "scene_11_fill00",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pentagon and Wall Street split composition, institutional duality, cold blue lighting, static locked frame, perfectly still composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "narration_context": "The financial system \u2014 through the Tether-Tron-Binance architecture \u2014 was transferring value to the other. V3: \"This is what economists call 'policy incoherence.' What historians call 'institutional contradiction.' What the person paying for the war on both ends calls something considerably less technical."
+  },
+  {
+    "clip_id": "scene_11_fill01",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military logistics aircraft departing while commercial cargo arrives, parallel operations, extreme close-up, razor-thin focus. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "narration_context": "V3: \"This is what economists call 'policy incoherence.' What historians call 'institutional contradiction.' What the person paying for the war on both ends calls something considerably less technical."
+  },
+  {
+    "clip_id": "scene_11_fill02",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Two gas stations facing each other across intersection, competing economic forces, aerial drone descent, smooth and deliberate. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "narration_context": "V3: \"This is what economists call 'policy incoherence.' What historians call 'institutional contradiction.' What the person paying for the war on both ends calls something considerably less technical. The war economy is not a coherent system optimized for any particular outcome."
+  },
+  {
+    "clip_id": "scene_11_fill03",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Government wire transfer terminal beside crypto exchange server, institutional contrast, pull-back reveal, steady backward dolly. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "narration_context": "The war economy is not a coherent system optimized for any particular outcome. It is the aggregate consequence of a thousand individually rational decisions made in a thousand separate rooms by people who never had to share a spreadsheet."
+  },
+  {
+    "clip_id": "scene_11_fill04",
+    "scene_number": 11,
+    "scene_title": "THE SECOND PAYMASTER",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military supply convoy passing civilian fuel truck on shared highway, parallel economies, close-up with shallow depth of field. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #80B8F0, #E8A020, #F8F8F8, #F0ECD8",
+    "narration_context": "It is the aggregate consequence of a thousand individually rational decisions made in a thousand separate rooms by people who never had to share a spreadsheet."
+  },
+  {
+    "clip_id": "scene_12_fill00",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Russian oil tanker at sea in rough weather, loaded hull riding low, dark water, telephoto compression, flattened perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "One of these estimates was produced by people with a reason to minimize the number. The other was produced by someone watching his country being invaded by the state receiving the payment."
+  },
+  {
+    "clip_id": "scene_12_fill01",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "OFAC office interior, institutional desk with compliance paperwork, regulatory architecture, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "The other was produced by someone watching his country being invaded by the state receiving the payment."
+  },
+  {
+    "clip_id": "scene_12_fill02",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gas pump display frozen at price point, macro detail, consumer impact crystallized, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "The other was produced by someone watching his country being invaded by the state receiving the payment. V3: \"The political economy here is precise and important."
+  },
+  {
+    "clip_id": "scene_12_fill03",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Russian port facility at dawn, oil loading infrastructure, commerce under sanction pressure, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "V3: \"The political economy here is precise and important. The Trump administration was simultaneously fighting a war against Iran \u2014 Russia's strategic partner \u2014 and paying Russia \u2014 Iran's strategic partner \u2014 to moderate domestic gas prices."
+  },
+  {
+    "clip_id": "scene_12_fill04",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "White House exterior at dusk, institutional power, decision architecture, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "The Trump administration was simultaneously fighting a war against Iran \u2014 Russia's strategic partner \u2014 and paying Russia \u2014 Iran's strategic partner \u2014 to moderate domestic gas prices."
+  },
+  {
+    "clip_id": "scene_12_fill05",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Spring break highway traffic from above, family vehicles, domestic travel, fuel demand, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "The Trump administration was simultaneously fighting a war against Iran \u2014 Russia's strategic partner \u2014 and paying Russia \u2014 Iran's strategic partner \u2014 to moderate domestic gas prices. The two decisions are not contradictory in the logic of domestic American politics."
+  },
+  {
+    "clip_id": "scene_12_fill06",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil barrel stack in storage facility, commodity at rest, strategic asset, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "The two decisions are not contradictory in the logic of domestic American politics. A war twelve thousand kilometers away is abstract."
+  },
+  {
+    "clip_id": "scene_12_fill07",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European ally's foreign ministry building exterior, institutional architecture, alliance strain, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "A war twelve thousand kilometers away is abstract. Gas at three-seventy-two is tangible."
+  },
+  {
+    "clip_id": "scene_12_fill08",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Family minivan at gas station, vacation luggage visible through windows, domestic economics, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "Gas at three-seventy-two is tangible."
+  },
+  {
+    "clip_id": "scene_12_fill09",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Port authority dock with tanker manifest paperwork, institutional commerce detail, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "Gas at three-seventy-two is tangible. Democratic leaders respond to tangible."
+  },
+  {
+    "clip_id": "scene_12_fill10",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Crude oil flowing through transparent pipeline section, commodity in transit, warm amber, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "Democratic leaders respond to tangible. And three-seventy-two, during spring break, is very tangible indeed."
+  },
+  {
+    "clip_id": "scene_12_fill11",
+    "scene_number": 12,
+    "scene_title": "THE PRICE AT THE PUMP DECIDES",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "State Department briefing room, empty podium, institutional communication space, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4EDD0, #E0E8F0, #A0A8B0, #D0CCC0",
+    "narration_context": "And three-seventy-two, during spring break, is very tangible indeed."
+  },
+  {
+    "clip_id": "scene_13_fill00",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "EU headquarters flag display, institutional architecture, alliance symbolism, cold morning light, steady tracking forward into space. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "And shared commitments are only as durable as the perception of shared interest. V1: \"NATO allies protested."
+  },
+  {
+    "clip_id": "scene_13_fill01",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "NATO conference table, empty chairs with country , diplomatic vacancy, wide shot, imperceptible push in. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "V1: \"NATO allies protested. The protest had no enforcement mechanism."
+  },
+  {
+    "clip_id": "scene_13_fill02",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European foreign ministry corridor at dawn, institutional architecture, marble and formality, static locked frame, perfectly still composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "The protest had no enforcement mechanism. The oil was sold."
+  },
+  {
+    "clip_id": "scene_13_fill03",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "German Bundestag exterior, institutional facade, European political architecture, extreme close-up, razor-thin focus. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "The oil was sold. Gas prices moderated slightly."
+  },
+  {
+    "clip_id": "scene_13_fill04",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Diplomatic cable being sealed in envelope, institutional communication, macro detail, aerial drone descent, smooth and deliberate. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "Gas prices moderated slightly. Spring break proceeded."
+  },
+  {
+    "clip_id": "scene_13_fill05",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Baltic state government building, small-nation institutional architecture, vulnerability, pull-back reveal, steady backward dolly. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "Spring break proceeded. This is what power asymmetry inside an alliance actually looks like \u2014 not in a summit statement about shared values, but in a unilateral market decision that the other members cannot override."
+  },
+  {
+    "clip_id": "scene_13_fill06",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European city newsstand at dawn, morning editions waiting, information distribution, close-up with shallow depth of field. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "This is what power asymmetry inside an alliance actually looks like \u2014 not in a summit statement about shared values, but in a unilateral market decision that the other members cannot override. The alliance survived."
+  },
+  {
+    "clip_id": "scene_13_fill07",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Embassy gate at dusk, institutional barrier, diplomatic boundary, security architecture, aerial wide, slow lateral tracking movement. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "The alliance survived. But it was a different alliance on March thirteenth than it had been on March eleventh."
+  },
+  {
+    "clip_id": "scene_13_fill08",
+    "scene_number": 13,
+    "scene_title": "THE FRACTURE",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Transatlantic fiber optic cable emerging from ocean, infrastructure of alliance communication, macro detail shot, extreme magnification. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8ECF4, #2060A0, #2A2A2A, #D8D0C0",
+    "narration_context": "But it was a different alliance on March thirteenth than it had been on March eleventh."
+  },
+  {
+    "clip_id": "scene_14_fill00",
+    "scene_number": 14,
+    "scene_title": "THE POLITICAL ARITHMETIC",
+    "clip_index": 5,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gas pump handle being squeezed by working-class hand, daily decision point, medium close-up, slow rack focus shift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4F0EC, #FEFEFE, #D08830, #F0D060",
+    "narration_context": "The costs are diffuse, distributed, and absorbed by people who had no seat at the table."
+  },
+  {
+    "clip_id": "scene_14_fill01",
+    "scene_number": 14,
+    "scene_title": "THE POLITICAL ARITHMETIC",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "White House situation room table, institutional furniture, decision architecture empty, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4F0EC, #FEFEFE, #D08830, #F0D060",
+    "narration_context": "The costs are diffuse, distributed, and absorbed by people who had no seat at the table. V1: \"The answers haven't been assembled in the same room until now."
+  },
+  {
+    "clip_id": "scene_14_fill02",
+    "scene_number": 14,
+    "scene_title": "THE POLITICAL ARITHMETIC",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Split composition: suburban gas station and military command center, parallel realities, telephoto compression, flattened perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4F0EC, #FEFEFE, #D08830, #F0D060",
+    "narration_context": "V1: \"The answers haven't been assembled in the same room until now. That is what this room is for."
+  },
+  {
+    "clip_id": "scene_14_fill03",
+    "scene_number": 14,
+    "scene_title": "THE POLITICAL ARITHMETIC",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional voting gallery, institutional architecture, democratic mechanism, medium shot, gentle dolly forward. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F4F0EC, #FEFEFE, #D08830, #F0D060",
+    "narration_context": "That is what this room is for."
+  },
+  {
+    "clip_id": "scene_15_fill00",
+    "scene_number": 15,
+    "scene_title": "THE BISHOPS AVENUE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "North London mansion behind stone wall, ornate iron gate, wealth concealment architecture, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+    "narration_context": "The wealth sits in north London. The gap between those two geographies is the gap in which impunity lives."
+  },
+  {
+    "clip_id": "scene_15_fill01",
+    "scene_number": 15,
+    "scene_title": "THE BISHOPS AVENUE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Five-star hotel lobby, marble and chandelier, European luxury hospitality, institutional opulence, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8D080, #9A9490, #B8C8D8, #F4F0EC",
+    "narration_context": "The gap between those two geographies is the gap in which impunity lives."
+  },
+  {
+    "clip_id": "scene_16_fill00",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Isle of Man corporate registry building, institutional architecture, offshore jurisdiction, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "Zero single point at which any one jurisdiction can see the entire chain. This is the architecture of opacity."
+  },
+  {
+    "clip_id": "scene_16_fill01",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Caribbean tax haven office, modest exterior, palm trees, shell company registration, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "This is the architecture of opacity. Each link is, individually, potentially legal."
+  },
+  {
+    "clip_id": "scene_16_fill02",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Abu Dhabi bank tower at dusk, modern glass facade, Gulf financial infrastructure, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "Each link is, individually, potentially legal. The chain, collectively, moves sanctioned wealth outside the reach of the sanctions regime."
+  },
+  {
+    "clip_id": "scene_16_fill03",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Corporate formation documents on solicitor's desk, institutional paperwork, shell structure, low angle looking upward, imposing perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The chain, collectively, moves sanctioned wealth outside the reach of the sanctions regime."
+  },
+  {
+    "clip_id": "scene_16_fill04",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "UAE free trade zone office block, commercial registration, jurisdictional gateway, telephoto compression, flattened perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The chain, collectively, moves sanctioned wealth outside the reach of the sanctions regime. V3: \"This is not unusual."
+  },
+  {
+    "clip_id": "scene_16_fill05",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Property deed document, macro detail on parchment, ownership chain evidence, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "V3: \"This is not unusual. The Khamenei family is estimated to hold between ninety-five and two hundred billion dollars in assets hidden outside Iran."
+  },
+  {
+    "clip_id": "scene_16_fill06",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Five-jurisdiction network map on analyst wall, connected nodes, institutional investigation, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The Khamenei family is estimated to hold between ninety-five and two hundred billion dollars in assets hidden outside Iran. The range is wide because the secrecy is effective."
+  },
+  {
+    "clip_id": "scene_16_fill07",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Saint Kitts and Nevis government building, Caribbean institutional architecture, offshore hub, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The range is wide because the secrecy is effective. The secrecy is effective because five legal jurisdictions each provided one link in a chain that none of them sees in full."
+  },
+  {
+    "clip_id": "scene_16_fill08",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "London property solicitor's office, Mayfair window, institutional real estate commerce, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The secrecy is effective because five legal jurisdictions each provided one link in a chain that none of them sees in full. This is not a failure of individual laws."
+  },
+  {
+    "clip_id": "scene_16_fill09",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Shell company registration stamp, macro detail, corporate formation machinery, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "This is not a failure of individual laws. It is a success of fragmentation."
+  },
+  {
+    "clip_id": "scene_16_fill10",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Global financial center skyline at dusk, interconnected towers, systemic architecture, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "It is a success of fragmentation. The sanction is a national instrument."
+  },
+  {
+    "clip_id": "scene_16_fill11",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Accountant's ledger open to offshore entity page, institutional financial record, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The sanction is a national instrument. The wealth is a global one."
+  },
+  {
+    "clip_id": "scene_16_fill12",
+    "scene_number": 16,
+    "scene_title": "THE PIPELINE",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Dubai Marina towers at night, vertical wealth storage, architectural extravagance, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8C020, #E8D8A0, #40C0B0, #7090A0",
+    "narration_context": "The wealth is a global one."
+  },
+  {
+    "clip_id": "scene_17_fill00",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 5,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Mansion exterior behind security wall, curtains drawn, wealth hidden in plain sight, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The architecture pays for itself in the first day of protection. V3: \"Naomi Klein, in 'The Shock Doctrine,' argued that crisis is an opportunity for capital to restructure in its own favor while attention is elsewhere."
+  },
+  {
+    "clip_id": "scene_17_fill01",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Legal document shredder detail, paper entering teeth, evidence management, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "V3: \"Naomi Klein, in 'The Shock Doctrine,' argued that crisis is an opportunity for capital to restructure in its own favor while attention is elsewhere."
+  },
+  {
+    "clip_id": "scene_17_fill02",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Financial investigator's desk covered in jurisdiction maps and corporate trees, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "V3: \"Naomi Klein, in 'The Shock Doctrine,' argued that crisis is an opportunity for capital to restructure in its own favor while attention is elsewhere. She was writing about neoliberal economic reform in post-crisis economies."
+  },
+  {
+    "clip_id": "scene_17_fill03",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Open padlock lying on stone surface, chain attached to nothing, security theater, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "She was writing about neoliberal economic reform in post-crisis economies. She was also, unknowingly, describing this."
+  },
+  {
+    "clip_id": "scene_17_fill04",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "International law firm nameplate on brass, institutional legal infrastructure, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "She was also, unknowingly, describing this. Every war is a redistribution event."
+  },
+  {
+    "clip_id": "scene_17_fill05",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Offshore banking terminal, generic interface, financial anonymity architecture, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "Every war is a redistribution event. The question is always: redistribution toward whom?"
+  },
+  {
+    "clip_id": "scene_17_fill06",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Supreme Leader's compound wall from outside, institutional barrier, untouchable wealth, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The question is always: redistribution toward whom?"
+  },
+  {
+    "clip_id": "scene_17_fill07",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Anti-money laundering compliance screen, institutional software, regulatory technology, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The question is always: redistribution toward whom? The answer, in this war as in most, runs consistently upward."
+  },
+  {
+    "clip_id": "scene_17_fill08",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Luxury property behind high hedge, aerial barely revealing roofline, concealment architecture, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The answer, in this war as in most, runs consistently upward. The war destroys the middle."
+  },
+  {
+    "clip_id": "scene_17_fill09",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Customs checkpoint at port, cargo containers passing through, enforcement limitation, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The war destroys the middle. The wealth survives in the shell company."
+  },
+  {
+    "clip_id": "scene_17_fill10",
+    "scene_number": 17,
+    "scene_title": "THE IMMUNITY",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Corporate registration certificate, ornate border, institutional legitimacy machinery, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #C8C090, #B0A090, #D0C8B0, #F0F0F0",
+    "narration_context": "The wealth survives in the shell company."
+  },
+  {
+    "clip_id": "scene_18_fill00",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "White House West Wing corridor, institutional architecture, power pathway, dawn light, pull-back reveal, steady backward dolly. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "Northrop Grumman had hit an all-time high above seven hundred and five dollars per share. RTX had gained one hundred and ten percent over three years."
+  },
+  {
+    "clip_id": "scene_18_fill01",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense stock chart climbing sharply on institutional display, green against dark background, close-up with shallow depth of field. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "RTX had gained one hundred and ten percent over three years. The iShares Defense ETF \u2014 a broad basket of US defense companies \u2014 was up fourteen percent year-to-date, outperforming the broader market significantly."
+  },
+  {
+    "clip_id": "scene_18_fill02",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Lockheed Martin corporate campus aerial, institutional sprawl, defense industry headquarters, aerial wide, slow lateral tracking movement. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "The iShares Defense ETF \u2014 a broad basket of US defense companies \u2014 was up fourteen percent year-to-date, outperforming the broader market significantly. The CEOs arrived at the White House wealthy."
+  },
+  {
+    "clip_id": "scene_18_fill03",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Executive motorcade vehicles parked at White House, institutional arrival, power convening, macro detail shot, extreme magnification. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "The CEOs arrived at the White House wealthy. They left with a mandate to become substantially wealthier, backed by emergency government production contracts at premium pricing."
+  },
+  {
+    "clip_id": "scene_18_fill04",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Northrop Grumman facility from above, defense manufacturing scale, institutional production, medium close-up, slow rack focus shift. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "They left with a mandate to become substantially wealthier, backed by emergency government production contracts at premium pricing. V3: \"There is a phrase from the First World War era: 'merchants of death.' It was used by critics of the munitions industry to describe companies that profited from warfare."
+  },
+  {
+    "clip_id": "scene_18_fill05",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "RTX corporate tower reflecting sunset, defense industry architecture, glass and steel, low angle looking upward, imposing perspective. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "V3: \"There is a phrase from the First World War era: 'merchants of death.' It was used by critics of the munitions industry to describe companies that profited from warfare."
+  },
+  {
+    "clip_id": "scene_18_fill06",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "iShares defense ETF performance curve on analyst screen, sector outperformance visible, telephoto compression, flattened perspective. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "V3: \"There is a phrase from the First World War era: 'merchants of death.' It was used by critics of the munitions industry to describe companies that profited from warfare. The phrase fell out of use because it was too simplistic \u2014 defense manufacturing is complicated, dual-use technology is real, and the people who work in these industries are not villains."
+  },
+  {
+    "clip_id": "scene_18_fill07",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "White House gate at dawn, institutional security, power boundary architecture, medium shot, gentle dolly forward. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "The phrase fell out of use because it was too simplistic \u2014 defense manufacturing is complicated, dual-use technology is real, and the people who work in these industries are not villains. What it captured, imprecisely but not inaccurately, was the structural reality that for some participants, war is not a cost."
+  },
+  {
+    "clip_id": "scene_18_fill08",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense industry boardroom, empty after meeting, institutional furniture, aftermath, high angle looking down, overhead vantage. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "What it captured, imprecisely but not inaccurately, was the structural reality that for some participants, war is not a cost. War is a revenue event."
+  },
+  {
+    "clip_id": "scene_18_fill09",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military industrial production line, precision assembly, institutional manufacturing, bird's-eye overhead composition. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "War is a revenue event. The White House meeting on March sixth was a revenue event, conducted at the highest levels of American government, three days into a war."
+  },
+  {
+    "clip_id": "scene_18_fill10",
+    "scene_number": 18,
+    "scene_title": "THE WHITE HOUSE MEETING",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Stock portfolio display showing defense holdings, all positions in green, institutional gain, medium wide, handheld with subtle drift. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #D8D4D0, #F0ECEC, #E0E0F0, #0A1420",
+    "narration_context": "The White House meeting on March sixth was a revenue event, conducted at the highest levels of American government, three days into a war."
+  },
+  {
+    "clip_id": "scene_19_fill00",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense Acquisition Board hearing room, institutional desk arrangement, governance space, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "In this case, the contracts go to the defense sector. Steve Feinberg's professional network is in the defense sector."
+  },
+  {
+    "clip_id": "scene_19_fill01",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Cerberus Capital Management office building exterior, private equity architecture, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "Steve Feinberg's professional network is in the defense sector."
+  },
+  {
+    "clip_id": "scene_19_fill02",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "DynCorp military contractor facility, operational compound, private military infrastructure, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "Steve Feinberg's professional network is in the defense sector. These two facts coexist within the law."
+  },
+  {
+    "clip_id": "scene_19_fill03",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Procurement contract signature page, institutional paperwork, authorization machinery, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "These two facts coexist within the law. Whether they coexist within the spirit of public service is a question the law does not adjudicate."
+  },
+  {
+    "clip_id": "scene_19_fill04",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pentagon procurement corridor, institutional interior, bureaucratic pathway, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "Whether they coexist within the spirit of public service is a question the law does not adjudicate."
+  },
+  {
+    "clip_id": "scene_19_fill05",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Private equity fund prospectus on executive desk, financial instrument, institutional detail, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "Whether they coexist within the spirit of public service is a question the law does not adjudicate. V3: \"The term 'revolving door' has been in political vocabulary since the 1960s."
+  },
+  {
+    "clip_id": "scene_19_fill06",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military contractor vehicle fleet parked in compound, operational assets, scale, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "V3: \"The term 'revolving door' has been in political vocabulary since the 1960s. It describes the movement of individuals between regulatory or government positions and the private sectors they regulate or fund."
+  },
+  {
+    "clip_id": "scene_19_fill07",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "DOD budget spreadsheet on analyst dual monitors, institutional financial planning, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "It describes the movement of individuals between regulatory or government positions and the private sectors they regulate or fund."
+  },
+  {
+    "clip_id": "scene_19_fill08",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Revolving door metaphor: glass door spinning slowly in institutional lobby, distorted reflection, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "It describes the movement of individuals between regulatory or government positions and the private sectors they regulate or fund. In every generation, the door revolves faster."
+  },
+  {
+    "clip_id": "scene_19_fill09",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense industry conference hall, empty before event, institutional networking space, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "In every generation, the door revolves faster. The gap between regulator and regulated closes."
+  },
+  {
+    "clip_id": "scene_19_fill10",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pentagon exterior ring corridor, institutional architecture, decision pathway, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "The gap between regulator and regulated closes."
+  },
+  {
+    "clip_id": "scene_19_fill11",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military procurement warehouse, inventory shelves, supply chain governance point, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "The gap between regulator and regulated closes. The boundary between public interest and private benefit blurs."
+  },
+  {
+    "clip_id": "scene_19_fill12",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Executive elevator ascending in glass shaft, institutional vertical, power ascent, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "The boundary between public interest and private benefit blurs. This is not unique to defense."
+  },
+  {
+    "clip_id": "scene_19_fill13",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional defense budget markup hearing room, institutional governance architecture, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "This is not unique to defense."
+  },
+  {
+    "clip_id": "scene_19_fill14",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 20,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Private equity portfolio visualization on screen, diversified defense holdings displayed, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "This is not unique to defense. It is most visible in defense because the numbers are largest."
+  },
+  {
+    "clip_id": "scene_19_fill15",
+    "scene_number": 19,
+    "scene_title": "THE MAN WHO SIGNS THE CHECKS",
+    "clip_index": 21,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Government ethics office, institutional desk, compliance architecture, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E4ECF8, #E8D8A0, #F0E870",
+    "narration_context": "It is most visible in defense because the numbers are largest."
+  },
+  {
+    "clip_id": "scene_20_fill00",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional committee chamber from above, curved desk arrangement, institutional governance, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "The stocks went up. V3: \"The political philosopher John Rawls asked us to design institutions from behind a 'veil of ignorance' \u2014 as if we did not know in advance which position in the system we would occupy."
+  },
+  {
+    "clip_id": "scene_20_fill01",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Financial disclosure filing cabinet, institutional records, forty-five-day paper trail, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "V3: \"The political philosopher John Rawls asked us to design institutions from behind a 'veil of ignorance' \u2014 as if we did not know in advance which position in the system we would occupy. A system designed from behind the veil of ignorance would not allow the legislators who fund the war to hold stock in the companies paid by the war."
+  },
+  {
+    "clip_id": "scene_20_fill02",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense ETF performance chart on congressional aide's monitor, institutional data, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "A system designed from behind the veil of ignorance would not allow the legislators who fund the war to hold stock in the companies paid by the war. But the veil of ignorance has never been the operating principle of American institutional design."
+  },
+  {
+    "clip_id": "scene_20_fill03",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Senate office building corridor at dawn, institutional architecture, governance pathway, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "But the veil of ignorance has never been the operating principle of American institutional design."
+  },
+  {
+    "clip_id": "scene_20_fill04",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Committee hearing room from witness perspective, empty elevated desk, institutional power, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "But the veil of ignorance has never been the operating principle of American institutional design. The operating principle is disclosure."
+  },
+  {
+    "clip_id": "scene_20_fill05",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Lockheed stock chart overlaid on calendar dates, institutional timeline correlation, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "The operating principle is disclosure. And disclosed conflicts are, apparently, the kind we have decided to live with."
+  },
+  {
+    "clip_id": "scene_20_fill06",
+    "scene_number": 20,
+    "scene_title": "THE PORTFOLIO AND THE COMMITTEE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Congressional parking garage, luxury vehicles, institutional wealth proximity, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #ECEEFC, #F0ECD8, #4A5068, #0A1020",
+    "narration_context": "And disclosed conflicts are, apparently, the kind we have decided to live with."
+  },
+  {
+    "clip_id": "scene_21_fill00",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense factory floor operating at surge capacity, workers on overtime, production pressure, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "This is the system working precisely as designed. V3: \"The economist John Kenneth Galbraith called this dynamic 'private profit, public cost.' He was writing about environmental externalities \u2014 the cost of pollution borne by the public while the profits of production are privately retained."
+  },
+  {
+    "clip_id": "scene_21_fill01",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Stock buyback transaction confirmation on corporate terminal, institutional financial action, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "V3: \"The economist John Kenneth Galbraith called this dynamic 'private profit, public cost.' He was writing about environmental externalities \u2014 the cost of pollution borne by the public while the profits of production are privately retained. He would recognize the defense procurement version of the argument immediately and without hesitation."
+  },
+  {
+    "clip_id": "scene_21_fill02",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty production line that could have been expanded, industrial potential unrealized, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "He would recognize the defense procurement version of the argument immediately and without hesitation."
+  },
+  {
+    "clip_id": "scene_21_fill03",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Emergency defense procurement order on government desk, institutional urgency paperwork, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "He would recognize the defense procurement version of the argument immediately and without hesitation. The profit of the buyback was private."
+  },
+  {
+    "clip_id": "scene_21_fill04",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Shareholder dividend check being printed, corporate financial distribution, macro detail, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "The profit of the buyback was private. The cost of the production shortfall is public."
+  },
+  {
+    "clip_id": "scene_21_fill05",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "THAAD production facility bottleneck, limited assembly stations, capacity constraint visible, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "The cost of the production shortfall is public."
+  },
+  {
+    "clip_id": "scene_21_fill06",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Corporate executive compensation report on institutional desk, financial reward document, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "The cost of the production shortfall is public. The emergency contract that bridges the gap transfers the public cost back to private revenue, at a premium."
+  },
+  {
+    "clip_id": "scene_21_fill07",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Military supply requisition form marked urgent, institutional logistics, operational need, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "The emergency contract that bridges the gap transfers the public cost back to private revenue, at a premium. This is not corruption."
+  },
+  {
+    "clip_id": "scene_21_fill08",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense factory expansion site, undeveloped land beside existing plant, missed investment, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "This is not corruption."
+  },
+  {
+    "clip_id": "scene_21_fill09",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Investor relations presentation slide on screen, financial engineering metrics displayed, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "This is not corruption. This is the market, working precisely as advertised."
+  },
+  {
+    "clip_id": "scene_21_fill10",
+    "scene_number": 21,
+    "scene_title": "THE BUYBACK IRONY",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Government supplemental appropriation document, emergency budget mechanism, institutional, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #FEFEFE, #D8A030, #9A2010, #F0ECDC",
+    "narration_context": "This is the market, working precisely as advertised."
+  },
+  {
+    "clip_id": "scene_22_fill00",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "SPR underground cavern with lower oil level, industrial interior, strategic reserve depleted, wide shot, imperceptible push in. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "Spring break was manageable. The twenty-billion-dollar refill bill was not mentioned in the press conference announcing the release."
+  },
+  {
+    "clip_id": "scene_22_fill01",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gulf Coast salt dome facility pump running, drawdown in progress, institutional energy, static locked frame, perfectly still composition. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "The twenty-billion-dollar refill bill was not mentioned in the press conference announcing the release. It was not the point."
+  },
+  {
+    "clip_id": "scene_22_fill02",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Future budget projection on government analyst screen, deferred cost growing, institutional data, extreme close-up, razor-thin focus. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "It was not the point."
+  },
+  {
+    "clip_id": "scene_22_fill03",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil barrel price indicator at hundred-dollar mark, commodity cost for refill, institutional display, aerial drone descent, smooth and deliberate. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "It was not the point. The point was three-seventy-two at the pump."
+  },
+  {
+    "clip_id": "scene_22_fill04",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "SPR control room operator monitoring drawdown gauges, institutional energy management, pull-back reveal, steady backward dolly. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "The point was three-seventy-two at the pump."
+  },
+  {
+    "clip_id": "scene_22_fill05",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Spring break highway from above, family vehicles, temporary consumer relief in motion, close-up with shallow depth of field. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "The point was three-seventy-two at the pump. The twenty billion is somebody else's problem, scheduled for a future somebody."
+  },
+  {
+    "clip_id": "scene_22_fill06",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "White House press briefing room, empty podium, institutional communication, cost unmentioned, aerial wide, slow lateral tracking movement. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "The twenty billion is somebody else's problem, scheduled for a future somebody. V3: \"The Strategic Petroleum Reserve was established in 1975, in the wake of the 1973 Arab oil embargo, as a permanent lesson in strategic foresight \u2014 the idea that a great power should maintain energy independence sufficient to outlast a supply disruption without economic collapse."
+  },
+  {
+    "clip_id": "scene_22_fill07",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Treasury bond auction interface, government borrowing mechanism, institutional finance, macro detail shot, extreme magnification. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "V3: \"The Strategic Petroleum Reserve was established in 1975, in the wake of the 1973 Arab oil embargo, as a permanent lesson in strategic foresight \u2014 the idea that a great power should maintain energy independence sufficient to outlast a supply disruption without economic collapse."
+  },
+  {
+    "clip_id": "scene_22_fill08",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Salt cavern cross-section revealing declining reserves, geological storage, institutional asset, medium close-up, slow rack focus shift. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "V3: \"The Strategic Petroleum Reserve was established in 1975, in the wake of the 1973 Arab oil embargo, as a permanent lesson in strategic foresight \u2014 the idea that a great power should maintain energy independence sufficient to outlast a supply disruption without economic collapse. In 2026, its use as a domestic political instrument \u2014 a tool for managing pump prices during an election-sensitive vacation week \u2014 represents, in some sense, the reserve's original strategic premise being consumed by a different kind of strategy."
+  },
+  {
+    "clip_id": "scene_22_fill09",
+    "scene_number": 22,
+    "scene_title": "THE SPR GAMBLE",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Future taxpayer: young person at gas station, inheriting deferred cost, generational burden, low angle looking upward, imposing perspective. warm amber light, lived-in textures. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E0D8A0, #1A1A10, #F4ECD0, #F0E8C8",
+    "narration_context": "In 2026, its use as a domestic political instrument \u2014 a tool for managing pump prices during an election-sensitive vacation week \u2014 represents, in some sense, the reserve's original strategic premise being consumed by a different kind of strategy."
+  },
+  {
+    "clip_id": "scene_23_fill00",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Strait of Hormuz aerial, narrow waterway between coastlines, geographic chokepoint, low angle looking upward, imposing perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "V2: \"The insurance market is, in some ways, the most honest market in the world \u2014 because it prices actual risk in real time, with no political motive."
+  },
+  {
+    "clip_id": "scene_23_fill01",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Oil tanker navigating narrow channel, coastline visible on both sides, strategic vulnerability, telephoto compression, flattened perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "V2: \"The insurance market is, in some ways, the most honest market in the world \u2014 because it prices actual risk in real time, with no political motive. A one-thousand-percent surge in Hormuz premiums is the insurance market saying: the probability of losing a ship in this waterway has increased by a factor of ten."
+  },
+  {
+    "clip_id": "scene_23_fill02",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Lloyd's of London insurance market interior, institutional underwriting architecture, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "A one-thousand-percent surge in Hormuz premiums is the insurance market saying: the probability of losing a ship in this waterway has increased by a factor of ten. That assessment has direct economic consequences."
+  },
+  {
+    "clip_id": "scene_23_fill03",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Container ship bridge, navigation instruments, crew monitoring passage, operational tension, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "That assessment has direct economic consequences."
+  },
+  {
+    "clip_id": "scene_23_fill04",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Shipping insurance certificate on broker desk, institutional risk documentation, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "That assessment has direct economic consequences. Every vessel that cannot afford the premium cannot transit."
+  },
+  {
+    "clip_id": "scene_23_fill05",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "LNG tanker in Persian Gulf at dawn, specialized cargo, energy security vessel, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "Every vessel that cannot afford the premium cannot transit. Every vessel that can afford it passes the cost to its cargo owners, who pass it to retailers, who pass it to consumers."
+  },
+  {
+    "clip_id": "scene_23_fill06",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Satellite view of Gulf waterway with vessel traffic, strategic monitoring perspective, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "Every vessel that can afford it passes the cost to its cargo owners, who pass it to retailers, who pass it to consumers. The four-million-dollar transit premium is distributed across millions of units of goods, invisibly, as a slightly higher price for everything."
+  },
+  {
+    "clip_id": "scene_23_fill07",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Ship engine room, massive machinery operating, maritime power infrastructure, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The four-million-dollar transit premium is distributed across millions of units of goods, invisibly, as a slightly higher price for everything."
+  },
+  {
+    "clip_id": "scene_23_fill08",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Port congestion from above, vessels waiting to transit, logistical bottleneck, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The four-million-dollar transit premium is distributed across millions of units of goods, invisibly, as a slightly higher price for everything. V3: \"There is a concept in systems theory called chokepoint amplification \u2014 the disproportionate systemic consequence of disrupting a single critical node."
+  },
+  {
+    "clip_id": "scene_23_fill09",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pharmaceutical supply chain warehouse, partially empty shelves, disruption evidence, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "V3: \"There is a concept in systems theory called chokepoint amplification \u2014 the disproportionate systemic consequence of disrupting a single critical node. The Strait of Hormuz is the world's most consequential chokepoint."
+  },
+  {
+    "clip_id": "scene_23_fill10",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Automotive parts container being unloaded, just-in-time supply chain fragility, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The Strait of Hormuz is the world's most consequential chokepoint."
+  },
+  {
+    "clip_id": "scene_23_fill11",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Electronics assembly line with component shortage gap, manufacturing disruption, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The Strait of Hormuz is the world's most consequential chokepoint. A single twenty-one-mile waterway carries one-fifth of global energy."
+  },
+  {
+    "clip_id": "scene_23_fill12",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Grocery store shelf with gaps, consumer-facing supply chain impact, subtle scarcity, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "A single twenty-one-mile waterway carries one-fifth of global energy. That concentration of consequence in a single geography is not an accident of nature \u2014 it is the result of decades of infrastructure investment decisions made in a period of relative stability."
+  },
+  {
+    "clip_id": "scene_23_fill13",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Shipping broker's desk with rate charts climbing, institutional maritime commerce, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "That concentration of consequence in a single geography is not an accident of nature \u2014 it is the result of decades of infrastructure investment decisions made in a period of relative stability."
+  },
+  {
+    "clip_id": "scene_23_fill14",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 20,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Fertilizer storage facility at port, agricultural supply chain node, strategic commodity, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "That concentration of consequence in a single geography is not an accident of nature \u2014 it is the result of decades of infrastructure investment decisions made in a period of relative stability. The world built the system assuming the Strait would remain open."
+  },
+  {
+    "clip_id": "scene_23_fill15",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 21,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Hormuz coastline at sunset, strategic geography, oil infrastructure visible on shore, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The world built the system assuming the Strait would remain open. The war demonstrated the assumption."
+  },
+  {
+    "clip_id": "scene_23_fill16",
+    "scene_number": 23,
+    "scene_title": "THE MOST EXPENSIVE WATERWAY",
+    "clip_index": 22,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Marine fuel bunker facility, ships waiting for passage, maritime logistics chokepoint, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #F0E0A0, #4080A0, #3060A0, #E0ECFC",
+    "narration_context": "The war demonstrated the assumption."
+  },
+  {
+    "clip_id": "scene_24_fill00",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Goldman Sachs research report on analyst desk, institutional economic outlook, recession data, slow crane rising to reveal landscape. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "That means: the family who absorbed seventy cents more per gallon, who watched their grocery bill rise, who noticed that the credit card balance was not going down this month \u2014 they were standing in a one-in-four probability space of living through the beginning of a recession. Not caused by their decisions."
+  },
+  {
+    "clip_id": "scene_24_fill01",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Family kitchen at evening, bills on table, absorbing gas price increase, warm domestic light, steady tracking forward into space. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "Not caused by their decisions."
+  },
+  {
+    "clip_id": "scene_24_fill02",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Consumer price chart climbing on institutional display, inflation transmission visible, wide shot, imperceptible push in. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "Not caused by their decisions. Not announced in advance."
+  },
+  {
+    "clip_id": "scene_24_fill03",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Credit card statement on kitchen counter, monthly balance not declining, domestic pressure, static locked frame, perfectly still composition. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "Not announced in advance. Transmitted to them through the oil price, which was transmitted from the Strait of Hormuz, which was transmitted from a decision made in a room they never entered, by people whose financial positions were arranged to benefit from the answer being yes."
+  },
+  {
+    "clip_id": "scene_24_fill04",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Grocery store checkout total rising, consumer POV, everyday inflation impact, extreme close-up, razor-thin focus. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "Transmitted to them through the oil price, which was transmitted from the Strait of Hormuz, which was transmitted from a decision made in a room they never entered, by people whose financial positions were arranged to benefit from the answer being yes. V3: \"The economist Hyman Minsky observed that stability breeds instability \u2014 that the longer an economy is stable, the more leverage accumulates, and the more fragile it becomes to disruption."
+  },
+  {
+    "clip_id": "scene_24_fill05",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Strait of Hormuz to American suburb: aerial of coastline transitioning to aerial of suburb, aerial drone descent, smooth and deliberate. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "V3: \"The economist Hyman Minsky observed that stability breeds instability \u2014 that the longer an economy is stable, the more leverage accumulates, and the more fragile it becomes to disruption."
+  },
+  {
+    "clip_id": "scene_24_fill06",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Small business calculator and ledger, margin compression visible in figures, warm light, pull-back reveal, steady backward dolly. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "V3: \"The economist Hyman Minsky observed that stability breeds instability \u2014 that the longer an economy is stable, the more leverage accumulates, and the more fragile it becomes to disruption. The Q4 2025 GDP revision suggests an economy that had been leveraged into fragility before the war."
+  },
+  {
+    "clip_id": "scene_24_fill07",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Federal Reserve building at dusk, institutional monetary authority, economic governance, close-up with shallow depth of field. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "The Q4 2025 GDP revision suggests an economy that had been leveraged into fragility before the war. The war was the disruption."
+  },
+  {
+    "clip_id": "scene_24_fill08",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Gas station at dusk, family finishing fueling, economic transmission endpoint, aerial wide, slow lateral tracking movement. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "The war was the disruption. The Goldman call was the market's assessment that fragility plus disruption equals twenty-five percent probability of the thing that hurts ordinary people most: a recession."
+  },
+  {
+    "clip_id": "scene_24_fill09",
+    "scene_number": 24,
+    "scene_title": "GOLDMAN'S CALL",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty restaurant at lunch hour, small business impact, economic uncertainty visible, macro detail shot, extreme magnification. cold blue-white institutional lighting. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #E8D0A0, #A0C0E0, #9A2010, #D09030",
+    "narration_context": "The Goldman call was the market's assessment that fragility plus disruption equals twenty-five percent probability of the thing that hurts ordinary people most: a recession."
+  },
+  {
+    "clip_id": "scene_25_fill00",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 6,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Chinese strategic petroleum reserve facility aerial, massive tank farm, national preparedness, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "Fertilizer production is the foundation of global food supply. A sixteen percent rise in sulfur prices means a rise in fertilizer costs."
+  },
+  {
+    "clip_id": "scene_25_fill01",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 7,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Asian rice paddy at dawn, agricultural production, food supply chain origin, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "A sixteen percent rise in sulfur prices means a rise in fertilizer costs."
+  },
+  {
+    "clip_id": "scene_25_fill02",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 8,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Sulfur processing plant, yellow industrial material, fertilizer feedstock production, low angle looking upward, imposing perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "A sixteen percent rise in sulfur prices means a rise in fertilizer costs. A rise in fertilizer costs, applied at planting season across Asia, means a rise in food production costs."
+  },
+  {
+    "clip_id": "scene_25_fill03",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 9,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Fertilizer warehouse, bags stacked high, agricultural supply chain infrastructure, telephoto compression, flattened perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "A rise in fertilizer costs, applied at planting season across Asia, means a rise in food production costs. The war's economic radius extended from the Strait of Hormuz to the rice paddies of Asia."
+  },
+  {
+    "clip_id": "scene_25_fill04",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 10,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "South Korean LNG terminal, storage tanks near capacity limit, energy vulnerability, medium shot, gentle dolly forward. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "The war's economic radius extended from the Strait of Hormuz to the rice paddies of Asia."
+  },
+  {
+    "clip_id": "scene_25_fill05",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 11,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European gas pipeline valve station, institutional energy infrastructure, re-exposure risk, high angle looking down, overhead vantage. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "The war's economic radius extended from the Strait of Hormuz to the rice paddies of Asia. In the food inflation data of autumn 2026, the March missile strikes will be visible as a price signal."
+  },
+  {
+    "clip_id": "scene_25_fill06",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 12,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Asian farmer's hands holding soil, agricultural foundation, food security at human scale, bird's-eye overhead composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "In the food inflation data of autumn 2026, the March missile strikes will be visible as a price signal. V3: \"The asymmetry is structural and it is a policy choice."
+  },
+  {
+    "clip_id": "scene_25_fill07",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Chinese refinery complex at dawn, operational capacity, energy processing independence, medium wide, handheld with subtle drift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "V3: \"The asymmetry is structural and it is a policy choice."
+  },
+  {
+    "clip_id": "scene_25_fill08",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Global shipping lane aerial, tankers in transit, energy trade route vulnerability, tracking shot, smooth lateral glide. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "V3: \"The asymmetry is structural and it is a policy choice. Countries with strategic reserves \u2014 built by deliberate long-term investment, funded by decades of consistent policy \u2014 were relatively insulated from the war's energy shock."
+  },
+  {
+    "clip_id": "scene_25_fill09",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European utility company control room, energy supply monitoring, institutional management, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "Countries with strategic reserves \u2014 built by deliberate long-term investment, funded by decades of consistent policy \u2014 were relatively insulated from the war's energy shock. Countries that had run their reserves down, for quarterly budget reasons, for market efficiency arguments, for the financial logic of just-in-time resource management \u2014 were not."
+  },
+  {
+    "clip_id": "scene_25_fill10",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Wheat field at golden hour, agricultural output, food production dependent on energy, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "Countries that had run their reserves down, for quarterly budget reasons, for market efficiency arguments, for the financial logic of just-in-time resource management \u2014 were not."
+  },
+  {
+    "clip_id": "scene_25_fill11",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "LNG carrier approaching Asian port, energy security delivery, strategic logistics, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "Countries that had run their reserves down, for quarterly budget reasons, for market efficiency arguments, for the financial logic of just-in-time resource management \u2014 were not. This is not fate."
+  },
+  {
+    "clip_id": "scene_25_fill12",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Chemical fertilizer production facility interior, industrial agriculture dependency, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "This is not fate. It is a choice made in advance of the crisis and collected, with interest, during it."
+  },
+  {
+    "clip_id": "scene_25_fill13",
+    "scene_number": 25,
+    "scene_title": "CHINA'S BUFFER",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Container port in Southeast Asia, global supply chain node, interconnected commerce, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #0A1020, #E8D090, #1840A0, #D09030",
+    "narration_context": "It is a choice made in advance of the crisis and collected, with interest, during it."
+  },
+  {
+    "clip_id": "scene_26_fill00",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 13,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Hedge fund trading desk at dawn, positions being reviewed, profit-takers at work, slow tilt upward revealing full height. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "V2: \"The frame matters because the frame determines the question. Without it, the question is: who won the war?"
+  },
+  {
+    "clip_id": "scene_26_fill01",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 14,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Tanker ETF performance curve on institutional display, gains from conflict measured, wide establishing shot, locked tripod. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "Without it, the question is: who won the war?"
+  },
+  {
+    "clip_id": "scene_26_fill02",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 15,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Defense CEO's executive office, morning light on corporate success, institutional wealth, slow crane rising to reveal landscape. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "Without it, the question is: who won the war? With it, the question is: who won from the war?"
+  },
+  {
+    "clip_id": "scene_26_fill03",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 16,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Suburban family at breakfast table, morning routine, unknowing participants in war economy, steady tracking forward into space. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "With it, the question is: who won from the war? These are different questions with different answers."
+  },
+  {
+    "clip_id": "scene_26_fill04",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 17,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "South Korean apartment window looking out at winter, energy vulnerability, domestic moment, wide shot, imperceptible push in. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "These are different questions with different answers. The first is answered by military historians."
+  },
+  {
+    "clip_id": "scene_26_fill05",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 18,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Asian farming community at dawn, planting season beginning, fertilizer cost absorbed, static locked frame, perfectly still composition. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "The first is answered by military historians."
+  },
+  {
+    "clip_id": "scene_26_fill06",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 19,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "American gas station at sunrise, first customer of the day, transmission endpoint, extreme close-up, razor-thin focus. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "The first is answered by military historians. The second is answered by following the money."
+  },
+  {
+    "clip_id": "scene_26_fill07",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 20,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "SPR facility at dawn, depleted caverns, national debt deferred, institutional consequence, aerial drone descent, smooth and deliberate. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "The second is answered by following the money. We followed it for sixty minutes."
+  },
+  {
+    "clip_id": "scene_26_fill08",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 21,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Pentagon corridor at dawn, institutional machinery continuing, operational persistence, pull-back reveal, steady backward dolly. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "We followed it for sixty minutes. The trail was not hard to find."
+  },
+  {
+    "clip_id": "scene_26_fill09",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 22,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Small business owner opening shop at dawn, economic survival, human resilience, close-up with shallow depth of field. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "The trail was not hard to find."
+  },
+  {
+    "clip_id": "scene_26_fill10",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 23,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "European parliament at dawn, alliance framework under strain, institutional morning, aerial wide, slow lateral tracking movement. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "The trail was not hard to find. It was in the public record."
+  },
+  {
+    "clip_id": "scene_26_fill11",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 24,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Goldman Sachs tower catching first light, recession probability calculated, institutional forecast, macro detail shot, extreme magnification. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "It was in the public record. Waiting for someone to read it in the same order."
+  },
+  {
+    "clip_id": "scene_26_fill12",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 25,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Ocean horizon at dawn, tanker silhouette barely visible, global scale indifferent to individuals, medium close-up, slow rack focus shift. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "Waiting for someone to read it in the same order. V1: \"This was the frame."
+  },
+  {
+    "clip_id": "scene_26_fill13",
+    "scene_number": 26,
+    "scene_title": "THE LEDGER CLOSES",
+    "clip_index": 26,
+    "target_duration_sec": 5,
+    "ltx_clips_needed": 1,
+    "prompt": "Empty courtroom at dawn light, accountability pending, institutional justice waiting, low angle looking upward, imposing perspective. dramatic cinematic lighting, high contrast. cinematic documentary, photorealistic, shot on Arri Alexa, 16:9 widescreen, shallow depth of field, subtle film grain, color palette: #8090A0, #D08030, #1A2A4A",
+    "narration_context": "V1: \"This was the frame."
+  }
+]

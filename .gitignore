@@ -31,3 +31,13 @@ Thumbs.db
 
 # Environment
 .env
+
+# V7 assembly artifacts (large binaries)
+*.mp4
+*.wav
+*.tar.gz
+assembly/scenes/
+assembly/tmp/
+assembly/clips/
+__pycache__/
+*.pyc
