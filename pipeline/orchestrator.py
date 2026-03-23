@@ -5,6 +5,7 @@ Master Pipeline Orchestrator v9 — OTIO-Centric Audio-First Workflow
 Runs the complete documentary production pipeline with strict phase
 validation gates enforcing audio-first flow.
 
+  Phase 0: DOWNLOAD -> YouTube content acquisition (Tube Archivist / Apify / Bright Data)
   Phase 1: SCRIPT PARSE -> scene list
   Phase 2: AUDIO GENERATION -> narration WAV files -> OTIO audio track
   Phase 3: PROMPT GENERATION -> LTX-2.3 prompts -> OTIO metadata (+ JSON export)
@@ -31,6 +32,8 @@ Usage:
                                    --output-dir ./production
 
   # Individual phases
+  python3 -m pipeline.orchestrator --phase download --channels-file channels.txt
+  python3 -m pipeline.orchestrator --phase download --video-ids "abc123,def456"
   python3 -m pipeline.orchestrator --phase audio --script narration_script.json
   python3 -m pipeline.orchestrator --phase prompts --otio timeline.otio --script narration_script.json
   python3 -m pipeline.orchestrator --phase video --otio timeline.otio
@@ -51,6 +54,27 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
 log = logging.getLogger(__name__)
+
+
+def phase_download(args):
+    """Phase 0: YouTube Content Acquisition."""
+    from pipeline.youtube_downloader import YouTubeDownloader, DownloaderConfig
+
+    config = DownloaderConfig.from_env()
+    downloader = YouTubeDownloader(config)
+
+    if args.channels_file:
+        channels = Path(args.channels_file).read_text().strip().splitlines()
+        channels = [ch.strip() for ch in channels if ch.strip() and not ch.strip().startswith("#")]
+        report = downloader.run_full_pipeline(channel_ids=channels)
+    elif args.video_ids:
+        video_ids = [v.strip() for v in args.video_ids.split(",") if v.strip()]
+        report = downloader.download_videos(video_ids)
+    else:
+        report = downloader.run_full_pipeline()
+
+    log.info(f"\n{report}")
+    return report
 
 
 def phase_audio(args):
@@ -466,6 +490,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Phases:
+  download    YouTube content acquisition (Tube Archivist / Apify / Bright Data)
   audio       Generate narration audio -> OTIO audio track
   prompts     Generate LTX-2.3 video prompts -> OTIO metadata (+ JSON export)
   video       Generate video clips with LTX-2.3 -> OTIO video track
@@ -486,7 +511,7 @@ Validation Gates:
     )
 
     parser.add_argument("--phase", default="all",
-                        choices=["audio", "prompts", "video", "quality",
+                        choices=["download", "audio", "prompts", "video", "quality",
                                  "regenerate", "assemble",
                                  "validate", "status", "export", "all"],
                         help="Pipeline phase to run")
@@ -501,6 +526,8 @@ Validation Gates:
     parser.add_argument("--b2-key-id", default=None, help="B2 key ID")
     parser.add_argument("--b2-app-key", default=None, help="B2 app key")
     parser.add_argument("--gpu", type=int, default=None, help="GPU index")
+    parser.add_argument("--channels-file", default=None, help="File with channel IDs (one per line, for download phase)")
+    parser.add_argument("--video-ids", default=None, help="Comma-separated video IDs (for download phase)")
 
     args = parser.parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -523,6 +550,14 @@ Validation Gates:
 
     if args.phase == "validate":
         phase_validate(args)
+        return
+
+    if args.phase == "download":
+        phase_download(args)
+        elapsed = time.time() - start_time
+        print(f"\n{'='*60}")
+        print(f"DOWNLOAD COMPLETE in {elapsed:.0f}s ({elapsed / 60:.1f} min)")
+        print(f"{'='*60}")
         return
 
     if args.phase in ("audio", "all"):
