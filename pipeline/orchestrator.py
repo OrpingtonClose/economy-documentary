@@ -9,8 +9,10 @@ validation gates enforcing audio-first flow.
   Phase 2: AUDIO GENERATION -> narration WAV files -> OTIO audio track
   Phase 3: PROMPT GENERATION -> LTX-2.3 prompts -> OTIO metadata (+ JSON export)
   Phase 4: VIDEO GENERATION -> video clips -> OTIO video track + quality metadata
-  Phase 5: ASSEMBLY -> read OTIO -> render final MP4
-  Phase 6: EXPORT -> .otio + FCPXML + EDL
+  Phase 5: QUALITY CHECK -> Qwen3-Omni-Thinking assesses clips -> OTIO quality metadata
+  Phase 6: REGENERATION -> re-generate failed clips with enhanced negative prompts
+  Phase 7: ASSEMBLY -> read OTIO -> render final MP4
+  Phase 8: EXPORT -> .otio + FCPXML + EDL
   VALIDATE: Print pipeline state for each scene
 
 The .otio file is the SINGLE SOURCE OF TRUTH at every stage.
@@ -32,6 +34,8 @@ Usage:
   python3 -m pipeline.orchestrator --phase audio --script narration_script.json
   python3 -m pipeline.orchestrator --phase prompts --otio timeline.otio --script narration_script.json
   python3 -m pipeline.orchestrator --phase video --otio timeline.otio
+  python3 -m pipeline.orchestrator --phase quality --otio timeline.otio
+  python3 -m pipeline.orchestrator --phase regenerate --otio timeline.otio
   python3 -m pipeline.orchestrator --phase assemble --otio timeline.otio
   python3 -m pipeline.orchestrator --phase validate --otio timeline.otio
   python3 -m pipeline.orchestrator --phase status --otio timeline.otio
@@ -181,9 +185,127 @@ def phase_video(args):
     return results
 
 
+def phase_quality(args):
+    """
+    Phase 5: Quality check all clips using Qwen3-Omni-Thinking.
+
+    Runs on a SEPARATE VM from LTX-2.3 generation. Loads Qwen3-Omni once,
+    assesses every clip in the OTIO timeline, writes quality scores and
+    regeneration flags back to OTIO metadata.
+    """
+    from pipeline.quality_checker import VideoQualityChecker
+
+    otio_path = args.otio or os.path.join(args.output_dir, "war_economy_v9.otio")
+    clips_dir = os.path.join(args.output_dir, "clips")
+    report_path = os.path.join(args.output_dir, "quality_report.json")
+
+    if not os.path.exists(otio_path):
+        log.error(f"OTIO timeline not found: {otio_path}")
+        sys.exit(1)
+
+    if not os.path.isdir(clips_dir):
+        log.error(f"Clips directory not found: {clips_dir}")
+        sys.exit(1)
+
+    checker = VideoQualityChecker(model_path=getattr(args, "qc_model_path", None))
+    checker.load_model()
+
+    assessments = checker.assess_all_clips(otio_path, clips_dir)
+    report = checker.generate_report(assessments, report_path)
+
+    failed = report["failed"]
+    if failed > 0:
+        log.warning(f"\n{failed} clip(s) FAILED quality check. "
+                    f"Run --phase regenerate to re-generate them.")
+
+    return report
+
+
+def phase_regenerate(args):
+    """
+    Phase 6: Re-generate clips that failed quality check.
+
+    Reads regeneration flags from OTIO metadata, re-generates ONLY those
+    clips with new random seeds and enhanced negative prompts targeting
+    the specific failure categories identified by Qwen3-Omni.
+    """
+    import random
+
+    from pipeline.quality_checker import get_flagged_clips
+    from pipeline.video_generator import VideoGenerator, NEGATIVE_PROMPT
+
+    otio_path = args.otio or os.path.join(args.output_dir, "war_economy_v9.otio")
+    clips_dir = os.path.join(args.output_dir, "clips")
+
+    if not os.path.exists(otio_path):
+        log.error(f"OTIO timeline not found: {otio_path}")
+        sys.exit(1)
+
+    flagged = get_flagged_clips(otio_path)
+
+    if not flagged:
+        log.info("No clips flagged for regeneration. All quality checks passed.")
+        return []
+
+    log.info(f"\n{'='*60}")
+    log.info(f"REGENERATION — {len(flagged)} clip(s) to re-generate")
+    log.info(f"{'='*60}")
+
+    # Build prompts list for the video generator
+    regen_prompts = []
+    for clip_info in flagged:
+        # New random seed (the previous seed clearly didn't work)
+        new_seed = random.randint(0, 2**31 - 1)
+
+        # Combine base negative prompt with category-specific enhancements
+        enhanced_neg = NEGATIVE_PROMPT
+        if clip_info["enhanced_negative_prompt"]:
+            enhanced_neg = f"{NEGATIVE_PROMPT}, {clip_info['enhanced_negative_prompt']}"
+
+        log.info(f"  {clip_info['clip_id']} (scene {clip_info['scene_number']}) — "
+                 f"failed: {', '.join(clip_info['failed_categories'])}")
+        log.info(f"    New seed: {new_seed}")
+        if clip_info["enhanced_negative_prompt"]:
+            log.info(f"    Enhanced neg: +{clip_info['enhanced_negative_prompt']}")
+
+        # Delete old clip to force re-generation
+        old_path = os.path.join(clips_dir, f"{clip_info['clip_id']}.mp4")
+        if os.path.exists(old_path):
+            os.remove(old_path)
+            log.info(f"    Removed old clip: {old_path}")
+
+        # Calculate ltx_clips_needed from duration
+        target_dur = clip_info["target_duration_sec"]
+        ltx_clips_needed = max(1, int(target_dur / 5.04) + (1 if target_dur % 5.04 > 0.5 else 0))
+
+        regen_prompts.append({
+            "clip_id": clip_info["clip_id"],
+            "scene_number": clip_info["scene_number"],
+            "prompt": clip_info["prompt"],
+            "target_duration_sec": target_dur,
+            "ltx_clips_needed": ltx_clips_needed,
+            "negative_prompt_override": enhanced_neg,
+            "seed_override": new_seed,
+        })
+
+    # Run video generation for flagged clips only
+    gen = VideoGenerator(
+        otio_path=otio_path,
+        output_dir=clips_dir,
+        b2_key_id=args.b2_key_id,
+        b2_app_key=args.b2_app_key,
+    )
+    results = gen.generate_all(regen_prompts, start_at=0)
+
+    completed = sum(1 for r in results if r["status"] == "complete")
+    log.info(f"\nRegeneration complete: {completed}/{len(regen_prompts)} clips")
+
+    return results
+
+
 def phase_assemble(args):
     """
-    Phase 5: Assemble final video from OTIO timeline.
+    Phase 7: Assemble final video from OTIO timeline.
 
     VALIDATION GATE: Warns about incomplete scenes but does not refuse
     (partial assembly is useful for review).
@@ -344,24 +466,28 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Phases:
-  audio     Generate narration audio -> OTIO audio track
-  prompts   Generate LTX-2.3 video prompts -> OTIO metadata (+ JSON export)
-  video     Generate video clips with LTX-2.3 -> OTIO video track
-  assemble  Render final video from OTIO timeline
-  validate  Print pipeline state for each scene (audio/prompts/video)
-  status    Print OTIO timeline status
-  export    Export OTIO to FCPXML/EDL/JSON
-  all       Run audio -> prompts -> video -> assemble -> export
+  audio       Generate narration audio -> OTIO audio track
+  prompts     Generate LTX-2.3 video prompts -> OTIO metadata (+ JSON export)
+  video       Generate video clips with LTX-2.3 -> OTIO video track
+  quality     Qwen3-Omni-Thinking quality assessment -> OTIO quality metadata
+  regenerate  Re-generate failed clips with enhanced negative prompts
+  assemble    Render final video from OTIO timeline
+  validate    Print pipeline state for each scene (audio/prompts/video)
+  status      Print OTIO timeline status
+  export      Export OTIO to FCPXML/EDL/JSON
+  all         Run audio -> prompts -> video -> assemble -> export
 
 Validation Gates:
   prompts phase REQUIRES audio track to be populated
   video phase REQUIRES prompts to be stored on OTIO
+  quality phase runs on separate QC VM (Qwen3-Omni-Thinking)
   assemble phase WARNS about incomplete video (but proceeds)
         """
     )
 
     parser.add_argument("--phase", default="all",
-                        choices=["audio", "prompts", "video", "assemble",
+                        choices=["audio", "prompts", "video", "quality",
+                                 "regenerate", "assemble",
                                  "validate", "status", "export", "all"],
                         help="Pipeline phase to run")
     parser.add_argument("--script", help="Path to narration_script.json")
@@ -413,6 +539,17 @@ Validation Gates:
 
     if args.phase in ("video", "all"):
         phase_video(args)
+
+    if args.phase in ("quality", "all"):
+        # In full pipeline mode, quality check runs after video generation.
+        # If any clips fail, log a warning but don't auto-regenerate.
+        report = phase_quality(args)
+        if args.phase == "all" and report and report.get("failed", 0) > 0:
+            log.warning(f"{report['failed']} clip(s) failed quality check. "
+                        f"Run --phase regenerate to fix. Continuing pipeline...")
+
+    if args.phase == "regenerate":
+        phase_regenerate(args)
 
     if args.phase in ("assemble", "all"):
         phase_assemble(args)
