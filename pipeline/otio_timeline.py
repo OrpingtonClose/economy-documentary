@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """
-OTIO Timeline Manager — Single Source of Truth
-================================================
+OTIO Timeline Manager v9 — Absolute Single Source of Truth
+=============================================================
 Creates, reads, updates, and exports the master .otio timeline.
 Every pipeline stage reads from and writes back to this file.
 
 The timeline has these tracks:
-  - V1_Video: generated LTX-2.3 video clips
+  - V1_Video: generated LTX-2.3 video clips (or placeholder gaps with prompts)
   - VO_Narration: Qwen3-TTS narration audio segments
   - MX_Music: music/ambient bed (placeholder for future)
 
 Key design:
   - Audio goes on first (audio-first workflow)
+  - Prompts are stored as OTIO metadata on video track gaps
   - Video clips are generated to match audio timing
   - Video clips are generated slightly longer, then trimmed via source_range
+  - Quality scores and generation params stored in clip metadata
   - No looping, no stretching — ever
+
+v9 additions:
+  - Prompt storage on video track gaps (store_prompt_on_gap, get_prompt_for_clip, etc.)
+  - Quality tracking (quality_score, needs_regeneration, regeneration_reason)
+  - Pipeline state validation (validate_audio_complete, validate_prompts_complete, etc.)
+  - Enhanced narration metadata (full_text, word_count, wpm)
+  - Prompt export from OTIO metadata to JSON (derivative, not source)
 """
 
 import json
@@ -57,24 +66,33 @@ class OTIOTimeline:
     Manages the master .otio timeline file.
 
     Usage:
-        tl = OTIOTimeline("war_economy_v8.otio")
-        tl.create_empty("War Economy V8")
+        tl = OTIOTimeline("war_economy_v9.otio")
+        tl.create_empty("War Economy V9")
 
         # Stage 1: Add narration
         tl.add_narration_clip(scene_num=1, seg_index=0, audio_path="seg_00.wav",
                               duration_sec=12.3, voice="V1")
 
-        # Stage 2: Read audio timing for prompt generation
-        segments = tl.get_scene_audio_segments(scene_num=1)
+        # Stage 2: Generate prompts and store on OTIO
+        tl.store_prompt_on_gap(scene_num=1, clip_index=0, prompt_data={...})
 
-        # Stage 3: Add video clips
+        # Stage 3: Read prompts from OTIO for video generation
+        prompts = tl.get_all_prompts()
+
+        # Stage 4: Add video clips + quality metadata
         tl.add_video_clip(scene_num=1, clip_id="scene_01_clip00",
                           video_path="clip.mp4", available_duration=10.5,
                           trimmed_duration=8.0)
 
+        # Quality tracking
+        tl.mark_clip_for_regeneration("scene_01_clip00", "low quality score")
+
+        # Pipeline state
+        state = tl.get_pipeline_state()
+
         # Export
         tl.save()
-        tl.export_fcpxml("timeline.fcpxml")
+        tl.export_prompts_json("prompts.json")
     """
 
     def __init__(self, otio_path):
@@ -85,7 +103,7 @@ class OTIOTimeline:
     # Creation & I/O
     # ------------------------------------------------------------------
 
-    def create_empty(self, name="War Economy V8"):
+    def create_empty(self, name="War Economy V9"):
         """Create a fresh timeline with standard tracks."""
         self.timeline = otio.schema.Timeline(name=name)
         self.timeline.global_start_time = seconds_to_rt(0)
@@ -104,7 +122,7 @@ class OTIOTimeline:
         self.timeline.tracks.append(narr_track)
         self.timeline.tracks.append(music_track)
 
-        self.timeline.metadata["pipeline_version"] = "v8_otio_centric"
+        self.timeline.metadata["pipeline_version"] = "v9_otio_centric"
         self.timeline.metadata["video_model"] = "LTX-2.3-22B bf16"
         self.timeline.metadata["tts_model"] = "Qwen3-TTS VoiceDesign"
         self.timeline.metadata["resolution"] = "768x512"
@@ -159,10 +177,22 @@ class OTIOTimeline:
     # ------------------------------------------------------------------
 
     def add_narration_clip(self, scene_num, seg_index, audio_path,
-                           duration_sec, voice="V1", text_preview=""):
+                           duration_sec, voice="V1", text_preview="",
+                           full_text="", word_count=0, wpm=0):
         """
         Add a narration audio segment to the VO_Narration track.
         This is the FIRST thing added — audio drives all timing.
+
+        Args:
+            scene_num: scene number
+            seg_index: segment index within scene
+            audio_path: path to audio file
+            duration_sec: audio duration
+            voice: V1/V2/V3
+            text_preview: short preview (max 200 chars)
+            full_text: full narration text for this segment
+            word_count: number of words in the narration
+            wpm: estimated words per minute
         """
         media_ref = otio.schema.ExternalReference(
             target_url=str(audio_path),
@@ -179,6 +209,9 @@ class OTIOTimeline:
         clip.metadata["voice"] = voice
         clip.metadata["seg_index"] = seg_index
         clip.metadata["text_preview"] = text_preview[:200]
+        clip.metadata["full_text"] = full_text
+        clip.metadata["word_count"] = word_count or len(full_text.split())
+        clip.metadata["wpm"] = wpm or (int(len(full_text.split()) / max(0.01, duration_sec) * 60) if full_text else 0)
 
         self.narration_track.append(clip)
         return clip
@@ -218,7 +251,198 @@ class OTIOTimeline:
         self.music_track.append(gap)
 
     # ------------------------------------------------------------------
-    # Stage 2: Read audio timing for prompt generation
+    # Stage 2: Prompt storage on video track (v9)
+    # ------------------------------------------------------------------
+
+    def store_prompt_on_gap(self, scene_num, clip_index, prompt_data):
+        """
+        Store a generated prompt as metadata on the video track placeholder gap.
+
+        The gap for a scene is split into per-clip gaps if this is the first
+        prompt being stored. Each per-clip gap gets prompt metadata.
+
+        Args:
+            scene_num: scene number
+            clip_index: clip index within the scene
+            prompt_data: dict with prompt, shot_type, environment, camera_movement,
+                        word_count, generation_params
+        """
+        track = self.video_track
+
+        # Find the scene gap(s)
+        # We need to find either:
+        # a) The single pending_video gap for this scene (first prompt storage)
+        # b) An existing per-clip gap with matching scene+clip_index
+        for i, item in enumerate(track):
+            if not isinstance(item, otio.schema.Gap):
+                continue
+
+            # Check for already-split per-clip gap
+            if (item.metadata.get("scene") == scene_num and
+                    item.metadata.get("prompt_clip_index") == clip_index):
+                # Update existing per-clip gap
+                self._write_prompt_metadata(item, prompt_data, clip_index)
+                return
+
+        # If no per-clip gap found, write on the scene-level gap
+        # (The scene gap stores all prompts as a JSON dict keyed by clip_index)
+        for item in track:
+            if (isinstance(item, otio.schema.Gap) and
+                    item.metadata.get("scene") == scene_num and
+                    item.metadata.get("status") in ("pending_video", "prompts_stored")):
+                # Store prompts as a dict keyed by clip index
+                prompts_key = "prompt_data"
+                existing = item.metadata.get(prompts_key, {})
+                if not isinstance(existing, dict):
+                    existing = {}
+                existing[str(clip_index)] = prompt_data
+                item.metadata[prompts_key] = existing
+                item.metadata["status"] = "prompts_stored"
+
+                # Also store flat metadata for the current clip
+                self._write_prompt_metadata_indexed(item, prompt_data, clip_index)
+                return
+
+        log.warning(f"No video gap found for scene {scene_num}, clip {clip_index}")
+
+    def _write_prompt_metadata(self, gap, prompt_data, clip_index):
+        """Write prompt metadata fields onto a gap item."""
+        gap.metadata["prompt_text"] = prompt_data.get("prompt", "")
+        gap.metadata["prompt_shot_type"] = prompt_data.get("shot_type", "")
+        gap.metadata["prompt_environment"] = prompt_data.get("environment", "")
+        gap.metadata["prompt_camera_movement"] = prompt_data.get("camera_movement", "")
+        gap.metadata["prompt_word_count"] = prompt_data.get("word_count", 0)
+        gap.metadata["prompt_generation_params"] = prompt_data.get("generation_params", {})
+        gap.metadata["prompt_clip_index"] = clip_index
+
+    def _write_prompt_metadata_indexed(self, gap, prompt_data, clip_index):
+        """Write prompt metadata with clip-index prefix for multi-clip gaps."""
+        prefix = f"prompt_{clip_index}_"
+        gap.metadata[f"{prefix}text"] = prompt_data.get("prompt", "")
+        gap.metadata[f"{prefix}shot_type"] = prompt_data.get("shot_type", "")
+        gap.metadata[f"{prefix}environment"] = prompt_data.get("environment", "")
+        gap.metadata[f"{prefix}camera_movement"] = prompt_data.get("camera_movement", "")
+        gap.metadata[f"{prefix}word_count"] = prompt_data.get("word_count", 0)
+        gap.metadata[f"{prefix}generation_params"] = prompt_data.get("generation_params", {})
+
+    def get_prompt_for_clip(self, scene_num, clip_index):
+        """
+        Retrieve the prompt stored in OTIO metadata for a specific clip.
+
+        Args:
+            scene_num: scene number
+            clip_index: clip index within the scene
+
+        Returns:
+            dict with prompt data, or None if not found
+        """
+        for item in self.video_track:
+            if not isinstance(item, otio.schema.Gap):
+                continue
+
+            # Check per-clip gap
+            if (item.metadata.get("scene") == scene_num and
+                    item.metadata.get("prompt_clip_index") == clip_index):
+                return {
+                    "prompt": item.metadata.get("prompt_text", ""),
+                    "shot_type": item.metadata.get("prompt_shot_type", ""),
+                    "environment": item.metadata.get("prompt_environment", ""),
+                    "camera_movement": item.metadata.get("prompt_camera_movement", ""),
+                    "word_count": item.metadata.get("prompt_word_count", 0),
+                    "generation_params": item.metadata.get("prompt_generation_params", {}),
+                }
+
+            # Check scene-level gap with prompt_data dict
+            if (item.metadata.get("scene") == scene_num and
+                    item.metadata.get("status") == "prompts_stored"):
+                prompt_dict = item.metadata.get("prompt_data", {})
+                clip_data = prompt_dict.get(str(clip_index))
+                if clip_data:
+                    return clip_data
+
+        return None
+
+    def get_all_prompts(self):
+        """
+        Export all prompts stored in OTIO metadata.
+
+        Returns:
+            list of dicts, each with scene_number, clip_index, and prompt data
+        """
+        prompts = []
+
+        for item in self.video_track:
+            if not isinstance(item, otio.schema.Gap):
+                continue
+
+            scene_num = item.metadata.get("scene")
+            if scene_num is None:
+                continue
+
+            # Scene-level gap with prompt_data dict
+            if item.metadata.get("status") == "prompts_stored":
+                prompt_dict = item.metadata.get("prompt_data", {})
+                for clip_idx_str, pdata in sorted(prompt_dict.items()):
+                    prompts.append({
+                        "scene_number": scene_num,
+                        "clip_index": int(clip_idx_str),
+                        **pdata,
+                    })
+
+        return prompts
+
+    def export_prompts_json(self, output_path):
+        """
+        Export prompts from OTIO metadata to JSON for VM deployment.
+        This is the ONLY way prompts leave the OTIO — the JSON is derivative.
+
+        Args:
+            output_path: path to write the JSON file
+        """
+        all_prompts = self.get_all_prompts()
+
+        # Enrich with audio timing
+        scenes_audio = self.get_all_scenes_audio_timing()
+
+        export_data = []
+        for p in all_prompts:
+            scene_num = p["scene_number"]
+            clip_idx = p["clip_index"]
+
+            audio_segs = scenes_audio.get(scene_num, [])
+            if clip_idx < len(audio_segs):
+                seg = audio_segs[clip_idx]
+                dur = seg["duration_sec"]
+                generation_duration = dur + 0.5
+                ltx_clips_needed = max(1, int(generation_duration / 5.04) + (1 if generation_duration % 5.04 > 0.5 else 0))
+            else:
+                dur = 5.0
+                generation_duration = 5.5
+                ltx_clips_needed = 1
+
+            export_data.append({
+                "clip_id": f"scene_{scene_num:02d}_clip{clip_idx:02d}",
+                "scene_number": scene_num,
+                "clip_index": clip_idx,
+                "target_duration_sec": round(dur, 3),
+                "generation_duration_sec": round(generation_duration, 3),
+                "ltx_clips_needed": ltx_clips_needed,
+                "prompt": p.get("prompt", ""),
+                "shot_type": p.get("shot_type", ""),
+                "environment": p.get("environment", ""),
+                "camera_movement": p.get("camera_movement", ""),
+                "word_count": p.get("word_count", 0),
+                "audio_start_sec": audio_segs[clip_idx]["start_sec"] if clip_idx < len(audio_segs) else 0,
+                "audio_end_sec": audio_segs[clip_idx]["end_sec"] if clip_idx < len(audio_segs) else 0,
+            })
+
+        with open(str(output_path), "w") as f:
+            json.dump(export_data, f, indent=2)
+
+        return export_data
+
+    # ------------------------------------------------------------------
+    # Stage 2b: Read audio timing for prompt generation
     # ------------------------------------------------------------------
 
     def get_scene_audio_segments(self, scene_num):
@@ -250,6 +474,9 @@ class OTIOTimeline:
                     "duration_sec": dur,
                     "end_sec": cursor_sec + dur,
                     "text_preview": item.metadata.get("text_preview", ""),
+                    "full_text": item.metadata.get("full_text", ""),
+                    "word_count": item.metadata.get("word_count", 0),
+                    "wpm": item.metadata.get("wpm", 0),
                     "audio_path": item.media_reference.target_url
                                   if hasattr(item, "media_reference") and item.media_reference else "",
                 })
@@ -287,6 +514,9 @@ class OTIOTimeline:
                 "duration_sec": dur,
                 "end_sec": cursor_sec + dur,
                 "text_preview": item.metadata.get("text_preview", ""),
+                "full_text": item.metadata.get("full_text", ""),
+                "word_count": item.metadata.get("word_count", 0),
+                "wpm": item.metadata.get("wpm", 0),
                 "audio_path": item.media_reference.target_url
                               if hasattr(item, "media_reference") and item.media_reference else "",
             })
@@ -324,7 +554,7 @@ class OTIOTimeline:
         for i, item in enumerate(track):
             if (isinstance(item, otio.schema.Gap) and
                     item.metadata.get("scene") == scene_num and
-                    item.metadata.get("status") == "pending_video"):
+                    item.metadata.get("status") in ("pending_video", "prompts_stored")):
                 gap_idx = i
                 break
 
@@ -334,9 +564,6 @@ class OTIOTimeline:
         else:
             insert_idx = gap_idx
             del track[gap_idx]
-
-        # Calculate total video duration we have
-        total_video_dur = sum(vc["trimmed_duration_sec"] for vc in video_clips)
 
         # Insert clips
         inserted = 0
@@ -363,6 +590,16 @@ class OTIOTimeline:
             clip.metadata["trimmed_duration"] = trim_dur
             clip.metadata["status"] = "complete"
 
+            # Quality metadata defaults
+            clip.metadata["quality_score"] = vc.get("quality_score", 0.0)
+            clip.metadata["quality_needs_regeneration"] = False
+            clip.metadata["quality_regeneration_reason"] = ""
+
+            # Generation params
+            clip.metadata["gen_seed"] = vc.get("gen_seed", 0)
+            clip.metadata["gen_inference_steps"] = vc.get("gen_inference_steps", 0)
+            clip.metadata["gen_cfg_scale"] = vc.get("gen_cfg_scale", 0.0)
+
             track.insert(insert_idx + inserted, clip)
             inserted += 1
             cursor += trim_dur
@@ -380,6 +617,186 @@ class OTIOTimeline:
         self.save()
 
     # ------------------------------------------------------------------
+    # Quality tracking (v9)
+    # ------------------------------------------------------------------
+
+    def mark_clip_for_regeneration(self, clip_id, reason):
+        """
+        Mark a video clip as needing regeneration.
+
+        Args:
+            clip_id: the clip name/ID
+            reason: string describing why it needs regeneration
+        """
+        for item in self.video_track:
+            if isinstance(item, otio.schema.Clip) and item.name == clip_id:
+                item.metadata["quality_needs_regeneration"] = True
+                item.metadata["quality_regeneration_reason"] = reason
+                self.save()
+                return True
+        return False
+
+    def set_clip_quality_score(self, clip_id, score):
+        """
+        Set the quality score for a video clip.
+
+        Args:
+            clip_id: the clip name/ID
+            score: float quality score (0.0 - 1.0)
+        """
+        for item in self.video_track:
+            if isinstance(item, otio.schema.Clip) and item.name == clip_id:
+                item.metadata["quality_score"] = score
+                return True
+        return False
+
+    def set_clip_generation_params(self, clip_id, params):
+        """
+        Store generation parameters on a video clip.
+
+        Args:
+            clip_id: the clip name/ID
+            params: dict with gen_seed, gen_inference_steps, gen_cfg_scale, etc.
+        """
+        for item in self.video_track:
+            if isinstance(item, otio.schema.Clip) and item.name == clip_id:
+                for key, val in params.items():
+                    item.metadata[f"gen_{key}"] = val
+                return True
+        return False
+
+    def get_clips_needing_regeneration(self):
+        """
+        Get all video clips marked for regeneration.
+
+        Returns:
+            list of dicts with clip_id, scene, reason
+        """
+        clips = []
+        for item in self.video_track:
+            if (isinstance(item, otio.schema.Clip) and
+                    item.metadata.get("quality_needs_regeneration")):
+                clips.append({
+                    "clip_id": item.name,
+                    "scene": item.metadata.get("scene", 0),
+                    "reason": item.metadata.get("quality_regeneration_reason", ""),
+                    "quality_score": item.metadata.get("quality_score", 0.0),
+                })
+        return clips
+
+    # ------------------------------------------------------------------
+    # Pipeline state validation (v9)
+    # ------------------------------------------------------------------
+
+    def validate_audio_complete(self, scene_num=None):
+        """
+        Check if the audio track is populated.
+
+        Args:
+            scene_num: if provided, check only this scene. Otherwise check all scenes.
+
+        Returns:
+            True if audio track has narration clips (for specified scene or overall)
+        """
+        for item in self.narration_track:
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            if scene_num is None:
+                return True  # At least one clip exists
+            if item.metadata.get("scene") == scene_num:
+                return True
+
+        return False
+
+    def validate_prompts_complete(self, scene_num=None):
+        """
+        Check if all video gaps have prompts stored.
+
+        Args:
+            scene_num: if provided, check only this scene.
+
+        Returns:
+            True if all relevant video gaps have prompts
+        """
+        found_any = False
+        for item in self.video_track:
+            if not isinstance(item, otio.schema.Gap):
+                continue
+
+            item_scene = item.metadata.get("scene")
+            if item_scene is None:
+                continue
+            if scene_num is not None and item_scene != scene_num:
+                continue
+
+            status = item.metadata.get("status", "")
+            if status == "pending_video":
+                return False  # Gap without prompts
+            if status == "prompts_stored":
+                found_any = True
+
+        return found_any
+
+    def validate_video_complete(self, scene_num=None):
+        """
+        Check if all video placeholders have been replaced with clips.
+
+        Args:
+            scene_num: if provided, check only this scene.
+
+        Returns:
+            True if no pending video gaps remain
+        """
+        has_clips = False
+        for item in self.video_track:
+            item_scene = item.metadata.get("scene") if hasattr(item, "metadata") else None
+
+            if scene_num is not None and item_scene != scene_num:
+                continue
+
+            if isinstance(item, otio.schema.Gap):
+                status = item.metadata.get("status", "")
+                if status in ("pending_video", "prompts_stored"):
+                    return False
+
+            if isinstance(item, otio.schema.Clip):
+                if item.metadata.get("status") == "complete":
+                    has_clips = True
+
+        return has_clips
+
+    def get_pipeline_state(self):
+        """
+        Get the pipeline completion state for each scene.
+
+        Returns:
+            dict mapping scene_num -> {audio: bool, prompts: bool, video: bool}
+        """
+        # Discover all scenes from narration track
+        scene_nums = set()
+        for item in self.narration_track:
+            if isinstance(item, otio.schema.Clip):
+                sn = item.metadata.get("scene")
+                if sn is not None:
+                    scene_nums.add(sn)
+
+        # Also check video track for scenes
+        for item in self.video_track:
+            sn = item.metadata.get("scene") if hasattr(item, "metadata") else None
+            if sn is not None:
+                scene_nums.add(sn)
+
+        state = {}
+        for sn in sorted(scene_nums):
+            state[sn] = {
+                "audio": self.validate_audio_complete(sn),
+                "prompts": self.validate_prompts_complete(sn),
+                "video": self.validate_video_complete(sn),
+            }
+
+        return state
+
+    # ------------------------------------------------------------------
     # Query / Status
     # ------------------------------------------------------------------
 
@@ -394,6 +811,7 @@ class OTIOTimeline:
             "video_clips_count": 0,
             "narration_clips_count": 0,
             "pending_scenes": [],
+            "prompts_stored_scenes": [],
         }
 
         # Narration timing
@@ -419,8 +837,11 @@ class OTIOTimeline:
                     status["scenes"][scene]["video_sec"] += dur
                     status["scenes"][scene]["clips"] += 1
             elif isinstance(item, otio.schema.Gap):
-                if item.metadata.get("status") == "pending_video":
+                item_status = item.metadata.get("status", "")
+                if item_status == "pending_video":
                     status["pending_scenes"].append(scene)
+                elif item_status == "prompts_stored":
+                    status["prompts_stored_scenes"].append(scene)
                 status["total_video_gaps_sec"] += dur
                 if scene in status["scenes"]:
                     status["scenes"][scene]["video_gaps_sec"] += dur
@@ -446,6 +867,16 @@ class OTIOTimeline:
         print(f"Completion: {s['completion_pct']}%")
         if s["pending_scenes"]:
             print(f"Pending video: scenes {s['pending_scenes']}")
+        if s["prompts_stored_scenes"]:
+            print(f"Prompts stored (awaiting video): scenes {s['prompts_stored_scenes']}")
+
+        # Quality info
+        regen_clips = self.get_clips_needing_regeneration()
+        if regen_clips:
+            print(f"Clips needing regeneration: {len(regen_clips)}")
+            for rc in regen_clips[:5]:
+                print(f"  - {rc['clip_id']}: {rc['reason']}")
+
         print(f"{'='*60}")
 
     # ------------------------------------------------------------------
@@ -492,3 +923,8 @@ class OTIOTimeline:
             json.dump(assembly, f, indent=2)
 
         return assembly
+
+
+# Import logger at module level for use in methods
+import logging
+log = logging.getLogger(__name__)

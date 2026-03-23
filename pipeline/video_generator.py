@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Video Generator — LTX-2.3 with OTIO Integration
-==================================================
-Generates video clips using LTX-2.3 based on prompts derived from OTIO audio timing.
-After generation, clips are trimmed and placed on the OTIO video track.
+Video Generator v9 — LTX-2.3 with OTIO Integration
+=====================================================
+Generates video clips using LTX-2.3 based on prompts from the OTIO timeline.
+After generation, clips are trimmed, placed on the OTIO video track, and
+quality metadata is written back to OTIO.
 
 Key constraints (non-negotiable):
   - LTX-2.3 22B-dev ONLY (bf16, no distillation, no fp8, no quantization)
@@ -12,18 +13,24 @@ Key constraints (non-negotiable):
   - NO text on screen
   - 80GB VRAM minimum
   - Model loads ONCE, generates all clips in-process (no subprocess-per-clip)
-  - Frame-chaining for clips > 5.04s: extract last frame → image-to-video continuation
+  - Frame-chaining for clips > 5.04s: extract last frame -> image-to-video continuation
+
+v9 changes:
+  - Accepts prompts from OTIO export (or direct from OTIO)
+  - After each clip generation, writes quality metadata back to OTIO
+  - Tracks generation parameters (seed, inference steps, cfg scales) in OTIO
+  - Uses OTIO export_prompts_json() as the source (derivative from OTIO metadata)
 
 Pipeline integration:
-  1. Reads prompts JSON (generated from OTIO audio timing)
+  1. Reads prompts JSON (exported from OTIO metadata)
   2. Generates video clips with LTX-2.3
   3. Trims each clip to exact target duration
-  4. Updates OTIO timeline video track with clips
+  4. Updates OTIO timeline video track with clips + quality + gen params
   5. Uploads to B2 (optional, inline after each clip)
 
 Usage (standalone on Vast.ai VM):
   python3 video_generator.py --manifest prompts.json \\
-                              --otio war_economy_v8.otio \\
+                              --otio war_economy_v9.otio \\
                               --output-dir /workspace/outputs
 
 Usage (from pipeline):
@@ -80,7 +87,7 @@ NEGATIVE_PROMPT = (
 
 # B2 upload config
 B2_BUCKET = "economy-vid-assets"
-B2_PREFIX = "v8_war_economy"
+B2_PREFIX = "v9_war_economy"
 
 
 def extract_last_frame_ffmpeg(video_path, frame_path):
@@ -162,7 +169,7 @@ def upload_to_b2(clip_path, clip_id, b2_key_id=None, b2_app_key=None):
         meta_comment = (
             f"LTX-2.3 | {WIDTH}x{HEIGHT} | {NUM_FRAMES}frames | "
             f"{NUM_INFERENCE_STEPS}steps | cfg{VIDEO_GUIDER_CFG['cfg_scale']} | "
-            f"bf16 full quality | v8_otio_pipeline"
+            f"bf16 full quality | v9_otio_pipeline"
         )
         subprocess.run([
             "ffmpeg", "-y", "-i", clip_path,
@@ -194,6 +201,7 @@ def upload_to_b2(clip_path, clip_id, b2_key_id=None, b2_app_key=None):
 class VideoGenerator:
     """
     Generates video clips with LTX-2.3 and places them on the OTIO timeline.
+    Writes quality metadata and generation params back to OTIO after each scene.
 
     Usage:
         gen = VideoGenerator(otio_path="timeline.otio", output_dir="./clips")
@@ -282,7 +290,7 @@ class VideoGenerator:
         Generate a single video clip (possibly with frame-chaining for longer clips).
 
         prompt_data: dict with clip_id, prompt, target_duration_sec, ltx_clips_needed, etc.
-        Returns: dict with status, path, duration, etc.
+        Returns: dict with status, path, duration, generation params, etc.
         """
         import torch
         from ltx_pipelines.utils.args import ImageConditioningInput
@@ -303,6 +311,9 @@ class VideoGenerator:
             return {
                 "clip_id": clip_id, "status": "skipped",
                 "path": final_path, "duration": actual_dur,
+                "seed": seed_base,
+                "inference_steps": NUM_INFERENCE_STEPS,
+                "cfg_scale": VIDEO_GUIDER_CFG["cfg_scale"],
             }
 
         sub_paths = []
@@ -384,13 +395,16 @@ class VideoGenerator:
             "actual_duration": actual_dur,
             "sub_clips": ltx_count,
             "generation_time": clip_elapsed,
+            "seed": seed_base,
+            "inference_steps": NUM_INFERENCE_STEPS,
+            "cfg_scale": VIDEO_GUIDER_CFG["cfg_scale"],
         }
 
     def generate_all(self, prompts, start_at=0):
         """
-        Generate all video clips and update OTIO timeline.
+        Generate all video clips and update OTIO timeline with clips and quality metadata.
 
-        prompts: list of prompt dicts from prompt_generator
+        prompts: list of prompt dicts (from OTIO export or prompt_generator)
         start_at: resume from this clip index
         """
         self._load_pipeline()
@@ -398,7 +412,7 @@ class VideoGenerator:
         import torch
 
         log.info(f"\n{'='*60}")
-        log.info(f"VIDEO GENERATION — LTX-2.3 Single-Process")
+        log.info(f"VIDEO GENERATION — LTX-2.3 Single-Process (v9)")
         log.info(f"{'='*60}")
         log.info(f"Clips: {len(prompts)} | Output: {self.output_dir}")
 
@@ -435,7 +449,7 @@ class VideoGenerator:
             with open(os.path.join(self.output_dir, "generation_progress.json"), "w") as f:
                 json.dump(progress, f, indent=2)
 
-        # Update OTIO timeline with generated clips
+        # Update OTIO timeline with generated clips + quality metadata
         self._update_otio(prompts, results)
 
         elapsed = time.time() - start_time
@@ -448,7 +462,7 @@ class VideoGenerator:
         return results
 
     def _update_otio(self, prompts, results):
-        """Update OTIO timeline with generated video clips."""
+        """Update OTIO timeline with generated video clips and quality metadata."""
         from pipeline.otio_timeline import OTIOTimeline
 
         otio_tl = OTIOTimeline(self.otio_path)
@@ -470,23 +484,29 @@ class VideoGenerator:
                 "available_duration_sec": result.get("actual_duration", 5.0),
                 "trimmed_duration_sec": prompt_data["target_duration_sec"],
                 "prompt": prompt_data["prompt"][:300],
+                # Quality metadata
+                "quality_score": 0.0,  # Default; can be updated post-generation
+                # Generation params stored in OTIO
+                "gen_seed": result.get("seed", 0),
+                "gen_inference_steps": result.get("inference_steps", NUM_INFERENCE_STEPS),
+                "gen_cfg_scale": result.get("cfg_scale", VIDEO_GUIDER_CFG["cfg_scale"]),
             })
 
-        # Replace video gaps with actual clips
+        # Replace video gaps with actual clips (includes quality + gen params)
         for scene_num, clips in sorted(scene_clips.items()):
             otio_tl.replace_video_gap_with_clips(scene_num, clips)
-            log.info(f"OTIO: Scene {scene_num} — placed {len(clips)} video clips")
+            log.info(f"OTIO: Scene {scene_num} — placed {len(clips)} video clips with quality metadata")
 
         otio_tl.save()
-        log.info(f"OTIO timeline saved: {self.otio_path}")
+        log.info(f"OTIO timeline saved with quality metadata: {self.otio_path}")
 
 
 def main():
     """CLI entry point for video generation on Vast.ai."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="LTX-2.3 video generation with OTIO integration")
-    parser.add_argument("--manifest", required=True, help="Prompts JSON file")
+    parser = argparse.ArgumentParser(description="LTX-2.3 video generation v9 with OTIO integration")
+    parser.add_argument("--manifest", required=True, help="Prompts JSON file (exported from OTIO)")
     parser.add_argument("--otio", required=True, help="Path to .otio timeline")
     parser.add_argument("--output-dir", default="/workspace/outputs", help="Output directory")
     parser.add_argument("--gpu", type=int, default=None, help="GPU index")
