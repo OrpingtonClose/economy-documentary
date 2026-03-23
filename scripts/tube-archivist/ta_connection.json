@@ -1,0 +1,19 @@
+{
+  "instance_id": 33385249,
+  "ssh_host": "ssh9.vast.ai",
+  "ssh_port": 25248,
+  "ssh_user": "root",
+  "ta_host": "localhost",
+  "ta_port": 8000,
+  "ta_url": "http://localhost:8000",
+  "ta_api_token": "7e3b351854eff74529e7bc82b2cfe6cfadd1c765",
+  "ta_username": "admin",
+  "ta_password": "u1LW_ssWzytKjgL2CfGgifcpEqVpoYbD",
+  "es_url": "http://localhost:9200",
+  "es_user": "elastic",
+  "es_password": "T6nc1ag-UzQOSZ5HzJq5rlIcgLDULAzu",
+  "redis_url": "redis://localhost:6379",
+  "access_method": "ssh_tunnel",
+  "ssh_tunnel_command": "ssh -o StrictHostKeyChecking=no -L 8000:localhost:8000 -p 25248 root@ssh9.vast.ai -N",
+  "notes": "Native install (no Docker). ES 8.19.13, Redis 6.0.16, TA v0.5.10-unstable from source. Python 3.12 venv at /opt/ta-venv. Startup script at /opt/start_ta.sh. Celery worker and beat via /tmp/start_celery2.sh."
+}

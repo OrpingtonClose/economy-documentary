@@ -6,7 +6,7 @@ Deploy a self-hosted [Tube Archivist](https://github.com/tubearchivist/tubearchi
 
 - `VAST_API_KEY` environment variable set
 - `pip install vastai` (Vast.ai CLI)
-- SSH key configured for Vast.ai (`~/.ssh/vast_v3`)
+- SSH key configured for Vast.ai
 
 ## Quick Start
 
@@ -24,36 +24,56 @@ python3 scripts/tube-archivist/deploy.py --status
 
 ## Architecture
 
+Tube Archivist runs as a **native install** on Vast.ai (not Docker — Vast.ai containers
+lack the `SYS_ADMIN` capability required for Docker-in-Docker).
+
 ```
-┌────────────────────────────────────┐
-│         Vast.ai VM ($0.05-0.20/hr) │
-│                                    │
-│  ┌──────────────┐  ┌────────────┐ │
-│  │ TubeArchivist│  │  Redis     │ │
-│  │  :8000       │  │  :6379     │ │
-│  └──────┬───────┘  └────────────┘ │
-│         │                          │
-│  ┌──────┴───────┐                  │
-│  │ElasticSearch │                  │
-│  │  :9200       │                  │
-│  └──────────────┘                  │
-│                                    │
-│  /data/ta/media  ← downloaded vids │
-│  /data/ta/cache  ← TA cache       │
-│  /data/ta/es     ← ES data        │
-│  /data/ta/redis  ← Redis data     │
-└────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│         Vast.ai VM ($0.04-0.10/hr)       │
+│   image: nvidia/cuda:12.4-ubuntu22.04    │
+│                                          │
+│  Python 3.12 venv: /opt/ta-venv          │
+│                                          │
+│  ┌──────────────┐  ┌──────────────────┐  │
+│  │ TubeArchivist│  │  Redis 6.x       │  │
+│  │  :8000       │  │  :6379           │  │
+│  │  (uvicorn)   │  │  (apt install)   │  │
+│  └──────┬───────┘  └──────────────────┘  │
+│         │                                │
+│  ┌──────┴──────────┐  ┌───────────────┐  │
+│  │ElasticSearch 8.x│  │ Celery worker │  │
+│  │  :9200          │  │ + beat        │  │
+│  │  (apt install)  │  │ (ta-venv)     │  │
+│  └─────────────────┘  └───────────────┘  │
+│                                          │
+│  /data/ta/media  ← downloaded videos     │
+│  /data/ta/cache  ← TA cache             │
+│  /data/ta/es     ← ES data              │
+│  /data/ta/redis  ← Redis data           │
+│  /opt/tubearchivist ← TA source clone    │
+└──────────────────────────────────────────┘
          │
-         │ REST API (port 8000)
+         │ SSH tunnel → REST API (port 8000)
          ▼
-┌────────────────────────────────────┐
-│  pipeline/youtube_downloader.py    │
-│  (TubeArchivistClient)             │
-│  - List archived videos            │
-│  - Stream video files              │
-│  - Fetch metadata + subtitles      │
-└────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│  pipeline/youtube_downloader.py          │
+│  (TubeArchivistClient)                   │
+│  - List archived videos                  │
+│  - Stream video files                    │
+│  - Fetch metadata + subtitles            │
+└──────────────────────────────────────────┘
 ```
+
+### Access via SSH Tunnel
+
+TA port 8000 is not directly exposed. Connect via SSH tunnel:
+
+```bash
+ssh -o StrictHostKeyChecking=no -L 8000:localhost:8000 -p <SSH_PORT> root@<SSH_HOST> -N
+# Then access TA at http://localhost:8000
+```
+
+The `youtube_downloader.py` handles tunnel setup automatically when using TA backend.
 
 ## CLI Reference
 
@@ -87,16 +107,40 @@ https://youtube.com/channel/UC4sS8q...
 @BenjaminCowen
 ```
 
+## Native Install Details
+
+Since Vast.ai containers cannot run Docker-in-Docker, TA is installed natively:
+
+1. **Python 3.12** installed via `deadsnakes` PPA (TA requires Django 6.0+)
+2. **Virtual env** at `/opt/ta-venv` with all TA Python dependencies
+3. **Elasticsearch 8.x** installed via official apt repo, runs as `elasticsearch` user
+4. **Redis 6.x** installed via apt
+5. **TA source** cloned from GitHub to `/opt/tubearchivist`
+6. **Uvicorn** serves TA on port 8000 with 2 workers
+7. **Celery** worker + beat for background tasks (channel scanning, downloads)
+
+### Boot Script
+
+`/opt/boot_ta.sh` starts all services in order: Redis → ES → Celery → Uvicorn.
+Copy this to `/root/onstart.sh` for auto-start on instance reboot.
+
+### Important Notes
+
+- YouTube rate-limits datacenter IPs. Consider importing browser cookies
+  (`cookie_import` in TA settings) or using residential proxies
+- The pipeline's Apify and Bright Data backends serve as fallbacks when TA
+  encounters rate limits
+
 ## Cost Estimates
 
 | Resource | Cost |
 |----------|------|
-| Cheap CPU VM (interruptible) | $0.05-0.15/hr |
-| Cheap CPU VM (on-demand) | $0.10-0.20/hr |
-| Running 24/7 | $1.20-4.80/day |
+| Cheap GPU VM (needed for CUDA image) | $0.04-0.10/hr |
+| Running 24/7 | $0.96-2.40/day |
 | Storage (100GB disk) | included in VM |
 
-Tip: destroy the VM when not downloading, redeploy when needed. TA data persists on the VM disk while it exists.
+Tip: stop the VM when not downloading, restart when needed. TA data persists
+on the VM disk while the instance exists (even when stopped).
 
 ## Troubleshooting
 
@@ -104,18 +148,22 @@ Tip: destroy the VM when not downloading, redeploy when needed. TA data persists
 - Relax search criteria — try during off-peak hours or increase max $/hr
 
 **TA health check times out**
-- SSH in and check: `docker compose logs -f`
-- ElasticSearch needs 1-2 min to start: `docker logs archivist-es`
-- Verify vm.max_map_count: `sysctl vm.max_map_count` (must be 262144)
+- SSH in and check: `tail -f /tmp/ta_startup.log`
+- ElasticSearch needs 1-2 min to start: `tail -f /var/log/elasticsearch/tubearchivist.log`
 
 **Cannot get API token**
 - TA needs to fully initialize first (can take 2-3 min after health check passes)
 - Run: `python3 scripts/tube-archivist/deploy.py --get-token`
 
-**Docker not starting inside Vast.ai container**
-- The base image `nvidia/cuda:12.4.0-devel-ubuntu22.04` supports Docker-in-Docker
-- Check: `ssh ... dockerd &` then `docker ps`
+**Docker-in-Docker not supported**
+- Vast.ai containers lack `CAP_SYS_ADMIN` — Docker images cannot be pulled
+- Use the native install approach (this is what deploy.py does)
+- For KVM VM support, use Vast.ai's KVM VM templates (more expensive)
 
 **SSH connection refused**
 - Instance may still be booting — wait 1-2 min
 - Check instance status: `vastai show instance ID`
+
+**"Failed to get metadata" on channel subscription**
+- YouTube blocks datacenter IPs; import cookies via TA settings
+- Or use `pipeline/youtube_downloader.py` which falls back to Apify/Bright Data
