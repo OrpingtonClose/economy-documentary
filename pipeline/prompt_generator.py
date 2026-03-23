@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-LTX-2.3 Prompt Generator v9 — Context-Aware Cinematic Composition Engine
+LTX-2.3 Prompt Generator — Project-Agnostic Cinematic Composition Engine
 ==========================================================================
-Generates cinema-quality prompts for LTX-2.3 using a sophisticated rule-based
-composition engine that understands narration context, scene continuity, and
-LTX-2.3's specific requirements.
+Generates cinema-quality prompts for LTX-2.3 using NLP-based narration analysis
+that derives ALL visual vocabulary from the narration content at runtime.
+
+NO hardcoded topic-specific dictionaries. Works for any documentary subject
+(medicine, space, cooking, history, war, economy — anything).
 
 NO external LLM API required — runs entirely on VMs without internet access.
-The quality improvement comes from better template composition, scene continuity
-tracking, narration-context awareness, and duration-calibrated complexity.
+Quality comes from NLP-based narration analysis, cinematic building blocks,
+scene continuity tracking, and duration-calibrated complexity.
 
 Composition Layers:
   1. Shot establishment — cinematic framing varied across clips for visual rhythm
-  2. Scene/environment — lighting, color, textures, atmosphere
+  2. Scene/environment — lighting, color, textures, atmosphere (derived from narration)
   3. Action — visual metaphors and narration-derived B-roll descriptions
   4. Character(s) — physical description, clothing, physical emotion cues
   5. Camera movement — explicit, natural-language camera directions
@@ -100,398 +102,529 @@ CAMERA_MOVEMENTS = [
 ]
 
 # ------------------------------------------------------------------
-# Environment / atmosphere palettes for documentary subjects
+# Cinematic building blocks — filmmaking vocabulary, NOT topic-specific
 # ------------------------------------------------------------------
-ENVIRONMENTS = {
-    "trading_floor": {
-        "lighting": "Cool fluorescent overhead light mixed with the blue-white glow of multiple monitors",
-        "textures": "polished desk surfaces reflect green and red numbers, scattered papers, coffee-stained reports",
-        "atmosphere": "the tense hum of urgent voices and electronic beeps fills the space",
-        "palette": "deep navy, electric blue, amber warning indicators, clinical white",
-    },
-    "war_zone": {
-        "lighting": "Harsh, directional sunlight cutting through dust and smoke",
-        "textures": "pitted concrete, twisted rebar, the chalky surface of rubble",
-        "atmosphere": "a heavy stillness broken only by distant rumbles and the crackle of settling debris",
-        "palette": "desaturated earth tones, khaki, smoke gray, occasional flash of orange flame",
-    },
-    "government_office": {
-        "lighting": "Warm tungsten desk lamps creating pools of light against wood-paneled darkness",
-        "textures": "leather-bound folders, polished mahogany, brass fixtures catching the light",
-        "atmosphere": "the quiet of thick carpeting and heavy doors, the scratch of a pen on paper",
-        "palette": "rich burgundy, dark walnut, gold leaf accents, cream paper",
-    },
-    "street_market": {
-        "lighting": "Dappled morning light filtering through canvas awnings and rising steam",
-        "textures": "rough burlap sacks, stacked crates of produce, hand-painted price signs",
-        "atmosphere": "a layered soundscape of bargaining voices, clinking coins, and distant traffic",
-        "palette": "warm earth tones, vibrant produce colors muted by morning haze",
-    },
-    "oil_refinery": {
-        "lighting": "Industrial sodium-vapor lighting casting everything in amber-orange against a darkening sky",
-        "textures": "massive steel pipes, riveted tanks, the oily sheen on metal walkways",
-        "atmosphere": "the deep industrial drone of machinery, the hiss of steam from pressure valves",
-        "palette": "industrial gray, rust brown, sodium amber, petroleum black",
-    },
-    "kitchen_domestic": {
-        "lighting": "Warm morning light slanting through a window casting long shadows across worn surfaces",
-        "textures": "scratched countertops, ceramic mugs, the grain of oak visible under soft directional light",
-        "atmosphere": "the quiet intimacy of a family space, steam rising from coffee, a clock ticking",
-        "palette": "warm honey tones, cream, soft olive, weathered wood brown",
-    },
-    "data_center": {
-        "lighting": "Rows of blinking LEDs creating rhythmic patterns of green and blue light in a dark space",
-        "textures": "brushed aluminum server racks, fiber optic cables catching light, ventilation grilles",
-        "atmosphere": "the constant white noise of cooling fans, a clinical sterile stillness",
-        "palette": "midnight blue, LED green, cool silver, cable-management black",
-    },
-    "shipping_port": {
-        "lighting": "Overcast gray daylight reflecting off water and metal container surfaces",
-        "textures": "weathered steel containers stacked high, heavy-gauge chain, rust streaks on painted metal",
-        "atmosphere": "the deep horn of a cargo vessel, the clatter of crane mechanisms, seagull calls",
-        "palette": "container blue, safety orange, maritime gray, oxidized rust",
-    },
-    "financial_district": {
-        "lighting": "Cold morning light reflecting off glass towers, sharp geometric shadows on concrete",
-        "textures": "polished granite lobbies, steel and glass curtain walls, digital tickers",
-        "atmosphere": "the murmur of suited pedestrians, the whoosh of revolving doors, distant sirens",
-        "palette": "steel blue, concrete gray, glass reflection white, power-suit black",
-    },
-    "abstract_metaphor": {
-        "lighting": "Dramatic chiaroscuro lighting with deep blacks and sharp highlights",
-        "textures": "abstract surfaces, flowing liquids, crystalline structures, particles suspended in air",
-        "atmosphere": "a resonant low-frequency tone underscoring the visual weight of the image",
-        "palette": "high contrast black and white with a single accent color bleeding through",
-    },
-    "military_hardware": {
-        "lighting": "Flat overcast light with harsh clarity, every detail visible without shadow comfort",
-        "textures": "matte olive drab paint, riveted armor plate, rubber treads, stenciled markings",
-        "atmosphere": "the diesel rumble of engines, the metallic clank of machinery, radio static",
-        "palette": "olive green, desert tan, matte black, warning red markings",
-    },
-    "newsroom": {
-        "lighting": "Bright broadcast lighting from above, sharp and shadowless on the anchor desk",
-        "textures": "glossy desk surfaces, teleprompter glass, studio monitors showing live feeds",
-        "atmosphere": "the hum of studio equipment, producer chatter in earpieces, the urgency of breaking news",
-        "palette": "broadcast blue, studio white, accent red, ticker yellow",
-    },
-    # --- v9 new environments ---
-    "refugee_camp": {
-        "lighting": "Flat midday sun casting sharp shadows under canvas and corrugated roofing",
-        "textures": "frayed tarpaulin, stacked plastic crates, dusty gravel paths worn smooth by foot traffic",
-        "atmosphere": "a low murmur of distant voices, children calling, the flap of loose tent fabric in dry wind",
-        "palette": "UN blue, dust beige, faded orange tarpaulin, bleached white canvas",
-    },
-    "naval_vessel": {
-        "lighting": "Overcast maritime light filtered through salt spray, steel surfaces gleaming dull silver",
-        "textures": "riveted hull plating, non-skid deck coating, heavy watertight hatches with spinning wheel locks",
-        "atmosphere": "the deep throb of engines below deck, the hiss of bow wake, the snap of signal flags in wind",
-        "palette": "battleship gray, deep ocean blue, safety yellow, rust-streaked white",
-    },
-    "hospital": {
-        "lighting": "Harsh fluorescent ceiling panels casting flat, shadowless clinical light",
-        "textures": "polished linoleum floors, stainless steel instrument trays, starched cotton curtain dividers",
-        "atmosphere": "the rhythmic beep of monitors, the squeak of rubber soles on tile, a distant intercom page",
-        "palette": "clinical white, scrub green, monitor-glow blue, latex-glove purple",
-    },
-    "parliament": {
-        "lighting": "Grand chandeliers casting warm amber light across tiered seating and carved stone",
-        "textures": "green leather benches polished by decades of use, heavy oak dispatch boxes, gilt trim on dark wood",
-        "atmosphere": "the echo of voices in a high-ceilinged chamber, papers rustling, the thud of a gavel",
-        "palette": "parliamentary green, dark oak brown, gilt gold, parchment cream",
-    },
-    "protest_march": {
-        "lighting": "Harsh afternoon sun glinting off glass storefronts and the raised surfaces of hand-painted signs",
-        "textures": "rough cardboard placards, wrinkled fabric banners, scuffed asphalt underfoot",
-        "atmosphere": "a rising and falling chant carried on the wind, the shuffle of thousands of feet, distant megaphone distortion",
-        "palette": "crowd-cloth mixed colors, asphalt gray, banner red, spray-paint black",
-    },
-    "underground_bunker": {
-        "lighting": "Low-wattage incandescent bulbs in wire cages casting warm pools of light against raw concrete",
-        "textures": "rough poured-concrete walls, exposed conduit pipes, metal shelving heavy with supply crates",
-        "atmosphere": "a deep subterranean hum of ventilation, the drip of condensation, muffled silence",
-        "palette": "concrete gray, military olive, incandescent amber, shadow black",
-    },
-    "satellite_view": {
-        "lighting": "The cold blue of reflected earthlight against the darkness of orbital space",
-        "textures": "cloud formations swirling in visible atmospheric layers, the curvature of coastlines, glowing city grids at night",
-        "atmosphere": "a profound silence broken only by the faintest hum of station systems, the void pressing against every surface",
-        "palette": "deep space black, atmospheric blue, cloud white, city-light amber",
-    },
-    "grain_field": {
-        "lighting": "Golden hour light raking across endless rows of wheat, long shadows stretching east",
-        "textures": "dry wheat stalks rustling against each other, cracked soil visible between rows, the dust of harvest machinery",
-        "atmosphere": "the whisper of wind through standing grain, the distant rumble of a combine harvester, insect hum",
-        "palette": "wheat gold, harvest amber, soil brown, sky-wash blue",
-    },
-    "gas_station": {
-        "lighting": "Harsh overhead canopy fluorescents casting a flat white pool against dark surroundings",
-        "textures": "cracked concrete islands, weathered pump housings, the rainbow sheen of spilled fuel on wet pavement",
-        "atmosphere": "the mechanical clunk of a pump nozzle, the hiss of fuel flowing, distant highway drone",
-        "palette": "canopy white, pump-display green, petroleum rainbow, nighttime black",
-    },
-}
 
-# ------------------------------------------------------------------
-# Visual metaphor mappings for documentary narration concepts
-# ------------------------------------------------------------------
-CONCEPT_VISUALS = {
-    "money": ["stacks of currency being counted by weathered hands", "a scale tipping under the weight of gold coins",
-              "numbers cascading across a trading display", "a vault door slowly swinging open"],
-    "war": ["a chess board with pieces cast in the shape of military equipment",
-            "a map with lines being drawn and redrawn by unseen hands",
-            "smoke rising from a distant horizon viewed through binoculars"],
-    "oil": ["crude oil pouring in slow motion, its viscous surface catching the light",
-            "a gas pump nozzle dripping the last drops", "an oil derrick silhouetted against an amber sunset"],
-    "power": ["a gavel striking wood in extreme close-up", "a hand signing a document with a heavy fountain pen",
-              "a spotlight illuminating an empty podium in a vast dark room"],
-    "collapse": ["dominoes falling in a long chain viewed from a low angle",
-                 "a skyscraper reflected in a puddle, the image fragmenting as a foot steps through",
-                 "a stock ticker freezing mid-scroll, the numbers glitching"],
-    "surveillance": ["a bank of security monitors showing empty corridors",
-                     "a satellite dish slowly rotating against a star-filled sky",
-                     "a cursor blinking on a dark terminal screen"],
-    "profit": ["a champagne glass being filled in slow motion at a rooftop party",
-               "a luxury watch mechanism ticking in extreme macro close-up",
-               "a fountain pen signing a figure on a contract"],
-    "suffering": ["an empty playground swing moving gently in the wind",
-                  "a family photograph lying face-down in dust",
-                  "a pair of worn shoes left at a doorstep"],
-    "trade": ["cargo containers stacked like building blocks on a massive vessel",
-              "hands exchanging a briefcase in a dimly lit corridor",
-              "a scale balancing two different commodities"],
-    "corruption": ["a shadow falling across an official document",
-                   "coins slowly sinking into dark water",
-                   "a crack spreading through a marble facade"],
-    "technology": ["fiber optic cables pulsing with light in a dark server room",
-                   "a drone's eye view descending over a sprawling tech campus",
-                   "lines of code reflecting in the lens of a pair of glasses"],
-    "diplomacy": ["two flags hanging limply in still air inside a grand hall",
-                  "a long polished table with empty chairs and name placards",
-                  "a document being slid across a table between two pairs of hands"],
-    # --- v9 new concept visuals ---
-    "blockade": ["a heavy chain stretched taut across a harbor entrance, links rusted and slick with sea spray",
-                 "a barrier of concrete blocks arranged across a road, razor wire coiled along the top",
-                 "a cargo ship sitting motionless at anchor, its deck stacked with containers going nowhere"],
-    "refugee": ["a single pair of sandals left at the edge of a dusty road, tread worn paper-thin",
-                "a crowded tent settlement stretching to the horizon under a flat white sky",
-                "hands gripping the mesh of a chain-link fence, knuckles white with pressure"],
-    "missile": ["a contrail drawing a white line across a clear blue sky, accelerating toward the vanishing point",
-                "a radar screen with a single blip moving steadily across concentric green circles",
-                "a silo hatch grinding open to reveal darkness and the curved nose of a warhead"],
-    "sanction": ["a rubber stamp pressing down hard on a document marked with red ink",
-                 "a shipping manifest with entire sections struck through in heavy black marker",
-                 "bank vault doors swinging shut, the locking mechanism turning with mechanical finality"],
-    "alliance": ["two hands reaching across a polished conference table to clasp in a firm grip",
-                 "overlapping flag shadows cast side by side on a marble floor",
-                 "a row of chairs filling one by one as delegates take their seats at a long table"],
-    "ceasefire": ["a radio handset placed down gently on a desk, its cord still swaying",
-                  "a soldier lowering a weapon slowly until the barrel points at the ground",
-                  "a clock on a bunker wall, its second hand sweeping through silence"],
-    "escalation": ["a staircase spiraling upward into shadow, each step narrower than the last",
-                   "a pressure gauge needle creeping steadily toward the red zone",
-                   "flames spreading from a single point across a paper map, edges curling black"],
-    "humanitarian": ["a convoy of white trucks moving single-file along a dirt road toward rising dust",
-                     "medical supplies being unloaded by many hands from the back of a cargo plane",
-                     "a Red Cross flag snapping in the wind above a field hospital tent"],
-    "propaganda": ["a printing press rolling sheets of identical posters onto a growing stack",
-                   "a television screen showing a broadcast that repeats on every monitor in a shop window",
-                   "a loudspeaker mounted on a pole, its cone aimed down at an empty square"],
-    "intelligence": ["a wall covered in pinned photographs connected by red string forming a web",
-                     "a pair of headphones resting beside a reel-to-reel tape recorder, spools turning slowly",
-                     "a satellite dish pivoting silently against a night sky full of stars"],
-}
-
-# ------------------------------------------------------------------
-# Environment keyword scoring — maps narration keywords to environments
-# ------------------------------------------------------------------
-ENVIRONMENT_SCORING = {
-    "trading_floor": ["trade", "stock", "market", "dow", "nasdaq", "exchange", "ticker", "portfolio", "index"],
-    "war_zone": ["bomb", "missile", "attack", "destruction", "rubble", "casualt", "soldier", "combat", "strike", "shelling"],
-    "government_office": ["policy", "regulation", "senator", "congress", "legislation", "bureaucr", "official"],
-    "street_market": ["price", "grocery", "consumer", "inflation", "cost of living", "food", "bread"],
-    "oil_refinery": ["oil", "petroleum", "barrel", "crude", "refinery", "pipeline", "opec", "fuel"],
-    "kitchen_domestic": ["family", "kitchen", "home", "breakfast", "morning", "coffee", "everyday"],
-    "data_center": ["data", "algorithm", "crypto", "bitcoin", "blockchain", "digital", "server", "cyber"],
-    "shipping_port": ["shipping", "container", "cargo", "supply chain", "port", "export", "import"],
-    "financial_district": ["bank", "wall street", "finance", "investment", "billion", "hedge fund", "capital"],
-    "abstract_metaphor": ["concept", "abstract", "metaphor", "idea", "fundamental", "system"],
-    "military_hardware": ["weapon", "defense", "military", "arms", "tank", "aircraft", "ammunition", "contract"],
-    "newsroom": ["report", "breaking", "headline", "anchor", "broadcast", "coverage", "media"],
-    "refugee_camp": ["refugee", "displaced", "camp", "tent", "flee", "asylum", "migration", "humanitarian crisis"],
-    "naval_vessel": ["navy", "warship", "destroyer", "carrier", "fleet", "strait", "blockade", "maritime"],
-    "hospital": ["hospital", "wounded", "medical", "doctor", "triage", "casualty", "clinic", "patients"],
-    "parliament": ["parliament", "debate", "session", "vote", "resolution", "assembly", "chamber", "legislative"],
-    "protest_march": ["protest", "march", "demonstration", "rally", "crowd", "uprising", "dissent", "unrest"],
-    "underground_bunker": ["bunker", "shelter", "underground", "command center", "fortified", "air raid", "sirens"],
-    "satellite_view": ["satellite", "orbit", "aerial", "geopolitical", "global", "overview", "borders", "territory"],
-    "grain_field": ["grain", "wheat", "harvest", "agriculture", "crop", "famine", "food supply", "farming"],
-    "gas_station": ["gas", "gasoline", "fuel price", "pump", "rationing", "petrol", "filling station"],
-}
-
-# ------------------------------------------------------------------
-# Voice-specific visual treatment
-# ------------------------------------------------------------------
-VOICE_VISUAL_TREATMENT = {
-    "V1": {
-        "style": "data-driven",
-        "preference": ["trading_floor", "data_center", "financial_district"],
-        "detail_focus": "screens, charts, data displays, numerical readouts, technical instruments",
-    },
-    "V2": {
-        "style": "analytical",
-        "preference": ["government_office", "parliament", "newsroom"],
-        "detail_focus": "maps, documents, policy papers, strategic diagrams, diplomatic settings",
-    },
-    "V3": {
-        "style": "historical",
-        "preference": ["war_zone", "street_market", "kitchen_domestic"],
-        "detail_focus": "archival textures, worn surfaces, weathered objects, historical artifacts",
-    },
-}
-
-# ------------------------------------------------------------------
-# Scene opener phrases keyed by environment
-# ------------------------------------------------------------------
-SCENE_OPENERS = {
-    "trading_floor": "a dimly lit trading floor where rows of monitors cast flickering light across tense faces",
-    "war_zone": "a devastated urban landscape where dust and smoke drift through shattered window frames",
-    "government_office": "a wood-paneled office where heavy curtains filter pale light onto stacked dossiers",
-    "street_market": "a bustling morning market where vendors arrange goods under weathered canvas awnings",
-    "oil_refinery": "a sprawling industrial complex where steel towers rise against a chemical-hued sky",
-    "kitchen_domestic": "a quiet kitchen where morning light falls across a scratched wooden table",
-    "data_center": "a vast server hall where endless racks pulse with blinking indicator lights in the darkness",
-    "shipping_port": "a massive container port where cranes swing their loads against an overcast horizon",
-    "financial_district": "a glass-and-steel canyon of towers where reflections distort the morning sky",
-    "abstract_metaphor": "a stark abstract space where light and shadow create dramatic geometric patterns",
-    "military_hardware": "a military staging area where rows of equipment stand under flat gray daylight",
-    "newsroom": "a bright broadcast studio where multiple screens display competing urgent feeds",
-    "refugee_camp": "a sprawling encampment of canvas tents and corrugated shelters stretching across dry earth",
-    "naval_vessel": "the steel deck of a warship cutting through gray swells, spray misting across the bow",
-    "hospital": "a crowded hospital corridor where gurneys line the walls under buzzing fluorescent tubes",
-    "parliament": "a grand legislative chamber where tiered benches face an ornate speaker's podium",
-    "protest_march": "a surging crowd filling a wide avenue, hand-painted signs bobbing above a sea of heads",
-    "underground_bunker": "a low-ceilinged concrete shelter where bare bulbs cast harsh circles of light",
-    "satellite_view": "the curved horizon of the earth seen from orbit, cloud systems swirling over darkened landmass",
-    "grain_field": "an endless expanse of golden wheat rippling in waves under a wide-open sky",
-    "gas_station": "a solitary filling station under harsh canopy lights, pumps standing like sentinels in the dark",
-}
-
-# ------------------------------------------------------------------
-# Character templates — multiple per environment for variety
-# ------------------------------------------------------------------
-CHARACTER_TEMPLATES = {
-    "trading_floor": [
-        "A trader in a rumpled white dress shirt, sleeves rolled to the elbows, presses his palm against his forehead and exhales slowly through pursed lips, tie hanging loose, collar unbuttoned, dark circles visible under the monitor glow.",
-        "A woman at a desk leans forward with both hands flat on the surface, her blazer pushed back at the shoulders, eyes scanning rapidly between three screens, jaw clenched tight.",
-        "A floor manager stands with a phone pressed to each ear, feet planted wide apart, the cords stretched taut, sweat visible on his brow in the cool fluorescent light.",
+LIGHTING_MOODS = {
+    "tense": [
+        "harsh directional sidelight casting deep shadows",
+        "cold fluorescent overhead light creating stark contrast",
     ],
-    "war_zone": [
-        "A figure in a dust-covered jacket stands with shoulders hunched, one hand gripping a crumbling doorframe for balance, grime lining the creases of their face, gaze fixed on a point in the middle distance.",
-        "A medic crouches beside a stretcher, hands moving with swift precision, the cuffs of their uniform dark with stains, a headlamp throwing a beam across rubble.",
-        "An elderly person sits motionless on a concrete block, hands folded in their lap, dust settled in the folds of their clothing, watching the horizon with an unblinking stillness.",
+    "calm": [
+        "soft diffused natural light filtering through the space",
+        "warm golden hour light raking across surfaces at a low angle",
     ],
-    "government_office": [
-        "A silver-haired official in a dark suit adjusts a stack of folders with deliberate, measured movements, reading glasses perched at the tip of their nose, a fountain pen held motionless between two fingers.",
-        "An aide stands at the edge of the frame, arms full of dossiers, one foot angled toward the door, waiting for a signal from the figure behind the desk.",
-        "A diplomat leans back in a leather chair, fingertips pressed together in a steeple, the reflection of the window casting a grid of light across their face.",
+    "urgent": [
+        "rapidly shifting light sources creating unstable illumination",
+        "bright overhead light leaving no shadows to hide in",
     ],
-    "street_market": [
-        "A vendor with weathered hands and a faded apron leans forward to rearrange a display, fingers moving with practiced efficiency, deep lines framing their eyes as they squint against the morning sun.",
-        "A shopper pauses mid-stride with a cloth bag over one shoulder, reaching toward a price card and pulling their hand back slowly, the weight of the bag shifting on their frame.",
-        "An old man sits on an upturned crate, wrapping produce in newspaper with gnarled fingers, a scale balanced on the ledge beside him.",
+    "somber": [
+        "muted overcast light draining color from every surface",
+        "a single dim light source leaving the edges in darkness",
     ],
-    "oil_refinery": [
-        "A worker in a hard hat and high-visibility vest walks along a catwalk, one gloved hand trailing along the railing, boots leaving prints on the metal grating.",
-        "An engineer holds a clipboard against their chest, visor raised, staring upward at a maze of pipes, the orange glow of sodium lamps reflecting off their safety goggles.",
-    ],
-    "kitchen_domestic": [
-        "A middle-aged person in a worn cardigan pauses mid-motion, coffee mug suspended halfway to their lips, eyes fixed on a newspaper headline, their other hand resting flat on the table, fingers spread wide.",
-        "A teenager stands at the counter pouring cereal, one hand braced against the cabinet, their gaze drawn to a phone screen propped against the toaster, spoon forgotten mid-air.",
-    ],
-    "data_center": [
-        "A technician in a dark polo shirt peers at a rack display, the screen's light casting sharp shadows across their focused expression, fingers hovering over a keyboard without pressing a key.",
-        "A security guard walks the aisle between server racks, flashlight sweeping in slow arcs, the beam catching on dust motes drifting in recycled air.",
-    ],
-    "shipping_port": [
-        "A dockworker in a heavy coat and safety vest signals with broad arm gestures, the wind catching the loose fabric of their clothing, salt-weathered skin and squinting eyes against the harbor glare.",
-        "A crane operator sits in a glass cab high above the dock, hands steady on twin controls, their silhouette framed against an overcast sky.",
-    ],
-    "financial_district": [
-        "Suited pedestrians move through the frame, their pace quickening, briefcases gripped tighter, phone screens illuminating downcast faces, one figure standing still against the flow, staring upward at a ticker display.",
-        "A woman in a long coat pushes through a revolving door, one hand pressing a phone to her ear, the other clutching a portfolio, the glass panels spinning behind her.",
-    ],
-    "military_hardware": [
-        "A uniformed figure stands at attention beside a vehicle, arms clasped behind their back, chin slightly raised, the fabric of their uniform pressed and rigid, catching hard shadows.",
-        "A mechanic lies on a creeper beneath an armored vehicle, only their boots visible, a wrench clanging against metal in a rhythmic pulse.",
-    ],
-    "newsroom": [
-        "An anchor sits straight-backed behind the desk, papers squared precisely, maintaining composed stillness as studio lights cast a bright wash, eyes tracking a teleprompter with controlled precision.",
-        "A producer leans over a mixing board, one hand pressing a headphone to their ear, the other jabbing at a row of illuminated switches, monitors reflected in their glasses.",
-    ],
-    "refugee_camp": [
-        "A woman wrapped in a heavy shawl sits on the ground outside a tent, one hand resting on a sleeping child's back, her other hand wrapped around a tin cup, eyes staring past the camera.",
-        "A young man carries two plastic water jugs by their handles, arms extended, shoulders hunched under the weight, dust rising from each footstep on the packed earth.",
-    ],
-    "naval_vessel": [
-        "A sailor in a blue duty uniform grips a railing with both hands, salt spray misting across their face, eyes fixed on a point beyond the bow, feet braced wide on the rolling deck.",
-        "An officer stands at the bridge window, binoculars raised to their eyes, the ship's wheel visible behind them, jacket buttoned tight against the maritime cold.",
-    ],
-    "hospital": [
-        "A surgeon in scrubs pulls a mask down below their chin, sweat visible on their forehead, hands held up and apart at chest height, still gloved, eyes closed for a single long breath.",
-        "A nurse moves between beds with quick, efficient steps, hands adjusting an IV line, the squeak of their shoes on linoleum marking each stride.",
-    ],
-    "parliament": [
-        "A legislator rises from a green leather bench, one hand gripping a sheaf of papers, the other resting on the bench back, chin lifted as they prepare to address the chamber.",
-        "A clerk sits at a desk below the speaker's podium, pen moving steadily across a ledger, oblivious to the raised voices echoing off stone walls above.",
-    ],
-    "protest_march": [
-        "A young woman at the front of the march holds a placard above her head with both hands, arms fully extended, her face tilted upward against the sun, mouth open mid-chant.",
-        "A man in a heavy jacket links arms with those beside him, feet planted on asphalt, the muscles in his neck taut as the crowd surges forward around him.",
-    ],
-    "underground_bunker": [
-        "A communications officer hunches over a desk cluttered with radio equipment, one hand pressing a headset to their ear, the other scribbling on a notepad, a single bare bulb illuminating their work.",
-        "A civilian sits on a narrow cot against the concrete wall, arms wrapped around their knees, the orange glow of a space heater casting long shadows across the floor.",
-    ],
-    "satellite_view": [
-        "No human figure is visible at this altitude, only the patterns of civilization etched into the landscape, roads threading between settlements, harbors filled with the specks of waiting ships.",
-    ],
-    "grain_field": [
-        "A farmer stands knee-deep in wheat, one hand shading their eyes against the low sun, the other holding a handful of grain stalks, their silhouette sharp against the golden horizon.",
-        "A child runs along a narrow path between rows, arms outstretched, fingertips brushing the tops of the wheat, dust rising in a thin trail behind them.",
-    ],
-    "gas_station": [
-        "A driver leans against the side of a car with arms folded, watching the pump numbers climb, the fluorescent canopy light flattening every shadow, jaw tight, foot tapping the concrete.",
-        "An attendant in a stained uniform scrubs the windshield of a vehicle, one hand braced on the hood, the squeegee leaving clean arcs across dusty glass.",
+    "neutral": [
+        "even natural daylight filling the space without dramatic shadows",
+        "balanced practical lighting from visible sources in the scene",
     ],
 }
 
-# ------------------------------------------------------------------
-# Extra environment detail for longer clips
-# ------------------------------------------------------------------
-ENVIRONMENT_DETAILS = {
-    "trading_floor": "Papers shift in the air-conditioning draft, a phone rings unanswered on a far desk, the timestamp on a corner monitor ticks forward, reflections of chart patterns ripple across a glass partition.",
-    "war_zone": "A curtain flutters through a broken window, dust motes drift slowly through a shaft of light, a cracked mirror on a wall reflects fragmented sky, water drips steadily from exposed pipes into a growing puddle.",
-    "government_office": "A grandfather clock in the corner marks time with a low pendulum swing, light catches the edge of a crystal inkwell, a leather blotter bears the impression of a hundred signatures.",
-    "street_market": "Flies circle a basket of overripe fruit, a torn awning flaps in a gust, a child's hand reaches up to a counter edge, coins slide across a worn wooden surface.",
-    "oil_refinery": "A plume of steam vents from a pressure relief valve, puddles of oily water shimmer with iridescent color, a warning light rotates slowly on a distant catwalk.",
-    "kitchen_domestic": "Steam curls upward from the cup catching golden light, a clock on the wall ticks audibly, crumbs scatter across a breadboard, the refrigerator hum provides a bass note to the silence.",
-    "data_center": "A status LED shifts from green to amber on a single server blade, a maintenance cart sits abandoned in the aisle, cable bundles sway gently from overhead trays in the airflow.",
-    "shipping_port": "A rope as thick as an arm creaks against a bollard, container numbers blur as a crane swings its load, oil-sheened water laps against barnacle-crusted pilings.",
-    "financial_district": "Pigeons scatter from a ledge as a taxi horn sounds below, a newspaper page tumbles along the gutter, the digital clock on a bank facade flickers between time and temperature.",
-    "abstract_metaphor": "Particles drift through intersecting beams of light, a surface ripples as if struck by an unseen force, shadows lengthen and contract in a rhythmic, breathing pattern.",
-    "military_hardware": "A tarpaulin snaps in the wind over a supply pallet, boot prints track through a mud patch between vehicles, a radio aerial sways against a pale sky.",
-    "newsroom": "A coffee mug sits forgotten beside a keyboard, its surface reflecting the studio lights, a stack of printouts curls at the edges under the heat of the broadcast lamps.",
-    "refugee_camp": "A child's drawing is pinned to the inside of a tent wall, a queue of people stretches from a water point into the distance, laundry strung between poles flutters in dry wind.",
-    "naval_vessel": "Binoculars hang from a hook on the bridge wall, swaying with the ship's motion, a signal lamp blinks in staccato bursts from a distant escort vessel.",
-    "hospital": "An IV bag drips with metronomic regularity, a clipboard hangs from the foot of a bed, the rubber wheels of a gurney leave faint tracks on freshly mopped tile.",
-    "parliament": "Microphones stand at attention on every desk, their cables trailing to the floor, a gallery of portraits lines the upper walls, gilt frames catching the chandelier light.",
-    "protest_march": "Discarded flyers litter the asphalt in the wake of the crowd, a megaphone crackles with feedback, the shadow of the march stretches long down a cross street.",
-    "underground_bunker": "A map pinned to the wall is covered in colored pins and string, condensation beads on a steel pipe, a stack of ration boxes fills one corner floor to ceiling.",
-    "satellite_view": "Cloud formations cast vast shadows on the landscape below, city lights define the coastline in amber points, shipping lanes appear as faint wakes on the dark ocean surface.",
-    "grain_field": "A harvester trail cuts a geometric line through the standing crop, dust hangs in the air behind machinery like a golden curtain, birds rise in a flock from a disturbed section.",
-    "gas_station": "A price board with removable digits shows numbers recently rearranged, a crushed soda can rolls slowly across the forecourt in a breeze, moths orbit the canopy light in tight spirals.",
+TEXTURE_FAMILIES = {
+    "organic": "weathered wood grain, rough natural fiber, worn leather, aged paper",
+    "industrial": "brushed metal, riveted steel, poured concrete, rubber gaskets",
+    "digital": "glass screens, fiber optic cables, LED indicators, polished surfaces",
+    "architectural": "polished stone, carved wood, painted plaster, window glass",
+    "natural": "soil, water, growing plants, raw stone, unprocessed materials",
 }
+
+ATMOSPHERE_TYPES = {
+    "tense": "a weighted silence punctuated by small sharp sounds",
+    "busy": "overlapping voices and activity creating a layered soundscape",
+    "empty": "the hollow resonance of an unoccupied space",
+    "intimate": "close quiet sounds — breathing, fabric movement, the smallest gestures amplified",
+    "vast": "sound swallowed by distance, echoes fading into open space",
+}
+
+PALETTE_MODES = {
+    "warm": "warm amber, honey gold, burnt sienna, soft cream",
+    "cool": "steel blue, slate gray, pale silver, muted teal",
+    "desaturated": "washed-out earth tones, faded gray-green, muted ochre, dusty beige",
+    "high_contrast": "deep blacks against bright highlights, sharp tonal separation, minimal mid-tones",
+    "monochrome": "near-monochromatic tones with a single subtle accent color bleeding through",
+}
+
+# ------------------------------------------------------------------
+# NLP cue word sets — used to classify narration content at runtime
+# ------------------------------------------------------------------
+
+_INDOOR_CUES = {
+    "office", "room", "lab", "laboratory", "hospital", "factory", "studio",
+    "kitchen", "house", "home", "school", "church", "library", "museum",
+    "warehouse", "hall", "building", "station", "theater", "court", "prison",
+    "clinic", "workshop", "store", "shop", "restaurant", "bar", "cafe",
+    "bunker", "shelter", "chamber", "cockpit", "cabin", "cellar",
+}
+_OUTDOOR_CUES = {
+    "field", "mountain", "ocean", "sea", "river", "forest", "desert", "sky",
+    "road", "street", "city", "village", "farm", "garden", "beach", "coast",
+    "valley", "hill", "lake", "island", "jungle", "plain", "tundra", "port",
+    "harbor", "bridge", "border", "camp", "ruins", "canyon", "crater",
+    "orbit", "summit", "plateau", "marsh", "reef", "glacier",
+}
+
+_TENSE_CUES = {
+    "crisis", "threat", "danger", "fear", "risk", "conflict", "struggle",
+    "tension", "alarm", "emergency", "collapse", "destruction", "attack",
+    "chaos", "panic", "disaster", "catastrophe", "confrontation", "battle",
+    "critical", "desperate", "volatile", "unstable", "deadly", "violent",
+}
+_CALM_CUES = {
+    "peace", "quiet", "gentle", "slow", "calm", "rest", "steady", "still",
+    "harmony", "balance", "serene", "tranquil", "relaxed", "gradual",
+    "patient", "soft", "ease", "stable", "settled", "comfort",
+}
+_URGENT_CUES = {
+    "rapid", "sudden", "immediate", "race", "rush", "surge", "accelerat",
+    "fast", "quick", "speed", "hurry", "sprint", "scramble", "overnight",
+    "explode", "spike", "soar", "plummet", "crash", "erupt",
+}
+_SOMBER_CUES = {
+    "loss", "grief", "death", "mourn", "sorrow", "tragic", "suffer",
+    "decline", "fade", "wither", "abandon", "empty", "silent", "dark",
+    "bleak", "grim", "desolate", "forgotten", "ruin", "end",
+}
+
+_TEXTURE_CUES = {
+    "organic": {"wood", "leather", "cloth", "paper", "fiber", "fabric", "grain", "cotton", "wool", "bone", "shell"},
+    "industrial": {"metal", "steel", "concrete", "machine", "factory", "pipe", "engine", "iron", "wire", "bolt", "gear"},
+    "digital": {"screen", "computer", "data", "digital", "code", "monitor", "server", "network", "satellite", "radar"},
+    "architectural": {"building", "wall", "column", "floor", "ceiling", "door", "window", "stone", "brick", "tile", "arch"},
+    "natural": {"water", "earth", "soil", "plant", "tree", "river", "rock", "grass", "leaf", "sand", "ice", "snow"},
+}
+
+# Cinematic action verbs — generic framing language
+_CINEMATIC_VERBS = [
+    "unfolds", "emerges", "shifts", "accumulates", "transforms",
+    "materializes", "dissolves", "intensifies", "recedes", "converges",
+    "fragments", "coalesces", "ripples outward", "settles into place",
+    "builds momentum", "comes into sharp focus",
+]
+
+# Physical detail fragments for character building
+_POSTURE_DETAILS = [
+    "shoulders drawn slightly forward under an invisible weight",
+    "standing with feet planted wide, arms folded across the chest",
+    "leaning forward with both hands flat on a surface",
+    "sitting upright with a rigid spine, chin level",
+    "turned half away, one hand resting on a nearby object",
+    "paused mid-stride, weight shifted to one foot",
+    "bent forward at the waist, peering closely at something just out of frame",
+    "perched on the edge of a seat, body angled toward the center of the action",
+]
+_HAND_DETAILS = [
+    "fingers interlaced tightly, knuckles whitening",
+    "one hand gripping a worn object, the other hanging loose",
+    "hands moving with practiced efficiency across a workspace",
+    "fingers drumming silently on a surface",
+    "palms open and upturned in a gesture of explanation",
+    "hands clasped behind the back, fingers occasionally flexing",
+    "one hand tracing a line across a document or surface",
+    "both hands wrapped around a vessel, thumbs aligned along the rim",
+]
+_GAZE_DETAILS = [
+    "eyes fixed on a point in the middle distance",
+    "gaze tracking something just outside the frame",
+    "eyes narrowed, scanning details closely",
+    "looking downward at an object held in both hands",
+    "staring directly into the lens with unblinking composure",
+    "eyes moving rapidly, processing visible information",
+    "gaze shifting between two focal points, weighing what each reveals",
+    "eyes lifted toward the horizon, chin slightly raised",
+]
+
+# Generic action verbs extracted from narration
+_ACTION_VERB_PATTERN = re.compile(
+    r'\b(discover|transform|build|destroy|create|reveal|change|grow|'
+    r'spread|collapse|rise|fall|move|shift|turn|break|open|close|'
+    r'begin|end|start|stop|fight|defend|protect|save|lose|find|'
+    r'search|explore|cross|reach|arrive|leave|return|carry|hold|'
+    r'watch|observe|record|measure|test|launch|land|fly|sail|'
+    r'march|gather|scatter|connect|divide|merge|split|produce|'
+    r'harvest|cook|heal|teach|learn|write|read|sing|play|work|'
+    r'climb|dig|pour|press|pull|push|lift|drop|cut|shape|'
+    r'assemble|dismantle|navigate|orbit|descend|ascend|operate|'
+    r'examine|prepare|collect|distribute|construct|demolish)\w*',
+    re.IGNORECASE
+)
+
+# Generic person reference words
+_PERSON_WORDS = {
+    "person", "people", "man", "woman", "child", "children", "worker",
+    "leader", "figure", "scientist", "doctor", "soldier", "farmer",
+    "teacher", "student", "artist", "engineer", "pilot", "captain",
+    "crew", "team", "group", "crowd", "citizen", "resident", "official",
+    "expert", "researcher", "volunteer", "survivor", "witness", "patient",
+    "nurse", "technician", "operator", "inspector", "guide", "traveler",
+    "craftsman", "merchant", "apprentice", "elder", "youth", "infant",
+    "villager", "settler", "explorer", "commander", "medic", "assistant",
+}
+
+
+# ------------------------------------------------------------------
+# NLP-based narration analysis
+# ------------------------------------------------------------------
+
+def _analyze_narration(narration_text, scene_title=""):
+    """
+    Analyze narration text to extract visual composition cues.
+    Returns a dict with: mood, indoor_outdoor, texture_family,
+    time_of_day, palette_mode, content_words, persons, actions.
+    """
+    combined = (narration_text + " " + scene_title).lower()
+    words = set(re.findall(r'[a-z]+', combined))
+
+    # Detect mood from cue words
+    mood = "neutral"
+    mood_scores = {
+        "tense": len(words & _TENSE_CUES),
+        "calm": len(words & _CALM_CUES),
+        "urgent": len(words & _URGENT_CUES),
+        "somber": len(words & _SOMBER_CUES),
+    }
+    best_mood_score = max(mood_scores.values())
+    if best_mood_score > 0:
+        mood = max(mood_scores, key=mood_scores.get)
+
+    # Detect indoor/outdoor
+    indoor_score = len(words & _INDOOR_CUES)
+    outdoor_score = len(words & _OUTDOOR_CUES)
+    if indoor_score > outdoor_score:
+        indoor_outdoor = "indoor"
+    elif outdoor_score > indoor_score:
+        indoor_outdoor = "outdoor"
+    else:
+        indoor_outdoor = "indoor"
+
+    # Detect texture family
+    texture_scores = {family: len(words & cues) for family, cues in _TEXTURE_CUES.items()}
+    best_texture_score = max(texture_scores.values())
+    if best_texture_score > 0:
+        texture_family = max(texture_scores, key=texture_scores.get)
+    else:
+        texture_family = "architectural"
+
+    # Time of day
+    time_of_day = "day"
+    if words & {"night", "midnight", "dark", "dusk", "evening", "moonlight", "starlight"}:
+        time_of_day = "night"
+    elif words & {"dawn", "sunrise", "morning", "early"}:
+        time_of_day = "morning"
+    elif words & {"sunset", "twilight", "golden"}:
+        time_of_day = "evening"
+
+    # Palette from mood
+    palette_map = {
+        "tense": "high_contrast",
+        "calm": "warm",
+        "urgent": "desaturated",
+        "somber": "monochrome",
+        "neutral": "cool",
+    }
+    palette_mode = palette_map.get(mood, "cool")
+
+    # Extract action verbs first (needed to exclude from content words)
+    action_matches = _ACTION_VERB_PATTERN.findall(combined)
+    actions = list(dict.fromkeys(action_matches))[:6]
+    action_stems = {a.lower() for a in actions}
+
+    # Extract content words (nouns/descriptors) — excluding cue words and verbs
+    all_cue_words = (_TENSE_CUES | _CALM_CUES | _URGENT_CUES | _SOMBER_CUES
+                     | _INDOOR_CUES | _OUTDOOR_CUES | _PERSON_WORDS | action_stems)
+    for cue_set in _TEXTURE_CUES.values():
+        all_cue_words |= cue_set
+    # Also exclude common function words
+    _STOP_WORDS = {
+        "this", "that", "with", "from", "have", "been", "were", "they",
+        "their", "them", "than", "then", "into", "over", "also", "just",
+        "more", "most", "such", "when", "what", "which", "where", "will",
+        "would", "could", "should", "about", "after", "before", "between",
+        "through", "during", "without", "another", "because", "every",
+        "other", "some", "very", "only", "each", "much", "many", "well",
+        "back", "even", "same", "made", "like", "slowly", "quickly",
+        "carefully", "suddenly", "nearly", "almost", "already", "often",
+        "never", "always", "still", "away", "across", "along", "around",
+        "while", "until", "since", "being", "doing", "having", "going",
+        "took", "went", "came", "gave", "told", "knew", "said", "become",
+        "overnight", "aboard", "below", "above", "here", "there",
+    }
+    all_cue_words |= _STOP_WORDS
+    content_words = [
+        w for w in re.findall(r'[a-z]{4,}', combined)
+        if w not in all_cue_words and not any(w.startswith(stem) for stem in action_stems)
+    ]
+    # Deduplicate while preserving order
+    seen = set()
+    unique_content = []
+    for w in content_words:
+        if w not in seen:
+            seen.add(w)
+            unique_content.append(w)
+    content_words = unique_content[:12]
+
+    # Extract person references
+    found_persons = list(words & _PERSON_WORDS)
+
+    return {
+        "mood": mood,
+        "indoor_outdoor": indoor_outdoor,
+        "texture_family": texture_family,
+        "time_of_day": time_of_day,
+        "palette_mode": palette_mode,
+        "content_words": content_words,
+        "persons": found_persons,
+        "actions": actions,
+    }
+
+
+# ------------------------------------------------------------------
+# Environment builder — derives from narration, no fixed dict
+# ------------------------------------------------------------------
+
+def _build_environment(analysis):
+    """
+    Build environment description (lighting, textures, atmosphere, palette)
+    from narration analysis — NOT from a fixed environment dictionary.
+    """
+    mood = analysis["mood"]
+    texture_family = analysis["texture_family"]
+    palette_mode = analysis["palette_mode"]
+    time_of_day = analysis["time_of_day"]
+    indoor_outdoor = analysis["indoor_outdoor"]
+
+    # Lighting: mood-based, modified by time of day
+    lighting_options = LIGHTING_MOODS.get(mood, LIGHTING_MOODS["neutral"])
+    lighting = random.choice(lighting_options)
+    if time_of_day == "morning":
+        lighting = lighting + ", touched by early morning light"
+    elif time_of_day == "evening":
+        lighting = lighting + ", tinged with amber twilight"
+    elif time_of_day == "night":
+        lighting = "darkness punctuated by " + lighting.lower()
+
+    # Textures from family
+    textures = TEXTURE_FAMILIES.get(texture_family, TEXTURE_FAMILIES["architectural"])
+
+    # Atmosphere: map mood to atmosphere type, influenced by indoor/outdoor
+    mood_to_atmo = {
+        "tense": "tense",
+        "calm": "intimate",
+        "urgent": "busy",
+        "somber": "empty",
+        "neutral": "vast" if indoor_outdoor == "outdoor" else "intimate",
+    }
+    atmo_key = mood_to_atmo.get(mood, "intimate")
+    atmosphere = ATMOSPHERE_TYPES[atmo_key]
+
+    # Palette
+    palette = PALETTE_MODES.get(palette_mode, PALETTE_MODES["cool"])
+
+    return {
+        "lighting": lighting[0].upper() + lighting[1:],
+        "textures": textures,
+        "atmosphere": atmosphere,
+        "palette": palette,
+    }
+
+
+# ------------------------------------------------------------------
+# Scene opener — derived from narration cues
+# ------------------------------------------------------------------
+
+def _build_scene_opener(analysis):
+    """
+    Derive a scene-setting opener from the narration analysis.
+    Uses cinematic framing language to establish the scene.
+    """
+    content = analysis["content_words"]
+    indoor_outdoor = analysis["indoor_outdoor"]
+    texture = analysis["texture_family"]
+
+    texture_detail = TEXTURE_FAMILIES.get(texture, TEXTURE_FAMILIES["architectural"])
+    first_texture = texture_detail.split(",")[0].strip()
+
+    if content:
+        subject_phrase = " ".join(content[:3])
+    else:
+        subject_phrase = "the unfolding scene"
+
+    if indoor_outdoor == "outdoor":
+        openers = [
+            f"an open expanse where {first_texture} meets the horizon, the setting of {subject_phrase} stretching into the distance",
+            f"a wide landscape where the elements of {subject_phrase} are laid bare under an open sky",
+            f"a sprawling exterior where natural light reveals every surface connected to {subject_phrase}",
+        ]
+    else:
+        openers = [
+            f"an enclosed space where {first_texture} catches the available light, the domain of {subject_phrase}",
+            f"an interior where the details of {subject_phrase} fill the frame from edge to edge",
+            f"a contained environment defined by surfaces of {first_texture}, the setting for {subject_phrase}",
+        ]
+
+    return random.choice(openers)
+
+
+# ------------------------------------------------------------------
+# Action description — derived from narration content
+# ------------------------------------------------------------------
+
+def _narration_to_visual_action(narration_text, scene_context, analysis):
+    """
+    Convert narration text into a visual action description.
+    Extracts key subject and action from the narration and constructs
+    a cinematic visual description — no hardcoded topic mappings.
+    """
+    actions = analysis["actions"]
+    content_words = analysis["content_words"]
+
+    cinematic_verb = random.choice(_CINEMATIC_VERBS)
+
+    if actions and content_words:
+        subject_words = " ".join(content_words[:3])
+        return (
+            f"The visual narrative {cinematic_verb} as the scene depicts {subject_words}, "
+            f"each element in the frame reinforcing the subject, building a layered "
+            f"documentary composition with deliberate pacing"
+        )
+    elif content_words:
+        subject_words = " ".join(content_words[:4])
+        return (
+            f"The scene {cinematic_verb}, revealing {subject_words} "
+            f"through carefully composed documentary imagery, "
+            f"visual details accumulating gradually, each adding weight to the narrative"
+        )
+    else:
+        return (
+            f"The scene unfolds with deliberate pacing, each element in the frame "
+            f"reinforcing the gravity of the narration, "
+            f"visual details accumulate gradually, building a layered documentary composition"
+        )
+
+
+# ------------------------------------------------------------------
+# Character builder — derived from narration context
+# ------------------------------------------------------------------
+
+def _build_character(analysis, used_descriptions):
+    """
+    Build a character/subject description from narration context.
+    Uses physical cues only (LTX-2.3 rule). Avoids recently used descriptions.
+    """
+    persons = analysis["persons"]
+    content_words = analysis["content_words"]
+
+    posture = random.choice(_POSTURE_DETAILS)
+    hands = random.choice(_HAND_DETAILS)
+    gaze = random.choice(_GAZE_DETAILS)
+
+    if persons:
+        person_label = random.choice(persons)
+        desc = (
+            f"A {person_label} occupies the frame, {posture}. "
+            f"Their {hands.lower()}, {gaze.lower()}."
+        )
+    elif content_words:
+        context_hint = " ".join(content_words[:2])
+        desc = (
+            f"A solitary figure connected to {context_hint} stands in frame, "
+            f"{posture}. {hands[0].upper()}{hands[1:]}, {gaze.lower()}."
+        )
+    else:
+        desc = (
+            f"A solitary figure occupies the frame, {posture}. "
+            f"{hands[0].upper()}{hands[1:]}, {gaze.lower()}."
+        )
+
+    # If this exact description was recently used, regenerate with different details
+    if desc in used_descriptions:
+        posture = random.choice([p for p in _POSTURE_DETAILS if p != posture] or _POSTURE_DETAILS)
+        gaze = random.choice([g for g in _GAZE_DETAILS if g != gaze] or _GAZE_DETAILS)
+        if persons:
+            desc = (
+                f"A {random.choice(persons)} occupies the frame, {posture}. "
+                f"Their {hands.lower()}, {gaze.lower()}."
+            )
+        else:
+            desc = (
+                f"A solitary figure occupies the frame, {posture}. "
+                f"{hands[0].upper()}{hands[1:]}, {gaze.lower()}."
+            )
+
+    return desc
+
+
+# ------------------------------------------------------------------
+# Style signature — always Arri Alexa base, palette from analysis
+# ------------------------------------------------------------------
+
+def _compose_style_signature(analysis):
+    """Generate the photorealistic style signature for the prompt."""
+    palette = PALETTE_MODES.get(analysis["palette_mode"], PALETTE_MODES["cool"])
+    return (
+        "Photorealistic cinematic documentary footage, shot on Arri Alexa with Cooke anamorphic lenses, "
+        f"natural film grain, shallow depth of field, {palette} color palette, "
+        "documentary-style composition with deliberate negative space."
+    )
+
+
+# ------------------------------------------------------------------
+# Duration padding — extra detail for longer clips
+# ------------------------------------------------------------------
+
+def _add_detail_for_duration(analysis):
+    """Add extra environmental detail for longer clips so prompt matches duration."""
+    texture = TEXTURE_FAMILIES.get(analysis["texture_family"], TEXTURE_FAMILIES["architectural"])
+    texture_items = [t.strip() for t in texture.split(",")]
+    picked = random.sample(texture_items, min(2, len(texture_items)))
+
+    mood = analysis["mood"]
+    mood_ambient = {
+        "tense": "A faint vibration travels through the surfaces, the space holding its breath.",
+        "calm": "Light shifts almost imperceptibly, marking the passage of a quiet moment.",
+        "urgent": "Movement in the periphery keeps the eye restless, the frame alive with secondary motion.",
+        "somber": "Stillness settles over every surface, the frame holding its breath in muted silence.",
+    }
+    ambient = mood_ambient.get(mood, "Small ambient details emerge in the periphery of the frame.")
+
+    content = analysis["content_words"]
+    if content:
+        subject_ref = " ".join(content[:2])
+        return (
+            f"In the margins of the frame, {picked[0]} catches a glint of available light, "
+            f"a quiet reminder of {subject_ref}. {ambient} "
+            f"The documentary gaze lingers, letting texture and atmosphere speak."
+        )
+    return (
+        f"In the margins of the frame, {picked[0]} catches a glint of available light. "
+        f"{ambient} The documentary gaze lingers, letting texture and atmosphere speak."
+    )
+
+
+# ------------------------------------------------------------------
+# Shot and camera selection helpers
+# ------------------------------------------------------------------
+
+def _select_shot_type(dramatic_position, previous_shot_type):
+    """Select shot type based on dramatic position, avoiding repetition."""
+    preferred = SHOT_PROGRESSION.get(dramatic_position, SHOT_TYPES)
+    available = [s for s in preferred if s != previous_shot_type]
+    if not available:
+        available = [s for s in SHOT_TYPES if s != previous_shot_type]
+    return random.choice(available)
+
+
+def _select_camera_movement(previous_movement):
+    """Select camera movement, avoiding repetition."""
+    available = [m for m in CAMERA_MOVEMENTS if m != previous_movement]
+    return random.choice(available)
 
 
 # ===================================================================
@@ -506,10 +639,10 @@ class SceneVisualState:
         self.total_clips = total_clips
         self.previous_shot_type = None
         self.previous_camera_movement = None
-        self.current_environment = None
         self.current_palette = None
         self.character_descriptions_used = []
         self.clip_index = 0
+        self._analysis_cache = None
 
     def get_dramatic_position(self, clip_index):
         """Determine dramatic arc position based on clip placement in scene."""
@@ -527,60 +660,18 @@ class SceneVisualState:
         else:
             return "closing"
 
-    def advance(self, shot_type, camera_movement, environment, character_desc):
+    def advance(self, shot_type, camera_movement, character_desc):
         """Record what was used for this clip and advance."""
         self.previous_shot_type = shot_type
         self.previous_camera_movement = camera_movement
-        self.current_environment = environment
         if character_desc:
             self.character_descriptions_used.append(character_desc)
         self.clip_index += 1
 
 
 # ===================================================================
-# Core composition engine functions
+# Core prompt length calibration
 # ===================================================================
-
-def _pick_environment(narration_text, scene_title, voice=None):
-    """
-    Select the most fitting environment based on narration content.
-    Voice preference is used as a tiebreaker.
-    """
-    text = (narration_text + " " + scene_title).lower()
-
-    best_env = "abstract_metaphor"
-    best_score = 0
-
-    for env_key, keywords in ENVIRONMENT_SCORING.items():
-        score = sum(1 for kw in keywords if kw in text)
-        # Boost environments preferred by this voice
-        if voice and voice in VOICE_VISUAL_TREATMENT:
-            if env_key in VOICE_VISUAL_TREATMENT[voice]["preference"]:
-                score += 0.5
-        if score > best_score:
-            best_score = score
-            best_env = env_key
-
-    return best_env
-
-
-def _pick_visual_metaphor(narration_text):
-    """Select a visual metaphor based on narration content, preferring specificity."""
-    text = narration_text.lower()
-
-    matches = []
-    for concept, visuals in CONCEPT_VISUALS.items():
-        if concept in text:
-            matches.append((concept, visuals))
-
-    if not matches:
-        return None
-
-    # Prefer longer concept matches (more specific)
-    matches.sort(key=lambda x: len(x[0]), reverse=True)
-    concept, visuals = matches[0]
-    return random.choice(visuals)
-
 
 def _scale_prompt_length(duration_sec):
     """
@@ -599,121 +690,6 @@ def _scale_prompt_length(duration_sec):
         return 10, 14, 230, 300
 
 
-def _extract_key_concept(text):
-    """Extract the core concept from narration text."""
-    text_lower = text.lower()
-    for concept in CONCEPT_VISUALS:
-        if concept in text_lower:
-            return concept
-    words = [w for w in text.split()[:8] if len(w) > 3]
-    return " ".join(words[:4]) if words else "the unfolding situation"
-
-
-def _narration_to_visual_action(narration_text, scene_context, env_key, voice=None):
-    """
-    Convert narration text into a visual action description.
-    Produces cinematic B-roll descriptions rather than literal illustrations.
-    Uses environment context and voice treatment for more specific output.
-    """
-    text = narration_text.strip().lower()
-
-    # Concept-specific visual actions (richer than v8 static replacements)
-    concept_actions = {
-        "billion": "Rows of figures scroll across a backlit display, each line replacing the one before, the scale of the numbers suggested by the endless cascade of digits filling every screen in the frame",
-        "percent": "A graph line arcs sharply across a display, the curve bending like a drawn bow, and the light from the screen plays across nearby surfaces as the direction shifts",
-        "inflation": "Price cards on a market stall flip one by one from lower to higher values, each new card placed by a hand that moves with tired familiarity, the old cards scattered on the ground below",
-        "interest rate": "A dial on an institutional wall rotates clockwise with a mechanical click at each increment, the needle passing through marked zones from green to amber to red",
-        "sanctions": "A red stamp descends onto a shipping manifest, the imprint spreading ink across the paper surface, as a stack of identical documents waits in a tray beside it",
-        "supply chain": "Containers move along a vast conveyor system that stretches from foreground to vanishing point, each box stamped with routing codes, the machinery humming with continuous motion",
-        "deficit": "A balance scale in an empty room tips sharply to one side, the lower pan descending slowly, its weight pulling the frame composition off-center",
-        "gdp": "A bar chart fills the wall of a briefing room, each bar growing or shrinking as a hand adjusts figures on a chalkboard beside it, erasure marks ghosting behind the current numbers",
-        "unemployment": "A row of empty workstations stretches across a factory floor, each chair pushed back from its desk, overhead lights still on, casting bright pools onto vacant surfaces",
-        "debt": "Stacked folders rise in a tall column on a wooden desk, each one thicker than the last, the topmost teetering at the edge, casting a long shadow across scattered receipts",
-        "export": "Crates branded with destination markings slide down a loading ramp into the hold of a cargo aircraft, dock workers guiding each one with practiced hand signals",
-        "import": "Packages accumulate on a customs inspection table, each one opened and resealed with tape, a pair of gloved hands methodically cataloging contents onto a clipboard",
-        "treaty": "A fountain pen moves across a thick document on a polished table, the nib leaving a trail of wet ink, two pairs of hands visible at the edges of the frame",
-        "nuclear": "A control room panel displays rows of indicator lights, each one a steady green except for one that shifts to amber, a technician's hand hovering over the switch below it",
-        "election": "Paper ballots cascade into a transparent box, each one tumbling slowly, the pile rising unevenly, hands reaching in from outside the frame to deposit more",
-    }
-
-    for phrase, action_desc in concept_actions.items():
-        if phrase in text:
-            return action_desc
-
-    # Voice-specific fallback actions
-    if voice == "V1":
-        return (
-            "Data streams across multiple displays in the frame, each screen showing a different facet "
-            "of the same underlying pattern, the glow of the readouts casting shifting light across "
-            "the surrounding surfaces as values update in real time"
-        )
-    elif voice == "V2":
-        return (
-            "A document lies open on a polished surface, its margins filled with annotations in different "
-            "inks, a magnifying glass resting beside it catches the overhead light, and the visible text "
-            "suggests the weight and complexity of what is being decided"
-        )
-    elif voice == "V3":
-        return (
-            "The scene unfolds with the measured patience of a historical record, worn surfaces bearing "
-            "the marks of time and use, each object in the frame positioned as if it has been there for "
-            "decades, the light falling across textures that tell their own story of age and endurance"
-        )
-
-    # Generic fallback
-    return (
-        "The scene unfolds with deliberate pacing, each element in the frame reinforcing the gravity "
-        "of the narration, visual details accumulate gradually, building a layered documentary "
-        "composition where light, texture, and spatial depth carry the weight of meaning"
-    )
-
-
-def _select_character(env_key, used_descriptions):
-    """
-    Select a character description for the environment, avoiding recently used ones.
-    Returns a character description string.
-    """
-    templates = CHARACTER_TEMPLATES.get(env_key)
-    if not templates:
-        return (
-            "A solitary figure occupies the frame, their posture conveying the weight "
-            "of the moment through subtle physical tension visible in their hands and shoulders."
-        )
-
-    # Filter out recently used
-    available = [t for t in templates if t not in used_descriptions]
-    if not available:
-        available = templates  # Reset if all used
-
-    return random.choice(available)
-
-
-def _select_shot_type(dramatic_position, previous_shot_type):
-    """Select shot type based on dramatic position, avoiding repetition."""
-    preferred = SHOT_PROGRESSION.get(dramatic_position, SHOT_TYPES)
-    # Exclude previous
-    available = [s for s in preferred if s != previous_shot_type]
-    if not available:
-        available = [s for s in SHOT_TYPES if s != previous_shot_type]
-    return random.choice(available)
-
-
-def _select_camera_movement(previous_movement):
-    """Select camera movement, avoiding repetition."""
-    available = [m for m in CAMERA_MOVEMENTS if m != previous_movement]
-    return random.choice(available)
-
-
-def _compose_style_signature(env_key):
-    """Generate the photorealistic style signature for the prompt."""
-    env = ENVIRONMENTS.get(env_key, ENVIRONMENTS["abstract_metaphor"])
-    return (
-        "Photorealistic cinematic documentary footage, shot on Arri Alexa with Cooke anamorphic lenses, "
-        f"natural film grain, shallow depth of field, {env['palette']} color palette, "
-        "documentary-style composition with deliberate negative space."
-    )
-
-
 # ===================================================================
 # Main prompt generation function — single clip
 # ===================================================================
@@ -722,7 +698,7 @@ def generate_prompt(narration_text, scene_title, scene_context,
                     target_duration_sec, clip_index, total_clips_in_scene,
                     previous_shot_type=None, voice=None, scene_state=None):
     """
-    Generate a single LTX-2.3 video prompt using the context-aware composition engine.
+    Generate a single LTX-2.3 video prompt using NLP-based narration analysis.
 
     Produces a single flowing paragraph in present tense, 150-250 words,
     with explicit camera movement, physical textures, ambient audio, and
@@ -736,7 +712,7 @@ def generate_prompt(narration_text, scene_title, scene_context,
         clip_index: position of this clip within the scene (0-based)
         total_clips_in_scene: total clips in this scene
         previous_shot_type: shot type used in previous clip (to vary)
-        voice: narration voice (V1/V2/V3) for visual treatment
+        voice: narration voice label (used as label only, no topic-specific mapping)
         scene_state: SceneVisualState for continuity tracking
 
     Returns:
@@ -745,7 +721,13 @@ def generate_prompt(narration_text, scene_title, scene_context,
     """
     min_sent, max_sent, min_words, max_words = _scale_prompt_length(target_duration_sec)
 
-    # Determine dramatic position
+    # NLP analysis of narration content
+    analysis = _analyze_narration(narration_text, scene_title)
+
+    # Build environment from analysis
+    env = _build_environment(analysis)
+
+    # Determine dramatic position and continuity state
     if scene_state:
         dramatic_pos = scene_state.get_dramatic_position(clip_index)
         prev_shot = scene_state.previous_shot_type or previous_shot_type
@@ -757,33 +739,18 @@ def generate_prompt(narration_text, scene_title, scene_context,
         prev_cam = None
         used_chars = []
 
-    # Environment selection — consistent within scene if state available
-    if scene_state and scene_state.current_environment:
-        env_key = scene_state.current_environment
-    else:
-        env_key = _pick_environment(narration_text, scene_title, voice)
-
-    env = ENVIRONMENTS[env_key]
-
     # Layer 1: Shot type — driven by dramatic arc
     shot = _select_shot_type(dramatic_pos, prev_shot)
 
     # Layer 2: Scene/environment with textures
-    opener = SCENE_OPENERS.get(env_key, "a carefully composed documentary scene")
+    opener = _build_scene_opener(analysis)
     env_sentence = f"{env['lighting']}, {env['textures']}."
 
-    # Layer 3: Action — narration-derived visual metaphor or B-roll
-    metaphor = _pick_visual_metaphor(narration_text)
-    if metaphor:
-        action_sentence = (
-            f"{metaphor.rstrip('.')}. "
-            f"The scene conveys the weight of {_extract_key_concept(narration_text)}"
-        )
-    else:
-        action_sentence = _narration_to_visual_action(narration_text, scene_context, env_key, voice)
+    # Layer 3: Action — narration-derived visual description
+    action_sentence = _narration_to_visual_action(narration_text, scene_context, analysis)
 
     # Layer 4: Character — physical cues, no emotions, varied across scene
-    character_sentence = _select_character(env_key, used_chars)
+    character_sentence = _build_character(analysis, used_chars)
 
     # Layer 5: Camera movement — varied, no repetition
     cam_move = _select_camera_movement(prev_cam)
@@ -802,7 +769,7 @@ def generate_prompt(narration_text, scene_title, scene_context,
     ]
 
     # Style signature
-    parts.append(_compose_style_signature(env_key))
+    parts.append(_compose_style_signature(analysis))
 
     # Build prompt
     prompt = " ".join(p.strip() for p in parts if p.strip())
@@ -813,34 +780,43 @@ def generate_prompt(narration_text, scene_title, scene_context,
     # Pad for longer clips if under word target
     word_count = len(prompt.split())
     if word_count < min_words and target_duration_sec > 5:
-        extra = ENVIRONMENT_DETAILS.get(env_key, (
-            "Small details emerge in the periphery, textures reveal themselves under scrutiny, "
-            "ambient elements shift subtly, and the frame breathes with quiet, documentary patience."
-        ))
+        extra = _add_detail_for_duration(analysis)
         prompt = prompt.rstrip(".") + ". " + extra
         word_count = len(prompt.split())
 
-    # For very long clips, add even more detail
+    # For very long clips, add even more narration-derived detail
     if word_count < min_words and target_duration_sec > 10:
-        # Add a second metaphor or voice-specific detail
-        voice_treatment = VOICE_VISUAL_TREATMENT.get(voice, VOICE_VISUAL_TREATMENT["V1"])
-        prompt = prompt.rstrip(".") + f". Additional detail draws the eye to {voice_treatment['detail_focus']}, each element contributing to the layered documentary texture."
+        content = analysis["content_words"]
+        if content:
+            detail_subject = " ".join(content[:3])
+            prompt = prompt.rstrip(".") + (
+                f". Additional detail draws the eye to elements of {detail_subject}, "
+                f"each contributing to the layered documentary texture."
+            )
+        else:
+            prompt = prompt.rstrip(".") + (
+                ". Additional detail draws the eye to surfaces and objects in the periphery, "
+                "each contributing to the layered documentary texture."
+            )
         word_count = len(prompt.split())
+
+    # Derive environment label from analysis (for metadata)
+    env_label = f"{analysis['indoor_outdoor']}_{analysis['texture_family']}_{analysis['mood']}"
 
     # Update scene state for continuity
     if scene_state:
-        scene_state.advance(shot, cam_move, env_key, character_sentence)
+        scene_state.advance(shot, cam_move, character_sentence)
 
     return {
         "prompt": prompt,
         "shot_type": shot,
-        "environment": env_key,
+        "environment": env_label,
         "camera_movement": cam_move,
         "duration_sec": target_duration_sec,
         "word_count": len(prompt.split()),
         "generation_params": {
             "dramatic_position": dramatic_pos,
-            "voice": voice or "V1",
+            "voice": voice or "narrator",
             "palette": env["palette"],
         },
     }
@@ -862,7 +838,7 @@ def generate_prompts_for_scene(scene_num, scene_title, audio_segments,
         audio_segments: list of dicts from otio_timeline.get_scene_audio_segments()
         narration_texts: list of str, the full narration text for each segment
         scene_context: broader context about the scene
-        voices: list of voice assignments (V1/V2/V3) per segment
+        voices: list of voice labels per segment (used as labels only)
 
     Returns:
         list of prompt dicts ready for video generation and OTIO storage
@@ -875,7 +851,7 @@ def generate_prompts_for_scene(scene_num, scene_title, audio_segments,
         dur = seg["duration_sec"]
         narr_text = narration_texts[i] if i < len(narration_texts) else seg.get("text_preview", "")
         voice = (voices[i] if voices and i < len(voices)
-                 else seg.get("voice", "V1"))
+                 else seg.get("voice", None))
 
         # LTX-2.3 generates ~5.04s clips; for longer, we need frame-chaining
         generation_duration = dur + 0.5
@@ -1012,7 +988,7 @@ def main():
     import argparse
     from pipeline.otio_timeline import OTIOTimeline
 
-    parser = argparse.ArgumentParser(description="LTX-2.3 context-aware prompt generator v9")
+    parser = argparse.ArgumentParser(description="LTX-2.3 project-agnostic prompt generator")
     parser.add_argument("--otio", required=True, help="Path to .otio timeline")
     parser.add_argument("--narration-script", required=True, help="Path to narration_script.json")
     parser.add_argument("--output", required=True, help="Output prompts JSON path")
