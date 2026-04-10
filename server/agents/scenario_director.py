@@ -28,7 +28,7 @@ from google.adk.agents import Agent
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
-from callbacks.timeline_guardian import timeline_guardian_callback
+from callbacks.deterministic_steps import clean_scenes_after_scenario
 from tools.otio_tools import create_timeline_tool
 
 logger = logging.getLogger(__name__)
@@ -100,6 +100,11 @@ def _scenario_phase_setup(callback_context):
     return None
 
 
+def _clean_scenes_after_scenario_wrapper(callback_context):
+    """After scenario_director: clean scenes JSON then run timeline guardian."""
+    return clean_scenes_after_scenario(callback_context)
+
+
 # -- Evaluator agent -----------------------------------------------------------
 _EVALUATOR_INSTRUCTION = """\
 You are the ADHD Compliance Evaluator for a documentary script.
@@ -169,5 +174,6 @@ scenario_director = LoopAgent(
     max_iterations=3,
     sub_agents=[scenario_generator, scenario_evaluator],
     before_agent_callback=_scenario_phase_setup,
-    after_agent_callback=timeline_guardian_callback,
+    # Use clean_scenes_after_scenario which extracts JSON then runs timeline guardian
+    after_agent_callback=_clean_scenes_after_scenario_wrapper,
 )

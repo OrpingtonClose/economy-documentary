@@ -26,6 +26,7 @@ from google.adk.agents.loop_agent import LoopAgent
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
+from callbacks.deterministic_steps import write_visual_metadata_to_otio
 from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
 
@@ -199,5 +200,6 @@ visual_director = LoopAgent(
     max_iterations=3,
     sub_agents=[content_analyst, visual_concepter, coherence_evaluator],
     before_agent_callback=_visual_phase_setup,
-    after_agent_callback=timeline_guardian_callback,
+    # write_visual_metadata_to_otio writes gap metadata then runs timeline guardian
+    after_agent_callback=write_visual_metadata_to_otio,
 )

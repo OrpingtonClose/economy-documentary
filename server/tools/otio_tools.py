@@ -166,7 +166,7 @@ def add_narration_clip(
                 narration_track = track
                 break
 
-        if not narration_track:
+        if narration_track is None:
             return json.dumps({"error": "A1_Narration track not found"})
 
         clip_name = f"scene_{scene_num:03d}_{voice}"
@@ -249,7 +249,7 @@ def add_video_clip(
                 video_track = track
                 break
 
-        if not video_track:
+        if video_track is None:
             return json.dumps({"error": "V1_Video track not found"})
 
         clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
