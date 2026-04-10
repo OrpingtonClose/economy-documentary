@@ -64,14 +64,18 @@ def _repair_json_text(text: str) -> Optional[str]:
         # More aggressive: find the exact line numbers where the regex
         # inserted opening { characters, then insert matching } before
         # the next scope-closing line (starts with } or ]) after each.
+        # We track a cumulative offset because each inserted line shifts
+        # subsequent indices relative to the original text.
         repair_lines = set()  # line numbers of repair-inserted {
+        orig_lines = text.split('\n')
+        offset = 0  # cumulative lines inserted before current position
         for i, line in enumerate(repaired.split('\n')):
             if line.strip() == '{':
-                # Verify this { doesn't appear at the same position in
-                # the original text (i.e., it was inserted by regex).
-                orig_lines = text.split('\n')
-                if i >= len(orig_lines) or orig_lines[i].strip() != '{':
+                orig_idx = i - offset
+                if orig_idx < 0 or orig_idx >= len(orig_lines) or orig_lines[orig_idx].strip() != '{':
                     repair_lines.add(i)
+                    # The regex inserts "{\n" which adds 1 extra line
+                    offset += 1
 
         lines = repaired.split('\n')
         fixed_lines = []
