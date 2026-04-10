@@ -366,6 +366,11 @@ def main():
                 "ssh_host": args.vm_host,
                 "ssh_port": args.vm_port,
             }
+            if not gpu_worker_url:
+                # Existing VM but no worker URL — start worker + tunnel
+                start_gpu_worker(vm)
+                tunnel = setup_ssh_tunnel(vm)
+                gpu_worker_url = "http://localhost:8880"
 
         if not gpu_worker_url:
             raise RuntimeError("No GPU worker URL available")
