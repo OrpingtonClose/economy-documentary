@@ -124,7 +124,6 @@ def generate_narration(
         "voice": voice,
         "language": lang,
         "scene_num": scene_num,
-        "sample_rate": _SAMPLE_RATE,
     }).encode("utf-8")
 
     tts_url = f"{gpu_worker_url.rstrip('/')}/tts"

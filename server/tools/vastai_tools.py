@@ -134,6 +134,10 @@ def provision_gpu_vm(
         return json.dumps(create_result)
 
     instance_id = create_result.get("new_contract")
+    if not instance_id:
+        return json.dumps(
+            {"status": "error", "error": "No instance ID in create response", "response": create_result}
+        )
     return json.dumps(
         {
             "status": "provisioned",

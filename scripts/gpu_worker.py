@@ -59,7 +59,8 @@ class TTSRequest(BaseModel):
     voice: str = "V1"  # V1/V2/V3 — mapped to speaker profiles
     language: str = "en"  # "en" or "ru"
     scene_num: int = 1
-    sample_rate: int = 24000
+    # Note: sample_rate is NOT accepted here — the model's native rate is used
+    # and returned via the X-Sample-Rate response header.
 
 
 class VideoRequest(BaseModel):
@@ -182,7 +183,7 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 
     wavs, sr = _tts_model.generate_voice_design(
         text=text,
-        voice_instruction=voice_instruction,
+        instruct=voice_instruction,
         language=tts_language,
     )
 
