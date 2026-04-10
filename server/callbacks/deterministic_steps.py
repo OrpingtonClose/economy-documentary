@@ -655,42 +655,83 @@ def deterministic_assembly_callback(
             errors.append(f"Scene {scene_num}: no narration clips")
             continue
 
-        # Get the first video clip's media path
-        first_video = v_clips[0]
-        video_path = ""
-        if first_video.media_reference and hasattr(first_video.media_reference, "target_url"):
-            video_path = first_video.media_reference.target_url
+        # Collect ALL narration clip paths and total duration
+        audio_paths = []
+        total_audio_duration = 0.0
+        for a_clip in a_clips:
+            a_path = ""
+            if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
+                a_path = a_clip.media_reference.target_url
+            if a_path and os.path.exists(a_path):
+                audio_paths.append(a_path)
+            if a_clip.source_range:
+                total_audio_duration += a_clip.source_range.duration.to_seconds()
 
-        # Get the first narration clip's media path and duration
-        first_audio = a_clips[0]
-        audio_path = ""
-        audio_duration = 0
-        if first_audio.media_reference and hasattr(first_audio.media_reference, "target_url"):
-            audio_path = first_audio.media_reference.target_url
-        if first_audio.source_range:
-            audio_duration = first_audio.source_range.duration.to_seconds()
+        # Collect ALL video clip paths
+        video_paths = []
+        for v_clip in v_clips:
+            v_path = ""
+            if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
+                v_path = v_clip.media_reference.target_url
+            if v_path and os.path.exists(v_path):
+                video_paths.append(v_path)
 
-        if not video_path or not audio_path:
-            errors.append(f"Scene {scene_num}: missing media paths")
+        if not video_paths or not audio_paths:
+            errors.append(f"Scene {scene_num}: missing media paths "
+                          f"(video={len(video_paths)}, audio={len(audio_paths)})")
             continue
 
         try:
-            # Trim video to match narration duration
+            # Concatenate narration clips if more than one
+            if len(audio_paths) == 1:
+                combined_audio = audio_paths[0]
+            else:
+                combined_audio = os.path.join(
+                    assembly_dir, f"scene_{scene_num:03d}_narration_combined.wav"
+                )
+                concat_audio_result = json.loads(concat_clips(
+                    clip_paths=",".join(audio_paths),
+                    output_path=combined_audio,
+                ))
+                if "error" in concat_audio_result:
+                    errors.append(f"Scene {scene_num} audio concat: {concat_audio_result['error']}")
+                    continue
+                logger.info("Combined %d narration clips for scene %d",
+                            len(audio_paths), scene_num)
+
+            # Concatenate video clips if more than one
+            if len(video_paths) == 1:
+                combined_video = video_paths[0]
+            else:
+                combined_video = os.path.join(
+                    assembly_dir, f"scene_{scene_num:03d}_video_combined.mp4"
+                )
+                concat_video_result = json.loads(concat_clips(
+                    clip_paths=",".join(video_paths),
+                    output_path=combined_video,
+                ))
+                if "error" in concat_video_result:
+                    errors.append(f"Scene {scene_num} video concat: {concat_video_result['error']}")
+                    continue
+                logger.info("Combined %d video clips for scene %d",
+                            len(video_paths), scene_num)
+
+            # Trim combined video to match total narration duration
             trimmed_path = os.path.join(assembly_dir, f"scene_{scene_num:03d}_trimmed.mp4")
             trim_result = json.loads(trim_clip(
-                input_path=video_path,
+                input_path=combined_video,
                 start_sec=0,
-                duration_sec=audio_duration,
+                duration_sec=total_audio_duration,
                 output_path=trimmed_path,
             ))
             if "error" in trim_result:
                 errors.append(f"Scene {scene_num} trim: {trim_result['error']}")
                 continue
 
-            # Mux audio + video
+            # Mux combined audio + trimmed video
             muxed_path = os.path.join(assembly_dir, f"scene_{scene_num:03d}_muxed.mp4")
             mux_result = json.loads(mux_audio_video(
-                audio_path=audio_path,
+                audio_path=combined_audio,
                 video_path=trimmed_path,
                 output_path=muxed_path,
             ))
