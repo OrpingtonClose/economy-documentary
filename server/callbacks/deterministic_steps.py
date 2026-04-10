@@ -630,122 +630,178 @@ def deterministic_assembly_callback(
                 video_clips_by_scene[sn] = []
             video_clips_by_scene[sn].append(item)
 
-    # Collect narration clips by scene
-    narration_clips_by_scene = {}
+    # Collect narration clips by scene, split by language in dual mode
+    language = state.get("language", "en")
+    is_dual = language == "dual_ru_en"
+
+    narration_clips_by_scene = {}  # primary language (RU in dual mode)
+    alt_narration_clips_by_scene = {}  # alternate language (EN in dual mode)
     for item in narration_track:
         if isinstance(item, otio.schema.Clip):
             meta = item.metadata.get("documentary", {})
             sn = meta.get("scene_num", 0)
-            if sn not in narration_clips_by_scene:
-                narration_clips_by_scene[sn] = []
-            narration_clips_by_scene[sn].append(item)
+            voice = meta.get("voice", "")
 
-    muxed_paths = []
-    errors = []
-    scene_nums = sorted(set(list(video_clips_by_scene.keys()) + list(narration_clips_by_scene.keys())))
-
-    for scene_num in scene_nums:
-        v_clips = video_clips_by_scene.get(scene_num, [])
-        a_clips = narration_clips_by_scene.get(scene_num, [])
-
-        if not v_clips:
-            errors.append(f"Scene {scene_num}: no video clips")
-            continue
-        if not a_clips:
-            errors.append(f"Scene {scene_num}: no narration clips")
-            continue
-
-        # Collect ALL narration clip paths and total duration
-        audio_paths = []
-        total_audio_duration = 0.0
-        for a_clip in a_clips:
-            a_path = ""
-            if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
-                a_path = a_clip.media_reference.target_url
-            if a_path and os.path.exists(a_path):
-                audio_paths.append(a_path)
-            if a_clip.source_range:
-                total_audio_duration += a_clip.source_range.duration.to_seconds()
-
-        # Collect ALL video clip paths
-        video_paths = []
-        for v_clip in v_clips:
-            v_path = ""
-            if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
-                v_path = v_clip.media_reference.target_url
-            if v_path and os.path.exists(v_path):
-                video_paths.append(v_path)
-
-        if not video_paths or not audio_paths:
-            errors.append(f"Scene {scene_num}: missing media paths "
-                          f"(video={len(video_paths)}, audio={len(audio_paths)})")
-            continue
-
-        try:
-            # Concatenate narration clips if more than one
-            if len(audio_paths) == 1:
-                combined_audio = audio_paths[0]
+            if is_dual:
+                # Route to primary (RU) or alternate (EN) based on voice suffix
+                if voice.endswith("_EN"):
+                    if sn not in alt_narration_clips_by_scene:
+                        alt_narration_clips_by_scene[sn] = []
+                    alt_narration_clips_by_scene[sn].append(item)
+                else:
+                    # _RU clips or clips without suffix go to primary
+                    if sn not in narration_clips_by_scene:
+                        narration_clips_by_scene[sn] = []
+                    narration_clips_by_scene[sn].append(item)
             else:
-                combined_audio = os.path.join(
-                    assembly_dir, f"scene_{scene_num:03d}_narration_combined.wav"
-                )
-                concat_audio_result = json.loads(concat_clips(
-                    clip_paths=",".join(audio_paths),
-                    output_path=combined_audio,
-                ))
-                if "error" in concat_audio_result:
-                    errors.append(f"Scene {scene_num} audio concat: {concat_audio_result['error']}")
-                    continue
-                logger.info("Combined %d narration clips for scene %d",
-                            len(audio_paths), scene_num)
+                if sn not in narration_clips_by_scene:
+                    narration_clips_by_scene[sn] = []
+                narration_clips_by_scene[sn].append(item)
 
-            # Concatenate video clips if more than one
-            if len(video_paths) == 1:
-                combined_video = video_paths[0]
-            else:
-                combined_video = os.path.join(
-                    assembly_dir, f"scene_{scene_num:03d}_video_combined.mp4"
-                )
-                concat_video_result = json.loads(concat_clips(
-                    clip_paths=",".join(video_paths),
-                    output_path=combined_video,
-                ))
-                if "error" in concat_video_result:
-                    errors.append(f"Scene {scene_num} video concat: {concat_video_result['error']}")
-                    continue
-                logger.info("Combined %d video clips for scene %d",
-                            len(video_paths), scene_num)
+    def _assemble_language_track(
+        narration_by_scene: dict,
+        video_clips_by_scene: dict,
+        lang_suffix: str,
+    ) -> tuple:
+        """Assemble scenes for a single language track.
 
-            # Trim combined video to match total narration duration
-            trimmed_path = os.path.join(assembly_dir, f"scene_{scene_num:03d}_trimmed.mp4")
-            trim_result = json.loads(trim_clip(
-                input_path=combined_video,
-                start_sec=0,
-                duration_sec=total_audio_duration,
-                output_path=trimmed_path,
-            ))
-            if "error" in trim_result:
-                errors.append(f"Scene {scene_num} trim: {trim_result['error']}")
+        Returns (muxed_paths, errors) tuple.
+        """
+        track_muxed = []
+        track_errors = []
+        scene_nums = sorted(set(
+            list(video_clips_by_scene.keys()) + list(narration_by_scene.keys())
+        ))
+
+        for scene_num in scene_nums:
+            v_clips = video_clips_by_scene.get(scene_num, [])
+            a_clips = narration_by_scene.get(scene_num, [])
+
+            if not v_clips:
+                track_errors.append(f"Scene {scene_num}{lang_suffix}: no video clips")
+                continue
+            if not a_clips:
+                track_errors.append(f"Scene {scene_num}{lang_suffix}: no narration clips")
                 continue
 
-            # Mux combined audio + trimmed video
-            muxed_path = os.path.join(assembly_dir, f"scene_{scene_num:03d}_muxed.mp4")
-            mux_result = json.loads(mux_audio_video(
-                audio_path=combined_audio,
-                video_path=trimmed_path,
-                output_path=muxed_path,
-            ))
-            if "error" in mux_result:
-                errors.append(f"Scene {scene_num} mux: {mux_result['error']}")
+            # Collect ALL narration clip paths and total duration
+            audio_paths = []
+            total_audio_duration = 0.0
+            for a_clip in a_clips:
+                a_path = ""
+                if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
+                    a_path = a_clip.media_reference.target_url
+                if a_path and os.path.exists(a_path):
+                    audio_paths.append(a_path)
+                if a_clip.source_range:
+                    total_audio_duration += a_clip.source_range.duration.to_seconds()
+
+            # Collect ALL video clip paths
+            video_paths = []
+            for v_clip in v_clips:
+                v_path = ""
+                if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
+                    v_path = v_clip.media_reference.target_url
+                if v_path and os.path.exists(v_path):
+                    video_paths.append(v_path)
+
+            if not video_paths or not audio_paths:
+                track_errors.append(
+                    f"Scene {scene_num}{lang_suffix}: missing media "
+                    f"(video={len(video_paths)}, audio={len(audio_paths)})"
+                )
                 continue
 
-            muxed_paths.append(muxed_path)
+            try:
+                # Concatenate narration clips if more than one
+                if len(audio_paths) == 1:
+                    combined_audio = audio_paths[0]
+                else:
+                    combined_audio = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_narration_combined.wav",
+                    )
+                    concat_audio_result = json.loads(concat_clips(
+                        clip_paths=",".join(audio_paths),
+                        output_path=combined_audio,
+                    ))
+                    if "error" in concat_audio_result:
+                        track_errors.append(
+                            f"Scene {scene_num}{lang_suffix} audio concat: "
+                            f"{concat_audio_result['error']}"
+                        )
+                        continue
+                    logger.info("Combined %d narration clips for scene %d%s",
+                                len(audio_paths), scene_num, lang_suffix)
 
-        except Exception as e:
-            errors.append(f"Scene {scene_num} assembly: {e}")
+                # Concatenate video clips if more than one
+                if len(video_paths) == 1:
+                    combined_video = video_paths[0]
+                else:
+                    combined_video = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_video_combined.mp4",
+                    )
+                    concat_video_result = json.loads(concat_clips(
+                        clip_paths=",".join(video_paths),
+                        output_path=combined_video,
+                    ))
+                    if "error" in concat_video_result:
+                        track_errors.append(
+                            f"Scene {scene_num}{lang_suffix} video concat: "
+                            f"{concat_video_result['error']}"
+                        )
+                        continue
+                    logger.info("Combined %d video clips for scene %d%s",
+                                len(video_paths), scene_num, lang_suffix)
 
-    # Concatenate all muxed scenes
-    final_path = os.path.join(output_dir, "final_documentary.mp4")
+                # Trim combined video to match total narration duration
+                trimmed_path = os.path.join(
+                    assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
+                )
+                trim_result = json.loads(trim_clip(
+                    input_path=combined_video,
+                    start_sec=0,
+                    duration_sec=total_audio_duration,
+                    output_path=trimmed_path,
+                ))
+                if "error" in trim_result:
+                    track_errors.append(
+                        f"Scene {scene_num}{lang_suffix} trim: {trim_result['error']}"
+                    )
+                    continue
+
+                # Mux combined audio + trimmed video
+                muxed_path = os.path.join(
+                    assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_muxed.mp4"
+                )
+                mux_result = json.loads(mux_audio_video(
+                    audio_path=combined_audio,
+                    video_path=trimmed_path,
+                    output_path=muxed_path,
+                ))
+                if "error" in mux_result:
+                    track_errors.append(
+                        f"Scene {scene_num}{lang_suffix} mux: {mux_result['error']}"
+                    )
+                    continue
+
+                track_muxed.append(muxed_path)
+
+            except Exception as e:
+                track_errors.append(f"Scene {scene_num}{lang_suffix} assembly: {e}")
+
+        return track_muxed, track_errors
+
+    # Assemble primary language track (RU in dual mode, or the single language)
+    primary_suffix = "_ru" if is_dual else ""
+    muxed_paths, errors = _assemble_language_track(
+        narration_clips_by_scene, video_clips_by_scene, primary_suffix,
+    )
+
+    # Concatenate primary track
+    final_name = "final_documentary_ru.mp4" if is_dual else "final_documentary.mp4"
+    final_path = os.path.join(output_dir, final_name)
     if muxed_paths:
         try:
             concat_result = json.loads(concat_clips(
@@ -753,9 +809,29 @@ def deterministic_assembly_callback(
                 output_path=final_path,
             ))
             if "error" in concat_result:
-                errors.append(f"Concat: {concat_result['error']}")
+                errors.append(f"Concat primary: {concat_result['error']}")
         except Exception as e:
-            errors.append(f"Concat error: {e}")
+            errors.append(f"Concat primary error: {e}")
+
+    # Assemble alternate language track (EN) in dual mode
+    alt_final_path = ""
+    if is_dual and alt_narration_clips_by_scene:
+        alt_muxed, alt_errors = _assemble_language_track(
+            alt_narration_clips_by_scene, video_clips_by_scene, "_en",
+        )
+        errors.extend(alt_errors)
+
+        alt_final_path = os.path.join(output_dir, "final_documentary_en.mp4")
+        if alt_muxed:
+            try:
+                alt_concat_result = json.loads(concat_clips(
+                    clip_paths=",".join(alt_muxed),
+                    output_path=alt_final_path,
+                ))
+                if "error" in alt_concat_result:
+                    errors.append(f"Concat EN: {alt_concat_result['error']}")
+            except Exception as e:
+                errors.append(f"Concat EN error: {e}")
 
     summary_parts = [
         f"Assembly complete: {len(muxed_paths)} scenes assembled.",
@@ -763,9 +839,15 @@ def deterministic_assembly_callback(
     if os.path.exists(final_path):
         probe_result = json.loads(probe_clip(mp4_path=final_path))
         summary_parts.append(
-            f"Final documentary: {final_path} "
+            f"Primary documentary: {final_path} "
             f"(duration={probe_result.get('duration', 0):.1f}s, "
             f"resolution={probe_result.get('resolution', 'unknown')})"
+        )
+    if alt_final_path and os.path.exists(alt_final_path):
+        alt_probe = json.loads(probe_clip(mp4_path=alt_final_path))
+        summary_parts.append(
+            f"Alternate (EN) documentary: {alt_final_path} "
+            f"(duration={alt_probe.get('duration', 0):.1f}s)"
         )
     if errors:
         summary_parts.append(f"Errors: {len(errors)} - {'; '.join(errors[:5])}")
