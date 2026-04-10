@@ -74,8 +74,8 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 8  # distilled model uses 8 steps
-    guidance_scale: float = 1.0  # distilled model uses CFG=1
+    num_inference_steps: int = 30  # dev/full model: 20-50 steps
+    guidance_scale: float = 3.5  # dev/full model: CFG 2.0-5.0 (recommended 3.0-3.5)
 
 
 class HealthResponse(BaseModel):
@@ -246,6 +246,68 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 
 
 # ---------------------------------------------------------------------------
+# Video quality validation helpers
+# ---------------------------------------------------------------------------
+
+# Minimum thresholds for post-render quality check.
+# Brightness: average pixel value (0-255 scale). Below this = too dark.
+# Contrast: std dev of pixel values. Below this = flat/washed out.
+_MIN_BRIGHTNESS = 40.0  # ~16% of max — very conservative, rejects near-black
+_MIN_CONTRAST = 20.0    # rejects flat single-tone frames
+
+
+def _measure_frame_brightness(frames: list) -> float:
+    """Measure average brightness across sampled frames.
+
+    Args:
+        frames: List of PIL Images or numpy arrays from diffusers output.
+
+    Returns:
+        Average brightness on 0-255 scale.
+    """
+    if not frames:
+        return 0.0
+
+    # Sample up to 5 evenly spaced frames
+    n = len(frames)
+    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+    indices = sorted(set(indices))
+
+    total_brightness = 0.0
+    for idx in indices:
+        frame = frames[idx]
+        arr = np.array(frame, dtype=np.float32)
+        total_brightness += arr.mean()
+
+    return total_brightness / len(indices)
+
+
+def _measure_frame_contrast(frames: list) -> float:
+    """Measure average contrast (std dev of pixel values) across sampled frames.
+
+    Args:
+        frames: List of PIL Images or numpy arrays from diffusers output.
+
+    Returns:
+        Average contrast (std dev on 0-255 scale).
+    """
+    if not frames:
+        return 0.0
+
+    n = len(frames)
+    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+    indices = sorted(set(indices))
+
+    total_contrast = 0.0
+    for idx in indices:
+        frame = frames[idx]
+        arr = np.array(frame, dtype=np.float32)
+        total_contrast += arr.std()
+
+    return total_contrast / len(indices)
+
+
+# ---------------------------------------------------------------------------
 # Video generation (LTX-2.3 via diffusers LTX2Pipeline)
 # ---------------------------------------------------------------------------
 
@@ -259,7 +321,7 @@ def _generate_video(
     num_inference_steps: int,
     guidance_scale: float,
 ) -> bytes:
-    """Generate video clip using LTX-2.3 distilled via diffusers.
+    """Generate video clip using LTX-2.3 dev (full) model via diffusers.
 
     Returns raw MP4 bytes.
     Caller must hold _model_lock.
@@ -277,10 +339,8 @@ def _generate_video(
 
     negative_prompt = (
         "worst quality, inconsistent motion, blurry, jittery, distorted, "
-        "static, low resolution"
+        "static, low resolution, dark, underexposed"
     )
-
-    generator = torch.Generator("cpu").manual_seed(seed)
 
     logger.info(
         "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
@@ -288,19 +348,52 @@ def _generate_video(
     )
     t0 = time.time()
 
-    result = _ltx_pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        width=width,
-        height=height,
-        num_frames=num_frames,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        generator=generator,
-    )
+    # Retry loop: regenerate with different seed if frames are too dark
+    max_attempts = 3
+    current_seed = seed
+    video_frames = None
+
+    for attempt in range(1, max_attempts + 1):
+        gen = torch.Generator("cpu").manual_seed(current_seed)
+        result = _ltx_pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_frames=num_frames,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            generator=gen,
+        )
+        video_frames = result.frames[0]
+
+        # Post-render quality check: sample frames and measure brightness
+        brightness = _measure_frame_brightness(video_frames)
+        contrast = _measure_frame_contrast(video_frames)
+        logger.info(
+            "Quality check (attempt %d/%d): brightness=%.1f/255, contrast=%.1f, seed=%d",
+            attempt, max_attempts, brightness, contrast, current_seed,
+        )
+
+        if brightness >= _MIN_BRIGHTNESS and contrast >= _MIN_CONTRAST:
+            break
+
+        if attempt < max_attempts:
+            logger.warning(
+                "Video too dark/flat (brightness=%.1f, contrast=%.1f). "
+                "Retrying with new seed...",
+                brightness, contrast,
+            )
+            current_seed = (current_seed + 7919) % (2**31)  # different seed
+        else:
+            logger.warning(
+                "Video still dark after %d attempts (brightness=%.1f, contrast=%.1f). "
+                "Using best result anyway.",
+                max_attempts, brightness, contrast,
+            )
 
     elapsed = time.time() - t0
-    logger.info("Video generated in %.1fs", elapsed)
+    logger.info("Video generated in %.1fs (seed=%d)", elapsed, current_seed)
 
     # Export to MP4
     output_path = os.path.join(
@@ -308,7 +401,6 @@ def _generate_video(
     )
     os.makedirs(_output_dir, exist_ok=True)
 
-    video_frames = result.frames[0]
     export_to_video(video_frames, output_path, fps=fps)
 
     with open(output_path, "rb") as f:
