@@ -10,22 +10,21 @@ import json
 import logging
 import os
 import subprocess
-from typing import Optional
 
 from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
-_VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 
 
 def _vast_cmd(args: list[str]) -> dict:
     """Run a vastai CLI command and return parsed output."""
-    if not _VAST_API_KEY:
+    api_key = os.environ.get("VAST_API_KEY", "")
+    if not api_key:
         return {"error": "VAST_API_KEY not set"}
 
-    cmd = ["vastai", "--api-key", _VAST_API_KEY] + args
+    cmd = ["vastai", "--api-key", api_key] + args
     try:
         result = subprocess.run(
             cmd,

@@ -12,11 +12,11 @@ Rules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
-from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -141,13 +141,16 @@ def generate_video_clip(
     raw_frames = int(actual_duration * fps)
     num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
 
+    # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
+    seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
+
     payload = json.dumps({
         "prompt": prompt,
         "duration_sec": actual_duration,
         "width": 768,
         "height": 512,
         "num_frames": num_frames,
-        "seed": 42,
+        "seed": seed,
         "num_inference_steps": 8,
         "guidance_scale": 1.0,
     }).encode("utf-8")

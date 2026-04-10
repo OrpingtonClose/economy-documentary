@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import wave
-from typing import Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 

@@ -328,6 +328,9 @@ async def health() -> HealthResponse:
 @app.post("/tts")
 def tts_endpoint(req: TTSRequest):
     """Generate narration audio. Returns WAV bytes."""
+    if not req.text.strip():
+        raise HTTPException(400, "Text must not be empty")
+
     logger.info(
         "TTS request: scene=%d voice=%s lang=%s text=%d chars",
         req.scene_num, req.voice, req.language, len(req.text),
@@ -366,6 +369,13 @@ def tts_endpoint(req: TTSRequest):
 @app.post("/video")
 def video_endpoint(req: VideoRequest):
     """Generate video clip. Returns MP4 bytes."""
+    if not req.prompt.strip():
+        raise HTTPException(400, "Prompt must not be empty")
+    if req.duration_sec <= 0:
+        raise HTTPException(400, "duration_sec must be positive")
+    if req.width <= 0 or req.height <= 0:
+        raise HTTPException(400, "width and height must be positive")
+
     logger.info(
         "Video request: %.1fs, %dx%d, seed=%d, prompt=%.100s...",
         req.duration_sec, req.width, req.height, req.seed, req.prompt,

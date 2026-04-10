@@ -280,9 +280,17 @@ def upload_to_b2(
     """Upload output artifacts to B2."""
     logger.info("Uploading %s -> b2://%s/%s/", local_dir, bucket, prefix)
 
-    # Set B2 env vars
-    env = os.environ.copy()
-    env["B2_APPLICATION_KEY_ID"] = env.get("B2_KEY_ID", "")
+    b2_key_id = os.environ.get("B2_KEY_ID", "")
+    b2_app_key = os.environ.get("B2_APPLICATION_KEY", "")
+    if not b2_key_id or not b2_app_key:
+        raise RuntimeError("B2_KEY_ID and B2_APPLICATION_KEY must be set for upload")
+
+    # Authorize B2 CLI before upload
+    auth_cmd = ["b2", "account", "authorize", b2_key_id, b2_app_key]
+    auth_result = subprocess.run(auth_cmd, capture_output=True, text=True, timeout=30)
+    if auth_result.returncode != 0:
+        logger.error("B2 auth failed: %s", auth_result.stderr[:500])
+        raise RuntimeError("B2 authorization failed")
 
     cmd = [
         "b2", "sync",
@@ -291,7 +299,7 @@ def upload_to_b2(
         f"b2://{bucket}/{prefix}/",
     ]
 
-    result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
     if result.returncode != 0:
         logger.error("B2 upload failed: %s", result.stderr[:500])
         raise RuntimeError("B2 upload failed")
