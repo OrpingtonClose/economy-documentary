@@ -68,16 +68,20 @@ def vastai_cmd(args: list[str], timeout: int = 60) -> dict:
         return {"output": result.stdout.strip()}
 
 
-def provision_vm(gpu_type: str = "RTX_4090", max_price: float = 0.50) -> dict:
-    """Provision a Vast.ai GPU VM and wait for it to be ready."""
-    logger.info("Searching for %s offers (max $%.2f/hr)...", gpu_type, max_price)
+def provision_vm(gpu_type: str = "A100_SXM4", max_price: float = 1.50, min_vram_gb: int = 48) -> dict:
+    """Provision a Vast.ai GPU VM and wait for it to be ready.
+
+    LTX-2.3 with enable_model_cpu_offload() requires 48GB+ VRAM
+    (Gemma3 text encoder alone is ~46GB bf16).
+    """
+    logger.info("Searching for %s offers (min %dGB VRAM, max $%.2f/hr)...", gpu_type, min_vram_gb, max_price)
 
     # Search for offers
     offers = vastai_cmd([
         "search", "offers",
         "--type", "on-demand",
         "--gpu-name", gpu_type,
-        "--min-gpu-ram", "24",
+        "--min-gpu-ram", str(min_vram_gb),
         "--max-dph", str(max_price),
         "--raw",
     ])

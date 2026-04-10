@@ -48,16 +48,19 @@ def _vast_cmd(args: list[str]) -> dict:
 
 
 def provision_gpu_vm(
-    gpu_type: str = "RTX_4090",
-    min_vram_gb: int = 24,
-    max_price: float = 0.50,
+    gpu_type: str = "A100_SXM4",
+    min_vram_gb: int = 48,
+    max_price: float = 1.50,
     tool_context=None,
 ) -> str:
     """Provision a GPU VM via Vast.ai API.
 
+    LTX-2.3 with enable_model_cpu_offload() requires 48GB+ VRAM
+    (Gemma3 text encoder alone is ~46GB bf16).
+
     Args:
-        gpu_type: GPU type to request (e.g., "RTX_4090", "A100").
-        min_vram_gb: Minimum VRAM in GB.
+        gpu_type: GPU type to request (e.g., "A100_SXM4", "L40S").
+        min_vram_gb: Minimum VRAM in GB (must be >= 48 for LTX-2.3).
         max_price: Maximum price per hour in USD.
 
     Returns:
