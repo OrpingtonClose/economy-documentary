@@ -1,0 +1,198 @@
+"""
+Visual Director -- LoopAgent with 3 sub-agents for visual planning.
+
+Architecture::
+
+    LoopAgent("visual_director", max_iterations=3)
+    ├── Agent("content_analyst")        # semantic analysis + LoRA selection
+    ├── Agent("visual_concepter")       # 6-layer cinematic prompts
+    └── Agent("coherence_evaluator")    # quality gate
+
+Content Analyst reads full narration text + WhisperX timing, identifies
+semantic structure, determines visual breakpoints based on CONTENT SHIFTS.
+
+Visual Concepter creates 6-layer cinematic prompts per visual phrase.
+
+Coherence Evaluator checks visual-narration alignment and rates quality.
+If < GOOD, outputs feedback for next iteration. If >= GOOD, escalates.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from google.adk.agents import Agent
+from google.adk.agents.loop_agent import LoopAgent
+
+from agents.model_config import build_model
+from callbacks.timeline_guardian import timeline_guardian_callback
+from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
+
+logger = logging.getLogger(__name__)
+
+# -- Content Analyst -----------------------------------------------------------
+_CONTENT_ANALYST_INSTRUCTION = """\
+You are the Content Analyst for a documentary visual pipeline.
+
+Read the full narration text from {scenes} and word-level timing from
+{whisperx_alignment}. Your job is to understand the SEMANTIC STRUCTURE
+of the narration and determine where visual changes should happen.
+
+ANALYSIS PROCESS:
+1. Read each scene's narration text with WhisperX timing
+2. Identify semantic segments:
+   - Concept explanations (when a new idea is introduced)
+   - Examples (concrete illustrations of abstract ideas)
+   - Transitions (bridges between topics)
+   - Emotional beats (moments of impact, surprise, revelation)
+3. Determine visual breakpoints based on CONTENT SHIFTS, not time
+   - A visual change should happen when the MEANING changes
+   - Longer visual phrases for sustained explanations
+   - Shorter visual phrases for rapid-fire facts or emotional peaks
+4. Query the LoRA catalog to select styles matching each visual phrase:
+   - Use query_lora_catalog(content_type, mood, tags) to find matches
+   - Use get_lora_details(lora_id) for full information
+   - LoRA transitions should be MOTIVATED by narrative shifts
+
+OUTPUT: Per-scene semantic map with:
+- Visual phrase boundaries (start_time, end_time from WhisperX data)
+- Content type for each phrase (explanation, example, transition, emotional)
+- Suggested LoRA style with justification
+- Visual mood keywords
+
+Store the result as JSON in state["content_analysis"].
+"""
+
+content_analyst = Agent(
+    name="content_analyst",
+    model=build_model(thinker=True),
+    instruction=_CONTENT_ANALYST_INSTRUCTION,
+    tools=[query_lora_catalog_tool, get_lora_details_tool],
+    output_key="content_analysis",
+)
+
+# -- Visual Concepter ----------------------------------------------------------
+_VISUAL_CONCEPTER_INSTRUCTION = """\
+You are the Visual Concepter for a documentary pipeline.
+
+Read the content analysis from {content_analysis} which contains:
+- Per-scene semantic maps with visual phrase boundaries
+- Content types and LoRA selections
+- Visual mood keywords
+
+For EACH visual phrase, create a 6-LAYER CINEMATIC PROMPT:
+1. SUBJECT: What is the primary visual focus? (person, object, concept visualization)
+2. ACTION: What movement or change is happening? (camera or subject motion)
+3. ENVIRONMENT: Where does this take place? (setting, backdrop, context)
+4. LIGHTING: What is the light quality? (natural, dramatic, soft, harsh, neon)
+5. CAMERA: What camera style? (handheld, steadicam, crane, macro, wide, close-up)
+6. MOOD: What emotional quality? (tense, warm, cold, energetic, contemplative)
+
+RULES:
+- Each prompt must DEEPLY CONNECT to what the narration communicates at that moment
+- No two consecutive visual phrases should have the same camera style
+- No two consecutive visual phrases should have the same environment
+- LoRA selection per phrase based on Content Analyst's semantic understanding
+- Duration of each visual phrase comes from the content analysis timing
+
+OUTPUT: JSON array of visual concepts, each containing:
+- scene_num, phrase_idx, start_time, end_time, duration
+- prompt (6-layer cinematic description as single string)
+- lora_id, lora_weight
+- Camera style, environment, mood
+
+Store the result in state["visual_concepts"].
+"""
+
+visual_concepter = Agent(
+    name="visual_concepter",
+    model=build_model(),
+    instruction=_VISUAL_CONCEPTER_INSTRUCTION,
+    output_key="visual_concepts",
+)
+
+# -- Coherence Evaluator -------------------------------------------------------
+_COHERENCE_EVALUATOR_INSTRUCTION = """\
+You are the Coherence Evaluator for a documentary visual pipeline.
+
+Read the visual concepts from {visual_concepts} and the content analysis
+from {content_analysis}.
+
+EVALUATION CRITERIA:
+
+1. NARRATIVE-VISUAL CONNECTION:
+   Does each visual deeply connect to what the narration communicates at that
+   exact moment? A clip about "rising inflation" shouldn't show generic cityscapes.
+
+2. LORA TRANSITION MOTIVATION:
+   Are LoRA style transitions motivated by narrative shifts? Style changes
+   should feel intentional, not random. Check that transition_affinity rules
+   from the LoRA catalog are respected.
+
+3. VISUAL VARIETY:
+   - No consecutive visual phrases with the same camera style
+   - No consecutive visual phrases with the same environment
+   - Diverse range of perspectives throughout
+
+4. PROMPT QUALITY:
+   - All 6 layers present in each prompt
+   - Prompts are specific enough for video generation (no vague descriptions)
+   - Durations are reasonable (2-15 seconds per visual phrase)
+
+RATING:
+- POOR: Major disconnects between narration and visuals
+- FAIR: Some connection but lacks intentionality
+- GOOD: Strong connection with minor issues
+- EXCELLENT: Every visual choice is motivated and compelling
+
+If POOR or FAIR:
+- Output specific feedback for each problematic visual phrase
+- Explain what the visual SHOULD convey vs what it currently conveys
+
+If GOOD or EXCELLENT:
+- Output "APPROVED: true"
+- Set state["escalate"] = true to signal loop completion
+
+Store feedback in state["coherence_evaluation"].
+"""
+
+
+def _check_coherence_approval(callback_context):
+    """After evaluator: check if visuals are approved to break loop."""
+    state = callback_context.state
+    eval_output = state.get("coherence_evaluation", "")
+    if "APPROVED: true" in str(eval_output):
+        state["escalate"] = True
+        logger.info("Visual concepts approved by coherence evaluator")
+    return None
+
+
+coherence_evaluator = Agent(
+    name="coherence_evaluator",
+    model=build_model(vision=True),
+    instruction=_COHERENCE_EVALUATOR_INSTRUCTION,
+    output_key="coherence_evaluation",
+    after_agent_callback=_check_coherence_approval,
+)
+
+
+def _visual_phase_setup(callback_context):
+    """Set pipeline phase before visual director runs."""
+    callback_context.state["pipeline_phase"] = "visual_direction"
+    return None
+
+
+# -- Visual Director (LoopAgent) -----------------------------------------------
+visual_director = LoopAgent(
+    name="visual_director",
+    description=(
+        "Iterative visual planning loop: Content Analyst identifies semantic "
+        "structure and selects LoRAs, Visual Concepter creates 6-layer prompts, "
+        "Coherence Evaluator checks narrative-visual alignment. Loops until "
+        "GOOD or EXCELLENT rating."
+    ),
+    max_iterations=3,
+    sub_agents=[content_analyst, visual_concepter, coherence_evaluator],
+    before_agent_callback=_visual_phase_setup,
+    after_agent_callback=timeline_guardian_callback,
+)

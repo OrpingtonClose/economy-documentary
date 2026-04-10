@@ -29,11 +29,12 @@ log = logging.getLogger("enrichment")
 
 
 def _read_key(filename: str) -> str:
-    path = f"/Volumes/Shared/api_keys/{filename}"
-    try:
-        return open(path).read().strip()
-    except FileNotFoundError:
-        return os.getenv(filename.replace(".txt", "").upper(), "")
+    """Read API key from environment variable.
+
+    Env var name is derived from filename: 'perplexity_api_key.txt' -> PERPLEXITY_API_KEY
+    """
+    env_name = filename.replace(".txt", "").upper()
+    return os.getenv(env_name, "")
 
 
 PERPLEXITY_KEY = _read_key("perplexity_api_key.txt")
@@ -42,10 +43,10 @@ TAVILY_KEY = _read_key("tavily_api_key.txt")
 FRED_KEY = _read_key("fred_api_key.txt")
 WOLFRAM_KEY = _read_key("wolfram_alpha_api.txt")
 JINA_KEY = _read_key("jina_api_key.txt")
-BRAVE_KEY = _read_key("brave_search_api_key.txt") if os.path.exists("/Volumes/Shared/api_keys/brave_search_api_key.txt") else ""
+BRAVE_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 
 # ── Transcript corpus (loaded once, searched per-claim) ───────
-TRANSCRIPT_DIR = Path("/tmp/economy-documentary/corpus/transcripts")
+TRANSCRIPT_DIR = Path(os.environ.get("TRANSCRIPT_DIR", "/tmp/documentary-pipeline/corpus/transcripts"))
 _transcript_index: list[dict] = []  # [{video_id, channel, title, text, words_set}]
 _transcript_loaded = False
 
@@ -55,7 +56,7 @@ def _load_transcripts():
     if _transcript_loaded:
         return
     import duckdb
-    catalog_path = Path("/tmp/economy-documentary/corpus/catalog.parquet")
+    catalog_path = Path(os.environ.get("CORPUS_DIR", "/tmp/documentary-pipeline/corpus")) / "catalog.parquet"
     # Build video_id -> metadata map from catalog
     vid_meta = {}
     if catalog_path.exists():

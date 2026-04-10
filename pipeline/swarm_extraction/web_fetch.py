@@ -24,15 +24,16 @@ from .llm import _get_client
 log = logging.getLogger("enrichment")
 
 # ---------------------------------------------------------------------------
-# Key-reading helper  (reads from /Volumes/Shared/api_keys/ with env fallback)
+# Key-reading helper  (reads from environment variables)
 # ---------------------------------------------------------------------------
 
 def _read_key(filename: str) -> str:
-    path = f"/Volumes/Shared/api_keys/{filename}"
-    try:
-        return open(path).read().strip()
-    except FileNotFoundError:
-        return os.getenv(filename.replace(".txt", "").upper(), "")
+    """Read API key from environment variable.
+
+    Env var name is derived from filename: 'brightdata_key.txt' -> BRIGHTDATA_KEY
+    """
+    env_name = filename.replace(".txt", "").upper()
+    return os.getenv(env_name, "")
 
 
 # ---------------------------------------------------------------------------
@@ -41,14 +42,14 @@ def _read_key(filename: str) -> str:
 WEBPAGE_MAX_CHARS = 15000
 
 BRIGHT_DATA_API_KEY = _read_key("brightdata_key.txt")
-BRIGHT_DATA_CUSTOMER_ID = "hl_dc044bf4"
-BRIGHT_DATA_ZONE = "mcp_unlocker"
+BRIGHT_DATA_CUSTOMER_ID = os.getenv("BRIGHTDATA_CUSTOMER_ID", "hl_dc044bf4")
+BRIGHT_DATA_ZONE = os.getenv("BRIGHTDATA_ZONE", "mcp_unlocker")
 
 _oxylab_raw = _read_key("oxylab_api.txt")
 if ":" in _oxylab_raw:
     OXYLABS_USERNAME, OXYLABS_PASSWORD = _oxylab_raw.split(":", 1)
 else:
-    OXYLABS_USERNAME = _oxylab_raw
+    OXYLABS_USERNAME = os.getenv("OXYLABS_USERNAME", _oxylab_raw)
     OXYLABS_PASSWORD = os.getenv("OXYLABS_PASSWORD", "")
 
 # Playwright JS rendering: auto-detected at import time

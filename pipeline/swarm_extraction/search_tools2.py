@@ -42,25 +42,26 @@ log = logging.getLogger("enrichment")
 # ── API key helpers ──────────────────────────────────────────────
 
 def _read_key(filename: str) -> str:
-    path = f"/Volumes/Shared/api_keys/{filename}"
-    try:
-        return open(path).read().strip()
-    except FileNotFoundError:
-        return os.getenv(filename.replace(".txt", "").upper(), "")
+    """Read API key from environment variable.
+
+    Env var name is derived from filename: 'brightdata_key.txt' -> BRIGHTDATA_KEY
+    """
+    env_name = filename.replace(".txt", "").upper()
+    return os.getenv(env_name, "")
 
 
 BRIGHT_DATA_API_KEY = _read_key("brightdata_key.txt")
-BRIGHT_DATA_CUSTOMER_ID = "hl_dc044bf4"
-BRIGHT_DATA_ZONE = "mcp_unlocker"
+BRIGHT_DATA_CUSTOMER_ID = os.getenv("BRIGHTDATA_CUSTOMER_ID", "hl_dc044bf4")
+BRIGHT_DATA_ZONE = os.getenv("BRIGHTDATA_ZONE", "mcp_unlocker")
 
-# Oxylabs — try multiple filenames
+# Oxylabs — try multiple env var names
 OXYLABS_CREDS = _read_key("oxylab_api.txt") or _read_key("oxylabs_residential_proxy.txt")
 # Expect "user:pass" format
 if ":" in OXYLABS_CREDS:
     OXYLABS_USERNAME, OXYLABS_PASSWORD = OXYLABS_CREDS.split(":", 1)
 else:
-    OXYLABS_USERNAME = OXYLABS_CREDS
-    OXYLABS_PASSWORD = ""
+    OXYLABS_USERNAME = os.getenv("OXYLABS_USERNAME", OXYLABS_CREDS)
+    OXYLABS_PASSWORD = os.getenv("OXYLABS_PASSWORD", "")
 
 APIFY_KEY = _read_key("apify_key.txt")
 
