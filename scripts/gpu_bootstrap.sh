@@ -24,18 +24,18 @@ cd /workspace/pipeline
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install PyTorch with CUDA
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# Install PyTorch with CUDA (pinned for reproducible builds)
+pip install 'torch>=2.3.0,<2.5.0' 'torchvision>=0.18.0,<0.20.0' 'torchaudio>=2.3.0,<2.5.0' --index-url https://download.pytorch.org/whl/cu121
 
 # Install diffusers and dependencies for LTX-2.3
 pip install \
-    diffusers>=0.31.0 \
-    transformers>=4.44.0 \
-    accelerate>=0.33.0 \
-    safetensors \
-    sentencepiece \
-    soundfile \
-    numpy
+    'diffusers>=0.31.0,<0.35.0' \
+    'transformers>=4.44.0,<4.50.0' \
+    'accelerate>=0.33.0,<0.40.0' \
+    'safetensors>=0.4.0,<1.0.0' \
+    'sentencepiece>=0.2.0,<1.0.0' \
+    'soundfile>=0.12.0,<1.0.0' \
+    'numpy>=1.26.0,<2.0.0'
 
 # Pre-download LTX-2.3 model (if env var set)
 if [ -n "${LTX_MODEL_ID:-}" ]; then

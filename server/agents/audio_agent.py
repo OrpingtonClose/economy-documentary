@@ -14,7 +14,7 @@ from google.adk.agents import Agent
 
 from agents.model_config import build_model
 from callbacks.timeline_guardian import timeline_guardian_callback
-from tools.otio_tools import add_narration_clip_tool, get_timeline_status_tool
+from tools.otio_tools import add_narration_clip_tool, create_timeline_tool, get_timeline_status_tool
 from tools.tts_tools import generate_narration_tool
 from tools.whisperx_tools import align_narration_tool
 
@@ -60,6 +60,7 @@ audio_agent = Agent(
         generate_narration_tool,
         align_narration_tool,
         add_narration_clip_tool,
+        create_timeline_tool,
         get_timeline_status_tool,
     ],
     output_key="whisperx_alignment",

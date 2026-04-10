@@ -71,8 +71,8 @@ def generate_dashboard_html(data: dict) -> str:
     # Event stream (last 50)
     event_items = ""
     for e in events[-50:]:
-        etype = e.get("type", "")
-        event_items += f'<div class="event event-{etype}">{json.dumps(e)}</div>\n'
+        etype = html.escape(str(e.get("type", "")))
+        event_items += f'<div class="event event-{etype}">{html.escape(json.dumps(e))}</div>\n'
 
     status_color = "#4caf50" if status == "completed" else "#ff9800"
 

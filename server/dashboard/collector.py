@@ -192,10 +192,50 @@ class PipelineCollector:
                 "total_tools": len(self._tools),
                 "total_llm_calls": len(self._llm_calls),
                 "force_end": self._force_end,
-                "recent_events": [
-                    e for e in self._events[-10:]
-                ],
+                "recent_events": self._events[-10:],
             }
+
+    def _build_report(self) -> dict:
+        """Build the full report dict (must be called under ``self._lock``)."""
+        now = time.time()
+        elapsed = now - self.start_time
+        return {
+            "run_id": self.run_id,
+            "topic": self.topic,
+            "status": self.status,
+            "start_time": self.start_time,
+            "end_time": self.end_time or now,
+            "elapsed_sec": round(elapsed, 1),
+            "phases": [
+                {
+                    "name": p.name,
+                    "status": p.status,
+                    "duration": round(
+                        (p.end_time or now) - p.start_time, 2
+                    ),
+                }
+                for p in self._phases
+            ],
+            "tools": [
+                {
+                    "tool": t.tool_name,
+                    "agent": t.agent,
+                    "duration": round(t.duration, 2),
+                    "result_chars": t.result_chars,
+                }
+                for t in self._tools
+            ],
+            "llm_calls": [
+                {
+                    "agent": le.agent,
+                    "estimated_tokens": le.estimated_tokens,
+                    "output_tokens": le.output_tokens,
+                }
+                for le in self._llm_calls
+            ],
+            "events": list(self._events),
+            "force_end": self._force_end,
+        }
 
     def to_report_dict(self) -> dict:
         """Full dict for HTML reports without changing collector status.
@@ -204,84 +244,11 @@ class PipelineCollector:
         safe to call on active collectors for live HTML reports.
         """
         with self._lock:
-            elapsed = time.time() - self.start_time
-            return {
-                "run_id": self.run_id,
-                "topic": self.topic,
-                "status": self.status,
-                "start_time": self.start_time,
-                "end_time": self.end_time or time.time(),
-                "elapsed_sec": round(elapsed, 1),
-                "phases": [
-                    {
-                        "name": p.name,
-                        "status": p.status,
-                        "duration": round(p.end_time - p.start_time, 2)
-                        if p.end_time
-                        else round(time.time() - p.start_time, 2),
-                    }
-                    for p in self._phases
-                ],
-                "tools": [
-                    {
-                        "tool": t.tool_name,
-                        "agent": t.agent,
-                        "duration": round(t.duration, 2),
-                        "result_chars": t.result_chars,
-                    }
-                    for t in self._tools
-                ],
-                "llm_calls": [
-                    {
-                        "agent": l.agent,
-                        "estimated_tokens": l.estimated_tokens,
-                        "output_tokens": l.output_tokens,
-                    }
-                    for l in self._llm_calls
-                ],
-                "events": list(self._events),
-                "force_end": self._force_end,
-            }
+            return self._build_report()
 
     def finalize(self, status: str = "completed") -> dict:
-        """Full dict for JSON/HTML reports."""
+        """Mark run as completed and return full report dict."""
         with self._lock:
             self.end_time = time.time()
             self.status = status
-            return {
-                "run_id": self.run_id,
-                "topic": self.topic,
-                "status": status,
-                "start_time": self.start_time,
-                "end_time": self.end_time,
-                "elapsed_sec": round(self.end_time - self.start_time, 1),
-                "phases": [
-                    {
-                        "name": p.name,
-                        "status": p.status,
-                        "duration": round(p.end_time - p.start_time, 2)
-                        if p.end_time
-                        else 0,
-                    }
-                    for p in self._phases
-                ],
-                "tools": [
-                    {
-                        "tool": t.tool_name,
-                        "agent": t.agent,
-                        "duration": round(t.duration, 2),
-                        "result_chars": t.result_chars,
-                    }
-                    for t in self._tools
-                ],
-                "llm_calls": [
-                    {
-                        "agent": l.agent,
-                        "estimated_tokens": l.estimated_tokens,
-                        "output_tokens": l.output_tokens,
-                    }
-                    for l in self._llm_calls
-                ],
-                "events": self._events,
-                "force_end": self._force_end,
-            }
+            return self._build_report()

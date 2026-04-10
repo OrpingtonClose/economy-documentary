@@ -29,14 +29,22 @@ REQUIRED_TRACKS = {"V1_Video", "A1_Narration", "A2_Music"}
 
 
 def _load_timeline(state: dict):
-    """Load the OTIO timeline from the pipeline state."""
+    """Load the OTIO timeline from the pipeline state.
+
+    Acquires the ``_otio_lock`` from :mod:`tools.otio_tools` so that reads
+    are serialised against concurrent tool-call writes.  The returned
+    timeline object is a *snapshot* — safe to inspect after the lock is
+    released.
+    """
     try:
         import opentimelineio as otio
+        from tools.otio_tools import _otio_lock
 
         timeline_path = state.get("_timeline_path", "")
         if not timeline_path or not os.path.exists(timeline_path):
             return None
-        return otio.adapters.read_from_file(timeline_path)
+        with _otio_lock:
+            return otio.adapters.read_from_file(timeline_path)
     except Exception as e:
         logger.error("Failed to load OTIO timeline: %s", e)
         return None

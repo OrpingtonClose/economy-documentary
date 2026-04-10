@@ -22,14 +22,25 @@ _catalog: Optional[dict] = None
 
 
 def _load_catalog() -> dict:
-    """Load the LoRA catalog from JSON. Cached after first load."""
+    """Load the LoRA catalog from JSON. Cached after first load.
+
+    Returns an empty dict (with a logged warning) if the catalog file is
+    missing or contains invalid JSON, so downstream code never crashes.
+    """
     global _catalog
     if _catalog is not None:
         return _catalog
 
-    with open(_CATALOG_PATH, "r") as f:
-        _catalog = json.load(f)
-    logger.info("Loaded LoRA catalog: %d entries", len(_catalog))
+    try:
+        with open(_CATALOG_PATH, "r") as f:
+            _catalog = json.load(f)
+        logger.info("Loaded LoRA catalog: %d entries", len(_catalog))
+    except FileNotFoundError:
+        logger.warning("LoRA catalog not found at %s — using empty catalog", _CATALOG_PATH)
+        _catalog = {}
+    except json.JSONDecodeError as exc:
+        logger.warning("LoRA catalog contains invalid JSON (%s) — using empty catalog", exc)
+        _catalog = {}
     return _catalog
 
 

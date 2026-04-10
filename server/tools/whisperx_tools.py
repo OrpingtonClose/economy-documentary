@@ -149,7 +149,7 @@ def align_narration(
                 **alignment,
             }
         )
-    except Exception as e:
+    except (RuntimeError, ValueError, OSError) as e:
         logger.error("WhisperX alignment failed: %s", e)
         alignment = _generate_synthetic_alignment(text)
         return json.dumps(
