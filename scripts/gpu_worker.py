@@ -384,6 +384,7 @@ def _generate_video(
             best_score = score
 
         if brightness >= _MIN_BRIGHTNESS and contrast >= _MIN_CONTRAST:
+            best_frames = candidate_frames
             break
 
         if attempt < max_attempts:
