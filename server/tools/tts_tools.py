@@ -52,6 +52,7 @@ def generate_narration(
     voice_role: str,
     text: str,
     output_dir: str = "",
+    language: str = "",
     tool_context=None,
 ) -> str:
     """Generate narration WAV file using Qwen3-TTS.
@@ -61,6 +62,8 @@ def generate_narration(
         voice_role: Voice role identifier (e.g., "V1", "V2", "V3").
         text: Narration text to synthesize.
         output_dir: Optional output directory override.
+        language: Explicit language code ("en" or "ru"). If empty,
+                  inferred from voice_role suffix (e.g., "V1_RU" -> "ru").
 
     Returns:
         JSON string with WAV path and duration.
@@ -109,15 +112,16 @@ def generate_narration(
             }
         )
 
-    # Determine language from voice_role suffix (e.g., "V1_RU" -> "ru")
-    lang = "en"
+    # Determine language: explicit param takes priority, then suffix convention
     voice = voice_role
     if voice_role.endswith("_RU"):
-        lang = "ru"
         voice = voice_role[:-3]  # Strip _RU suffix
+        lang = language if language else "ru"
     elif voice_role.endswith("_EN"):
-        lang = "en"
         voice = voice_role[:-3]  # Strip _EN suffix
+        lang = language if language else "en"
+    else:
+        lang = language if language else "en"
 
     payload = json.dumps({
         "text": text,

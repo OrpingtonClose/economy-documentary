@@ -44,7 +44,7 @@ logger = logging.getLogger("gpu_worker")
 app = FastAPI(title="Documentary GPU Worker")
 
 # ---------------------------------------------------------------------------
-# Global model handles — only ONE model in VRAM at a time (24 GB RTX 4090)
+# Global model handles — model swapping for VRAM management
 # ---------------------------------------------------------------------------
 _tts_model = None  # Qwen3TTSModel instance
 _ltx_pipe = None
@@ -141,7 +141,7 @@ def _unload_ltx():
 def _load_tts():
     """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
 
-    Unloads LTX first if it's on GPU (only one model at a time on 24GB).
+    Unloads LTX first if it's on GPU to free VRAM.
     """
     global _tts_model, _active_model
     if _tts_model is not None:
@@ -170,10 +170,10 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
-    Unloads TTS first if it's on GPU (only one model at a time on 24GB).
-    Uses enable_model_cpu_offload() to fit the full pipeline
-    (Gemma3 text encoder + LTX2 transformer + VAE) on 24 GB VRAM
-    by keeping idle components in CPU RAM.
+    Unloads TTS first if it's on GPU to free VRAM.
+    Uses enable_model_cpu_offload() to keep idle components in CPU RAM
+    while the active component runs on GPU. Requires 48GB+ VRAM
+    for the Gemma3 text encoder (~24GB bf16 weights).
     """
     global _ltx_pipe, _active_model
     if _ltx_pipe is not None:
@@ -196,12 +196,10 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Sequential CPU offload: moves individual layers on/off GPU.
-    # The Gemma3 text encoder (~46GB bf16) is too large for 24GB VRAM
-    # with enable_model_cpu_offload() (which moves entire components).
-    # Sequential offload keeps only one layer on GPU at a time — slower
-    # but fits within 24GB.
-    _ltx_pipe.enable_sequential_cpu_offload()
+    # Model-level CPU offload: entire components move on/off GPU.
+    # Requires 48GB+ VRAM (A100 80GB / L40S) to fit the Gemma3 text
+    # encoder as a single component. Much faster than sequential offload.
+    _ltx_pipe.enable_model_cpu_offload()
     _active_model = "ltx"
 
     logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
@@ -436,7 +434,6 @@ def load_models(model: str = "tts"):
 
     Args:
         model: Which model to load — "tts" or "ltx". Default: "tts".
-               Only one model fits in 24GB VRAM at a time.
     """
     results = {}
 

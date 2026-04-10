@@ -64,7 +64,8 @@ pip install --no-cache-dir \
     'uvicorn>=0.20.0' \
     'pydantic>=2.0.0' \
     'b2>=4.0.0' \
-    'qwen-tts>=0.1.0'
+    'qwen-tts>=0.1.0' \
+    'opencv-python>=4.8.0'
 
 # Install sox for qwen-tts audio processing
 apt-get install -y sox libsox-dev
