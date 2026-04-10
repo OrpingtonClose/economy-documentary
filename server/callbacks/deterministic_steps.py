@@ -31,6 +31,64 @@ logger = logging.getLogger(__name__)
 # JSON extraction helper
 # ---------------------------------------------------------------------------
 
+def _repair_json_text(text: str) -> Optional[str]:
+    """Attempt to repair common LLM JSON generation errors.
+
+    Common error: LLM drops the opening ``{`` and ``"voice": "V3",`` for a
+    voice block inside a ``voices`` array, leaving a bare ``"text":`` key
+    after a ``},`` that closed the previous object.  We detect this by
+    looking for ``},\n`` followed by whitespace + ``"key":`` where the key
+    isn't starting a new object, and wrap it in ``{``...``}``.
+    """
+    # Fix: bare key-value after closing brace in an array context.
+    # Pattern: }, <newline+spaces> "key": value ... without an opening {
+    # We look for },\n<spaces>"<key>" and insert { before the key.
+    repaired = re.sub(
+        r'(},\s*\n)(\s*)("(?:text|tone|voice)"\s*:)',
+        r'\1\2{\n\2  \3',
+        text,
+    )
+
+    # If we inserted an opening {, we also need to close it before the next
+    # }, or before ] that closes the array.  This is tricky in general, so
+    # we take a simpler approach: try parsing, and if it still fails, try
+    # inserting } before the next }.
+    if repaired != text:
+        # Try parsing the repaired text directly first
+        try:
+            json.loads(repaired)
+            return repaired
+        except json.JSONDecodeError:
+            pass
+
+        # More aggressive: find unmatched { and close them
+        # by inserting } before the next line that starts with }
+        lines = repaired.split('\n')
+        fixed_lines = []
+        brace_depth = 0
+        for line in lines:
+            stripped = line.strip()
+            # Count braces in this line
+            for ch in stripped:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+            fixed_lines.append(line)
+
+            # If we see a line ending with a comma or closing brace
+            # and brace_depth suggests we have an unclosed object,
+            # check if the next meaningful content closes the array
+        result = '\n'.join(fixed_lines)
+        try:
+            json.loads(result)
+            return result
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 def extract_json_array(text: str) -> Optional[list]:
     """Extract a JSON array from text that may contain preamble/markdown fences.
 
@@ -39,6 +97,7 @@ def extract_json_array(text: str) -> Optional[list]:
     - JSON wrapped in ```json ... ``` fences
     - JSON preceded by preamble text ("I apologize...", "Here are the scenes:")
     - Multiple JSON blocks (returns the first valid array)
+    - Common LLM JSON errors (missing object wrappers) via repair
     """
     if not text or not text.strip():
         return None
@@ -54,8 +113,9 @@ def extract_json_array(text: str) -> Optional[list]:
     # Strategy 2: Extract from markdown code fences (handle optional newline)
     fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
+        inner = match.group(1).strip()
         try:
-            result = json.loads(match.group(1).strip())
+            result = json.loads(inner)
             if isinstance(result, list):
                 return result
             # If the fenced content is a dict with an array value, try extracting it
@@ -68,6 +128,16 @@ def extract_json_array(text: str) -> Optional[list]:
                     if isinstance(v, list):
                         return v
         except (json.JSONDecodeError, ValueError):
+            # Try repairing common LLM errors before giving up
+            repaired = _repair_json_text(inner)
+            if repaired:
+                try:
+                    result = json.loads(repaired)
+                    if isinstance(result, list):
+                        logger.info("Extracted JSON array after repair")
+                        return result
+                except (json.JSONDecodeError, ValueError):
+                    pass
             continue
 
     # Strategy 3: Find the first [ ... ] block in the text
@@ -82,11 +152,22 @@ def extract_json_array(text: str) -> Optional[list]:
         elif ch == ']':
             bracket_depth -= 1
             if bracket_depth == 0 and start_idx is not None:
+                candidate = text[start_idx:i + 1]
                 try:
-                    result = json.loads(text[start_idx:i + 1])
+                    result = json.loads(candidate)
                     if isinstance(result, list):
                         return result
                 except (json.JSONDecodeError, ValueError):
+                    # Try repair
+                    repaired = _repair_json_text(candidate)
+                    if repaired:
+                        try:
+                            result = json.loads(repaired)
+                            if isinstance(result, list):
+                                logger.info("Extracted JSON array after repair (strategy 3)")
+                                return result
+                        except (json.JSONDecodeError, ValueError):
+                            pass
                     start_idx = None
                     continue
 
@@ -155,6 +236,10 @@ def clean_scenes_after_scenario(
     to both state and backup files on disk.  This callback reads from
     whichever source has the data.
 
+    Falls back to ``_approved_scenes_backup`` if the current scenes
+    state cannot be parsed (e.g. the LoopAgent re-ran the generator
+    after approval and the second output was malformed).
+
     If the scenario stage was already completed in B2, this is a no-op
     (state was restored from B2 on startup).
     """
@@ -174,15 +259,28 @@ def clean_scenes_after_scenario(
     else:
         logger.info("visual_style present in state (%d chars)", len(raw_vs))
 
-    # --- Try state first, then backup file ---------------------------------
+    # --- Try state first, then disk backup, then in-memory backup ----------
     raw_str = str(state.get("scenes", ""))
     scenes = extract_json_array(raw_str) if raw_str.strip() not in ("", "[]") else None
 
     if not scenes and os.path.exists(scenes_file):
-        logger.info("State scenes empty/invalid, recovering from backup %s", scenes_file)
+        logger.info("State scenes empty/invalid, recovering from disk backup %s", scenes_file)
         with open(scenes_file) as f:
             backup_data = f.read()
         scenes = extract_json_array(backup_data)
+
+    if not scenes:
+        # Try the in-memory backup saved by _check_scenario_approval
+        backup = state.get("_approved_scenes_backup", "")
+        if backup:
+            backup_scenes = extract_json_array(str(backup))
+            if backup_scenes:
+                scenes = backup_scenes
+                logger.warning(
+                    "Used approved scenes backup: %d scenes "
+                    "(current state had malformed JSON)",
+                    len(backup_scenes),
+                )
 
     if scenes:
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
@@ -202,7 +300,8 @@ def clean_scenes_after_scenario(
             upload_stage_marker("scenario")
     else:
         logger.error(
-            "Failed to extract scenes from state (len=%d) and backup (exists=%s)",
+            "Failed to extract scenes from state (len=%d), disk backup (exists=%s), "
+            "and in-memory backup",
             len(raw_str), os.path.exists(scenes_file),
         )
 
