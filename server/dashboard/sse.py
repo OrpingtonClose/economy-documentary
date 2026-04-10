@@ -86,8 +86,7 @@ async def dashboard_html(run_id: str):
     # Try in-memory collector first
     collectors = get_all_active_collectors()
     if run_id in collectors:
-        data = collectors[run_id].snapshot()
-        data["events"] = collectors[run_id]._events  # full event list for report
+        data = collectors[run_id].to_report_dict()
         return HTMLResponse(generate_dashboard_html(data))
 
     # Fall back to event store

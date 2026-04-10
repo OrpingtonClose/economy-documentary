@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import struct
 import wave
 from typing import Optional
 
@@ -42,8 +41,8 @@ def _generate_silent_wav(output_path: str, duration: float) -> None:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(_SAMPLE_RATE)
-        # Write silence (zeros)
-        silent_data = struct.pack("<" + "h" * num_frames, *([0] * num_frames))
+        # Write silence — 16-bit PCM silence is simply zero bytes
+        silent_data = b'\x00' * (num_frames * 2)
         wf.writeframes(silent_data)
 
 

@@ -197,6 +197,52 @@ class PipelineCollector:
                 ],
             }
 
+    def to_report_dict(self) -> dict:
+        """Full dict for HTML reports without changing collector status.
+
+        Unlike finalize(), this does not mark the run as completed —
+        safe to call on active collectors for live HTML reports.
+        """
+        with self._lock:
+            elapsed = time.time() - self.start_time
+            return {
+                "run_id": self.run_id,
+                "topic": self.topic,
+                "status": self.status,
+                "start_time": self.start_time,
+                "end_time": self.end_time or time.time(),
+                "elapsed_sec": round(elapsed, 1),
+                "phases": [
+                    {
+                        "name": p.name,
+                        "status": p.status,
+                        "duration": round(p.end_time - p.start_time, 2)
+                        if p.end_time
+                        else round(time.time() - p.start_time, 2),
+                    }
+                    for p in self._phases
+                ],
+                "tools": [
+                    {
+                        "tool": t.tool_name,
+                        "agent": t.agent,
+                        "duration": round(t.duration, 2),
+                        "result_chars": t.result_chars,
+                    }
+                    for t in self._tools
+                ],
+                "llm_calls": [
+                    {
+                        "agent": l.agent,
+                        "estimated_tokens": l.estimated_tokens,
+                        "output_tokens": l.output_tokens,
+                    }
+                    for l in self._llm_calls
+                ],
+                "events": list(self._events),
+                "force_end": self._force_end,
+            }
+
     def finalize(self, status: str = "completed") -> dict:
         """Full dict for JSON/HTML reports."""
         with self._lock:

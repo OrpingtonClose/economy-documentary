@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from typing import Optional
 
 import opentimelineio as otio
@@ -25,6 +26,10 @@ TRACK_A1 = "A1_Narration"
 TRACK_A2 = "A2_Music"
 
 _TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+
+# Module-level lock to protect OTIO file read-modify-write cycles against
+# concurrent tool calls (parallel_tool_calls=True is the default).
+_otio_lock = threading.Lock()
 
 
 def _ensure_dir(path: str) -> None:
@@ -51,38 +56,39 @@ def create_timeline(
     Returns:
         JSON string with timeline path and structure summary.
     """
-    timeline = otio.schema.Timeline(name=f"Documentary: {topic}")
+    with _otio_lock:
+        timeline = otio.schema.Timeline(name=f"Documentary: {topic}")
 
-    # Create video track with gaps for each scene
-    video_track = otio.schema.Track(name=TRACK_V1, kind=otio.schema.TrackKind.Video)
-    for i in range(1, num_scenes + 1):
-        gap = otio.schema.Gap(
-            name=f"scene_{i:03d}_video",
-            source_range=otio.opentime.TimeRange(
-                start_time=otio.opentime.RationalTime(0, 24),
-                duration=otio.opentime.RationalTime(0, 24),
-            ),
+        # Create video track with gaps for each scene
+        video_track = otio.schema.Track(name=TRACK_V1, kind=otio.schema.TrackKind.Video)
+        for i in range(1, num_scenes + 1):
+            gap = otio.schema.Gap(
+                name=f"scene_{i:03d}_video",
+                source_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0, 24),
+                    duration=otio.opentime.RationalTime(0, 24),
+                ),
+            )
+            gap.metadata["documentary"] = {"scene_num": i, "status": "empty"}
+            video_track.append(gap)
+
+        # Create narration track
+        narration_track = otio.schema.Track(
+            name=TRACK_A1, kind=otio.schema.TrackKind.Audio
         )
-        gap.metadata["documentary"] = {"scene_num": i, "status": "empty"}
-        video_track.append(gap)
 
-    # Create narration track
-    narration_track = otio.schema.Track(
-        name=TRACK_A1, kind=otio.schema.TrackKind.Audio
-    )
+        # Create music track
+        music_track = otio.schema.Track(
+            name=TRACK_A2, kind=otio.schema.TrackKind.Audio
+        )
 
-    # Create music track
-    music_track = otio.schema.Track(
-        name=TRACK_A2, kind=otio.schema.TrackKind.Audio
-    )
+        timeline.tracks.append(video_track)
+        timeline.tracks.append(narration_track)
+        timeline.tracks.append(music_track)
 
-    timeline.tracks.append(video_track)
-    timeline.tracks.append(narration_track)
-    timeline.tracks.append(music_track)
-
-    path = _timeline_path(topic)
-    _ensure_dir(path)
-    otio.adapters.write_to_file(timeline, path)
+        path = _timeline_path(topic)
+        _ensure_dir(path)
+        otio.adapters.write_to_file(timeline, path)
 
     # Store path in tool_context state if available
     if tool_context:
@@ -126,45 +132,46 @@ def add_narration_clip(
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
 
-    timeline = otio.adapters.read_from_file(timeline_path)
-    narration_track = None
-    for track in timeline.tracks:
-        if track.name == TRACK_A1:
-            narration_track = track
-            break
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        narration_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_A1:
+                narration_track = track
+                break
 
-    if not narration_track:
-        return json.dumps({"error": "A1_Narration track not found"})
+        if not narration_track:
+            return json.dumps({"error": "A1_Narration track not found"})
 
-    clip_name = f"scene_{scene_num:03d}_{voice}"
+        clip_name = f"scene_{scene_num:03d}_{voice}"
 
-    # Idempotency check: don't add duplicates
-    for item in narration_track:
-        if isinstance(item, otio.schema.Clip) and item.name == clip_name:
-            return json.dumps(
-                {
-                    "status": "already_exists",
-                    "clip_name": clip_name,
-                    "message": "Clip already exists, skipping duplicate",
-                }
-            )
+        # Idempotency check: don't add duplicates
+        for item in narration_track:
+            if isinstance(item, otio.schema.Clip) and item.name == clip_name:
+                return json.dumps(
+                    {
+                        "status": "already_exists",
+                        "clip_name": clip_name,
+                        "message": "Clip already exists, skipping duplicate",
+                    }
+                )
 
-    clip = otio.schema.Clip(
-        name=clip_name,
-        media_reference=otio.schema.ExternalReference(target_url=wav_path),
-        source_range=otio.opentime.TimeRange(
-            start_time=otio.opentime.RationalTime(0, 24),
-            duration=otio.opentime.RationalTime(duration * 24, 24),
-        ),
-    )
-    clip.metadata["documentary"] = {
-        "scene_num": scene_num,
-        "voice": voice,
-        "type": "narration",
-    }
+        clip = otio.schema.Clip(
+            name=clip_name,
+            media_reference=otio.schema.ExternalReference(target_url=wav_path),
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(duration * 24, 24),
+            ),
+        )
+        clip.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "voice": voice,
+            "type": "narration",
+        }
 
-    narration_track.append(clip)
-    otio.adapters.write_to_file(timeline, timeline_path)
+        narration_track.append(clip)
+        otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info("Added narration clip: %s (%.2fs)", clip_name, duration)
     return json.dumps(
@@ -208,59 +215,60 @@ def add_video_clip(
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
 
-    timeline = otio.adapters.read_from_file(timeline_path)
-    video_track = None
-    for track in timeline.tracks:
-        if track.name == TRACK_V1:
-            video_track = track
-            break
-
-    if not video_track:
-        return json.dumps({"error": "V1_Video track not found"})
-
-    clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
-
-    # Idempotency check
-    for item in video_track:
-        if isinstance(item, otio.schema.Clip) and item.name == clip_name:
-            return json.dumps(
-                {
-                    "status": "already_exists",
-                    "clip_name": clip_name,
-                    "message": "Clip already exists, skipping duplicate",
-                }
-            )
-
-    clip = otio.schema.Clip(
-        name=clip_name,
-        media_reference=otio.schema.ExternalReference(target_url=mp4_path),
-        source_range=otio.opentime.TimeRange(
-            start_time=otio.opentime.RationalTime(0, 24),
-            duration=otio.opentime.RationalTime(source_range * 24, 24),
-        ),
-    )
-    clip.metadata["documentary"] = {
-        "scene_num": scene_num,
-        "phrase_idx": phrase_idx,
-        "lora_id": lora_id,
-        "available_range": available_range,
-        "type": "video",
-    }
-
-    # Replace the corresponding gap or append
-    replaced = False
-    for i, item in enumerate(video_track):
-        if isinstance(item, otio.schema.Gap):
-            gap_meta = item.metadata.get("documentary", {})
-            if gap_meta.get("scene_num") == scene_num:
-                video_track[i] = clip
-                replaced = True
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        video_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_V1:
+                video_track = track
                 break
 
-    if not replaced:
-        video_track.append(clip)
+        if not video_track:
+            return json.dumps({"error": "V1_Video track not found"})
 
-    otio.adapters.write_to_file(timeline, timeline_path)
+        clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+
+        # Idempotency check
+        for item in video_track:
+            if isinstance(item, otio.schema.Clip) and item.name == clip_name:
+                return json.dumps(
+                    {
+                        "status": "already_exists",
+                        "clip_name": clip_name,
+                        "message": "Clip already exists, skipping duplicate",
+                    }
+                )
+
+        clip = otio.schema.Clip(
+            name=clip_name,
+            media_reference=otio.schema.ExternalReference(target_url=mp4_path),
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(source_range * 24, 24),
+            ),
+        )
+        clip.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "phrase_idx": phrase_idx,
+            "lora_id": lora_id,
+            "available_range": available_range,
+            "type": "video",
+        }
+
+        # Replace the corresponding gap or append
+        replaced = False
+        for i, item in enumerate(video_track):
+            if isinstance(item, otio.schema.Gap):
+                gap_meta = item.metadata.get("documentary", {})
+                if gap_meta.get("scene_num") == scene_num:
+                    video_track[i] = clip
+                    replaced = True
+                    break
+
+        if not replaced:
+            video_track.append(clip)
+
+        otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info("Added video clip: %s (%.2fs)", clip_name, duration)
     return json.dumps(
