@@ -38,7 +38,11 @@ def _ensure_dir(path: str) -> None:
 
 def _timeline_path(topic: str) -> str:
     os.makedirs(_TIMELINE_DIR, exist_ok=True)
-    safe_topic = topic.replace(" ", "_").replace("/", "_")[:50]
+    # Sanitise all characters that are problematic in file paths
+    safe_topic = topic
+    for ch in " /:\\?*\"<>|'":
+        safe_topic = safe_topic.replace(ch, "_")
+    safe_topic = safe_topic[:50]
     return os.path.join(_TIMELINE_DIR, f"{safe_topic}.otio")
 
 

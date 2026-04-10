@@ -69,10 +69,23 @@ def _validate_scenario(timeline, state: dict) -> Optional[str]:
 
     scenes_str = state.get("scenes", "[]")
     try:
-        scenes = json.loads(scenes_str)
+        # The LLM output_key may wrap JSON in markdown code fences — strip them
+        cleaned = scenes_str.strip()
+        if cleaned.startswith("```"):
+            # Remove opening ```json or ``` line and closing ```
+            lines = cleaned.split("\n")
+            # Drop first line (```json) and last line (```)
+            start = 1
+            end = len(lines)
+            for i in range(len(lines) - 1, 0, -1):
+                if lines[i].strip().startswith("```"):
+                    end = i
+                    break
+            cleaned = "\n".join(lines[start:end])
+        scenes = json.loads(cleaned)
         if not scenes:
             errors.append("No scenes defined in state")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         errors.append("scenes state is not valid JSON")
 
     return "; ".join(errors) if errors else None

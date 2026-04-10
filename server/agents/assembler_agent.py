@@ -15,8 +15,13 @@ from google.adk.agents import Agent
 from agents.model_config import build_model
 from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.assembly_tools import concat_clips_tool, mux_audio_video_tool, trim_clip_tool
-from tools.otio_tools import get_timeline_status_tool, validate_timeline_tool
-from tools.video_tools import probe_clip_tool
+from tools.otio_tools import (
+    add_narration_clip_tool,
+    add_video_clip_tool,
+    get_timeline_status_tool,
+    validate_timeline_tool,
+)
+from tools.video_tools import generate_video_clip_tool, probe_clip_tool
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,17 @@ RULES:
   - Trimmed: /tmp/documentary-pipeline/assembly/scene_NNN_trimmed.mp4
   - Muxed: /tmp/documentary-pipeline/assembly/scene_NNN_muxed.mp4
   - Final: /tmp/documentary-pipeline/output/final_documentary.mp4
+
+YOUR AVAILABLE TOOLS:
+- get_timeline_status() — read current timeline state
+- validate_timeline(phase) — run validation
+- trim_clip(input_path, start_sec, duration_sec, output_path) — trim video
+- mux_audio_video(audio_path, video_path, output_path) — mux audio+video
+- concat_clips(clip_paths, output_path) — concatenate clips
+- probe_clip(mp4_path) — probe video file metadata
+- add_video_clip() — add clip to timeline (if needed)
+- add_narration_clip() — add narration clip (if needed)
+- generate_video_clip() — generate video clip (if needed)
 """
 
 
@@ -72,6 +88,9 @@ assembler_agent = Agent(
         mux_audio_video_tool,
         concat_clips_tool,
         probe_clip_tool,
+        add_video_clip_tool,
+        add_narration_clip_tool,
+        generate_video_clip_tool,
     ],
     before_agent_callback=_assembly_phase_setup,
     after_agent_callback=timeline_guardian_callback,

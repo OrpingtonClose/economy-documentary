@@ -51,6 +51,13 @@ Each scene MUST have:
 - visual_notes: brief notes on visual style for this scene
 - dopamine_hook: what makes this scene grab attention in first 3 seconds
 
+LANGUAGE MODE: "{language}"
+- If "en": write all voice text in English only.
+- If "ru": write all voice text in Russian only.
+- If "dual_ru_en": write EACH voice block with BOTH languages using this format:
+    "text": "[RU] <Russian narration>\n[EN] <English translation>"
+  The Russian text is the PRIMARY narration; the English is a faithful translation.
+
 RULES:
 1. Each scene MUST be <= 45 seconds when spoken at natural pace (~150 words/min)
 2. Each scene MUST use all 3 voices (V1, V2, V3)
