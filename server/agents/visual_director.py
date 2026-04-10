@@ -26,6 +26,10 @@ from google.adk.agents.loop_agent import LoopAgent
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
+from callbacks.before_model import before_model_callback
+from callbacks.after_model import after_model_callback
+from callbacks.before_tool import before_tool_callback
+from callbacks.after_tool import after_tool_callback
 from callbacks.deterministic_steps import write_visual_metadata_to_otio
 from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
@@ -71,6 +75,10 @@ content_analyst = Agent(
     instruction=_CONTENT_ANALYST_INSTRUCTION,
     tools=[query_lora_catalog_tool, get_lora_details_tool],
     output_key="content_analysis",
+    before_model_callback=before_model_callback,
+    after_model_callback=after_model_callback,
+    before_tool_callback=before_tool_callback,
+    after_tool_callback=after_tool_callback,
 )
 
 # -- Visual Concepter ----------------------------------------------------------
@@ -111,6 +119,8 @@ visual_concepter = Agent(
     model=build_model(),
     instruction=_VISUAL_CONCEPTER_INSTRUCTION,
     output_key="visual_concepts",
+    before_model_callback=before_model_callback,
+    after_model_callback=after_model_callback,
 )
 
 # -- Coherence Evaluator -------------------------------------------------------
@@ -179,6 +189,10 @@ coherence_evaluator = Agent(
     tools=[exit_loop],
     output_key="coherence_evaluation",
     after_agent_callback=_check_coherence_approval,
+    before_model_callback=before_model_callback,
+    after_model_callback=after_model_callback,
+    before_tool_callback=before_tool_callback,
+    after_tool_callback=after_tool_callback,
 )
 
 

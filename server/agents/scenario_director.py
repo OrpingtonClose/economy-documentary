@@ -28,6 +28,10 @@ from google.adk.agents import Agent
 from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
+from callbacks.before_model import before_model_callback
+from callbacks.after_model import after_model_callback
+from callbacks.before_tool import before_tool_callback
+from callbacks.after_tool import after_tool_callback
 from callbacks.deterministic_steps import clean_scenes_after_scenario
 from tools.otio_tools import create_timeline_tool
 
@@ -80,6 +84,10 @@ scenario_generator = Agent(
     instruction=_GENERATOR_INSTRUCTION,
     tools=[create_timeline_tool],
     output_key="scenes",
+    before_model_callback=before_model_callback,
+    after_model_callback=after_model_callback,
+    before_tool_callback=before_tool_callback,
+    after_tool_callback=after_tool_callback,
 )
 
 # -- Callbacks (defined before agents that reference them) ---------------------
@@ -154,6 +162,10 @@ scenario_evaluator = Agent(
     tools=[exit_loop],
     output_key="_last_evaluator_output",
     after_agent_callback=_check_scenario_approval,
+    before_model_callback=before_model_callback,
+    after_model_callback=after_model_callback,
+    before_tool_callback=before_tool_callback,
+    after_tool_callback=after_tool_callback,
 )
 
 

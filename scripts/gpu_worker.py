@@ -568,7 +568,7 @@ def _generate_video(
         "qa_reason": best_qa.get("qa_reason", "Not evaluated"),
         "attempts": final_attempt,
         "seed": best_seed,
-        "brightness": round(best_score - _measure_frame_contrast(video_frames), 1) if video_frames else 0,
+        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames else 0,
         "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames else 0,
     }
 

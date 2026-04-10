@@ -28,10 +28,9 @@ from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
 
 from agents.model_config import ADK_MODEL_NAME
 from agents.pipeline import pipeline_agent
-from callbacks.before_model import before_model_callback
-from callbacks.after_model import after_model_callback
-from callbacks.before_tool import before_tool_callback
-from callbacks.after_tool import after_tool_callback
+# Callbacks are wired directly into individual Agent sub-agents
+# (scenario_director.py, visual_director.py) — not at the AG-UI level.
+# See: before_model, after_model, before_tool, after_tool callbacks.
 from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
