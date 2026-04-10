@@ -51,7 +51,12 @@ def _load_timeline(state: dict):
 
 
 def _get_track(timeline, track_name: str):
-    """Get a track by name from the timeline."""
+    """Get a track by name from the timeline.
+
+    Returns the track object or ``None`` if no track with that name exists.
+    Note: OTIO Track objects are falsy when empty (``len(track) == 0``),
+    so callers must use ``is None`` checks instead of truthiness checks.
+    """
     for track in timeline.tracks:
         if track.name == track_name:
             return track
@@ -96,7 +101,7 @@ def _validate_audio(timeline, state: dict) -> Optional[str]:
     errors = []
 
     narration_track = _get_track(timeline, "A1_Narration")
-    if not narration_track:
+    if narration_track is None:
         return "A1_Narration track not found"
 
     import opentimelineio as otio
@@ -124,7 +129,7 @@ def _validate_visual_direction(timeline, state: dict) -> Optional[str]:
     errors = []
 
     video_track = _get_track(timeline, "V1_Video")
-    if not video_track:
+    if video_track is None:
         return "V1_Video track not found"
 
     import opentimelineio as otio
@@ -145,7 +150,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
     errors = []
 
     video_track = _get_track(timeline, "V1_Video")
-    if not video_track:
+    if video_track is None:
         return "V1_Video track not found"
 
     import opentimelineio as otio
@@ -182,12 +187,12 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
     video_track = _get_track(timeline, "V1_Video")
     narration_track = _get_track(timeline, "A1_Narration")
 
-    if not video_track:
+    if video_track is None:
         errors.append("V1_Video track not found")
-    if not narration_track:
+    if narration_track is None:
         errors.append("A1_Narration track not found")
 
-    if video_track:
+    if video_track is not None:
         # Check for remaining gaps
         gap_count = sum(
             1 for item in video_track if isinstance(item, otio.schema.Gap)
@@ -208,7 +213,7 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
             seen.add(name)
 
     # Check audio >= video sync
-    if video_track and narration_track:
+    if video_track is not None and narration_track is not None:
         video_dur = video_track.trimmed_range().duration.to_seconds()
         audio_dur = narration_track.trimmed_range().duration.to_seconds()
         if video_dur < audio_dur - 0.5:  # 500ms tolerance
