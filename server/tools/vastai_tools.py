@@ -91,12 +91,59 @@ def provision_gpu_vm(
     if "error" in search_result:
         return json.dumps(search_result)
 
-    # TODO: Parse offers and select best match, then create instance
+    # Parse offers and select best match (lowest price with sufficient VRAM)
+    offers = search_result if isinstance(search_result, list) else []
+    if not offers:
+        return json.dumps(
+            {"status": "no_offers", "error": "No matching GPU offers found"}
+        )
+
+    # Sort by dph_total (price per hour) ascending
+    sorted_offers = sorted(
+        offers,
+        key=lambda o: float(o.get("dph_total", 999)),
+    )
+
+    best = sorted_offers[0]
+    offer_id = best.get("id")
+    if not offer_id:
+        return json.dumps(
+            {"status": "error", "error": "Best offer has no ID", "offer": best}
+        )
+
+    logger.info(
+        "Selected offer %s: %s, %.1fGB VRAM, $%.3f/hr",
+        offer_id,
+        best.get("gpu_name", "unknown"),
+        float(best.get("gpu_ram", 0)) / 1024,
+        float(best.get("dph_total", 0)),
+    )
+
+    # Create instance from best offer
+    # Use pytorch template for CUDA + PyTorch pre-installed
+    create_result = _vast_cmd(
+        [
+            "create", "instance",
+            str(offer_id),
+            "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
+            "--disk", "80",
+            "--raw",
+        ]
+    )
+
+    if "error" in create_result:
+        return json.dumps(create_result)
+
+    instance_id = create_result.get("new_contract")
     return json.dumps(
         {
-            "status": "search_complete",
-            "offers": search_result,
-            "message": "Offers retrieved. Select and provision via create command.",
+            "status": "provisioned",
+            "vm_id": str(instance_id),
+            "offer_id": str(offer_id),
+            "gpu_name": best.get("gpu_name", "unknown"),
+            "gpu_ram_gb": round(float(best.get("gpu_ram", 0)) / 1024, 1),
+            "price_per_hour": round(float(best.get("dph_total", 0)), 3),
+            "message": "VM provisioned. Wait for status=running then bootstrap.",
         }
     )
 
