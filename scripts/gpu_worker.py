@@ -194,14 +194,15 @@ def _load_ltx():
     if not os.path.isfile(os.path.join(model_path, "model_index.json")):
         raise FileNotFoundError(f"model_index.json not found in {model_path}")
 
-    _ltx_pipe = LTX2Pipeline.from_pretrained(
+    pipe = LTX2Pipeline.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
     )
     # Model-level CPU offload: entire components move on/off GPU.
     # Requires 48GB+ VRAM (A100 80GB / L40S) to fit the Gemma3 text
     # encoder as a single component. Much faster than sequential offload.
-    _ltx_pipe.enable_model_cpu_offload()
+    pipe.enable_model_cpu_offload()
+    _ltx_pipe = pipe
     _active_model = "ltx"
 
     logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
