@@ -61,32 +61,27 @@ def _repair_json_text(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             pass
 
-        # More aggressive: insert closing } before lines that start
-        # with } or ] when brace_depth indicates an unclosed object.
-        # We skip characters inside JSON string values when counting.
+        # More aggressive: insert exactly as many closing } as the
+        # regex inserted opening {.  We count how many substitutions
+        # the regex made, then walk through lines and insert } at the
+        # first appropriate closing positions (lines starting with }
+        # or ] that would close the scope the repair opened).
+        repair_pattern = re.compile(
+            r'(},\s*\n)(\s*)("(?:text|tone|voice)"\s*:)'
+        )
+        num_inserted = len(repair_pattern.findall(text))
+        remaining_closes = num_inserted  # how many } we still need
+
         lines = repaired.split('\n')
         fixed_lines = []
-        brace_depth = 0
         for line in lines:
             stripped = line.strip()
-            # Before appending, check if this line closes a scope
-            # (starts with } or ]) while we have an extra unclosed {.
-            if stripped and stripped[0] in ('}', ']') and brace_depth > 0:
+            # Insert a closing } before a line that closes a scope
+            # (starts with } or ]) while we still owe closing braces.
+            if remaining_closes > 0 and stripped and stripped[0] in ('}', ']'):
                 indent = len(line) - len(line.lstrip())
                 fixed_lines.append(' ' * (indent + 2) + '}')
-                brace_depth -= 1
-            # Count braces outside of string values
-            in_string = False
-            prev_ch = ''
-            for ch in line:
-                if ch == '"' and prev_ch != '\\':
-                    in_string = not in_string
-                elif not in_string:
-                    if ch == '{':
-                        brace_depth += 1
-                    elif ch == '}':
-                        brace_depth -= 1
-                prev_ch = ch
+                remaining_closes -= 1
             fixed_lines.append(line)
 
         result = '\n'.join(fixed_lines)
