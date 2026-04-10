@@ -102,8 +102,11 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
                 "$LTX_DIR/text_encoder/$f" 2>/dev/null || true
         fi
     done
-    # Download model shards selectively
-    b2 ls "b2://${B2_BUCKET}/ltx2/text_encoder/" 2>/dev/null | while read -r filename; do
+    # Download model shards selectively (transformers format only)
+    # b2 ls returns full paths like "ltx2/text_encoder/model-00001-of-00011.safetensors"
+    # so we extract just the basename for matching
+    b2 ls "b2://${B2_BUCKET}/ltx2/text_encoder/" 2>/dev/null | while read -r fullpath; do
+        filename=$(basename "$fullpath")
         case "$filename" in
             model-*.safetensors)
                 if [ ! -f "$LTX_DIR/text_encoder/$filename" ]; then
