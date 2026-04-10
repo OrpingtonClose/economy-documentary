@@ -693,8 +693,8 @@ def deterministic_assembly_callback(
                     a_path = a_clip.media_reference.target_url
                 if a_path and os.path.exists(a_path):
                     audio_paths.append(a_path)
-                if a_clip.source_range:
-                    total_audio_duration += a_clip.source_range.duration.to_seconds()
+                    if a_clip.source_range:
+                        total_audio_duration += a_clip.source_range.duration.to_seconds()
 
             # Collect ALL video clip paths
             video_paths = []
