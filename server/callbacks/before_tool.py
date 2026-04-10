@@ -62,15 +62,17 @@ def before_tool_callback(
     provider = _get_provider(tool_name)
     if provider:
         sem = _provider_semaphores[provider]
-        acquired = sem.acquire(blocking=False)
+        # Block until semaphore is available (with 120s timeout to avoid deadlocks)
+        acquired = sem.acquire(blocking=True, timeout=120)
         if acquired:
             tool_context.state[f"_provider_sem_{call_id}"] = provider
             logger.debug("Provider semaphore acquired: %s", provider)
         else:
-            logger.debug(
-                "Provider semaphore full for %s, proceeding without limit",
+            logger.warning(
+                "Provider semaphore timeout for %s after 120s — rejecting tool call",
                 provider,
             )
+            return {"error": f"Rate limit timeout: {provider} concurrency limit reached. Retry later."}
 
     # -- Dashboard: track tool start -------------------------------------------
     tool_context.state[f"_tool_start_time_{call_id}"] = time.time()

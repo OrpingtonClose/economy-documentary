@@ -7,6 +7,7 @@ phase timeline, tool breakdown, and event stream.
 
 from __future__ import annotations
 
+import html
 import json
 from typing import Any
 
@@ -20,9 +21,9 @@ def generate_dashboard_html(data: dict) -> str:
     Returns:
         Complete HTML string.
     """
-    run_id = data.get("run_id", "unknown")
-    topic = data.get("topic", "Unknown Topic")
-    status = data.get("status", "unknown")
+    run_id = html.escape(str(data.get("run_id", "unknown")))
+    topic = html.escape(str(data.get("topic", "Unknown Topic")))
+    status = html.escape(str(data.get("status", "unknown")))
     elapsed = data.get("elapsed_sec", 0)
     phases = data.get("phases", [])
     tools = data.get("tools", [])
@@ -50,7 +51,7 @@ def generate_dashboard_html(data: dict) -> str:
         avg_dur = stats["total_duration"] / max(stats["count"], 1)
         tool_rows += f"""
         <tr>
-            <td>{name}</td>
+            <td>{html.escape(name)}</td>
             <td>{stats['count']}</td>
             <td>{avg_dur:.2f}s</td>
             <td>{stats['total_chars']:,}</td>
@@ -62,8 +63,8 @@ def generate_dashboard_html(data: dict) -> str:
         status_class = "completed" if p.get("status") == "completed" else "running"
         phase_rows += f"""
         <tr class="{status_class}">
-            <td>{p.get('name', '')}</td>
-            <td>{p.get('status', '')}</td>
+            <td>{html.escape(p.get('name', ''))}</td>
+            <td>{html.escape(p.get('status', ''))}</td>
             <td>{p.get('duration', 0):.1f}s</td>
         </tr>"""
 

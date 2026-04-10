@@ -68,6 +68,26 @@ scenario_generator = Agent(
     output_key="scenes",
 )
 
+# -- Callbacks (defined before agents that reference them) ---------------------
+
+
+def _check_scenario_approval(callback_context):
+    """After evaluator: check if scenario is approved to break loop."""
+    state = callback_context.state
+    # Check the last evaluator output for APPROVED or GOOD/EXCELLENT
+    eval_output = state.get("_last_evaluator_output", "")
+    if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output:
+        state["escalate"] = True
+        logger.info("Scenario approved by evaluator")
+    return None
+
+
+def _scenario_phase_setup(callback_context):
+    """Set pipeline phase before scenario director runs."""
+    callback_context.state["pipeline_phase"] = "scenario"
+    return None
+
+
 # -- Evaluator agent -----------------------------------------------------------
 _EVALUATOR_INSTRUCTION = """\
 You are the ADHD Compliance Evaluator for a documentary script.
@@ -109,31 +129,16 @@ scenario_evaluator = Agent(
     name="scenario_evaluator",
     model=build_model(synthesis=True),
     instruction=_EVALUATOR_INSTRUCTION,
+    output_key="_last_evaluator_output",
+    after_agent_callback=_check_scenario_approval,
 )
 
 
-def _scenario_phase_setup(callback_context):
-    """Set pipeline phase before scenario director runs."""
-    callback_context.state["pipeline_phase"] = "scenario"
-    return None
-
-
-# -- Combined agent using SequentialAgent for evaluate-optimize loop -----------
+# -- Combined agent using LoopAgent for evaluate-optimize loop -----------------
 # ADK doesn't have a built-in EvaluatorOptimizer, so we implement it as a
-# LoopAgent with generator + evaluator sub-agents. The evaluator sets
-# escalate=True when quality is GOOD or EXCELLENT.
+# LoopAgent with generator + evaluator sub-agents. The evaluator's
+# after_agent_callback sets escalate=True when quality is GOOD or EXCELLENT.
 from google.adk.agents.loop_agent import LoopAgent
-
-
-def _check_scenario_approval(callback_context):
-    """After evaluator: check if scenario is approved to break loop."""
-    state = callback_context.state
-    # Check the last evaluator output for APPROVED or GOOD/EXCELLENT
-    eval_output = state.get("_last_evaluator_output", "")
-    if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output:
-        state["escalate"] = True
-        logger.info("Scenario approved by evaluator")
-    return None
 
 
 scenario_director = LoopAgent(

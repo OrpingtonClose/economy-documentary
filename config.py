@@ -28,28 +28,31 @@ FINDINGS_DIR = Path(os.environ.get("FINDINGS_DIR", str(DATA_DIR / "findings")))
 DASHBOARD_DB_DIR = Path(os.environ.get("DASHBOARD_DB_DIR", str(DATA_DIR / "dashboard")))
 
 # ── API Keys (env vars only — no file-based keys) ───────────
+# Env var names match what pipeline/_read_key() derives from legacy filenames.
+# e.g. _read_key("minmax_api.txt") -> os.getenv("MINMAX_API")
+#
 # LLM Providers
-MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+MINMAX_API = os.environ.get("MINMAX_API", "")
+DEEPSEEK_API = os.environ.get("DEEPSEEK_API", "")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-XAI_API_KEY = os.environ.get("XAI_API_KEY", "")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROK_API = os.environ.get("GROK_API", "")
+OPENROUTER_API = os.environ.get("OPENROUTER_API", "")
+GROQ_API = os.environ.get("GROQ_API", "")
 MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API = os.environ.get("ANTHROPIC_API", "")
 
 # Search Providers
 EXA_API_KEY = os.environ.get("EXA_API_KEY", "")
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 BRAVE_SEARCH_API_KEY = os.environ.get("BRAVE_SEARCH_API_KEY", "")
-GOOGLE_SEARCH_API_KEY = os.environ.get("GOOGLE_SEARCH_API_KEY", "")
+GOOGLE_SEARCH_API = os.environ.get("GOOGLE_SEARCH_API", "")
 GOOGLE_SEARCH_ENGINE_ID = os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "")
 
 # Data APIs
 FRED_API_KEY = os.environ.get("FRED_API_KEY", "")
-WOLFRAM_ALPHA_API_KEY = os.environ.get("WOLFRAM_ALPHA_API_KEY", "")
+WOLFRAM_ALPHA_API = os.environ.get("WOLFRAM_ALPHA_API", "")
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 
 # GPU / Infrastructure
