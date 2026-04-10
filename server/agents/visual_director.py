@@ -23,6 +23,7 @@ import logging
 
 from google.adk.agents import Agent
 from google.adk.agents.loop_agent import LoopAgent
+from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
 from callbacks.timeline_guardian import timeline_guardian_callback
@@ -151,18 +152,21 @@ If POOR or FAIR:
 
 If GOOD or EXCELLENT:
 - Output "APPROVED: true"
-- Set state["escalate"] = true to signal loop completion
+- Call the exit_loop() tool to signal that visuals are accepted and the loop
+  should stop.
+
+IMPORTANT: You MUST call exit_loop() when the rating is GOOD or EXCELLENT.
+Do NOT call exit_loop() if the rating is POOR or FAIR.
 
 Store feedback in state["coherence_evaluation"].
 """
 
 
 def _check_coherence_approval(callback_context):
-    """After evaluator: check if visuals are approved to break loop."""
+    """After evaluator: log when visuals are approved."""
     state = callback_context.state
     eval_output = state.get("coherence_evaluation", "")
     if "APPROVED: true" in str(eval_output):
-        state["escalate"] = True
         logger.info("Visual concepts approved by coherence evaluator")
     return None
 
@@ -171,6 +175,7 @@ coherence_evaluator = Agent(
     name="coherence_evaluator",
     model=build_model(vision=True),
     instruction=_COHERENCE_EVALUATOR_INSTRUCTION,
+    tools=[exit_loop],
     output_key="coherence_evaluation",
     after_agent_callback=_check_coherence_approval,
 )

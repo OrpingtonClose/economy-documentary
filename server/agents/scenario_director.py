@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 
 from google.adk.agents import Agent
+from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
 from callbacks.timeline_guardian import timeline_guardian_callback
@@ -85,12 +86,10 @@ scenario_generator = Agent(
 
 
 def _check_scenario_approval(callback_context):
-    """After evaluator: check if scenario is approved to break loop."""
+    """After evaluator: log when scenario is approved."""
     state = callback_context.state
-    # Check the last evaluator output for APPROVED or GOOD/EXCELLENT
     eval_output = state.get("_last_evaluator_output", "")
     if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output or "RATING: GOOD" in eval_output:
-        state["escalate"] = True
         logger.info("Scenario approved by evaluator")
     return None
 
@@ -134,14 +133,20 @@ SUGGESTIONS:
 - [list specific improvements]
 ```
 
-If rating is GOOD or EXCELLENT, also output:
-APPROVED: true
+If rating is GOOD or EXCELLENT:
+1. Output "APPROVED: true"
+2. Call the exit_loop() tool to signal that the scenario is accepted and the
+   loop should stop.
+
+IMPORTANT: You MUST call exit_loop() when the rating is GOOD or EXCELLENT.
+Do NOT call exit_loop() if the rating is POOR or FAIR.
 """
 
 scenario_evaluator = Agent(
     name="scenario_evaluator",
     model=build_model(synthesis=True),
     instruction=_EVALUATOR_INSTRUCTION,
+    tools=[exit_loop],
     output_key="_last_evaluator_output",
     after_agent_callback=_check_scenario_approval,
 )
@@ -149,8 +154,8 @@ scenario_evaluator = Agent(
 
 # -- Combined agent using LoopAgent for evaluate-optimize loop -----------------
 # ADK doesn't have a built-in EvaluatorOptimizer, so we implement it as a
-# LoopAgent with generator + evaluator sub-agents. The evaluator's
-# after_agent_callback sets escalate=True when quality is GOOD or EXCELLENT.
+# LoopAgent with generator + evaluator sub-agents. The evaluator has the
+# exit_loop tool which sets event.actions.escalate=True to break the loop.
 from google.adk.agents.loop_agent import LoopAgent
 
 
