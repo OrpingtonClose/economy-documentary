@@ -159,7 +159,7 @@ def generate_video_clip(
     req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=900) as resp:  # 15 min: up to 3 retries × 30 steps
             mp4_bytes = resp.read()
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
     except (URLError, OSError, TimeoutError) as exc:
