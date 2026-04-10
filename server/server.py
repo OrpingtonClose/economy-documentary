@@ -24,6 +24,8 @@ from starlette.responses import Response
 
 load_dotenv()
 
+from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+
 from agents.model_config import ADK_MODEL_NAME
 from agents.pipeline import pipeline_agent
 from callbacks.before_model import before_model_callback
@@ -157,23 +159,12 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(dashboard_router)
 
 
-# AG-UI endpoint
-@app.post("/")
-async def agui_endpoint(request: Request):
-    """AG-UI endpoint for CopilotKit frontend."""
-    from ag_ui_adk import serve_agent
-
-    plugins = build_plugins()
-
-    return await serve_agent(
-        agent=pipeline_agent,
-        request=request,
-        plugins=plugins,
-        before_model_callback=before_model_callback,
-        after_model_callback=after_model_callback,
-        before_tool_callback=before_tool_callback,
-        after_tool_callback=after_tool_callback,
-    )
+# AG-UI endpoint -- uses add_adk_fastapi_endpoint which registers POST /
+adk_agent = ADKAgent(
+    adk_agent=pipeline_agent,
+    app_name="documentary-pipeline",
+)
+add_adk_fastapi_endpoint(app, adk_agent, path="/")
 
 
 @app.get("/health")
