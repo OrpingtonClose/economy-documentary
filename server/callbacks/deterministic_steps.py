@@ -224,22 +224,22 @@ def deterministic_audio_callback(
                         wav_path = result.get("wav_path", "")
                         duration = result.get("duration", 0)
 
-                            if wav_path and duration > 0:
-                                # Add clip to OTIO timeline
-                                clip_result_json = add_narration_clip(
-                                    scene_num=scene_num,
-                                    voice=voice_suffix,
-                                    wav_path=wav_path,
-                                    duration=duration,
-                                    tool_context=_MockToolContext(state),
-                                )
-                                clip_result = json.loads(clip_result_json)
-                                if "error" in clip_result:
-                                    err_msg = f"OTIO error scene {scene_num} {voice_suffix}: {clip_result['error']}"
-                                    logger.error(err_msg)
-                                    errors.append(err_msg)
-                                else:
-                                    total_clips += 1
+                        if wav_path and duration > 0:
+                            # Add clip to OTIO timeline
+                            clip_result_json = add_narration_clip(
+                                scene_num=scene_num,
+                                voice=voice_suffix,
+                                wav_path=wav_path,
+                                duration=duration,
+                                tool_context=_MockToolContext(state),
+                            )
+                            clip_result = json.loads(clip_result_json)
+                            if "error" in clip_result:
+                                err_msg = f"OTIO error scene {scene_num} {voice_suffix}: {clip_result['error']}"
+                                logger.error(err_msg)
+                                errors.append(err_msg)
+                            else:
+                                total_clips += 1
 
                             # Run alignment
                             align_result_json = align_narration(
