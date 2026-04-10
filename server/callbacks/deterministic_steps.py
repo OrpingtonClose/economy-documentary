@@ -185,6 +185,41 @@ def extract_json_array(text: str) -> Optional[list]:
     return None
 
 
+def _repair_unescaped_quotes(text: str) -> Optional[str]:
+    """Fix unescaped double-quotes inside JSON string values.
+
+    LLMs sometimes produce JSON like::
+
+        "prompt": "...highlights the \"eat on the spot\" rule...",
+
+    where the inner quotes are not escaped.  This function detects
+    key-value lines whose string value contains extra unescaped ``"``
+    characters and escapes them so the JSON can be parsed.
+    """
+    result_lines = []
+    changed = False
+    for line in text.split('\n'):
+        # Match:  <indent>"<key>" : "<value>",?
+        m = re.match(r'^(\s*"\w+"\s*:\s*)"(.*)"(,?)\s*$', line)
+        if m:
+            value = m.group(2)
+            # If the value itself contains unescaped quotes, fix them.
+            if '"' in value:
+                # Protect already-escaped quotes, escape bare ones, restore.
+                fixed = (
+                    value
+                    .replace('\\"', '\x00')
+                    .replace('"', '\\"')
+                    .replace('\x00', '\\"')
+                )
+                result_lines.append(f'{m.group(1)}"{fixed}"{m.group(3)}')
+                changed = True
+                continue
+        result_lines.append(line)
+
+    return '\n'.join(result_lines) if changed else None
+
+
 def extract_json_object(text: str) -> Optional[dict]:
     """Extract a JSON object from text that may contain preamble/markdown fences."""
     if not text or not text.strip():
@@ -201,11 +236,22 @@ def extract_json_object(text: str) -> Optional[dict]:
     # Strategy 2: Extract from markdown fences (handle optional newline)
     fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
+        inner = match.group(1).strip()
         try:
-            result = json.loads(match.group(1).strip())
+            result = json.loads(inner)
             if isinstance(result, dict):
                 return result
         except (json.JSONDecodeError, ValueError):
+            # Try repairing unescaped quotes
+            repaired = _repair_unescaped_quotes(inner)
+            if repaired:
+                try:
+                    result = json.loads(repaired)
+                    if isinstance(result, dict):
+                        logger.info("Extracted JSON object after quote repair")
+                        return result
+                except (json.JSONDecodeError, ValueError):
+                    pass
             continue
 
     # Strategy 3: Find first { ... } block
@@ -220,11 +266,24 @@ def extract_json_object(text: str) -> Optional[dict]:
         elif ch == '}':
             brace_depth -= 1
             if brace_depth == 0 and start_idx is not None:
+                candidate = text[start_idx:i + 1]
                 try:
-                    result = json.loads(text[start_idx:i + 1])
+                    result = json.loads(candidate)
                     if isinstance(result, dict):
                         return result
                 except (json.JSONDecodeError, ValueError):
+                    # Try repairing unescaped quotes
+                    repaired = _repair_unescaped_quotes(candidate)
+                    if repaired:
+                        try:
+                            result = json.loads(repaired)
+                            if isinstance(result, dict):
+                                logger.info(
+                                    "Extracted JSON object after quote repair (strategy 3)"
+                                )
+                                return result
+                        except (json.JSONDecodeError, ValueError):
+                            pass
                     start_idx = None
                     continue
 

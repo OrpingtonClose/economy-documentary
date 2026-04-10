@@ -96,6 +96,28 @@ Output the scene array as valid JSON in state["scenes"] and the visual style
 object in state["visual_style"].
 """
 
+def _save_generator_scenes(callback_context):
+    """After generator: save scenes backup unconditionally.
+
+    The generator's output_key writes to state['scenes'] before this
+    callback fires.  We parse and save the scenes immediately so that
+    clean_scenes_after_scenario has a fallback even if:
+    - the evaluator's output_key overwrites state['scenes'],
+    - the LoopAgent re-runs the generator with empty/malformed output,
+    - the evaluator calls exit_loop() and ADK skips output_key.
+    """
+    state = callback_context.state
+    raw = state.get("scenes", "")
+    if raw:
+        scenes = extract_json_array(str(raw))
+        if scenes:
+            state["_approved_scenes_backup"] = json.dumps(scenes)
+            logger.info(
+                "Saved generator scenes backup: %d scenes", len(scenes)
+            )
+    return None
+
+
 scenario_generator = Agent(
     name="scenario_generator",
     model=build_model(),
@@ -111,6 +133,7 @@ scenario_generator = Agent(
     after_model_callback=after_model_callback,
     before_tool_callback=before_tool_callback,
     after_tool_callback=after_tool_callback,
+    after_agent_callback=_save_generator_scenes,
 )
 
 # -- Callbacks (defined before agents that reference them) ---------------------
