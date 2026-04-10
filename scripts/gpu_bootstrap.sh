@@ -45,15 +45,18 @@ cd /workspace
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
+# torch 2.6+ required for diffusers 0.37 attention_dispatch compat
+# Driver supports CUDA 13.0, cu124 wheels work fine
 pip install --no-cache-dir \
-    'torch>=2.3.0' \
-    'torchaudio>=2.3.0' \
-    --index-url https://download.pytorch.org/whl/cu121
+    'torch>=2.6.0' \
+    'torchvision>=0.21.0' \
+    'torchaudio>=2.6.0' \
+    --index-url https://download.pytorch.org/whl/cu124
 
 # diffusers >= 0.37.0 required for LTX2Pipeline
+# transformers from git for qwen3_tts model architecture support
 pip install --no-cache-dir \
     'diffusers>=0.37.0' \
-    'transformers>=4.49.0' \
     'accelerate>=0.33.0' \
     'safetensors>=0.4.0' \
     'sentencepiece>=0.2.0' \
@@ -63,6 +66,7 @@ pip install --no-cache-dir \
     'uvicorn>=0.20.0' \
     'pydantic>=2.0.0' \
     'b2>=4.0.0'
+pip install --no-cache-dir git+https://github.com/huggingface/transformers.git
 
 # ---------------------------------------------------------------------------
 # B2 model download — selective (skip duplicate formats to save ~50 GB)
