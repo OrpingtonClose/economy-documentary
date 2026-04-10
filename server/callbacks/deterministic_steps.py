@@ -61,27 +61,33 @@ def _repair_json_text(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             pass
 
-        # More aggressive: insert exactly as many closing } as the
-        # regex inserted opening {.  We count how many substitutions
-        # the regex made, then walk through lines and insert } at the
-        # first appropriate closing positions (lines starting with }
-        # or ] that would close the scope the repair opened).
-        repair_pattern = re.compile(
-            r'(},\s*\n)(\s*)("(?:text|tone|voice)"\s*:)'
-        )
-        num_inserted = len(repair_pattern.findall(text))
-        remaining_closes = num_inserted  # how many } we still need
+        # More aggressive: find the exact line numbers where the regex
+        # inserted opening { characters, then insert matching } before
+        # the next scope-closing line (starts with } or ]) after each.
+        repair_lines = set()  # line numbers of repair-inserted {
+        for i, line in enumerate(repaired.split('\n')):
+            if line.strip() == '{':
+                # Verify this { doesn't appear at the same position in
+                # the original text (i.e., it was inserted by regex).
+                orig_lines = text.split('\n')
+                if i >= len(orig_lines) or orig_lines[i].strip() != '{':
+                    repair_lines.add(i)
 
         lines = repaired.split('\n')
         fixed_lines = []
-        for line in lines:
+        seeking_close = False
+        for i, line in enumerate(lines):
             stripped = line.strip()
-            # Insert a closing } before a line that closes a scope
-            # (starts with } or ]) while we still owe closing braces.
-            if remaining_closes > 0 and stripped and stripped[0] in ('}', ']'):
+            if i in repair_lines:
+                seeking_close = True
+                fixed_lines.append(line)
+                continue
+            # Insert closing } before a scope-closing line, but only
+            # after we've passed a repair-inserted {.
+            if seeking_close and stripped and stripped[0] in ('}', ']'):
                 indent = len(line) - len(line.lstrip())
                 fixed_lines.append(' ' * (indent + 2) + '}')
-                remaining_closes -= 1
+                seeking_close = False
             fixed_lines.append(line)
 
         result = '\n'.join(fixed_lines)
