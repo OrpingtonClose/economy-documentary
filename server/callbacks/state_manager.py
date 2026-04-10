@@ -17,6 +17,7 @@ def build_pipeline_state() -> dict:
         "_pipeline_key": f"doc_{uuid.uuid4().hex[:8]}",
         "topic": "",
         "corpus_path": "",
+        "language": "en",
         "scenes": "[]",
         "content_analysis": "(not yet analyzed)",
         "visual_concepts": "(not yet generated)",

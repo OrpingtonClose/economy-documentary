@@ -25,9 +25,10 @@ from __future__ import annotations
 import logging
 
 from google.adk.agents import Agent
+from google.adk.tools.exit_loop_tool import exit_loop
 
 from agents.model_config import build_model
-from callbacks.timeline_guardian import timeline_guardian_callback
+from callbacks.deterministic_steps import clean_scenes_after_scenario
 from tools.otio_tools import create_timeline_tool
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,13 @@ Each scene MUST have:
   Each voice block has: voice (V1/V2/V3), text (the narration), tone (descriptor)
 - visual_notes: brief notes on visual style for this scene
 - dopamine_hook: what makes this scene grab attention in first 3 seconds
+
+LANGUAGE MODE: "{language}"
+- If "en": write all voice text in English only.
+- If "ru": write all voice text in Russian only.
+- If "dual_ru_en": write EACH voice block with BOTH languages using this format:
+    "text": "[RU] <Russian narration>\n[EN] <English translation>"
+  The Russian text is the PRIMARY narration; the English is a faithful translation.
 
 RULES:
 1. Each scene MUST be <= 45 seconds when spoken at natural pace (~150 words/min)
@@ -78,12 +86,10 @@ scenario_generator = Agent(
 
 
 def _check_scenario_approval(callback_context):
-    """After evaluator: check if scenario is approved to break loop."""
+    """After evaluator: log when scenario is approved."""
     state = callback_context.state
-    # Check the last evaluator output for APPROVED or GOOD/EXCELLENT
     eval_output = state.get("_last_evaluator_output", "")
     if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output or "RATING: GOOD" in eval_output:
-        state["escalate"] = True
         logger.info("Scenario approved by evaluator")
     return None
 
@@ -92,6 +98,11 @@ def _scenario_phase_setup(callback_context):
     """Set pipeline phase before scenario director runs."""
     callback_context.state["pipeline_phase"] = "scenario"
     return None
+
+
+def _clean_scenes_after_scenario_wrapper(callback_context):
+    """After scenario_director: clean scenes JSON then run timeline guardian."""
+    return clean_scenes_after_scenario(callback_context)
 
 
 # -- Evaluator agent -----------------------------------------------------------
@@ -127,14 +138,20 @@ SUGGESTIONS:
 - [list specific improvements]
 ```
 
-If rating is GOOD or EXCELLENT, also output:
-APPROVED: true
+If rating is GOOD or EXCELLENT:
+1. Output "APPROVED: true"
+2. Call the exit_loop() tool to signal that the scenario is accepted and the
+   loop should stop.
+
+IMPORTANT: You MUST call exit_loop() when the rating is GOOD or EXCELLENT.
+Do NOT call exit_loop() if the rating is POOR or FAIR.
 """
 
 scenario_evaluator = Agent(
     name="scenario_evaluator",
     model=build_model(synthesis=True),
     instruction=_EVALUATOR_INSTRUCTION,
+    tools=[exit_loop],
     output_key="_last_evaluator_output",
     after_agent_callback=_check_scenario_approval,
 )
@@ -142,8 +159,8 @@ scenario_evaluator = Agent(
 
 # -- Combined agent using LoopAgent for evaluate-optimize loop -----------------
 # ADK doesn't have a built-in EvaluatorOptimizer, so we implement it as a
-# LoopAgent with generator + evaluator sub-agents. The evaluator's
-# after_agent_callback sets escalate=True when quality is GOOD or EXCELLENT.
+# LoopAgent with generator + evaluator sub-agents. The evaluator has the
+# exit_loop tool which sets event.actions.escalate=True to break the loop.
 from google.adk.agents.loop_agent import LoopAgent
 
 
@@ -157,5 +174,6 @@ scenario_director = LoopAgent(
     max_iterations=3,
     sub_agents=[scenario_generator, scenario_evaluator],
     before_agent_callback=_scenario_phase_setup,
-    after_agent_callback=timeline_guardian_callback,
+    # Use clean_scenes_after_scenario which extracts JSON then runs timeline guardian
+    after_agent_callback=_clean_scenes_after_scenario_wrapper,
 )

@@ -36,6 +36,7 @@ from agents.production_supervisor import production_supervisor
 from agents.scenario_director import scenario_director
 from agents.visual_director import visual_director
 from callbacks.state_manager import build_pipeline_state
+from tools.otio_tools import _timeline_path
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,15 @@ def _init_pipeline_state(
             "Pipeline state initialised: pipeline_key=%s",
             state["_pipeline_key"],
         )
+
+    # Pre-compute and store timeline path so all sub-agents can find it.
+    # The scenario director also sets this via create_timeline(), but that
+    # write may not propagate out of the LoopAgent scope.
+    topic = state.get("topic", "")
+    if topic and not state.get("_timeline_path"):
+        state["_timeline_path"] = _timeline_path(topic)
+        logger.info("Pre-set _timeline_path=%s", state["_timeline_path"])
+
     return None
 
 

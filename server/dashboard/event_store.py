@@ -130,7 +130,7 @@ def insert_snapshot(run_id: str, snapshot_data: dict) -> None:
     _executor.submit(_do)
 
 
-def finalize_run(run_id: str, status: str = "completed", metadata: dict = None) -> None:
+def finalize_run(run_id: str, status: str = "completed", metadata: Optional[dict] = None) -> None:
     """Finalize a pipeline run."""
     def _do():
         conn = _get_conn()
@@ -163,7 +163,7 @@ async def get_latest_snapshot(run_id: str) -> Optional[dict]:
         finally:
             conn.close()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_executor, _do)
 
 

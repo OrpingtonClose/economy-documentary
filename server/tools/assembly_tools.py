@@ -112,20 +112,18 @@ def concat_clips(
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     # Create concat list file
-    concat_file = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", delete=False
-    )
+    concat_fd, concat_path = tempfile.mkstemp(suffix=".txt", text=True)
     try:
-        for path in paths:
-            concat_file.write(f"file '{path}'\n")
-        concat_file.close()
+        with os.fdopen(concat_fd, "w") as concat_file:
+            for path in paths:
+                concat_file.write(f"file '{path}'\n")
 
         cmd = [
             "ffmpeg",
             "-y",
             "-f", "concat",
             "-safe", "0",
-            "-i", concat_file.name,
+            "-i", concat_path,
             "-c", "copy",
             output_path,
         ]
@@ -157,7 +155,10 @@ def concat_clips(
     except subprocess.TimeoutExpired:
         return json.dumps({"error": "ffmpeg concat timed out"})
     finally:
-        os.unlink(concat_file.name)
+        try:
+            os.unlink(concat_path)
+        except OSError:
+            pass
 
 
 def trim_clip(

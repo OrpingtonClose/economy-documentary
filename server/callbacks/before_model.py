@@ -72,11 +72,7 @@ async def before_model_callback(
     """
     await _llm_semaphore.acquire()
     callback_context.state["_llm_sem_held"] = True
-    logger.debug(
-        "LLM semaphore acquired (%d/%d slots used)",
-        _MAX_CONCURRENT_LLM - _llm_semaphore._value,
-        _MAX_CONCURRENT_LLM,
-    )
+    logger.debug("LLM semaphore acquired (max concurrent: %d)", _MAX_CONCURRENT_LLM)
 
     contents: Optional[List[genai_types.Content]] = getattr(
         llm_request, "contents", None

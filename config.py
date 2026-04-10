@@ -101,9 +101,12 @@ def _read_key(filename: str) -> str:
     """Read an API key from environment variable.
 
     This is a compatibility shim for existing code that used file-based keys.
-    The filename is converted to an env var name:
-      'minmax_api.txt' -> MINMAX_API
-      'deepseek_api.txt' -> DEEPSEEK_API
+    The filename is converted to an env var name by stripping the extension
+    and uppercasing:
+
+        'minmax_api.txt' -> MINMAX_API
+        'deepseek_api.txt' -> DEEPSEEK_API
+        'exa_api_key.json' -> EXA_API_KEY
 
     Args:
         filename: Original key filename (e.g., 'deepseek_api.txt').
@@ -111,5 +114,7 @@ def _read_key(filename: str) -> str:
     Returns:
         The API key string, or empty string if not set.
     """
-    env_name = filename.replace(".txt", "").upper()
+    # Strip any common extension, not just .txt
+    base = filename.rsplit(".", 1)[0] if "." in filename else filename
+    env_name = base.upper()
     return os.environ.get(env_name, "")

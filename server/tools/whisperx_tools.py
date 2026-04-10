@@ -149,7 +149,7 @@ def align_narration(
                 **alignment,
             }
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — whisperx/torch/transformers can raise many types
         logger.error("WhisperX alignment failed: %s", e)
         alignment = _generate_synthetic_alignment(text)
         return json.dumps(

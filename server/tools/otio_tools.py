@@ -38,7 +38,11 @@ def _ensure_dir(path: str) -> None:
 
 def _timeline_path(topic: str) -> str:
     os.makedirs(_TIMELINE_DIR, exist_ok=True)
-    safe_topic = topic.replace(" ", "_").replace("/", "_")[:50]
+    # Sanitise all characters that are problematic in file paths
+    safe_topic = topic
+    for ch in " /:\\?*\"<>|'":
+        safe_topic = safe_topic.replace(ch, "_")
+    safe_topic = safe_topic[:50]
     return os.path.join(_TIMELINE_DIR, f"{safe_topic}.otio")
 
 
@@ -49,6 +53,11 @@ def create_timeline(
 ) -> str:
     """Create a new OTIO timeline with the canonical track structure.
 
+    Idempotent: if ``_timeline_path`` already exists in the session state
+    the call is a no-op and returns the existing path.  This prevents the
+    scenario generator from overwriting the timeline on evaluator-loop
+    re-runs inside the LoopAgent.
+
     Args:
         topic: Documentary topic name.
         num_scenes: Number of scenes to create placeholder gaps for.
@@ -56,6 +65,23 @@ def create_timeline(
     Returns:
         JSON string with timeline path and structure summary.
     """
+    # Guard: skip re-creation if timeline already exists in session state
+    if tool_context:
+        existing_path = tool_context.state.get("_timeline_path", "")
+        if existing_path and os.path.exists(existing_path):
+            logger.info(
+                "Timeline already exists at %s — skipping re-creation",
+                existing_path,
+            )
+            return json.dumps(
+                {
+                    "timeline_path": existing_path,
+                    "tracks": [TRACK_V1, TRACK_A1, TRACK_A2],
+                    "num_scenes": num_scenes,
+                    "status": "already_exists",
+                }
+            )
+
     with _otio_lock:
         timeline = otio.schema.Timeline(name=f"Documentary: {topic}")
 
@@ -140,7 +166,7 @@ def add_narration_clip(
                 narration_track = track
                 break
 
-        if not narration_track:
+        if narration_track is None:
             return json.dumps({"error": "A1_Narration track not found"})
 
         clip_name = f"scene_{scene_num:03d}_{voice}"
@@ -223,7 +249,7 @@ def add_video_clip(
                 video_track = track
                 break
 
-        if not video_track:
+        if video_track is None:
             return json.dumps({"error": "V1_Video track not found"})
 
         clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
@@ -370,8 +396,8 @@ def validate_timeline(phase: str, tool_context=None) -> str:
     from callbacks.timeline_guardian import _VALIDATORS, _load_timeline
 
     state = tool_context.state if tool_context else {}
-    with _otio_lock:
-        timeline = _load_timeline(state)
+    # _load_timeline now acquires _otio_lock internally, so no outer lock needed.
+    timeline = _load_timeline(state)
 
     if not timeline:
         return json.dumps({"valid": False, "error": "Timeline not found"})

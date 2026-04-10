@@ -29,21 +29,34 @@ REQUIRED_TRACKS = {"V1_Video", "A1_Narration", "A2_Music"}
 
 
 def _load_timeline(state: dict):
-    """Load the OTIO timeline from the pipeline state."""
+    """Load the OTIO timeline from the pipeline state.
+
+    Acquires the ``_otio_lock`` from :mod:`tools.otio_tools` so that reads
+    are serialised against concurrent tool-call writes.  The returned
+    timeline object is a *snapshot* — safe to inspect after the lock is
+    released.
+    """
     try:
         import opentimelineio as otio
+        from tools.otio_tools import _otio_lock
 
         timeline_path = state.get("_timeline_path", "")
         if not timeline_path or not os.path.exists(timeline_path):
             return None
-        return otio.adapters.read_from_file(timeline_path)
+        with _otio_lock:
+            return otio.adapters.read_from_file(timeline_path)
     except Exception as e:
         logger.error("Failed to load OTIO timeline: %s", e)
         return None
 
 
 def _get_track(timeline, track_name: str):
-    """Get a track by name from the timeline."""
+    """Get a track by name from the timeline.
+
+    Returns the track object or ``None`` if no track with that name exists.
+    Note: OTIO Track objects are falsy when empty (``len(track) == 0``),
+    so callers must use ``is None`` checks instead of truthiness checks.
+    """
     for track in timeline.tracks:
         if track.name == track_name:
             return track
@@ -61,10 +74,14 @@ def _validate_scenario(timeline, state: dict) -> Optional[str]:
 
     scenes_str = state.get("scenes", "[]")
     try:
-        scenes = json.loads(scenes_str)
-        if not scenes:
+        from callbacks.deterministic_steps import extract_json_array
+
+        scenes = extract_json_array(str(scenes_str))
+        if scenes is None:
+            errors.append("scenes state is not valid JSON")
+        elif not scenes:
             errors.append("No scenes defined in state")
-    except json.JSONDecodeError:
+    except Exception:
         errors.append("scenes state is not valid JSON")
 
     return "; ".join(errors) if errors else None
@@ -75,7 +92,7 @@ def _validate_audio(timeline, state: dict) -> Optional[str]:
     errors = []
 
     narration_track = _get_track(timeline, "A1_Narration")
-    if not narration_track:
+    if narration_track is None:
         return "A1_Narration track not found"
 
     import opentimelineio as otio
@@ -103,7 +120,7 @@ def _validate_visual_direction(timeline, state: dict) -> Optional[str]:
     errors = []
 
     video_track = _get_track(timeline, "V1_Video")
-    if not video_track:
+    if video_track is None:
         return "V1_Video track not found"
 
     import opentimelineio as otio
@@ -124,7 +141,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
     errors = []
 
     video_track = _get_track(timeline, "V1_Video")
-    if not video_track:
+    if video_track is None:
         return "V1_Video track not found"
 
     import opentimelineio as otio
@@ -161,12 +178,12 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
     video_track = _get_track(timeline, "V1_Video")
     narration_track = _get_track(timeline, "A1_Narration")
 
-    if not video_track:
+    if video_track is None:
         errors.append("V1_Video track not found")
-    if not narration_track:
+    if narration_track is None:
         errors.append("A1_Narration track not found")
 
-    if video_track:
+    if video_track is not None:
         # Check for remaining gaps
         gap_count = sum(
             1 for item in video_track if isinstance(item, otio.schema.Gap)
@@ -187,7 +204,7 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
             seen.add(name)
 
     # Check audio >= video sync
-    if video_track and narration_track:
+    if video_track is not None and narration_track is not None:
         video_dur = video_track.trimmed_range().duration.to_seconds()
         audio_dur = narration_track.trimmed_range().duration.to_seconds()
         if video_dur < audio_dur - 0.5:  # 500ms tolerance
