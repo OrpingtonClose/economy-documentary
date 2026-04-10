@@ -24,6 +24,7 @@ import gc
 import io
 import logging
 import os
+import threading
 import time
 import uuid
 
@@ -51,6 +52,7 @@ _ltx_pipe = None
 _active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
+_model_lock = threading.Lock()  # Serialise all model load/unload/inference
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -214,6 +216,7 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 
     Uses voice instruction text to control the generated voice style.
     Returns (audio_array, sample_rate).
+    Caller must hold _model_lock.
     """
     _load_tts()
 
@@ -258,6 +261,7 @@ def _generate_video(
     """Generate video clip using LTX-2.3 distilled via diffusers.
 
     Returns raw MP4 bytes.
+    Caller must hold _model_lock.
     """
     _load_ltx()
 
@@ -353,13 +357,14 @@ def tts_endpoint(req: TTSRequest):
     )
     t0 = time.time()
 
-    try:
-        audio_array, sr = _generate_tts(req.text, req.voice, req.language)
-    except Exception as e:
-        logger.error("TTS failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"TTS generation failed: {e}")
+    with _model_lock:
+        try:
+            audio_array, sr = _generate_tts(req.text, req.voice, req.language)
+        except Exception as e:
+            logger.error("TTS failed: %s", e, exc_info=True)
+            raise HTTPException(500, f"TTS generation failed: {e}")
 
-    # Encode as WAV
+    # Encode as WAV (no lock needed — local data only)
     buf = io.BytesIO()
     sf.write(buf, audio_array, sr, format="WAV", subtype="PCM_16")
     wav_bytes = buf.getvalue()
@@ -398,22 +403,23 @@ def video_endpoint(req: VideoRequest):
     )
     t0 = time.time()
 
-    try:
-        mp4_bytes = _generate_video(
-            prompt=req.prompt,
-            duration_sec=req.duration_sec,
-            width=req.width,
-            height=req.height,
-            num_frames=req.num_frames,
-            seed=req.seed,
-            num_inference_steps=req.num_inference_steps,
-            guidance_scale=req.guidance_scale,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("Video failed: %s", e, exc_info=True)
-        raise HTTPException(500, f"Video generation failed: {e}")
+    with _model_lock:
+        try:
+            mp4_bytes = _generate_video(
+                prompt=req.prompt,
+                duration_sec=req.duration_sec,
+                width=req.width,
+                height=req.height,
+                num_frames=req.num_frames,
+                seed=req.seed,
+                num_inference_steps=req.num_inference_steps,
+                guidance_scale=req.guidance_scale,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Video failed: %s", e, exc_info=True)
+            raise HTTPException(500, f"Video generation failed: {e}")
 
     elapsed = time.time() - t0
     logger.info("Video done: %d bytes in %.1fs", len(mp4_bytes), elapsed)
@@ -437,22 +443,23 @@ def load_models(model: str = "tts"):
     """
     results = {}
 
-    if model == "tts":
-        try:
-            _load_tts()
-            results["tts"] = "loaded"
-            results["ltx"] = "unloaded (VRAM constraint)"
-        except Exception as e:
-            results["tts"] = f"error: {e}"
-    elif model == "ltx":
-        try:
-            _load_ltx()
-            results["ltx"] = "loaded"
-            results["tts"] = "unloaded (VRAM constraint)"
-        except Exception as e:
-            results["ltx"] = f"error: {e}"
-    else:
-        results["error"] = f"Unknown model: {model}. Use 'tts' or 'ltx'."
+    with _model_lock:
+        if model == "tts":
+            try:
+                _load_tts()
+                results["tts"] = "loaded"
+                results["ltx"] = "unloaded (VRAM constraint)"
+            except Exception as e:
+                results["tts"] = f"error: {e}"
+        elif model == "ltx":
+            try:
+                _load_ltx()
+                results["ltx"] = "loaded"
+                results["tts"] = "unloaded (VRAM constraint)"
+            except Exception as e:
+                results["ltx"] = f"error: {e}"
+        else:
+            results["error"] = f"Unknown model: {model}. Use 'tts' or 'ltx'."
 
     return results
 
