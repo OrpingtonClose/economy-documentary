@@ -159,34 +159,6 @@ def generate_video_clip(
         with urlopen(req, timeout=300) as resp:
             mp4_bytes = resp.read()
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
-
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        with open(output_path, "wb") as f:
-            f.write(mp4_bytes)
-
-        # Probe the generated clip for actual duration
-        probe_result = json.loads(probe_clip(output_path))
-        actual_dur = probe_result.get("duration", actual_duration)
-
-        logger.info(
-            "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f)",
-            output_path, actual_dur, gen_time, lora_id, lora_weight,
-        )
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "production",
-                "output_path": output_path,
-                "target_duration": round(duration_sec, 2),
-                "actual_duration": round(actual_dur, 2),
-                "lora_id": lora_id,
-                "lora_weight": lora_weight,
-                "prompt_preview": prompt[:200],
-                "gen_time": round(gen_time, 2),
-                "num_frames": num_frames,
-                "resolution": "768x512",
-            }
-        )
     except (URLError, OSError, TimeoutError) as exc:
         logger.error("GPU worker video request failed: %s", exc)
         # Fallback to solid-color so pipeline can continue
@@ -204,6 +176,39 @@ def generate_video_clip(
                 "error": str(exc),
             }
         )
+
+    # Video downloaded successfully — write to disk
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "wb") as f:
+        f.write(mp4_bytes)
+
+    # Probe the generated clip for actual duration (best-effort, never overwrites video)
+    actual_dur = actual_duration
+    try:
+        probe_result = json.loads(probe_clip(output_path))
+        actual_dur = probe_result.get("duration", actual_duration)
+    except Exception as probe_exc:
+        logger.warning("probe_clip failed (non-fatal): %s", probe_exc)
+
+    logger.info(
+        "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f)",
+        output_path, actual_dur, gen_time, lora_id, lora_weight,
+    )
+    return json.dumps(
+        {
+            "status": "generated",
+            "mode": "production",
+            "output_path": output_path,
+            "target_duration": round(duration_sec, 2),
+            "actual_duration": round(actual_dur, 2),
+            "lora_id": lora_id,
+            "lora_weight": lora_weight,
+            "prompt_preview": prompt[:200],
+            "gen_time": round(gen_time, 2),
+            "num_frames": num_frames,
+            "resolution": "768x512",
+        }
+    )
 
 
 def probe_clip(mp4_path: str, tool_context=None) -> str:

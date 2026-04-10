@@ -172,9 +172,8 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
     """
     _load_tts()
 
-    voice_instruction = _VOICE_PROFILES.get(voice, _VOICE_PROFILES["V1"]).get(
-        language, _VOICE_PROFILES["V1"]["en"]
-    )
+    profile = _VOICE_PROFILES.get(voice, _VOICE_PROFILES["V1"])
+    voice_instruction = profile.get(language, profile.get("en", _VOICE_PROFILES["V1"]["en"]))
 
     # Build the chat-style prompt for Qwen3-TTS
     messages = [
