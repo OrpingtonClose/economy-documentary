@@ -82,7 +82,7 @@ def _check_scenario_approval(callback_context):
     state = callback_context.state
     # Check the last evaluator output for APPROVED or GOOD/EXCELLENT
     eval_output = state.get("_last_evaluator_output", "")
-    if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output:
+    if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output or "RATING: GOOD" in eval_output:
         state["escalate"] = True
         logger.info("Scenario approved by evaluator")
     return None

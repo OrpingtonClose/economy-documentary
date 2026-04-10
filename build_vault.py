@@ -86,8 +86,9 @@ def _load_topic_taxonomy() -> dict[str, list[str]]:
             import json as _json
             with open(_TOPIC_TAXONOMY_PATH) as f:
                 return _json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            import sys
+            print(f"WARNING: Failed to load topic taxonomy from {_TOPIC_TAXONOMY_PATH}: {e}", file=sys.stderr)
 
     # Built-in defaults (economy documentary)
     return {

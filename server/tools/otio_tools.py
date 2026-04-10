@@ -261,35 +261,28 @@ def add_video_clip(
             "type": "video",
         }
 
-        # Insert clip in correct position, maintaining (scene_num, phrase_idx) order.
-        # First, try replacing the scene's placeholder gap (first phrase).
+        # Insert clip in correct sorted position by (scene_num, phrase_idx).
+        # First, try replacing the scene's placeholder gap (only for phrase 0).
         replaced = False
-        for i, item in enumerate(video_track):
-            if isinstance(item, otio.schema.Gap):
-                gap_meta = item.metadata.get("documentary", {})
-                if gap_meta.get("scene_num") == scene_num:
-                    video_track[i] = clip
-                    replaced = True
-                    break
+        if phrase_idx == 0:
+            for i, item in enumerate(video_track):
+                if isinstance(item, otio.schema.Gap):
+                    gap_meta = item.metadata.get("documentary", {})
+                    if gap_meta.get("scene_num") == scene_num:
+                        video_track[i] = clip
+                        replaced = True
+                        break
 
         if not replaced:
-            # No gap left for this scene — insert after the last item
-            # belonging to the same scene_num to maintain ordering.
+            # Find correct insertion position based on (scene_num, phrase_idx).
             insert_pos = len(video_track)  # default: append at end
-            last_same_scene = -1
-            last_smaller_scene = -1
             for i, item in enumerate(video_track):
                 meta = item.metadata.get("documentary", {})
                 item_scene = meta.get("scene_num", 0)
-                if item_scene == scene_num:
-                    last_same_scene = i
-                elif item_scene < scene_num:
-                    last_smaller_scene = i
-
-            if last_same_scene >= 0:
-                insert_pos = last_same_scene + 1
-            elif last_smaller_scene >= 0:
-                insert_pos = last_smaller_scene + 1
+                item_phrase = meta.get("phrase_idx", 0)
+                if (item_scene, item_phrase) > (scene_num, phrase_idx):
+                    insert_pos = i
+                    break
 
             video_track.insert(insert_pos, clip)
 
