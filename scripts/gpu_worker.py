@@ -196,8 +196,12 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # CPU offload: only the active component sits on GPU at any time
-    _ltx_pipe.enable_model_cpu_offload()
+    # Sequential CPU offload: moves individual layers on/off GPU.
+    # The Gemma3 text encoder (~46GB bf16) is too large for 24GB VRAM
+    # with enable_model_cpu_offload() (which moves entire components).
+    # Sequential offload keeps only one layer on GPU at a time — slower
+    # but fits within 24GB.
+    _ltx_pipe.enable_sequential_cpu_offload()
     _active_model = "ltx"
 
     logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
