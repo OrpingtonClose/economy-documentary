@@ -70,7 +70,10 @@ pip install --no-cache-dir \
 # Install sox for qwen-tts audio processing
 apt-get install -y sox libsox-dev
 
-# diffusers from git for LTX-2.3 model support (merged in PR #13217, not yet in stable release)
+# diffusers from git — the HuggingFace model dg845/LTX-2.3-Diffusers requires
+# LTX2VocoderWithBWE and updated transformer config fields (audio_cross_attn_mod,
+# gated_attn, perturbed_attn) that only exist in the dev branch (>= 0.38.0.dev0).
+# Stable 0.37.0 does NOT work. See huggingface/diffusers#13217.
 pip install --no-cache-dir \
     git+https://github.com/huggingface/diffusers.git
 
@@ -88,12 +91,13 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     if [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
         echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
         mkdir -p /workspace/models/qwen3-tts-voicedesign
+        pip install --no-cache-dir huggingface_hub 2>/dev/null
         # Try B2 first, fall back to HuggingFace
-        if b2 ls "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" &>/dev/null; then
+        b2_tts_count=$(b2 ls "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" 2>/dev/null | grep -c model.safetensors || true)
+        if [ "${b2_tts_count}" -gt 0 ]; then
             b2 sync --threads 8 "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" /workspace/models/qwen3-tts-voicedesign/
         else
-            echo "  Not in B2, downloading from HuggingFace..."
-            pip install --no-cache-dir huggingface_hub 2>/dev/null
+            echo "  Not in B2 (or empty), downloading from HuggingFace..."
             python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
         fi
     else
@@ -141,9 +145,16 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     done
 
     # transformer: all files (diffusers format, ~37.8 GB)
+    # NOTE: B2 cache must match diffusers git main. If stale, re-download from HuggingFace.
     echo "--- transformer (~37.8 GB) ---"
     mkdir -p "$LTX_DIR/transformer"
     b2 sync --threads 8 "b2://${B2_BUCKET}/ltx2/transformer/" "$LTX_DIR/transformer/"
+    # Verify transformer config has required fields for diffusers >= 0.38.0.dev0
+    if ! python3 -c "import json; c=json.load(open('$LTX_DIR/transformer/config.json')); assert c.get('audio_cross_attn_mod') is not None" 2>/dev/null; then
+        echo "  WARNING: B2 transformer config stale, re-downloading from HuggingFace..."
+        rm -rf "$LTX_DIR/transformer"
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='transformer/*')"
+    fi
 
     # Small components (< 3 GB each)
     for subdir in scheduler tokenizer vae audio_vae vocoder connectors latent_upsampler; do
