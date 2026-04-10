@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -157,7 +158,7 @@ def bootstrap_vm(vm: dict) -> None:
 
     # Run bootstrap
     logger.info("Running bootstrap on VM (this downloads models from B2)...")
-    bootstrap_env = f"B2_KEY_ID='{b2_key_id}' B2_APPLICATION_KEY='{b2_app_key}'"
+    bootstrap_env = f"B2_KEY_ID={shlex.quote(b2_key_id)} B2_APPLICATION_KEY={shlex.quote(b2_app_key)}"
     run_cmd(
         ssh_args + [f"{bootstrap_env} bash /workspace/gpu_bootstrap.sh"],
         timeout=600,

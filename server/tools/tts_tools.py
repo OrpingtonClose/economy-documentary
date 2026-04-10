@@ -135,6 +135,7 @@ def generate_narration(
         with urlopen(req, timeout=120) as resp:
             wav_bytes = resp.read()
             actual_duration = float(resp.headers.get("X-Audio-Duration", str(duration)))
+            actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
 
         os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
@@ -151,7 +152,7 @@ def generate_narration(
                 "mode": "production",
                 "wav_path": wav_path,
                 "duration": round(actual_duration, 2),
-                "sample_rate": _SAMPLE_RATE,
+                "sample_rate": actual_sample_rate,
                 "text_length": len(text),
                 "word_count": len(text.split()),
                 "gen_time": round(gen_time, 2),
