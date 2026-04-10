@@ -8,8 +8,8 @@ Usage:
     python gpu_worker.py [--port 8880] [--models-dir /workspace/models]
 
 Models are expected at:
-    {models_dir}/qwen3-tts/     — Qwen3-TTS-12Hz-1.7B-Base
-    {models_dir}/ltx2/          — LTX-2.3 diffusers-format components
+    {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    {models_dir}/ltx2/                   — LTX-2.3 diffusers-format components
                                   (model_index.json, text_encoder/, transformer/,
                                    vae/, audio_vae/, vocoder/, connectors/, etc.)
 
@@ -45,9 +45,7 @@ app = FastAPI(title="Documentary GPU Worker")
 # ---------------------------------------------------------------------------
 # Global model handles (loaded once at startup)
 # ---------------------------------------------------------------------------
-_tts_model = None
-_tts_tokenizer = None
-_tts_processor = None
+_tts_model = None  # Qwen3TTSModel instance
 _ltx_pipe = None
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
@@ -108,27 +106,24 @@ _VOICE_PROFILES = {
 # ---------------------------------------------------------------------------
 
 def _load_tts():
-    """Load Qwen3-TTS model."""
-    global _tts_model, _tts_tokenizer, _tts_processor
+    """Load Qwen3-TTS VoiceDesign model via qwen-tts package."""
+    global _tts_model
     if _tts_model is not None:
         return
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer, AutoProcessor
+    from qwen_tts import Qwen3TTSModel
 
-    model_path = os.path.join(_models_dir, "qwen3-tts")
-    logger.info("Loading Qwen3-TTS from %s ...", model_path)
+    model_path = os.path.join(_models_dir, "qwen3-tts-voicedesign")
+    logger.info("Loading Qwen3-TTS VoiceDesign from %s ...", model_path)
     t0 = time.time()
 
-    _tts_tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    _tts_processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
-    _tts_model = AutoModelForCausalLM.from_pretrained(
+    _tts_model = Qwen3TTSModel.from_pretrained(
         model_path,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        trust_remote_code=True,
+        device_map="cuda:0",
+        dtype=torch.bfloat16,
     )
 
-    logger.info("Qwen3-TTS loaded in %.1fs", time.time() - t0)
+    logger.info("Qwen3-TTS VoiceDesign loaded in %.1fs", time.time() - t0)
 
 
 def _load_ltx():
@@ -166,8 +161,9 @@ def _load_ltx():
 # ---------------------------------------------------------------------------
 
 def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int]:
-    """Generate speech audio using Qwen3-TTS.
+    """Generate speech audio using Qwen3-TTS VoiceDesign.
 
+    Uses voice instruction text to control the generated voice style.
     Returns (audio_array, sample_rate).
     """
     _load_tts()
@@ -175,52 +171,23 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
     profile = _VOICE_PROFILES.get(voice, _VOICE_PROFILES["V1"])
     voice_instruction = profile.get(language, profile.get("en", _VOICE_PROFILES["V1"]["en"]))
 
-    # Build the chat-style prompt for Qwen3-TTS
-    messages = [
-        {"role": "system", "content": voice_instruction},
-        {"role": "user", "content": text},
-    ]
+    # Map language codes to Qwen3-TTS language names
+    lang_map = {"en": "English", "ru": "Russian"}
+    tts_language = lang_map.get(language, "Auto")
 
-    # Tokenize
-    inputs = _tts_tokenizer.apply_chat_template(
-        messages,
-        return_tensors="pt",
-        add_generation_prompt=True,
-        tokenize=True,
+    logger.info(
+        "VoiceDesign: voice=%s lang=%s instruction=%.60s...",
+        voice, tts_language, voice_instruction,
     )
-    if isinstance(inputs, torch.Tensor):
-        input_ids = inputs.to(_tts_model.device)
-    else:
-        input_ids = inputs["input_ids"].to(_tts_model.device)
 
-    # Generate speech tokens
-    with torch.no_grad():
-        outputs = _tts_model.generate(
-            input_ids,
-            max_new_tokens=4096,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9,
-        )
+    wavs, sr = _tts_model.generate_voice_design(
+        text=text,
+        voice_instruction=voice_instruction,
+        language=tts_language,
+    )
 
-    # Decode speech tokens to audio using the processor/tokenizer
-    # Extract only the new tokens (after the input)
-    new_tokens = outputs[0][input_ids.shape[-1]:]
-
-    # Use the processor to convert tokens to audio
-    audio = _tts_processor.decode(new_tokens, skip_special_tokens=True)
-
-    if isinstance(audio, dict) and "audio" in audio:
-        audio_array = audio["audio"]
-        sr = audio.get("sampling_rate", 24000)
-    elif isinstance(audio, np.ndarray):
-        audio_array = audio
-        sr = 24000
-    else:
-        # Fallback: the output might be in a different format depending
-        # on the exact Qwen3-TTS version. Try to extract audio.
-        audio_array = np.array(audio, dtype=np.float32)
-        sr = 24000
+    # wavs is a list of np.ndarray; take the first (single utterance)
+    audio_array = wavs[0] if wavs else np.zeros(sr, dtype=np.float32)
 
     return audio_array, sr
 

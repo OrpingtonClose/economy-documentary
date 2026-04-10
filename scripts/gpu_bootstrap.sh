@@ -14,7 +14,7 @@
 #   transformer  (diffusers fmt):    ~37.8 GB
 #   vae + audio_vae + vocoder:       ~ 2.7 GB
 #   connectors + latent_upsampler:   ~ 3.9 GB
-#   Qwen3-TTS:                       ~ 4.3 GB
+#   Qwen3-TTS VoiceDesign:           ~ 4.3 GB
 #   Total models:                    ~95.3 GB
 #   OS + software + output:          ~30   GB
 #   Minimum disk required:           ~125  GB  (recommend 200+)
@@ -54,7 +54,6 @@ pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cu124
 
 # diffusers >= 0.37.0 required for LTX2Pipeline
-# transformers from git for qwen3_tts model architecture support
 pip install --no-cache-dir \
     'accelerate>=0.33.0' \
     'safetensors>=0.4.0' \
@@ -64,12 +63,15 @@ pip install --no-cache-dir \
     'fastapi>=0.100.0' \
     'uvicorn>=0.20.0' \
     'pydantic>=2.0.0' \
-    'b2>=4.0.0'
+    'b2>=4.0.0' \
+    'qwen-tts>=0.1.0'
+
+# Install sox for qwen-tts audio processing
+apt-get install -y sox libsox-dev
+
 # diffusers from git for LTX-2.3 model support (merged in PR #13217, not yet in stable release)
-# transformers from git for qwen3_tts model architecture support
 pip install --no-cache-dir \
-    git+https://github.com/huggingface/diffusers.git \
-    git+https://github.com/huggingface/transformers.git
+    git+https://github.com/huggingface/diffusers.git
 
 # ---------------------------------------------------------------------------
 # B2 model download — selective (skip duplicate formats to save ~50 GB)
@@ -81,13 +83,20 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     export B2_APPLICATION_KEY_ID="$B2_KEY_ID"
     b2 account authorize "$B2_KEY_ID" "$B2_APPLICATION_KEY"
 
-    # --- Qwen3-TTS (~4.3 GB) ---
-    if [ ! -f /workspace/models/qwen3-tts/model.safetensors ]; then
-        echo "--- Qwen3-TTS (~4.3 GB) ---"
-        mkdir -p /workspace/models/qwen3-tts
-        b2 sync --threads 8 "b2://${B2_BUCKET}/qwen3-tts/" /workspace/models/qwen3-tts/
+    # --- Qwen3-TTS VoiceDesign (~4.3 GB) ---
+    if [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
+        echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
+        mkdir -p /workspace/models/qwen3-tts-voicedesign
+        # Try B2 first, fall back to HuggingFace
+        if b2 ls "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" &>/dev/null; then
+            b2 sync --threads 8 "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" /workspace/models/qwen3-tts-voicedesign/
+        else
+            echo "  Not in B2, downloading from HuggingFace..."
+            pip install --no-cache-dir huggingface_hub 2>/dev/null
+            python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
+        fi
     else
-        echo "Qwen3-TTS already present."
+        echo "Qwen3-TTS VoiceDesign already present."
     fi
 
     # --- LTX-2.3 diffusers components ---
@@ -146,7 +155,7 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
 
     echo ""
     echo "=== Download complete ==="
-    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts/ 2>/dev/null
+    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null
     df -h /
 else
     echo "WARNING: B2 credentials not set. Downloading from HuggingFace instead."
@@ -156,10 +165,10 @@ else
 from huggingface_hub import snapshot_download
 import os
 
-if not os.path.exists('/workspace/models/qwen3-tts/model.safetensors'):
-    print('Downloading Qwen3-TTS from HuggingFace...')
-    snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-Base',
-                      local_dir='/workspace/models/qwen3-tts')
+if not os.path.exists('/workspace/models/qwen3-tts-voicedesign/model.safetensors'):
+    print('Downloading Qwen3-TTS VoiceDesign from HuggingFace...')
+    snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+                      local_dir='/workspace/models/qwen3-tts-voicedesign')
 
 if not os.path.exists('/workspace/models/ltx2/model_index.json'):
     print('Downloading LTX-2.3 from HuggingFace...')
@@ -187,7 +196,7 @@ echo ""
 echo "=== Model verification ==="
 OK=true
 for f in \
-    /workspace/models/qwen3-tts/model.safetensors \
+    /workspace/models/qwen3-tts-voicedesign/model.safetensors \
     /workspace/models/ltx2/model_index.json \
     /workspace/models/ltx2/text_encoder/config.json \
     /workspace/models/ltx2/text_encoder/model.safetensors.index.json \
