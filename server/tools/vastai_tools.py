@@ -126,7 +126,7 @@ def provision_gpu_vm(
             "create", "instance",
             str(offer_id),
             "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
-            "--disk", "80",
+            "--disk", "224",
             "--raw",
         ]
     )
