@@ -82,15 +82,14 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         echo "Qwen3-TTS already present."
     fi
 
-    # Download LTX-2.3 distilled checkpoint
-    if [ ! -f /workspace/models/ltx2/ltx-2-19b-distilled.safetensors ] && \
-       [ ! -f /workspace/models/ltx2/ltx-2-19b-distilled-fp8.safetensors ]; then
+    # Download LTX-2.3 distilled checkpoint (bf16 only — no FP8/quantization)
+    if [ ! -f /workspace/models/ltx2/ltx-2-19b-distilled.safetensors ]; then
         echo "Downloading LTX-2.3 model files..."
         mkdir -p /workspace/models/ltx2
 
-        # Download the distilled fp8 version (27GB, fits in 24GB VRAM)
-        b2 file download "b2://${B2_BUCKET}/ltx2/ltx-2-19b-distilled-fp8.safetensors" \
-            /workspace/models/ltx2/ltx-2-19b-distilled-fp8.safetensors
+        # Download the bf16 distilled version (43GB)
+        b2 file download "b2://${B2_BUCKET}/ltx2/ltx-2-19b-distilled.safetensors" \
+            /workspace/models/ltx2/ltx-2-19b-distilled.safetensors
 
         # Download supporting files
         for f in model_index.json .gitattributes LICENSE README.md; do

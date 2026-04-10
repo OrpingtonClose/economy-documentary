@@ -396,7 +396,7 @@ async def health() -> HealthResponse:
 
 
 @app.post("/tts")
-async def tts_endpoint(req: TTSRequest):
+def tts_endpoint(req: TTSRequest):
     """Generate narration audio. Returns WAV bytes."""
     logger.info(
         "TTS request: scene=%d voice=%s lang=%s text=%d chars",
@@ -434,7 +434,7 @@ async def tts_endpoint(req: TTSRequest):
 
 
 @app.post("/video")
-async def video_endpoint(req: VideoRequest):
+def video_endpoint(req: VideoRequest):
     """Generate video clip. Returns MP4 bytes."""
     logger.info(
         "Video request: %.1fs, %dx%d, seed=%d, prompt=%.100s...",
@@ -473,7 +473,7 @@ async def video_endpoint(req: VideoRequest):
 
 
 @app.post("/load-models")
-async def load_models():
+def load_models():
     """Pre-load all models into VRAM."""
     results = {}
 
