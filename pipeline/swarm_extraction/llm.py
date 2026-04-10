@@ -55,11 +55,12 @@ async def close_client():
 # ── API Keys ────────────────────────────────────────────────────
 
 def _read_key(filename: str) -> str:
-    path = f"/Volumes/Shared/api_keys/{filename}"
-    try:
-        return open(path).read().strip()
-    except FileNotFoundError:
-        return os.getenv(filename.replace(".txt", "").upper(), "")
+    """Read API key from environment variable.
+
+    Env var name is derived from filename: 'minmax_api.txt' -> MINMAX_API
+    """
+    env_name = filename.replace(".txt", "").upper()
+    return os.getenv(env_name, "")
 
 
 MINIMAX_KEY = _read_key("minmax_api.txt")

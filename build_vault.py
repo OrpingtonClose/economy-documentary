@@ -20,10 +20,22 @@ from pathlib import Path
 
 
 # ── Defaults ──────────────────────────────────────────────────
-DEFAULT_STREAM = Path("/tmp/economy-documentary/enrichment/claim_stream.jsonl")
-DEFAULT_SCENES = Path("/tmp/economy-documentary/data/scenes_parsed.json")
-DEFAULT_OUTPUT = Path("/Users/orpington/Documents/Obsidian Vault/Documentary Enrichment")
-DEFAULT_QUARTZ = Path("/Users/orpington/quartz-documentary/content")
+DEFAULT_STREAM = Path(os.environ.get(
+    "CLAIM_STREAM_PATH",
+    "/tmp/documentary-pipeline/enrichment/claim_stream.jsonl",
+))
+DEFAULT_SCENES = Path(os.environ.get(
+    "SCENES_PATH",
+    "/tmp/documentary-pipeline/data/scenes_parsed.json",
+))
+DEFAULT_OUTPUT = Path(os.environ.get(
+    "VAULT_OUTPUT_PATH",
+    "/tmp/documentary-pipeline/vault",
+))
+DEFAULT_QUARTZ = Path(os.environ.get(
+    "QUARTZ_CONTENT_PATH",
+    "/tmp/documentary-pipeline/quartz-content",
+))
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -61,27 +73,39 @@ def scene_fn(num: int, title: str) -> str:
 
 # ── Topic assignment ──────────────────────────────────────────
 
-TOPICS = {
-    "Federal Reserve": ["federal reserve", "fed ", "fed's", "fed chair", "monetary policy", "quantitative easing", "qe", "balance sheet", "interest rate", "rate hike", "fomc"],
-    "Energy & Oil": ["oil", "energy", "gas ", "lng", "petroleum", "crude", "brent", "pipeline", "opec", "strait of hormuz", "refinery"],
-    "Inflation": ["inflation", "cpi", "consumer price", "stagflation", "warflation", "deflat"],
-    "Iran Conflict": ["iran", "middle east", "strike", "drone", "missile", "hormuz", "qatar", "force majeure"],
-    "National Debt": ["national debt", "deficit", "debt", "trillion dollar", "interest payment", "government borrow", "fiscal"],
-    "Trade Policy": ["tariff", "trade", "ieepa", "scotus", "import", "export", "manufacturing"],
-    "Precious Metals": ["gold", "silver", "precious metal", "monetary metal", "rosenberg", "bullion", "central bank gold"],
-    "Cryptocurrency": ["bitcoin", "crypto", "btc", "saylor", "lyn alden"],
-    "Housing Market": ["housing", "mortgage", "home sale", "homeowner", "real estate", "rent", "lock-in"],
-    "China": ["china", "chinese", "yuan", "beijing", "shanghai"],
-    "Russia": ["russia", "russian", "putin", "ukraine", "sanctions", "ruble"],
-    "Europe": ["europe", "european", "germany", "german", "netherlands", "eu ", "eurozone"],
-    "Kevin Warsh": ["warsh"],
-    "Private Credit": ["private credit", "shadow bank", "blue owl", "apollo", "blackstone", "kkr", "redemption"],
-    "Wealth Inequality": ["wealth inequality", "wealth gap", "k-shaped", "wealth transfer", "inequality"],
-    "Dollar": ["dollar", "usd", "de-dollarization", "petrodollar", "reserve currency", "swift"],
-    "Stock Market": ["stock market", "s&p", "equity", "passive invest", "index fund", "etf", "correlated selling"],
-    "Consumer Economy": ["consumer", "grocery", "credit card", "spending", "sentiment"],
-    "Bond Market": ["bond", "yield", "treasury", "gundlach", "fixed income"],
-}
+# Topic taxonomy — loaded from environment or config file, with economy defaults.
+# To customize for a different documentary topic, set TOPIC_TAXONOMY_PATH env var
+# pointing to a JSON file with {"Topic Name": ["keyword1", "keyword2", ...]} format.
+_TOPIC_TAXONOMY_PATH = os.environ.get("TOPIC_TAXONOMY_PATH", "")
+
+
+def _load_topic_taxonomy() -> dict[str, list[str]]:
+    """Load topic taxonomy from file or use built-in defaults."""
+    if _TOPIC_TAXONOMY_PATH and os.path.exists(_TOPIC_TAXONOMY_PATH):
+        try:
+            import json as _json
+            with open(_TOPIC_TAXONOMY_PATH) as f:
+                return _json.load(f)
+        except Exception:
+            pass
+
+    # Built-in defaults (economy documentary)
+    return {
+        "Federal Reserve": ["federal reserve", "fed ", "fed's", "fed chair", "monetary policy", "quantitative easing", "qe", "balance sheet", "interest rate", "rate hike", "fomc"],
+        "Energy & Oil": ["oil", "energy", "gas ", "lng", "petroleum", "crude", "brent", "pipeline", "opec", "strait of hormuz", "refinery"],
+        "Inflation": ["inflation", "cpi", "consumer price", "stagflation", "warflation", "deflat"],
+        "National Debt": ["national debt", "deficit", "debt", "trillion dollar", "interest payment", "government borrow", "fiscal"],
+        "Trade Policy": ["tariff", "trade", "ieepa", "scotus", "import", "export", "manufacturing"],
+        "Precious Metals": ["gold", "silver", "precious metal", "monetary metal", "bullion", "central bank gold"],
+        "Cryptocurrency": ["bitcoin", "crypto", "btc"],
+        "Housing Market": ["housing", "mortgage", "home sale", "homeowner", "real estate", "rent"],
+        "Stock Market": ["stock market", "s&p", "equity", "index fund", "etf"],
+        "Bond Market": ["bond", "yield", "treasury", "fixed income"],
+        "Consumer Economy": ["consumer", "grocery", "credit card", "spending", "sentiment"],
+    }
+
+
+TOPICS = _load_topic_taxonomy()
 
 
 def assign_topics(text: str) -> list[str]:

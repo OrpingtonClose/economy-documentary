@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+*.db
+*.sqlite
+/output/
+/tmp/
+node_modules/
+.next/
+dashboard_logs/
+lora_cache/

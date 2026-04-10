@@ -35,16 +35,17 @@ log = logging.getLogger("enrichment")
 
 
 def _read_key(filename: str) -> str:
-    path = f"/Volumes/Shared/api_keys/{filename}"
-    try:
-        return open(path).read().strip()
-    except FileNotFoundError:
-        return os.getenv(filename.replace(".txt", "").upper(), "")
+    """Read API key from environment variable.
+
+    Env var name is derived from filename: 'exa_api_key.txt' -> EXA_API_KEY
+    """
+    env_name = filename.replace(".txt", "").upper()
+    return os.getenv(env_name, "")
 
 
 EXA_KEY = _read_key("exa_api_key.txt")
 TAVILY_KEY = _read_key("tavily_api_key.txt")
-BRAVE_KEY = _read_key("brave_search_api.txt") if os.path.exists("/Volumes/Shared/api_keys/brave_search_api.txt") else ""
+BRAVE_KEY = os.getenv("BRAVE_SEARCH_API_KEY", "")
 GOOGLE_KEY = _read_key("google_search_api.txt")
 GOOGLE_CX = _read_key("google_search_engine_id.txt")
 
