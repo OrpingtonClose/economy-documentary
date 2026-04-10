@@ -111,24 +111,33 @@ def provision_vm(gpu_type: str = "RTX_4090", max_price: float = 0.50) -> dict:
     logger.info("Instance created: %s. Waiting for ready...", instance_id)
 
     # Wait for instance to be running (up to 5 min)
-    for i in range(60):
-        time.sleep(5)
-        status = vastai_cmd(["show", "instance", str(instance_id), "--raw"])
-        actual_status = status.get("actual_status", "")
-        if actual_status == "running":
-            ssh_host = status.get("ssh_host", "")
-            ssh_port = status.get("ssh_port", "")
-            logger.info("VM ready: ssh -p %s root@%s", ssh_port, ssh_host)
-            return {
-                "instance_id": str(instance_id),
-                "ssh_host": ssh_host,
-                "ssh_port": str(ssh_port),
-                "gpu_name": best.get("gpu_name", ""),
-                "price": float(best.get("dph_total", 0)),
-            }
-        if i % 6 == 0:
-            logger.info("  Waiting... status=%s (%ds)", actual_status, i * 5)
+    # If this fails, terminate the instance to avoid resource leaks
+    try:
+        for i in range(60):
+            time.sleep(5)
+            status = vastai_cmd(["show", "instance", str(instance_id), "--raw"])
+            actual_status = status.get("actual_status", "")
+            if actual_status == "running":
+                ssh_host = status.get("ssh_host", "")
+                ssh_port = status.get("ssh_port", "")
+                logger.info("VM ready: ssh -p %s root@%s", ssh_port, ssh_host)
+                return {
+                    "instance_id": str(instance_id),
+                    "ssh_host": ssh_host,
+                    "ssh_port": str(ssh_port),
+                    "gpu_name": best.get("gpu_name", ""),
+                    "price": float(best.get("dph_total", 0)),
+                }
+            if i % 6 == 0:
+                logger.info("  Waiting... status=%s (%ds)", actual_status, i * 5)
+    except Exception:
+        logger.error("Error while waiting for VM %s, terminating to avoid leak", instance_id)
+        terminate_vm(str(instance_id))
+        raise
 
+    # Timed out — terminate the instance before raising
+    logger.error("VM %s did not become ready in 5 minutes, terminating", instance_id)
+    terminate_vm(str(instance_id))
     raise RuntimeError(f"VM {instance_id} did not become ready in 5 minutes")
 
 
