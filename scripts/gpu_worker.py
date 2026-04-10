@@ -348,10 +348,12 @@ def _generate_video(
     )
     t0 = time.time()
 
-    # Retry loop: regenerate with different seed if frames are too dark
+    # Retry loop: regenerate with different seed if frames are too dark.
+    # Tracks the best result across all attempts (highest brightness+contrast).
     max_attempts = 3
     current_seed = seed
-    video_frames = None
+    best_frames = None
+    best_score = -1.0  # brightness + contrast
 
     for attempt in range(1, max_attempts + 1):
         gen = torch.Generator("cpu").manual_seed(current_seed)
@@ -365,15 +367,21 @@ def _generate_video(
             guidance_scale=guidance_scale,
             generator=gen,
         )
-        video_frames = result.frames[0]
+        candidate_frames = result.frames[0]
 
         # Post-render quality check: sample frames and measure brightness
-        brightness = _measure_frame_brightness(video_frames)
-        contrast = _measure_frame_contrast(video_frames)
+        brightness = _measure_frame_brightness(candidate_frames)
+        contrast = _measure_frame_contrast(candidate_frames)
+        score = brightness + contrast
         logger.info(
             "Quality check (attempt %d/%d): brightness=%.1f/255, contrast=%.1f, seed=%d",
             attempt, max_attempts, brightness, contrast, current_seed,
         )
+
+        # Keep the best-scoring result across all attempts
+        if score > best_score:
+            best_frames = candidate_frames
+            best_score = score
 
         if brightness >= _MIN_BRIGHTNESS and contrast >= _MIN_CONTRAST:
             break
@@ -387,10 +395,12 @@ def _generate_video(
             current_seed = (current_seed + 7919) % (2**31)  # different seed
         else:
             logger.warning(
-                "Video still dark after %d attempts (brightness=%.1f, contrast=%.1f). "
-                "Using best result anyway.",
-                max_attempts, brightness, contrast,
+                "Video still dark after %d attempts (best score=%.1f). "
+                "Using best result.",
+                max_attempts, best_score,
             )
+
+    video_frames = best_frames
 
     elapsed = time.time() - t0
     logger.info("Video generated in %.1fs (seed=%d)", elapsed, current_seed)
