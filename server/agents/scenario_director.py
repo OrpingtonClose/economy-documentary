@@ -28,6 +28,7 @@ from google.adk.agents import Agent
 
 from agents.model_config import build_model
 from callbacks.timeline_guardian import timeline_guardian_callback
+from tools.otio_tools import create_timeline_tool
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ RULES:
 5. Open with a dopamine hook — surprising fact, counterintuitive claim, or vivid image
 6. Build narrative arc across scenes: hook → tension → insight → resolution
 
+After generating scenes, create the OTIO timeline by calling
+create_timeline(topic, num_scenes) where num_scenes = len(scenes).
+This MUST be done before the Audio Agent runs.
+
 Output the scene array as valid JSON in state["scenes"].
 """
 
@@ -65,6 +70,7 @@ scenario_generator = Agent(
     name="scenario_generator",
     model=build_model(),
     instruction=_GENERATOR_INSTRUCTION,
+    tools=[create_timeline_tool],
     output_key="scenes",
 )
 

@@ -241,7 +241,13 @@ def add_video_clip(
 
         clip = otio.schema.Clip(
             name=clip_name,
-            media_reference=otio.schema.ExternalReference(target_url=mp4_path),
+            media_reference=otio.schema.ExternalReference(
+                target_url=mp4_path,
+                available_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0, 24),
+                    duration=otio.opentime.RationalTime(available_range * 24, 24),
+                ),
+            ),
             source_range=otio.opentime.TimeRange(
                 start_time=otio.opentime.RationalTime(0, 24),
                 duration=otio.opentime.RationalTime(source_range * 24, 24),
