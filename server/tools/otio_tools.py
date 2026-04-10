@@ -255,7 +255,8 @@ def add_video_clip(
             "type": "video",
         }
 
-        # Replace the corresponding gap or append
+        # Insert clip in correct position, maintaining (scene_num, phrase_idx) order.
+        # First, try replacing the scene's placeholder gap (first phrase).
         replaced = False
         for i, item in enumerate(video_track):
             if isinstance(item, otio.schema.Gap):
@@ -266,7 +267,25 @@ def add_video_clip(
                     break
 
         if not replaced:
-            video_track.append(clip)
+            # No gap left for this scene — insert after the last item
+            # belonging to the same scene_num to maintain ordering.
+            insert_pos = len(video_track)  # default: append at end
+            last_same_scene = -1
+            last_smaller_scene = -1
+            for i, item in enumerate(video_track):
+                meta = item.metadata.get("documentary", {})
+                item_scene = meta.get("scene_num", 0)
+                if item_scene == scene_num:
+                    last_same_scene = i
+                elif item_scene < scene_num:
+                    last_smaller_scene = i
+
+            if last_same_scene >= 0:
+                insert_pos = last_same_scene + 1
+            elif last_smaller_scene >= 0:
+                insert_pos = last_smaller_scene + 1
+
+            video_track.insert(insert_pos, clip)
 
         otio.adapters.write_to_file(timeline, timeline_path)
 
@@ -294,7 +313,8 @@ def get_timeline_status(tool_context=None) -> str:
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found."})
 
-    timeline = otio.adapters.read_from_file(timeline_path)
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
 
     tracks_info = []
     for track in timeline.tracks:
@@ -351,7 +371,8 @@ def validate_timeline(phase: str, tool_context=None) -> str:
     from callbacks.timeline_guardian import _VALIDATORS, _load_timeline
 
     state = tool_context.state if tool_context else {}
-    timeline = _load_timeline(state)
+    with _otio_lock:
+        timeline = _load_timeline(state)
 
     if not timeline:
         return json.dumps({"valid": False, "error": "Timeline not found"})

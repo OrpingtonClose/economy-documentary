@@ -40,10 +40,12 @@ pip install \
 # Pre-download LTX-2.3 model (if env var set)
 if [ -n "${LTX_MODEL_ID:-}" ]; then
     python3 -c "
+import os
 from diffusers import LTXPipeline
 import torch
-print('Downloading LTX model...')
-pipe = LTXPipeline.from_pretrained('$LTX_MODEL_ID', torch_dtype=torch.bfloat16)
+model_id = os.environ['LTX_MODEL_ID']
+print(f'Downloading LTX model: {model_id}...')
+pipe = LTXPipeline.from_pretrained(model_id, torch_dtype=torch.bfloat16)
 print('Model downloaded successfully.')
 "
 fi
