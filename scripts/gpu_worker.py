@@ -9,9 +9,13 @@ Usage:
 
 Models are expected at:
     {models_dir}/qwen3-tts/     — Qwen3-TTS-12Hz-1.7B-Base
-    {models_dir}/ltx2/          — LTX-2.3 distilled checkpoint
+    {models_dir}/ltx2/          — LTX-2.3 diffusers-format components
+                                  (model_index.json, text_encoder/, transformer/,
+                                   vae/, audio_vae/, vocoder/, connectors/, etc.)
 
 The bootstrap script (gpu_bootstrap.sh) downloads these from B2.
+Requires diffusers >= 0.37.0 for LTX2Pipeline support.
+bf16 only — no FP8, no quantization.
 """
 from __future__ import annotations
 
@@ -19,11 +23,8 @@ import argparse
 import io
 import logging
 import os
-import subprocess
-import tempfile
 import time
 import uuid
-from pathlib import Path
 
 import numpy as np
 import soundfile as sf
@@ -131,26 +132,33 @@ def _load_tts():
 
 
 def _load_ltx():
-    """Load LTX-2.3 distilled pipeline."""
+    """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
+
+    Uses enable_model_cpu_offload() to fit the full pipeline
+    (Gemma3 text encoder + LTX2 transformer + VAE) on 24 GB VRAM
+    by keeping idle components in CPU RAM.
+    """
     global _ltx_pipe
     if _ltx_pipe is not None:
         return
 
-    logger.info("Loading LTX-2.3 distilled from %s ...", _models_dir)
+    from diffusers import LTX2Pipeline
+
+    model_path = os.path.join(_models_dir, "ltx2")
+    logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
     t0 = time.time()
 
-    # LTX-2.3 uses its own codebase, not diffusers pipeline directly.
-    # We use subprocess to call the inference script.
-    # Check if ltx2 inference script exists
-    ltx_dir = os.path.join(_models_dir, "ltx2")
-    if not os.path.isdir(ltx_dir):
-        logger.warning("LTX-2.3 model dir not found at %s", ltx_dir)
-        return
+    if not os.path.isfile(os.path.join(model_path, "model_index.json")):
+        raise FileNotFoundError(f"model_index.json not found in {model_path}")
 
-    # For LTX-2.3, we'll use the inference.py from the official repo
-    # which is cloned during bootstrap. We mark as loaded.
-    _ltx_pipe = "loaded"
-    logger.info("LTX-2.3 ready (%.1fs)", time.time() - t0)
+    _ltx_pipe = LTX2Pipeline.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+    )
+    # CPU offload: only the active component sits on GPU at any time
+    _ltx_pipe.enable_model_cpu_offload()
+
+    logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +227,7 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 
 
 # ---------------------------------------------------------------------------
-# Video generation (LTX-2.3 via subprocess)
+# Video generation (LTX-2.3 via diffusers LTX2Pipeline)
 # ---------------------------------------------------------------------------
 
 def _generate_video(
@@ -232,10 +240,14 @@ def _generate_video(
     num_inference_steps: int,
     guidance_scale: float,
 ) -> bytes:
-    """Generate video clip using LTX-2.3 distilled.
+    """Generate video clip using LTX-2.3 distilled via diffusers.
 
     Returns raw MP4 bytes.
     """
+    _load_ltx()
+
+    from diffusers.utils import export_to_video
+
     fps = 24
     if num_frames is None:
         # LTX-2.3 works in chunks of 8+1 frames
@@ -243,111 +255,25 @@ def _generate_video(
         # Round to nearest valid frame count: 8k+1
         num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
 
-    output_path = os.path.join(
-        _output_dir, f"clip_{uuid.uuid4().hex[:8]}.mp4"
-    )
-    os.makedirs(_output_dir, exist_ok=True)
-
-    ltx_dir = os.path.join(_models_dir, "ltx2")
-    ltx_code = "/workspace/ltx-video"  # cloned during bootstrap
-
-    # Check if we have the official LTX inference script
-    inference_script = os.path.join(ltx_code, "inference.py")
-    if not os.path.isfile(inference_script):
-        # Fallback: use diffusers pipeline directly
-        return _generate_video_diffusers(
-            prompt, num_frames, width, height, fps, seed,
-            num_inference_steps, guidance_scale, output_path,
-        )
-
-    # Use official inference script
-    config_path = os.path.join(ltx_code, "configs", "ltxv-13b-0.9.8-distilled.yaml")
-    if not os.path.isfile(config_path):
-        # Try the LTX-2.3 config
-        config_path = os.path.join(ltx_code, "configs", "ltx-2.3-22b-distilled.yaml")
-
-    cmd = [
-        "python", inference_script,
-        "--config", config_path,
-        "--prompt", prompt,
-        "--num_frames", str(num_frames),
-        "--width", str(width),
-        "--height", str(height),
-        "--seed", str(seed),
-        "--num_inference_steps", str(num_inference_steps),
-        "--guidance_scale", str(guidance_scale),
-        "--output_path", output_path,
-    ]
-
-    logger.info("Running LTX-2.3: %d frames, %dx%d, seed=%d", num_frames, width, height, seed)
-    t0 = time.time()
-
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=300,
-        cwd=ltx_code,
+    negative_prompt = (
+        "worst quality, inconsistent motion, blurry, jittery, distorted, "
+        "static, low resolution"
     )
 
-    elapsed = time.time() - t0
-    logger.info("LTX-2.3 finished in %.1fs (rc=%d)", elapsed, result.returncode)
+    generator = torch.Generator("cpu").manual_seed(seed)
 
-    if result.returncode != 0:
-        logger.error("LTX stderr: %s", result.stderr[-2000:])
-        raise HTTPException(500, f"LTX-2.3 failed: {result.stderr[-500:]}")
-
-    if not os.path.isfile(output_path):
-        raise HTTPException(500, "LTX-2.3 did not produce output file")
-
-    with open(output_path, "rb") as f:
-        data = f.read()
-
-    # Clean up
-    try:
-        os.unlink(output_path)
-    except OSError:
-        pass
-
-    return data
-
-
-def _generate_video_diffusers(
-    prompt: str,
-    num_frames: int,
-    width: int,
-    height: int,
-    fps: int,
-    seed: int,
-    num_inference_steps: int,
-    guidance_scale: float,
-    output_path: str,
-) -> bytes:
-    """Fallback: generate video using diffusers LTXPipeline."""
-    from diffusers import LTXPipeline
-    from diffusers.utils import export_to_video
-
-    global _ltx_pipe
-
-    model_path = os.path.join(_models_dir, "ltx2")
-
-    if not isinstance(_ltx_pipe, LTXPipeline):
-        logger.info("Loading LTX via diffusers from %s ...", model_path)
-        _ltx_pipe = LTXPipeline.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-        ).to("cuda")
-
-    generator = torch.Generator("cuda").manual_seed(seed)
-
-    logger.info("Generating video: %d frames, %dx%d", num_frames, width, height)
+    logger.info(
+        "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
+        num_frames, num_frames / fps, width, height, seed,
+    )
     t0 = time.time()
 
     result = _ltx_pipe(
         prompt=prompt,
-        num_frames=num_frames,
+        negative_prompt=negative_prompt,
         width=width,
         height=height,
+        num_frames=num_frames,
         num_inference_steps=num_inference_steps,
         guidance_scale=guidance_scale,
         generator=generator,
@@ -357,6 +283,11 @@ def _generate_video_diffusers(
     logger.info("Video generated in %.1fs", elapsed)
 
     # Export to MP4
+    output_path = os.path.join(
+        _output_dir, f"clip_{uuid.uuid4().hex[:8]}.mp4"
+    )
+    os.makedirs(_output_dir, exist_ok=True)
+
     video_frames = result.frames[0]
     export_to_video(video_frames, output_path, fps=fps)
 
