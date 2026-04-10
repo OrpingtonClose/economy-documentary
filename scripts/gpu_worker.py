@@ -1,0 +1,494 @@
+#!/usr/bin/env python3
+"""GPU Worker — FastAPI service for TTS and video generation.
+
+Runs on a Vast.ai GPU VM. Exposes HTTP endpoints that the pipeline
+calls to generate narration (Qwen3-TTS) and video clips (LTX-2.3).
+
+Usage:
+    python gpu_worker.py [--port 8880] [--models-dir /workspace/models]
+
+Models are expected at:
+    {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
+    {models_dir}/ltx2/                   — LTX-2.3 diffusers-format components
+                                  (model_index.json, text_encoder/, transformer/,
+                                   vae/, audio_vae/, vocoder/, connectors/, etc.)
+
+The bootstrap script (gpu_bootstrap.sh) downloads these from B2.
+Requires diffusers >= 0.37.0 for LTX2Pipeline support.
+bf16 only — no FP8, no quantization.
+"""
+from __future__ import annotations
+
+import argparse
+import gc
+import io
+import logging
+import os
+import threading
+import time
+import uuid
+
+import numpy as np
+import soundfile as sf
+import torch
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response
+from pydantic import BaseModel
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logger = logging.getLogger("gpu_worker")
+
+app = FastAPI(title="Documentary GPU Worker")
+
+# ---------------------------------------------------------------------------
+# Global model handles — model swapping for VRAM management
+# ---------------------------------------------------------------------------
+_tts_model = None  # Qwen3TTSModel instance
+_ltx_pipe = None
+_active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
+_models_dir: str = "/workspace/models"
+_output_dir: str = "/workspace/output"
+_model_lock = threading.Lock()  # Serialise all model load/unload/inference
+
+# ---------------------------------------------------------------------------
+# Pydantic request/response models
+# ---------------------------------------------------------------------------
+
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "V1"  # V1/V2/V3 — mapped to speaker profiles
+    language: str = "en"  # "en" or "ru"
+    scene_num: int = 1
+    # Note: sample_rate is NOT accepted here — the model's native rate is used
+    # and returned via the X-Sample-Rate response header.
+
+
+class VideoRequest(BaseModel):
+    prompt: str
+    duration_sec: float = 5.0
+    width: int = 768
+    height: int = 512
+    num_frames: int | None = None  # auto-calculated from duration if None
+    seed: int = 42
+    num_inference_steps: int = 8  # distilled model uses 8 steps
+    guidance_scale: float = 1.0  # distilled model uses CFG=1
+
+
+class HealthResponse(BaseModel):
+    status: str
+    gpu: str
+    tts_loaded: bool
+    ltx_loaded: bool
+    vram_used_gb: float
+    vram_total_gb: float
+
+
+# ---------------------------------------------------------------------------
+# Voice profiles for 3-voice narration
+# ---------------------------------------------------------------------------
+_VOICE_PROFILES = {
+    "V1": {
+        "en": "You are a warm, authoritative narrator with a deep voice.",
+        "ru": "Вы тёплый, авторитетный рассказчик с глубоким голосом.",
+    },
+    "V2": {
+        "en": "You are an enthusiastic, energetic presenter with a bright voice.",
+        "ru": "Вы энергичный, увлечённый ведущий с ярким голосом.",
+    },
+    "V3": {
+        "en": "You are a thoughtful, calm commentator with a measured voice.",
+        "ru": "Вы вдумчивый, спокойный комментатор с размеренным голосом.",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
+
+def _unload_tts():
+    """Move TTS model off GPU and free VRAM."""
+    global _tts_model, _active_model
+    if _tts_model is None:
+        return
+    logger.info("Unloading TTS from GPU...")
+    del _tts_model
+    _tts_model = None
+    _active_model = ""
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("TTS unloaded. VRAM free: %.1f GB",
+                (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1e9)
+
+
+def _unload_ltx():
+    """Move LTX pipeline off GPU and free VRAM."""
+    global _ltx_pipe, _active_model
+    if _ltx_pipe is None:
+        return
+    logger.info("Unloading LTX from GPU...")
+    del _ltx_pipe
+    _ltx_pipe = None
+    _active_model = ""
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("LTX unloaded. VRAM free: %.1f GB",
+                (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1e9)
+
+
+def _load_tts():
+    """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
+
+    Unloads LTX first if it's on GPU to free VRAM.
+    """
+    global _tts_model, _active_model
+    if _tts_model is not None:
+        return
+
+    # Free VRAM if LTX is loaded
+    if _ltx_pipe is not None:
+        _unload_ltx()
+
+    from qwen_tts import Qwen3TTSModel
+
+    model_path = os.path.join(_models_dir, "qwen3-tts-voicedesign")
+    logger.info("Loading Qwen3-TTS VoiceDesign from %s ...", model_path)
+    t0 = time.time()
+
+    _tts_model = Qwen3TTSModel.from_pretrained(
+        model_path,
+        device_map="cuda:0",
+        dtype=torch.bfloat16,
+    )
+    _active_model = "tts"
+
+    logger.info("Qwen3-TTS VoiceDesign loaded in %.1fs", time.time() - t0)
+
+
+def _load_ltx():
+    """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
+
+    Unloads TTS first if it's on GPU to free VRAM.
+    Uses enable_model_cpu_offload() to keep idle components in CPU RAM
+    while the active component runs on GPU. Requires 48GB+ VRAM
+    for the Gemma3 text encoder (~24GB bf16 weights).
+    """
+    global _ltx_pipe, _active_model
+    if _ltx_pipe is not None:
+        return
+
+    # Free VRAM if TTS is loaded
+    if _tts_model is not None:
+        _unload_tts()
+
+    from diffusers import LTX2Pipeline
+
+    model_path = os.path.join(_models_dir, "ltx2")
+    logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
+    t0 = time.time()
+
+    if not os.path.isfile(os.path.join(model_path, "model_index.json")):
+        raise FileNotFoundError(f"model_index.json not found in {model_path}")
+
+    pipe = LTX2Pipeline.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+    )
+    # Model-level CPU offload: entire components move on/off GPU.
+    # Requires 48GB+ VRAM (A100 80GB / L40S) to fit the Gemma3 text
+    # encoder as a single component. Much faster than sequential offload.
+    pipe.enable_model_cpu_offload()
+    _ltx_pipe = pipe
+    _active_model = "ltx"
+
+    logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
+
+
+# ---------------------------------------------------------------------------
+# TTS generation
+# ---------------------------------------------------------------------------
+
+def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int]:
+    """Generate speech audio using Qwen3-TTS VoiceDesign.
+
+    Uses voice instruction text to control the generated voice style.
+    Returns (audio_array, sample_rate).
+    Caller must hold _model_lock.
+    """
+    _load_tts()
+
+    profile = _VOICE_PROFILES.get(voice, _VOICE_PROFILES["V1"])
+    voice_instruction = profile.get(language, profile.get("en", _VOICE_PROFILES["V1"]["en"]))
+
+    # Map language codes to Qwen3-TTS language names
+    lang_map = {"en": "English", "ru": "Russian"}
+    tts_language = lang_map.get(language, "Auto")
+
+    logger.info(
+        "VoiceDesign: voice=%s lang=%s instruction=%.60s...",
+        voice, tts_language, voice_instruction,
+    )
+
+    wavs, sr = _tts_model.generate_voice_design(
+        text=text,
+        instruct=voice_instruction,
+        language=tts_language,
+    )
+
+    # wavs is a list of np.ndarray; take the first (single utterance)
+    audio_array = wavs[0] if wavs else np.zeros(sr, dtype=np.float32)
+
+    return audio_array, sr
+
+
+# ---------------------------------------------------------------------------
+# Video generation (LTX-2.3 via diffusers LTX2Pipeline)
+# ---------------------------------------------------------------------------
+
+def _generate_video(
+    prompt: str,
+    duration_sec: float,
+    width: int,
+    height: int,
+    num_frames: int | None,
+    seed: int,
+    num_inference_steps: int,
+    guidance_scale: float,
+) -> bytes:
+    """Generate video clip using LTX-2.3 distilled via diffusers.
+
+    Returns raw MP4 bytes.
+    Caller must hold _model_lock.
+    """
+    _load_ltx()
+
+    from diffusers.utils import export_to_video
+
+    fps = 24
+    if num_frames is None:
+        # LTX-2.3 works in chunks of 8+1 frames
+        raw_frames = int(duration_sec * fps)
+        # Round to nearest valid frame count: 8k+1
+        num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
+
+    negative_prompt = (
+        "worst quality, inconsistent motion, blurry, jittery, distorted, "
+        "static, low resolution"
+    )
+
+    generator = torch.Generator("cpu").manual_seed(seed)
+
+    logger.info(
+        "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
+        num_frames, num_frames / fps, width, height, seed,
+    )
+    t0 = time.time()
+
+    result = _ltx_pipe(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        num_frames=num_frames,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        generator=generator,
+    )
+
+    elapsed = time.time() - t0
+    logger.info("Video generated in %.1fs", elapsed)
+
+    # Export to MP4
+    output_path = os.path.join(
+        _output_dir, f"clip_{uuid.uuid4().hex[:8]}.mp4"
+    )
+    os.makedirs(_output_dir, exist_ok=True)
+
+    video_frames = result.frames[0]
+    export_to_video(video_frames, output_path, fps=fps)
+
+    with open(output_path, "rb") as f:
+        data = f.read()
+
+    try:
+        os.unlink(output_path)
+    except OSError:
+        pass
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# API endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/health")
+async def health() -> HealthResponse:
+    gpu_name = "unknown"
+    vram_used = 0.0
+    vram_total = 0.0
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        vram_used = torch.cuda.memory_allocated(0) / 1e9
+        vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
+
+    return HealthResponse(
+        status="ok",
+        gpu=gpu_name,
+        tts_loaded=_tts_model is not None,
+        ltx_loaded=_ltx_pipe is not None,
+        vram_used_gb=round(vram_used, 2),
+        vram_total_gb=round(vram_total, 2),
+    )
+
+
+@app.post("/tts")
+def tts_endpoint(req: TTSRequest):
+    """Generate narration audio. Returns WAV bytes."""
+    if not req.text.strip():
+        raise HTTPException(400, "Text must not be empty")
+
+    logger.info(
+        "TTS request: scene=%d voice=%s lang=%s text=%d chars",
+        req.scene_num, req.voice, req.language, len(req.text),
+    )
+    t0 = time.time()
+
+    with _model_lock:
+        try:
+            audio_array, sr = _generate_tts(req.text, req.voice, req.language)
+        except Exception as e:
+            logger.error("TTS failed: %s", e, exc_info=True)
+            raise HTTPException(500, f"TTS generation failed: {e}")
+
+    # Encode as WAV (no lock needed — local data only)
+    buf = io.BytesIO()
+    sf.write(buf, audio_array, sr, format="WAV", subtype="PCM_16")
+    wav_bytes = buf.getvalue()
+
+    elapsed = time.time() - t0
+    duration = len(audio_array) / sr
+    logger.info(
+        "TTS done: %.1fs audio in %.1fs (%.1fx realtime)",
+        duration, elapsed, duration / max(elapsed, 0.01),
+    )
+
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "X-Audio-Duration": str(round(duration, 3)),
+            "X-Sample-Rate": str(sr),
+            "X-Gen-Time": str(round(elapsed, 3)),
+        },
+    )
+
+
+@app.post("/video")
+def video_endpoint(req: VideoRequest):
+    """Generate video clip. Returns MP4 bytes."""
+    if not req.prompt.strip():
+        raise HTTPException(400, "Prompt must not be empty")
+    if req.duration_sec <= 0:
+        raise HTTPException(400, "duration_sec must be positive")
+    if req.width <= 0 or req.height <= 0:
+        raise HTTPException(400, "width and height must be positive")
+
+    logger.info(
+        "Video request: %.1fs, %dx%d, seed=%d, prompt=%.100s...",
+        req.duration_sec, req.width, req.height, req.seed, req.prompt,
+    )
+    t0 = time.time()
+
+    with _model_lock:
+        try:
+            mp4_bytes = _generate_video(
+                prompt=req.prompt,
+                duration_sec=req.duration_sec,
+                width=req.width,
+                height=req.height,
+                num_frames=req.num_frames,
+                seed=req.seed,
+                num_inference_steps=req.num_inference_steps,
+                guidance_scale=req.guidance_scale,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Video failed: %s", e, exc_info=True)
+            raise HTTPException(500, f"Video generation failed: {e}")
+
+    elapsed = time.time() - t0
+    logger.info("Video done: %d bytes in %.1fs", len(mp4_bytes), elapsed)
+
+    return Response(
+        content=mp4_bytes,
+        media_type="video/mp4",
+        headers={
+            "X-Gen-Time": str(round(elapsed, 3)),
+            "X-File-Size": str(len(mp4_bytes)),
+        },
+    )
+
+
+@app.post("/load-models")
+def load_models(model: str = "tts"):
+    """Load a specific model into VRAM (unloads the other first).
+
+    Args:
+        model: Which model to load — "tts" or "ltx". Default: "tts".
+    """
+    results = {}
+
+    with _model_lock:
+        if model == "tts":
+            try:
+                _load_tts()
+                results["tts"] = "loaded"
+                results["ltx"] = "unloaded (VRAM constraint)"
+            except Exception as e:
+                results["tts"] = f"error: {e}"
+        elif model == "ltx":
+            try:
+                _load_ltx()
+                results["ltx"] = "loaded"
+                results["tts"] = "unloaded (VRAM constraint)"
+            except Exception as e:
+                results["ltx"] = f"error: {e}"
+        else:
+            results["error"] = f"Unknown model: {model}. Use 'tts' or 'ltx'."
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="GPU Worker for Documentary Pipeline")
+    parser.add_argument("--port", type=int, default=8880)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--models-dir", type=str, default="/workspace/models")
+    parser.add_argument("--output-dir", type=str, default="/workspace/output")
+    args = parser.parse_args()
+
+    global _models_dir, _output_dir
+    _models_dir = args.models_dir
+    _output_dir = args.output_dir
+
+    os.makedirs(_output_dir, exist_ok=True)
+
+    logger.info("Starting GPU Worker on %s:%d", args.host, args.port)
+    logger.info("Models dir: %s", _models_dir)
+    logger.info("Output dir: %s", _output_dir)
+
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

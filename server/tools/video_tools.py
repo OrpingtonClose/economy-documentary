@@ -12,11 +12,13 @@ Rules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import subprocess
-from typing import Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from google.adk.tools import FunctionTool
 
@@ -113,37 +115,101 @@ def generate_video_clip(
             }
         )
 
-    # Production mode: call LTX-2.3 on GPU VM
-    # TODO: Implement actual LTX-2.3 generation call
-    # For now, generate solid-color placeholder
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    success = _generate_solid_color_mp4(output_path, actual_duration)
-
-    if not success:
+    # Production mode: call LTX-2.3 on GPU worker
+    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    if not gpu_worker_url:
+        # Fallback: generate solid-color placeholder if no GPU worker
+        logger.warning("GPU_WORKER_URL not set, generating solid-color placeholder")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        success = _generate_solid_color_mp4(output_path, actual_duration)
+        if not success:
+            return json.dumps({"status": "error", "error": "Failed to generate placeholder video"})
         return json.dumps(
             {
-                "status": "error",
-                "error": "Failed to generate placeholder video",
+                "status": "generated",
+                "mode": "placeholder",
+                "output_path": output_path,
+                "target_duration": round(duration_sec, 2),
+                "actual_duration": round(actual_duration, 2),
+                "lora_id": lora_id,
+                "lora_weight": lora_weight,
             }
         )
 
+    # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
+    fps = 24
+    raw_frames = int(actual_duration * fps)
+    num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
+
+    # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
+    seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
+
+    payload = json.dumps({
+        "prompt": prompt,
+        "duration_sec": actual_duration,
+        "width": 768,
+        "height": 512,
+        "num_frames": num_frames,
+        "seed": seed,
+        "num_inference_steps": 8,
+        "guidance_scale": 1.0,
+    }).encode("utf-8")
+
+    video_url = f"{gpu_worker_url.rstrip('/')}/video"
+    req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
+
+    try:
+        with urlopen(req, timeout=300) as resp:
+            mp4_bytes = resp.read()
+            gen_time = float(resp.headers.get("X-Gen-Time", "0"))
+    except (URLError, OSError, TimeoutError) as exc:
+        logger.error("GPU worker video request failed: %s", exc)
+        # Fallback to solid-color so pipeline can continue
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        success = _generate_solid_color_mp4(output_path, actual_duration)
+        if not success:
+            return json.dumps({"status": "error", "error": f"GPU worker failed and fallback failed: {exc}"})
+        return json.dumps(
+            {
+                "status": "generated",
+                "mode": "fallback",
+                "output_path": output_path,
+                "target_duration": round(duration_sec, 2),
+                "actual_duration": round(actual_duration, 2),
+                "error": str(exc),
+            }
+        )
+
+    # Video downloaded successfully — write to disk
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    with open(output_path, "wb") as f:
+        f.write(mp4_bytes)
+
+    # Probe the generated clip for actual duration (best-effort, never overwrites video)
+    actual_dur = actual_duration
+    try:
+        probe_result = json.loads(probe_clip(output_path))
+        actual_dur = probe_result.get("duration", actual_duration)
+    except Exception as probe_exc:
+        logger.warning("probe_clip failed (non-fatal): %s", probe_exc)
+
     logger.info(
-        "Generated video clip %s (%.2fs, lora=%s@%.2f)",
-        output_path,
-        actual_duration,
-        lora_id,
-        lora_weight,
+        "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f)",
+        output_path, actual_dur, gen_time, lora_id, lora_weight,
     )
     return json.dumps(
         {
             "status": "generated",
-            "mode": "placeholder",
+            "mode": "production",
             "output_path": output_path,
             "target_duration": round(duration_sec, 2),
-            "actual_duration": round(actual_duration, 2),
+            "actual_duration": round(actual_dur, 2),
             "lora_id": lora_id,
             "lora_weight": lora_weight,
             "prompt_preview": prompt[:200],
+            "gen_time": round(gen_time, 2),
+            "num_frames": num_frames,
+            "resolution": "768x512",
         }
     )
 

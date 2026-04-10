@@ -263,6 +263,7 @@ def deterministic_audio_callback(
                         scene_num=scene_num,
                         voice_role=voice,
                         text=text,
+                        language=lang_code,
                     )
                     result = json.loads(result_json)
                     wav_path = result.get("wav_path", "")

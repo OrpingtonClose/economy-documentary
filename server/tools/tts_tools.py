@@ -11,7 +11,8 @@ import json
 import logging
 import os
 import wave
-from typing import Optional
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 from google.adk.tools import FunctionTool
 
@@ -51,6 +52,7 @@ def generate_narration(
     voice_role: str,
     text: str,
     output_dir: str = "",
+    language: str = "",
     tool_context=None,
 ) -> str:
     """Generate narration WAV file using Qwen3-TTS.
@@ -60,6 +62,8 @@ def generate_narration(
         voice_role: Voice role identifier (e.g., "V1", "V2", "V3").
         text: Narration text to synthesize.
         output_dir: Optional output directory override.
+        language: Explicit language code ("en" or "ru"). If empty,
+                  inferred from voice_role suffix (e.g., "V1_RU" -> "ru").
 
     Returns:
         JSON string with WAV path and duration.
@@ -90,28 +94,86 @@ def generate_narration(
             }
         )
 
-    # Production mode: call Qwen3-TTS
-    # TODO: Implement actual Qwen3-TTS call on GPU VM
-    # For now, generate silent WAV as placeholder
-    _generate_silent_wav(wav_path, duration)
-    logger.info(
-        "Generated narration WAV %s (%.2fs, %d words)",
-        wav_path,
-        duration,
-        len(text.split()),
-    )
+    # Production mode: call Qwen3-TTS on GPU worker
+    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    if not gpu_worker_url:
+        # Fallback: generate silent WAV if no GPU worker configured
+        logger.warning("GPU_WORKER_URL not set, generating silent WAV placeholder")
+        _generate_silent_wav(wav_path, duration)
+        return json.dumps(
+            {
+                "status": "generated",
+                "mode": "placeholder",
+                "wav_path": wav_path,
+                "duration": round(duration, 2),
+                "sample_rate": _SAMPLE_RATE,
+                "text_length": len(text),
+                "word_count": len(text.split()),
+            }
+        )
 
-    return json.dumps(
-        {
-            "status": "generated",
-            "mode": "placeholder",
-            "wav_path": wav_path,
-            "duration": round(duration, 2),
-            "sample_rate": _SAMPLE_RATE,
-            "text_length": len(text),
-            "word_count": len(text.split()),
-        }
-    )
+    # Determine language: explicit param takes priority, then suffix convention
+    voice = voice_role
+    if voice_role.endswith("_RU"):
+        voice = voice_role[:-3]  # Strip _RU suffix
+        lang = language if language else "ru"
+    elif voice_role.endswith("_EN"):
+        voice = voice_role[:-3]  # Strip _EN suffix
+        lang = language if language else "en"
+    else:
+        lang = language if language else "en"
+
+    payload = json.dumps({
+        "text": text,
+        "voice": voice,
+        "language": lang,
+        "scene_num": scene_num,
+    }).encode("utf-8")
+
+    tts_url = f"{gpu_worker_url.rstrip('/')}/tts"
+    req = Request(tts_url, data=payload, headers={"Content-Type": "application/json"})
+
+    try:
+        with urlopen(req, timeout=120) as resp:
+            wav_bytes = resp.read()
+            actual_duration = float(resp.headers.get("X-Audio-Duration", str(duration)))
+            actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
+            gen_time = float(resp.headers.get("X-Gen-Time", "0"))
+
+        os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
+        with open(wav_path, "wb") as f:
+            f.write(wav_bytes)
+
+        logger.info(
+            "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
+            wav_path, actual_duration, gen_time, len(text.split()),
+        )
+        return json.dumps(
+            {
+                "status": "generated",
+                "mode": "production",
+                "wav_path": wav_path,
+                "duration": round(actual_duration, 2),
+                "sample_rate": actual_sample_rate,
+                "text_length": len(text),
+                "word_count": len(text.split()),
+                "gen_time": round(gen_time, 2),
+            }
+        )
+    except (URLError, OSError, TimeoutError) as exc:
+        logger.error("GPU worker TTS request failed: %s", exc)
+        # Fallback to silent WAV so pipeline can continue
+        _generate_silent_wav(wav_path, duration)
+        return json.dumps(
+            {
+                "status": "generated",
+                "mode": "fallback",
+                "wav_path": wav_path,
+                "duration": round(duration, 2),
+                "sample_rate": _SAMPLE_RATE,
+                "error": str(exc),
+            }
+        )
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------

@@ -10,22 +10,21 @@ import json
 import logging
 import os
 import subprocess
-from typing import Optional
 
 from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
-_VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 
 
 def _vast_cmd(args: list[str]) -> dict:
     """Run a vastai CLI command and return parsed output."""
-    if not _VAST_API_KEY:
+    api_key = os.environ.get("VAST_API_KEY", "")
+    if not api_key:
         return {"error": "VAST_API_KEY not set"}
 
-    cmd = ["vastai", "--api-key", _VAST_API_KEY] + args
+    cmd = ["vastai", "--api-key", api_key] + args
     try:
         result = subprocess.run(
             cmd,
@@ -49,16 +48,19 @@ def _vast_cmd(args: list[str]) -> dict:
 
 
 def provision_gpu_vm(
-    gpu_type: str = "RTX_4090",
-    min_vram_gb: int = 24,
-    max_price: float = 0.50,
+    gpu_type: str = "A100_SXM4",
+    min_vram_gb: int = 48,
+    max_price: float = 1.50,
     tool_context=None,
 ) -> str:
     """Provision a GPU VM via Vast.ai API.
 
+    LTX-2.3 with enable_model_cpu_offload() requires 48GB+ VRAM
+    (Gemma3 text encoder alone is ~46GB bf16).
+
     Args:
-        gpu_type: GPU type to request (e.g., "RTX_4090", "A100").
-        min_vram_gb: Minimum VRAM in GB.
+        gpu_type: GPU type to request (e.g., "A100_SXM4", "L40S").
+        min_vram_gb: Minimum VRAM in GB (must be >= 48 for LTX-2.3).
         max_price: Maximum price per hour in USD.
 
     Returns:
@@ -91,12 +93,63 @@ def provision_gpu_vm(
     if "error" in search_result:
         return json.dumps(search_result)
 
-    # TODO: Parse offers and select best match, then create instance
+    # Parse offers and select best match (lowest price with sufficient VRAM)
+    offers = search_result if isinstance(search_result, list) else []
+    if not offers:
+        return json.dumps(
+            {"status": "no_offers", "error": "No matching GPU offers found"}
+        )
+
+    # Sort by dph_total (price per hour) ascending
+    sorted_offers = sorted(
+        offers,
+        key=lambda o: float(o.get("dph_total", 999)),
+    )
+
+    best = sorted_offers[0]
+    offer_id = best.get("id")
+    if not offer_id:
+        return json.dumps(
+            {"status": "error", "error": "Best offer has no ID", "offer": best}
+        )
+
+    logger.info(
+        "Selected offer %s: %s, %.1fGB VRAM, $%.3f/hr",
+        offer_id,
+        best.get("gpu_name", "unknown"),
+        float(best.get("gpu_ram", 0)) / 1024,
+        float(best.get("dph_total", 0)),
+    )
+
+    # Create instance from best offer
+    # Use pytorch template for CUDA + PyTorch pre-installed
+    create_result = _vast_cmd(
+        [
+            "create", "instance",
+            str(offer_id),
+            "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
+            "--disk", "224",
+            "--raw",
+        ]
+    )
+
+    if "error" in create_result:
+        return json.dumps(create_result)
+
+    instance_id = create_result.get("new_contract")
+    if not instance_id:
+        return json.dumps(
+            {"status": "error", "error": "No instance ID in create response", "response": create_result}
+        )
     return json.dumps(
         {
-            "status": "search_complete",
-            "offers": search_result,
-            "message": "Offers retrieved. Select and provision via create command.",
+            "status": "provisioned",
+            "vm_id": str(instance_id),
+            "offer_id": str(offer_id),
+            "gpu_name": best.get("gpu_name", "unknown"),
+            "gpu_ram_gb": round(float(best.get("gpu_ram", 0)) / 1024, 1),
+            "price_per_hour": round(float(best.get("dph_total", 0)), 3),
+            "message": "VM provisioned. Wait for status=running then bootstrap.",
         }
     )
 
