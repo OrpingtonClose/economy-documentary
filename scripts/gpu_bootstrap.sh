@@ -56,7 +56,6 @@ pip install --no-cache-dir \
 # diffusers >= 0.37.0 required for LTX2Pipeline
 # transformers from git for qwen3_tts model architecture support
 pip install --no-cache-dir \
-    'diffusers>=0.37.0' \
     'accelerate>=0.33.0' \
     'safetensors>=0.4.0' \
     'sentencepiece>=0.2.0' \
@@ -66,7 +65,11 @@ pip install --no-cache-dir \
     'uvicorn>=0.20.0' \
     'pydantic>=2.0.0' \
     'b2>=4.0.0'
-pip install --no-cache-dir git+https://github.com/huggingface/transformers.git
+# diffusers from git for LTX-2.3 model support (merged in PR #13217, not yet in stable release)
+# transformers from git for qwen3_tts model architecture support
+pip install --no-cache-dir \
+    git+https://github.com/huggingface/diffusers.git \
+    git+https://github.com/huggingface/transformers.git
 
 # ---------------------------------------------------------------------------
 # B2 model download — selective (skip duplicate formats to save ~50 GB)
