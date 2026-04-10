@@ -61,24 +61,34 @@ def _repair_json_text(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             pass
 
-        # More aggressive: find unmatched { and close them
-        # by inserting } before the next line that starts with }
+        # More aggressive: insert closing } before lines that start
+        # with } or ] when brace_depth indicates an unclosed object.
+        # We skip characters inside JSON string values when counting.
         lines = repaired.split('\n')
         fixed_lines = []
         brace_depth = 0
         for line in lines:
             stripped = line.strip()
-            # Count braces in this line
-            for ch in stripped:
-                if ch == '{':
-                    brace_depth += 1
-                elif ch == '}':
-                    brace_depth -= 1
+            # Before appending, check if this line closes a scope
+            # (starts with } or ]) while we have an extra unclosed {.
+            if stripped and stripped[0] in ('}', ']') and brace_depth > 0:
+                indent = len(line) - len(line.lstrip())
+                fixed_lines.append(' ' * (indent + 2) + '}')
+                brace_depth -= 1
+            # Count braces outside of string values
+            in_string = False
+            prev_ch = ''
+            for ch in line:
+                if ch == '"' and prev_ch != '\\':
+                    in_string = not in_string
+                elif not in_string:
+                    if ch == '{':
+                        brace_depth += 1
+                    elif ch == '}':
+                        brace_depth -= 1
+                prev_ch = ch
             fixed_lines.append(line)
 
-            # If we see a line ending with a comma or closing brace
-            # and brace_depth suggests we have an unclosed object,
-            # check if the next meaningful content closes the array
         result = '\n'.join(fixed_lines)
         try:
             json.loads(result)
