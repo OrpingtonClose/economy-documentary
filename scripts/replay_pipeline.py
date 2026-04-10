@@ -31,14 +31,14 @@ DEFAULT_DB = os.environ.get(
 
 def list_runs(db_path: str) -> None:
     """List all pipeline runs in the event store."""
-    db_file = os.path.join(db_path, "pipeline_events.db")
+    db_file = os.path.join(db_path, "dashboard.db")
     if not os.path.exists(db_file):
         print(f"No database found at {db_file}")
         return
 
     conn = sqlite3.connect(db_file)
     cursor = conn.execute(
-        "SELECT run_id, topic, status, created_at, finished_at FROM runs ORDER BY created_at DESC LIMIT 20"
+        "SELECT run_id, topic, status, start_time, end_time FROM runs ORDER BY start_time DESC LIMIT 20"
     )
     rows = cursor.fetchall()
     conn.close()
@@ -47,16 +47,16 @@ def list_runs(db_path: str) -> None:
         print("No runs found.")
         return
 
-    print(f"{'Run ID':<40} {'Topic':<20} {'Status':<12} {'Created':<20} {'Finished':<20}")
+    print(f"{'Run ID':<40} {'Topic':<20} {'Status':<12} {'Start Time':<20} {'End Time':<20}")
     print("-" * 112)
     for row in rows:
-        run_id, topic, status, created, finished = row
-        print(f"{run_id:<40} {(topic or '-'):<20} {(status or 'running'):<12} {(created or '-'):<20} {(finished or '-'):<20}")
+        run_id, topic, status, start_time, end_time = row
+        print(f"{run_id:<40} {(topic or '-'):<20} {(status or 'running'):<12} {(str(start_time) if start_time else '-'):<20} {(str(end_time) if end_time else '-'):<20}")
 
 
 def replay_run(db_path: str, run_id: str) -> None:
     """Replay events for a specific pipeline run."""
-    db_file = os.path.join(db_path, "pipeline_events.db")
+    db_file = os.path.join(db_path, "dashboard.db")
     if not os.path.exists(db_file):
         print(f"No database found at {db_file}")
         return
@@ -65,7 +65,7 @@ def replay_run(db_path: str, run_id: str) -> None:
 
     # Get run info
     cursor = conn.execute(
-        "SELECT run_id, topic, status, created_at, finished_at, metadata FROM runs WHERE run_id = ?",
+        "SELECT run_id, topic, status, start_time, end_time, metadata_json FROM runs WHERE run_id = ?",
         (run_id,),
     )
     run = cursor.fetchone()
@@ -77,8 +77,8 @@ def replay_run(db_path: str, run_id: str) -> None:
     print(f"\n=== Pipeline Run: {run[0]} ===")
     print(f"Topic: {run[1] or '-'}")
     print(f"Status: {run[2] or 'running'}")
-    print(f"Created: {run[3]}")
-    print(f"Finished: {run[4] or '-'}")
+    print(f"Start Time: {run[3]}")
+    print(f"End Time: {run[4] or '-'}")
 
     if run[5]:
         try:
@@ -89,7 +89,7 @@ def replay_run(db_path: str, run_id: str) -> None:
 
     # Get events
     cursor = conn.execute(
-        "SELECT event_type, event_data, created_at FROM events WHERE run_id = ? ORDER BY created_at ASC",
+        "SELECT event_type, event_data, timestamp FROM events WHERE run_id = ? ORDER BY timestamp ASC",
         (run_id,),
     )
     events = cursor.fetchall()

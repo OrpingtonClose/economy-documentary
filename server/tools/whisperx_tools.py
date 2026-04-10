@@ -16,7 +16,7 @@ from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip() == "1"
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 _SECONDS_PER_WORD = 0.3
 _WORD_GAP = 0.05  # Small gap between words
 

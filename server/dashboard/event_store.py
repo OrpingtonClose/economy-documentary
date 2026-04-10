@@ -147,8 +147,8 @@ def finalize_run(run_id: str, status: str = "completed", metadata: dict = None) 
     _executor.submit(_do)
 
 
-def get_latest_snapshot(run_id: str) -> Optional[dict]:
-    """Get the latest snapshot for a run (blocking read via thread pool)."""
+async def get_latest_snapshot(run_id: str) -> Optional[dict]:
+    """Get the latest snapshot for a run (async read via thread pool)."""
     import asyncio
 
     def _do():
@@ -164,7 +164,7 @@ def get_latest_snapshot(run_id: str) -> Optional[dict]:
             conn.close()
 
     loop = asyncio.get_event_loop()
-    return loop.run_in_executor(_executor, _do)
+    return await loop.run_in_executor(_executor, _do)
 
 
 def get_recent_events(run_id: str, limit: int = 50) -> list[dict]:

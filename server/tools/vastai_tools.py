@@ -17,7 +17,7 @@ from google.adk.tools import FunctionTool
 logger = logging.getLogger(__name__)
 
 _VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip() == "1"
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 
 
 def _vast_cmd(args: list[str]) -> dict:

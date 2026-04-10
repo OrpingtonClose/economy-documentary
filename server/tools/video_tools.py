@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video"
 )
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip() == "1"
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 _TRIM_MARGIN = 1.15  # 15% longer for trim margin
 
 

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "TTS_OUTPUT_DIR", "/tmp/documentary-pipeline/audio"
 )
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip() == "1"
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 
 # Approximate speech rate: ~0.3s per word (for test duration estimation)
 _SECONDS_PER_WORD = 0.3
