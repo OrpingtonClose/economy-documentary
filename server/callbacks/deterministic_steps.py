@@ -16,6 +16,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import tempfile
 from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
@@ -685,14 +687,28 @@ def deterministic_assembly_callback(
                 track_errors.append(f"Scene {scene_num}{lang_suffix}: no narration clips")
                 continue
 
-            # Collect ALL narration clip paths and total duration
+            # Collect ALL narration clip paths and total duration,
+            # inserting tasteful silence pauses between voice segments.
+            INTER_VOICE_PAUSE_SEC = 1.0  # pause between V1→V2→V3 within a scene
             audio_paths = []
             total_audio_duration = 0.0
-            for a_clip in a_clips:
+            for idx, a_clip in enumerate(a_clips):
                 a_path = ""
                 if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
                     a_path = a_clip.media_reference.target_url
                 if a_path and os.path.exists(a_path):
+                    # Insert a silence gap before every clip after the first
+                    if idx > 0:
+                        silence_path = _generate_silence(
+                            INTER_VOICE_PAUSE_SEC,
+                            os.path.join(
+                                assembly_dir,
+                                f"silence_scene{scene_num:03d}{lang_suffix}_v{idx}.wav",
+                            ),
+                        )
+                        if silence_path:
+                            audio_paths.append(silence_path)
+                            total_audio_duration += INTER_VOICE_PAUSE_SEC
                     audio_paths.append(a_path)
                     if a_clip.source_range:
                         total_audio_duration += a_clip.source_range.duration.to_seconds()
@@ -800,13 +816,38 @@ def deterministic_assembly_callback(
         narration_clips_by_scene, video_clips_by_scene, primary_suffix,
     )
 
-    # Concatenate primary track
+    # Concatenate primary track with inter-scene pauses
+    INTER_SCENE_PAUSE_SEC = 2.0  # tasteful pause between scenes
     final_name = "final_documentary_ru.mp4" if is_dual else "final_documentary.mp4"
     final_path = os.path.join(output_dir, final_name)
     if muxed_paths:
         try:
+            # Insert black-video+silence segments between scenes
+            paths_with_pauses = []
+            for i, mp in enumerate(muxed_paths):
+                if i > 0:
+                    pause_path = os.path.join(
+                        assembly_dir, f"scene_pause_primary_{i}.mp4"
+                    )
+                    pause_audio = os.path.join(
+                        assembly_dir, f"scene_pause_primary_{i}.wav"
+                    )
+                    sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
+                    blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
+                    if sil and blk:
+                        # Mux silence + black into a single transition clip
+                        transition_path = os.path.join(
+                            assembly_dir, f"scene_transition_primary_{i}.mp4"
+                        )
+                        mux_res = json.loads(mux_audio_video(
+                            audio_path=sil, video_path=blk, output_path=transition_path,
+                        ))
+                        if "error" not in mux_res:
+                            paths_with_pauses.append(transition_path)
+                paths_with_pauses.append(mp)
+
             concat_result = json.loads(concat_clips(
-                clip_paths=",".join(muxed_paths),
+                clip_paths=",".join(paths_with_pauses),
                 output_path=final_path,
             ))
             if "error" in concat_result:
@@ -825,8 +866,31 @@ def deterministic_assembly_callback(
         alt_final_path = os.path.join(output_dir, "final_documentary_en.mp4")
         if alt_muxed:
             try:
+                # Insert inter-scene pauses for EN track too
+                alt_paths_with_pauses = []
+                for i, mp in enumerate(alt_muxed):
+                    if i > 0:
+                        pause_path = os.path.join(
+                            assembly_dir, f"scene_pause_en_{i}.mp4"
+                        )
+                        pause_audio = os.path.join(
+                            assembly_dir, f"scene_pause_en_{i}.wav"
+                        )
+                        sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
+                        blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
+                        if sil and blk:
+                            transition_path = os.path.join(
+                                assembly_dir, f"scene_transition_en_{i}.mp4"
+                            )
+                            mux_res = json.loads(mux_audio_video(
+                                audio_path=sil, video_path=blk, output_path=transition_path,
+                            ))
+                            if "error" not in mux_res:
+                                alt_paths_with_pauses.append(transition_path)
+                    alt_paths_with_pauses.append(mp)
+
                 alt_concat_result = json.loads(concat_clips(
-                    clip_paths=",".join(alt_muxed),
+                    clip_paths=",".join(alt_paths_with_pauses),
                     output_path=alt_final_path,
                 ))
                 if "error" in alt_concat_result:
@@ -864,6 +928,57 @@ def deterministic_assembly_callback(
 # ---------------------------------------------------------------------------
 # Mock tool context for direct function calls
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Silence generation helper for inter-voice / inter-scene pauses
+# ---------------------------------------------------------------------------
+
+def _generate_silence(duration_sec: float, output_path: str) -> str:
+    """Generate a silent WAV file of the given duration using ffmpeg.
+
+    Returns the output path on success, empty string on failure.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", f"anullsrc=r=24000:cl=mono:d={duration_sec}",
+        "-t", str(duration_sec),
+        output_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0 and os.path.exists(output_path):
+            return output_path
+        logger.warning("Silence generation failed: %s", result.stderr[:200])
+    except Exception as e:
+        logger.warning("Silence generation error: %s", e)
+    return ""
+
+
+def _generate_black_video(duration_sec: float, output_path: str, width: int = 768, height: int = 512) -> str:
+    """Generate a black video of the given duration for inter-scene transitions.
+
+    Returns the output path on success, empty string on failure.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", f"color=c=black:s={width}x{height}:r=24:d={duration_sec}",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-t", str(duration_sec),
+        output_path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0 and os.path.exists(output_path):
+            return output_path
+        logger.warning("Black video generation failed: %s", result.stderr[:200])
+    except Exception as e:
+        logger.warning("Black video generation error: %s", e)
+    return ""
+
 
 class _MockToolContext:
     """Minimal mock of ADK tool_context for direct function calls."""
