@@ -354,6 +354,7 @@ def _generate_video(
     current_seed = seed
     best_frames = None
     best_score = -1.0  # brightness + contrast
+    best_seed = seed
 
     for attempt in range(1, max_attempts + 1):
         gen = torch.Generator("cpu").manual_seed(current_seed)
@@ -382,9 +383,11 @@ def _generate_video(
         if score > best_score:
             best_frames = candidate_frames
             best_score = score
+            best_seed = current_seed
 
         if brightness >= _MIN_BRIGHTNESS and contrast >= _MIN_CONTRAST:
             best_frames = candidate_frames
+            best_seed = current_seed
             break
 
         if attempt < max_attempts:
@@ -404,7 +407,7 @@ def _generate_video(
     video_frames = best_frames
 
     elapsed = time.time() - t0
-    logger.info("Video generated in %.1fs (seed=%d)", elapsed, current_seed)
+    logger.info("Video generated in %.1fs (seed=%d)", elapsed, best_seed)
 
     # Export to MP4
     output_path = os.path.join(
