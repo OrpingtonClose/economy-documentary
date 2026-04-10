@@ -33,7 +33,6 @@ audio_agent = Agent(
     model=build_model(),
     instruction=_INSTRUCTION,
     tools=[],
-    output_key="whisperx_alignment",
     before_agent_callback=deterministic_audio_callback,
     after_agent_callback=timeline_guardian_callback,
 )

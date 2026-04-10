@@ -405,6 +405,9 @@ def write_visual_metadata_to_otio(
     import opentimelineio as otio
     from tools.otio_tools import _otio_lock
 
+    video_track_missing = False
+    updated = 0
+
     with _otio_lock:
         timeline = otio.adapters.read_from_file(timeline_path)
         video_track = None
@@ -415,34 +418,32 @@ def write_visual_metadata_to_otio(
 
         if video_track is None:
             logger.error("V1_Video track not found")
-            from callbacks.timeline_guardian import timeline_guardian_callback
-            return timeline_guardian_callback(callback_context)
+            video_track_missing = True
+        else:
+            # Build a map of scene_num -> concepts
+            scene_concepts = {}
+            for concept in concepts:
+                sn = concept.get("scene_num", 0)
+                if sn not in scene_concepts:
+                    scene_concepts[sn] = []
+                scene_concepts[sn].append(concept)
 
-        # Build a map of scene_num -> concepts
-        scene_concepts = {}
-        for concept in concepts:
-            sn = concept.get("scene_num", 0)
-            if sn not in scene_concepts:
-                scene_concepts[sn] = []
-            scene_concepts[sn].append(concept)
+            # Update gap metadata
+            for item in video_track:
+                if isinstance(item, otio.schema.Gap):
+                    meta = item.metadata.get("documentary", {})
+                    scene_num = meta.get("scene_num", 0)
+                    if scene_num in scene_concepts:
+                        # Use the first concept for this scene
+                        concept = scene_concepts[scene_num][0]
+                        meta["prompt"] = concept.get("prompt", "")
+                        meta["lora_id"] = concept.get("lora_id", "documentary-realism")
+                        meta["lora_weight"] = concept.get("lora_weight", 0.75)
+                        meta["visual_phrases"] = scene_concepts[scene_num]
+                        item.metadata["documentary"] = meta
+                        updated += 1
 
-        # Update gap metadata
-        updated = 0
-        for item in video_track:
-            if isinstance(item, otio.schema.Gap):
-                meta = item.metadata.get("documentary", {})
-                scene_num = meta.get("scene_num", 0)
-                if scene_num in scene_concepts:
-                    # Use the first concept for this scene
-                    concept = scene_concepts[scene_num][0]
-                    meta["prompt"] = concept.get("prompt", "")
-                    meta["lora_id"] = concept.get("lora_id", "documentary-realism")
-                    meta["lora_weight"] = concept.get("lora_weight", 0.75)
-                    meta["visual_phrases"] = scene_concepts[scene_num]
-                    item.metadata["documentary"] = meta
-                    updated += 1
-
-        otio.adapters.write_to_file(timeline, timeline_path)
+            otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info("Updated %d OTIO gaps with visual metadata", updated)
 
@@ -534,7 +535,7 @@ def deterministic_production_callback(
             actual_duration = probe_result.get("duration", duration * 1.15)
 
             # Add to OTIO timeline
-            add_video_clip(
+            clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
                 mp4_path=output_path,
@@ -544,7 +545,11 @@ def deterministic_production_callback(
                 lora_id=lora_id,
                 tool_context=_MockToolContext(state),
             )
-            total_clips += 1
+            clip_result = json.loads(clip_result_json)
+            if "error" in clip_result:
+                errors.append(f"OTIO error scene {scene_num} phrase {phrase_idx}: {clip_result['error']}")
+            else:
+                total_clips += 1
 
         except Exception as e:
             err_msg = f"Error producing scene {scene_num} phrase {phrase_idx}: {e}"
