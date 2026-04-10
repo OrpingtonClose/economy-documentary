@@ -20,6 +20,7 @@ bf16 only — no FP8, no quantization.
 from __future__ import annotations
 
 import argparse
+import gc
 import io
 import logging
 import os
@@ -43,10 +44,11 @@ logger = logging.getLogger("gpu_worker")
 app = FastAPI(title="Documentary GPU Worker")
 
 # ---------------------------------------------------------------------------
-# Global model handles (loaded once at startup)
+# Global model handles — only ONE model in VRAM at a time (24 GB RTX 4090)
 # ---------------------------------------------------------------------------
 _tts_model = None  # Qwen3TTSModel instance
 _ltx_pipe = None
+_active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
 
@@ -106,11 +108,48 @@ _VOICE_PROFILES = {
 # Model loading
 # ---------------------------------------------------------------------------
 
+def _unload_tts():
+    """Move TTS model off GPU and free VRAM."""
+    global _tts_model, _active_model
+    if _tts_model is None:
+        return
+    logger.info("Unloading TTS from GPU...")
+    del _tts_model
+    _tts_model = None
+    _active_model = ""
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("TTS unloaded. VRAM free: %.1f GB",
+                (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1e9)
+
+
+def _unload_ltx():
+    """Move LTX pipeline off GPU and free VRAM."""
+    global _ltx_pipe, _active_model
+    if _ltx_pipe is None:
+        return
+    logger.info("Unloading LTX from GPU...")
+    del _ltx_pipe
+    _ltx_pipe = None
+    _active_model = ""
+    gc.collect()
+    torch.cuda.empty_cache()
+    logger.info("LTX unloaded. VRAM free: %.1f GB",
+                (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1e9)
+
+
 def _load_tts():
-    """Load Qwen3-TTS VoiceDesign model via qwen-tts package."""
-    global _tts_model
+    """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
+
+    Unloads LTX first if it's on GPU (only one model at a time on 24GB).
+    """
+    global _tts_model, _active_model
     if _tts_model is not None:
         return
+
+    # Free VRAM if LTX is loaded
+    if _ltx_pipe is not None:
+        _unload_ltx()
 
     from qwen_tts import Qwen3TTSModel
 
@@ -123,6 +162,7 @@ def _load_tts():
         device_map="cuda:0",
         dtype=torch.bfloat16,
     )
+    _active_model = "tts"
 
     logger.info("Qwen3-TTS VoiceDesign loaded in %.1fs", time.time() - t0)
 
@@ -130,13 +170,18 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
+    Unloads TTS first if it's on GPU (only one model at a time on 24GB).
     Uses enable_model_cpu_offload() to fit the full pipeline
     (Gemma3 text encoder + LTX2 transformer + VAE) on 24 GB VRAM
     by keeping idle components in CPU RAM.
     """
-    global _ltx_pipe
+    global _ltx_pipe, _active_model
     if _ltx_pipe is not None:
         return
+
+    # Free VRAM if TTS is loaded
+    if _tts_model is not None:
+        _unload_tts()
 
     from diffusers import LTX2Pipeline
 
@@ -153,6 +198,7 @@ def _load_ltx():
     )
     # CPU offload: only the active component sits on GPU at any time
     _ltx_pipe.enable_model_cpu_offload()
+    _active_model = "ltx"
 
     logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
 
@@ -381,21 +427,31 @@ def video_endpoint(req: VideoRequest):
 
 
 @app.post("/load-models")
-def load_models():
-    """Pre-load all models into VRAM."""
+def load_models(model: str = "tts"):
+    """Load a specific model into VRAM (unloads the other first).
+
+    Args:
+        model: Which model to load — "tts" or "ltx". Default: "tts".
+               Only one model fits in 24GB VRAM at a time.
+    """
     results = {}
 
-    try:
-        _load_tts()
-        results["tts"] = "loaded"
-    except Exception as e:
-        results["tts"] = f"error: {e}"
-
-    try:
-        _load_ltx()
-        results["ltx"] = "loaded"
-    except Exception as e:
-        results["ltx"] = f"error: {e}"
+    if model == "tts":
+        try:
+            _load_tts()
+            results["tts"] = "loaded"
+            results["ltx"] = "unloaded (VRAM constraint)"
+        except Exception as e:
+            results["tts"] = f"error: {e}"
+    elif model == "ltx":
+        try:
+            _load_ltx()
+            results["ltx"] = "loaded"
+            results["tts"] = "unloaded (VRAM constraint)"
+        except Exception as e:
+            results["ltx"] = f"error: {e}"
+    else:
+        results["error"] = f"Unknown model: {model}. Use 'tts' or 'ltx'."
 
     return results
 
