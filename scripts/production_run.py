@@ -99,7 +99,7 @@ def provision_vm(gpu_type: str = "RTX_4090", max_price: float = 0.50) -> dict:
     result = vastai_cmd([
         "create", "instance", str(offer_id),
         "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
-        "--disk", "80",
+        "--disk", "224",
         "--raw",
     ])
 
@@ -177,8 +177,7 @@ def start_gpu_worker(vm: dict) -> str:
     # Start worker in background
     run_cmd(
         ssh_args + [
-            "source /workspace/.venv/bin/activate && "
-            "nohup python /workspace/gpu_worker.py --port 8880 "
+            "nohup python3 /workspace/gpu_worker.py --port 8880 "
             "> /workspace/worker.log 2>&1 &"
         ],
         timeout=10,
