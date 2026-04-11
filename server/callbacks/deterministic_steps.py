@@ -154,6 +154,9 @@ def clean_scenes_after_scenario(
     the scenes.  The after_model_callback captures scenes and visual_style
     to both state and backup files on disk.  This callback reads from
     whichever source has the data.
+
+    If the scenario stage was already completed in B2, this is a no-op
+    (state was restored from B2 on startup).
     """
     state = callback_context.state
     timeline_dir = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
@@ -184,6 +187,19 @@ def clean_scenes_after_scenario(
     if scenes:
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
+
+        # Upload scenario artifacts to B2 immediately
+        from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
+        vs_raw = str(state.get("visual_style", ""))
+        _b2_ok = upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
+        _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
+        # Upload timeline if it exists
+        tp = state.get("_timeline_path", "")
+        if tp and os.path.exists(tp):
+            upload_timeline(tp)
+        # Only mark stage complete if critical artifacts uploaded
+        if _b2_ok:
+            upload_stage_marker("scenario")
     else:
         logger.error(
             "Failed to extract scenes from state (len=%d) and backup (exists=%s)",
@@ -206,8 +222,18 @@ def deterministic_audio_callback(
 
     Parses scenes from state, generates TTS for each voice, adds clips
     to OTIO timeline, runs alignment. Returns Content to skip the LLM.
+
+    If the audio stage was already completed in B2, skip entirely.
     """
     state = callback_context.state
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "audio" in stages_complete:
+        logger.info("B2: audio stage already complete, skipping TTS generation")
+        state["pipeline_phase"] = "audio"
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Audio stage restored from B2 checkpoint — skipped.")],
+        )
     state["pipeline_phase"] = "audio"
 
     # Parse scenes
@@ -360,6 +386,16 @@ def deterministic_audio_callback(
 
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
+
+    # Upload audio stage completion to B2
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    _b2_ok = upload_pipeline_state(dict(state))
+    tp = state.get("_timeline_path", "")
+    if tp and os.path.exists(tp):
+        upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("audio")
 
     summary_parts = [
         f"Audio generation complete: {total_clips} narration clips added to timeline.",
@@ -541,6 +577,20 @@ def write_visual_metadata_to_otio(
 
     logger.info("Updated %d OTIO gaps with visual metadata", updated)
 
+    # Upload visual direction artifacts to B2 immediately
+    from tools.b2_checkpoint import upload_visual_concepts, upload_stage_marker, upload_pipeline_state, upload_timeline
+    _b2_ok = True
+    raw_vc = str(callback_context.state.get("visual_concepts", ""))
+    if raw_vc:
+        _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
+    _b2_ok = upload_pipeline_state(dict(callback_context.state)) and _b2_ok
+    tp = callback_context.state.get("_timeline_path", "")
+    if tp and os.path.exists(tp):
+        upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("visual_direction")
+
     # Run timeline guardian
     from callbacks.timeline_guardian import timeline_guardian_callback
     return timeline_guardian_callback(callback_context)
@@ -557,8 +607,18 @@ def deterministic_production_callback(
 
     Reads visual_concepts from state, generates video clips for each phrase,
     probes results, and adds them to the OTIO timeline.
+
+    If the production stage was already completed in B2, skip entirely.
     """
     state = callback_context.state
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "production" in stages_complete:
+        logger.info("B2: production stage already complete, skipping video generation")
+        state["pipeline_phase"] = "production"
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Production stage restored from B2 checkpoint — skipped.")],
+        )
     state["pipeline_phase"] = "production"
 
     raw_concepts = state.get("visual_concepts", "")
@@ -758,6 +818,16 @@ def deterministic_production_callback(
             logger.error(err_msg)
             errors.append(err_msg)
 
+    # Upload production stage completion to B2
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    _b2_ok = upload_pipeline_state(dict(state))
+    tp = state.get("_timeline_path", "")
+    if tp and os.path.exists(tp):
+        upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("production")
+
     summary_parts = [
         f"Production complete: {total_clips} video clips generated and added to timeline.",
     ]
@@ -786,8 +856,18 @@ def deterministic_assembly_callback(
 
     Reads the OTIO timeline, trims video clips, muxes audio+video per scene,
     and concatenates everything into the final output.
+
+    If the assembly stage was already completed in B2, skip entirely.
     """
     state = callback_context.state
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "assembly" in stages_complete:
+        logger.info("B2: assembly stage already complete, skipping")
+        state["pipeline_phase"] = "assembly"
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Assembly stage restored from B2 checkpoint — skipped.")],
+        )
     state["pipeline_phase"] = "assembly"
 
     timeline_path = state.get("_timeline_path", "")
@@ -1118,6 +1198,18 @@ def deterministic_assembly_callback(
         )
     if errors:
         summary_parts.append(f"Errors: {len(errors)} - {'; '.join(errors[:5])}")
+
+    # Upload final outputs + assembly stage marker to B2
+    from tools.b2_checkpoint import upload_final_output, upload_stage_marker, upload_pipeline_state
+    _b2_ok = True
+    if os.path.exists(final_path):
+        _b2_ok = upload_final_output(final_path) and _b2_ok
+    if alt_final_path and os.path.exists(alt_final_path):
+        _b2_ok = upload_final_output(alt_final_path) and _b2_ok
+    _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("assembly")
 
     logger.info("Deterministic assembly: %d scenes, final=%s", len(muxed_paths), final_path)
 

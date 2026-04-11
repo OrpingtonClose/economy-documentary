@@ -125,8 +125,21 @@ def _check_scenario_approval(callback_context):
 
 
 def _scenario_phase_setup(callback_context):
-    """Set pipeline phase before scenario director runs."""
-    callback_context.state["pipeline_phase"] = "scenario"
+    """Set pipeline phase before scenario director runs.
+
+    If the scenario stage was already completed in B2, skip the entire
+    LoopAgent by returning Content (which ADK treats as 'agent already answered').
+    """
+    from google.genai import types as genai_types
+    state = callback_context.state
+    state["pipeline_phase"] = "scenario"
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "scenario" in stages_complete:
+        logger.info("B2: scenario stage already complete, skipping LoopAgent")
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Scenario restored from B2 checkpoint — skipped.")],
+        )
     return None
 
 

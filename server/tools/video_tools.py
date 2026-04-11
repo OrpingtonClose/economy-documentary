@@ -278,6 +278,13 @@ def generate_video_clip(
     except OSError as e:
         logger.warning("Failed to write clip status %s: %s", status_path, e)
 
+    # Upload video clip + QA status to B2 immediately after creation
+    try:
+        from tools.b2_checkpoint import upload_video_clip
+        upload_video_clip(output_path, status_path)
+    except Exception as b2_err:
+        logger.warning("B2 upload failed for video clip %s: %s", output_path, b2_err)
+
     # Probe the generated clip for actual duration (best-effort, never overwrites video)
     actual_dur = actual_duration
     try:
