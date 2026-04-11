@@ -160,7 +160,7 @@ def generate_video_clip(
     req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=900) as resp:  # 15 min: up to 3 retries × 30 steps
+        with urlopen(req, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
             mp4_bytes = resp.read()
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
             # Qwen-Omni visual QA status from GPU worker (bearnaise pattern)
@@ -181,7 +181,7 @@ def generate_video_clip(
             time.sleep(backoff)
             try:
                 req2 = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
-                with urlopen(req2, timeout=900) as resp:
+                with urlopen(req2, timeout=3600) as resp:
                     mp4_bytes = resp.read()
                     gen_time = float(resp.headers.get("X-Gen-Time", "0"))
                     qa_quality = resp.headers.get("X-QA-Quality", "unknown")
