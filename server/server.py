@@ -25,6 +25,7 @@ from starlette.responses import Response
 load_dotenv()
 
 from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+from google.adk.apps import App
 
 from agents.model_config import ADK_MODEL_NAME
 from agents.pipeline import pipeline_agent
@@ -158,10 +159,14 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(dashboard_router)
 
 
-# AG-UI endpoint -- uses add_adk_fastapi_endpoint which registers POST /
-adk_agent = ADKAgent(
-    adk_agent=pipeline_agent,
-    app_name="documentary-pipeline",
+# AG-UI endpoint -- uses App + ADKAgent.from_app() to preserve plugins
+_adk_app = App(
+    name="documentary-pipeline",
+    root_agent=pipeline_agent,
+    plugins=build_plugins(),
+)
+adk_agent = ADKAgent.from_app(
+    app=_adk_app,
 )
 add_adk_fastapi_endpoint(app, adk_agent, path="/")
 
