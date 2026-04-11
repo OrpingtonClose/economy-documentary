@@ -148,15 +148,16 @@ def _unload_ltx():
 def _load_tts():
     """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
 
-    In single-mode (--mode tts), no unloading needed — TTS owns the GPU.
-    In shared mode (--mode both), unloads LTX first to free VRAM.
+    Always unloads LTX first if loaded — prevents OOM from both models
+    coexisting in VRAM.  In single-mode (--mode tts) LTX should never be
+    loaded, so the guard is a safety net rather than normal path.
     """
     global _tts_model, _active_model
     if _tts_model is not None:
         return
 
-    # Free VRAM if LTX is loaded (only relevant in shared mode)
-    if _worker_mode == "both" and _ltx_pipe is not None:
+    # Always free VRAM if LTX is loaded — OOM safety net
+    if _ltx_pipe is not None:
         _unload_ltx()
 
     from qwen_tts import Qwen3TTSModel
@@ -178,8 +179,9 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
-    In single-mode (--mode ltx), no unloading needed — LTX owns the GPU.
-    In shared mode (--mode both), unloads TTS first to free VRAM.
+    Always unloads TTS first if loaded — prevents OOM from both models
+    coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
+    loaded, so the guard is a safety net rather than normal path.
     Uses enable_model_cpu_offload() to keep idle components in CPU RAM
     while the active component runs on GPU. Requires 48GB+ VRAM
     for the Gemma3 text encoder (~24GB bf16 weights).
@@ -188,8 +190,8 @@ def _load_ltx():
     if _ltx_pipe is not None:
         return
 
-    # Free VRAM if TTS is loaded (only relevant in shared mode)
-    if _worker_mode == "both" and _tts_model is not None:
+    # Always free VRAM if TTS is loaded — OOM safety net
+    if _tts_model is not None:
         _unload_tts()
 
     from diffusers import LTX2Pipeline
@@ -729,9 +731,18 @@ def video_endpoint(req: VideoRequest):
 def load_models(model: str = "tts"):
     """Load a specific model into VRAM (unloads the other first).
 
+    In single-mode workers, rejects requests for the wrong model type
+    to prevent accidentally loading both models and causing OOM.
+
     Args:
         model: Which model to load — "tts" or "ltx". Default: "tts".
     """
+    # Reject wrong-model requests in single-mode workers
+    if _worker_mode == "tts" and model == "ltx":
+        raise HTTPException(503, "This worker is in TTS-only mode. Cannot load LTX.")
+    if _worker_mode == "ltx" and model == "tts":
+        raise HTTPException(503, "This worker is in LTX-only mode. Cannot load TTS.")
+
     results = {}
 
     with _model_lock:
@@ -739,14 +750,14 @@ def load_models(model: str = "tts"):
             try:
                 _load_tts()
                 results["tts"] = "loaded"
-                results["ltx"] = "unloaded (VRAM constraint)"
+                results["ltx"] = "unloaded" if _ltx_pipe is None else "still loaded (unexpected)"
             except Exception as e:
                 results["tts"] = f"error: {e}"
         elif model == "ltx":
             try:
                 _load_ltx()
                 results["ltx"] = "loaded"
-                results["tts"] = "unloaded (VRAM constraint)"
+                results["tts"] = "unloaded" if _tts_model is None else "still loaded (unexpected)"
             except Exception as e:
                 results["ltx"] = f"error: {e}"
         else:
