@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -31,6 +32,32 @@ _OUTPUT_BASE = os.environ.get(
 )
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 _TRIM_MARGIN = 1.15  # 15% longer for trim margin
+
+# Round-robin state for distributing work across multiple GPU workers
+_worker_lock = threading.Lock()
+_worker_index = 0
+
+
+def _get_next_worker_url() -> str:
+    """Get the next GPU worker URL using round-robin distribution.
+
+    Reads VIDEO_WORKER_URLS (comma-separated) for multiple workers,
+    falls back to VIDEO_WORKER_URL or GPU_WORKER_URL for single worker.
+    """
+    global _worker_index
+
+    # Check for multiple workers first
+    urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
+    if urls_str:
+        urls = [u.strip() for u in urls_str.split(",") if u.strip()]
+        if urls:
+            with _worker_lock:
+                url = urls[_worker_index % len(urls)]
+                _worker_index += 1
+            return url
+
+    # Single worker fallback
+    return os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
 
 
 def _generate_solid_color_mp4(
@@ -122,8 +149,8 @@ def generate_video_clip(
         )
 
     # Production mode: call LTX-2.3 on GPU worker
-    # VIDEO_WORKER_URL takes priority (dedicated LTX VM), falls back to GPU_WORKER_URL
-    gpu_worker_url = os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
+    # Uses round-robin across VIDEO_WORKER_URLS if multiple workers available
+    gpu_worker_url = _get_next_worker_url()
     if not gpu_worker_url:
         # Fallback: generate solid-color placeholder if no GPU worker
         logger.warning("GPU_WORKER_URL not set, generating solid-color placeholder")

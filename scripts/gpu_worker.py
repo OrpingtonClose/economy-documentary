@@ -184,9 +184,8 @@ def _load_ltx():
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
     loaded, so the guard is a safety net rather than normal path.
-    Uses enable_model_cpu_offload() to keep idle components in CPU RAM
-    while the active component runs on GPU. Requires 48GB+ VRAM
-    for the Gemma3 text encoder (~24GB bf16 weights).
+    Loads all components fully on GPU (no cpu_offload). Requires 80GB+ VRAM
+    (model is ~71GB bf16). H200 (141GB) or A100 80GB recommended.
     """
     global _ltx_pipe, _active_model
     if _ltx_pipe is not None:
@@ -215,11 +214,8 @@ def _load_ltx():
     pipe = LTX2Pipeline.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
-    )
-    # Use cpu_offload per official dg845 example — moves idle components
-    # to CPU while active component runs on GPU.  Same bf16 precision,
-    # just memory management.  Required for long clips on any GPU size.
-    pipe.enable_model_cpu_offload(device="cuda")
+        low_cpu_mem_usage=False,
+    ).to("cuda")
     pipe.vae.enable_tiling()  # Required for quality output per official docs
     _ltx_pipe = pipe
     _active_model = "ltx"
