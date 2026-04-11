@@ -207,12 +207,11 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Model-level CPU offload: entire components move on/off GPU as needed.
-    # Keeps idle components (e.g. text encoder after encoding) in CPU RAM
-    # while active component (e.g. transformer) runs on GPU.  No quality
-    # loss — same bf16 precision.  Frees ~20GB VRAM headroom for inference
-    # working memory (intermediate tensors, attention KV cache, etc.).
-    pipe.enable_model_cpu_offload()
+    # Move entire pipeline to GPU — no offloading of any kind.
+    # H200 140GB VRAM has massive headroom for the full model (~85GB)
+    # plus inference working memory.  Avoids any CPU↔GPU transfer
+    # latency and ensures maximum generation quality.
+    pipe.to("cuda")
     _ltx_pipe = pipe
     _active_model = "ltx"
 
