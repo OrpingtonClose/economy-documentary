@@ -149,6 +149,9 @@ def generate_narration(
         # Fallback: generate silent WAV if no GPU worker configured
         logger.warning("GPU_WORKER_URL not set, generating silent WAV placeholder")
         _generate_silent_wav(wav_path, duration)
+        # Remove stale sidecar so this placeholder isn't mistaken for real audio
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         return json.dumps(
             {
                 "status": "generated",
@@ -214,6 +217,9 @@ def generate_narration(
         logger.error("GPU worker TTS request failed: %s", exc)
         # Fallback to silent WAV so pipeline can continue
         _generate_silent_wav(wav_path, duration)
+        # Remove stale sidecar so this placeholder isn't mistaken for real audio
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         return json.dumps(
             {
                 "status": "generated",
