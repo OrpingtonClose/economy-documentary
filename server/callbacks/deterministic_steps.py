@@ -722,6 +722,11 @@ def write_visual_metadata_to_otio(
     if not concepts:
         logger.warning("No visual concepts found to write to OTIO (raw=%s...)",
                        raw_str[:200] if raw_str else "empty")
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        from infra_agent import get_infra_agent
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("visual_direction")
         # Still run timeline guardian
         from callbacks.timeline_guardian import timeline_guardian_callback
         return timeline_guardian_callback(callback_context)
@@ -729,6 +734,11 @@ def write_visual_metadata_to_otio(
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         logger.error("Timeline not found at %s", timeline_path)
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        from infra_agent import get_infra_agent
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("visual_direction")
         from callbacks.timeline_guardian import timeline_guardian_callback
         return timeline_guardian_callback(callback_context)
 
@@ -1111,6 +1121,10 @@ def deterministic_assembly_callback(
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("assembly")
         return genai_types.Content(
             role="model",
             parts=[genai_types.Part(text="ERROR: Timeline not found")],
@@ -1139,6 +1153,10 @@ def deterministic_assembly_callback(
             narration_track = track
 
     if video_track is None or narration_track is None:
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("assembly")
         return genai_types.Content(
             role="model",
             parts=[genai_types.Part(text="ERROR: Missing V1_Video or A1_Narration track")],
