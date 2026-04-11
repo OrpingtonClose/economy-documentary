@@ -564,7 +564,7 @@ def deterministic_production_callback(
                 concepts.append({
                     "scene_num": sn,
                     "phrase_idx": 0,
-                    "duration": scene.get("duration_sec", 30),
+                    "duration": scene.get("duration_sec", 5),
                     "prompt": f"Documentary footage: {scene.get('title', 'scene')}. {scene.get('visual_notes', '')}",
                     "start_time": 0.0,
                     "end_time": min(scene.get('duration_sec', 5), 8.0),
