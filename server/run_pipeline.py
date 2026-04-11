@@ -142,6 +142,12 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         f"{language_instruction}"
     )
 
+    # Start infra agent for continuous health monitoring
+    from infra_agent import start_infra_agent
+    infra = start_infra_agent(poll_interval=30.0, max_consecutive_failures=3)
+    infra_task = asyncio.create_task(infra.run())
+    logger.info("InfraAgent started as background task")
+
     # Run the pipeline
     start_time = time.time()
     logger.info("Starting pipeline run...")
@@ -168,6 +174,14 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
 
     elapsed = time.time() - start_time
     logger.info("Pipeline completed in %.1f seconds", elapsed)
+
+    # Shutdown infra agent
+    infra.shutdown()
+    try:
+        await asyncio.wait_for(infra_task, timeout=5.0)
+    except asyncio.TimeoutError:
+        logger.warning("InfraAgent did not shut down cleanly within 5s")
+    logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
 
     # Get final session state
     final_session = await session_service.get_session(

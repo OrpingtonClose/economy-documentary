@@ -379,6 +379,12 @@ def clean_scenes_after_scenario(
             len(raw_str), os.path.exists(scenes_file),
         )
 
+    # INFRA: notify scenario stage complete
+    from infra_agent import get_infra_agent
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_complete("scenario")
+
     # Run timeline guardian after cleaning
     from callbacks.timeline_guardian import timeline_guardian_callback
     return timeline_guardian_callback(callback_context)
@@ -411,6 +417,13 @@ def deterministic_audio_callback(
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
     validate_preconditions(AUDIO_CONTRACT, state.to_dict())
+
+    # INFRA: notify stage start + check if pipeline is paused
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("audio")
+    check_infra_pause()
 
     state["pipeline_phase"] = "audio"
 
@@ -587,6 +600,11 @@ def deterministic_audio_callback(
         summary_parts.append(f"Errors: {len(errors)} - {'; '.join(errors[:3])}")
 
     logger.info("Deterministic audio: %d clips, %d alignments", total_clips, len(alignment_data))
+
+    # INFRA: notify stage complete
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_complete("audio")
 
     return genai_types.Content(
         role="model",
@@ -773,6 +791,12 @@ def write_visual_metadata_to_otio(
     if _b2_ok:
         upload_stage_marker("visual_direction")
 
+    # INFRA: notify visual_direction stage complete
+    from infra_agent import get_infra_agent
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_complete("visual_direction")
+
     # Run timeline guardian
     from callbacks.timeline_guardian import timeline_guardian_callback
     return timeline_guardian_callback(callback_context)
@@ -805,6 +829,13 @@ def deterministic_production_callback(
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
     validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
+
+    # INFRA: notify stage start + check if pipeline is paused
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("production")
+    check_infra_pause()
 
     state["pipeline_phase"] = "production"
 
@@ -1030,6 +1061,11 @@ def deterministic_production_callback(
 
     logger.info("Deterministic production: %d clips generated", total_clips)
 
+    # INFRA: notify stage complete
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_complete("production")
+
     return genai_types.Content(
         role="model",
         parts=[genai_types.Part(text="\n".join(summary_parts))],
@@ -1063,6 +1099,13 @@ def deterministic_assembly_callback(
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
     validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
+
+    # INFRA: notify stage start + check if pipeline is paused
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("assembly")
+    check_infra_pause()
 
     state["pipeline_phase"] = "assembly"
 
@@ -1408,6 +1451,11 @@ def deterministic_assembly_callback(
         upload_stage_marker("assembly")
 
     logger.info("Deterministic assembly: %d scenes, final=%s", len(muxed_paths), final_path)
+
+    # INFRA: notify stage complete
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_complete("assembly")
 
     return genai_types.Content(
         role="model",
