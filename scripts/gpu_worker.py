@@ -797,7 +797,9 @@ def video_endpoint(req: VideoRequest):
             "X-Gen-Time": str(round(elapsed, 3)),
             "X-File-Size": str(len(mp4_bytes)),
             "X-QA-Quality": qa_status.get("quality", "unknown"),
-            "X-QA-Reason": "see-body",
+            "X-QA-Reason": base64.b64encode(
+                qa_status.get("qa_reason", "")[:500].encode("utf-8")
+            ).decode("ascii"),
             "X-QA-Attempts": str(qa_status.get("attempts", 1)),
             "X-QA-Seed": str(qa_status.get("seed", req.seed)),
         },

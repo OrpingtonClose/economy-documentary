@@ -12,6 +12,7 @@ Rules:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -166,7 +167,11 @@ def generate_video_clip(
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
             # Qwen-Omni visual QA status from GPU worker (bearnaise pattern)
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-            qa_reason = resp.headers.get("X-QA-Reason", "")
+            _raw_reason = resp.headers.get("X-QA-Reason", "")
+            try:
+                qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
+            except Exception:
+                qa_reason = _raw_reason  # fallback: use raw value
             qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
             qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
     except (URLError, OSError, TimeoutError) as exc:
@@ -186,7 +191,11 @@ def generate_video_clip(
                     mp4_bytes = resp.read()
                     gen_time = float(resp.headers.get("X-Gen-Time", "0"))
                     qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-                    qa_reason = resp.headers.get("X-QA-Reason", "")
+                    _raw_reason = resp.headers.get("X-QA-Reason", "")
+                    try:
+                        qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
+                    except Exception:
+                        qa_reason = _raw_reason
                     qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
                     qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
                 break  # success — exit retry loop
