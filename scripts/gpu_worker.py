@@ -298,6 +298,8 @@ def _measure_frame_brightness(frames) -> float:
         return 0.0
     # Scale to 0-255 if in [0,1] float range (use 1.5 threshold —
     # VAE decode can produce values slightly > 1.0 due to fp imprecision)
+    if sampled.size == 0:
+        return 0.0
     if sampled.max() <= 1.5:
         sampled = sampled * 255.0
     return float(sampled.mean())
@@ -324,6 +326,8 @@ def _measure_frame_contrast(frames) -> float:
     elif arr.ndim == 3:
         sampled = arr[np.newaxis]
     else:
+        return 0.0
+    if sampled.size == 0:
         return 0.0
     if sampled.max() <= 1.5:
         sampled = sampled * 255.0

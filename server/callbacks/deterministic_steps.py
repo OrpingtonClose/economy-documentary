@@ -59,6 +59,10 @@ def extract_json_array(text: str) -> Optional[list]:
                 return result
             # If the fenced content is a dict with an array value, try extracting it
             if isinstance(result, dict):
+                # Prefer known keys first
+                for key in ("scenes", "visual_concepts", "content_analysis"):
+                    if key in result and isinstance(result[key], list):
+                        return result[key]
                 for v in result.values():
                     if isinstance(v, list):
                         return v
