@@ -255,7 +255,7 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 # Brightness: average pixel value (0-255 scale). Below this = too dark.
 # Contrast: std dev of pixel values. Below this = flat/washed out.
 _MIN_BRIGHTNESS = 40.0  # ~16% of max — very conservative, rejects near-black
-_MIN_CONTRAST = 20.0    # rejects flat single-tone frames
+_MIN_CONTRAST = 10.0    # rejects flat single-tone frames (cinematic footage can be low-contrast)
 
 
 def _measure_frame_brightness(frames: list) -> float:
