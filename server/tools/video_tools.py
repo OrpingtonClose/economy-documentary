@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -169,21 +170,34 @@ def generate_video_clip(
             qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
     except (URLError, OSError, TimeoutError) as exc:
         logger.error("GPU worker video request failed: %s", exc)
-        # Fallback to solid-color so pipeline can continue
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        success = _generate_solid_color_mp4(output_path, actual_duration)
-        if not success:
-            return json.dumps({"status": "error", "error": f"GPU worker failed and fallback failed: {exc}"})
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "fallback",
-                "output_path": output_path,
-                "target_duration": round(duration_sec, 2),
-                "actual_duration": round(actual_duration, 2),
-                "error": str(exc),
-            }
-        )
+        # Retry with backoff — GPU worker may be temporarily down
+        max_retries = 5
+        for retry in range(1, max_retries + 1):
+            backoff = min(30 * retry, 120)  # 30s, 60s, 90s, 120s, 120s
+            logger.info(
+                "Retrying GPU worker (attempt %d/%d) after %ds backoff...",
+                retry, max_retries, backoff,
+            )
+            time.sleep(backoff)
+            try:
+                req2 = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
+                with urlopen(req2, timeout=900) as resp:
+                    mp4_bytes = resp.read()
+                    gen_time = float(resp.headers.get("X-Gen-Time", "0"))
+                    qa_quality = resp.headers.get("X-QA-Quality", "unknown")
+                    qa_reason = resp.headers.get("X-QA-Reason", "")
+                    qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
+                    qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
+                break  # success — exit retry loop
+            except (URLError, OSError, TimeoutError) as retry_exc:
+                logger.error("Retry %d/%d failed: %s", retry, max_retries, retry_exc)
+                if retry == max_retries:
+                    return json.dumps(
+                        {
+                            "status": "error",
+                            "error": f"GPU worker failed after {max_retries} retries: {retry_exc}",
+                        }
+                    )
 
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

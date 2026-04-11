@@ -211,6 +211,28 @@ def deterministic_audio_callback(
                     # Extract language-specific text
                     lang_text = _extract_lang_text(text, lang_tag)
                     if not lang_text:
+                        # Fallback: if no [RU] tag, use raw text as Russian
+                        if lang_code == "ru":
+                            lang_text = text.strip()
+                            logger.warning(
+                                "Scene %d %s: no [RU] tag, using raw text",
+                                scene_num, voice,
+                            )
+                        # Fallback: if no [EN] tag, translate RU text via LLM
+                        elif lang_code == "en":
+                            ru_text = _extract_lang_text(text, "[RU]") or text.strip()
+                            lang_text = _translate_via_llm(ru_text, "ru", "en")
+                            if not lang_text:
+                                logger.error(
+                                    "Scene %d %s: [EN] missing and translation failed",
+                                    scene_num, voice,
+                                )
+                                continue
+                            logger.info(
+                                "Scene %d %s: translated RU→EN (%d chars)",
+                                scene_num, voice, len(lang_text),
+                            )
+                    if not lang_text:
                         continue
 
                     voice_suffix = f"{voice}_{lang_code.upper()}"
@@ -316,6 +338,39 @@ def deterministic_audio_callback(
         role="model",
         parts=[genai_types.Part(text="\n".join(summary_parts))],
     )
+
+
+def _translate_via_llm(text: str, src_lang: str, tgt_lang: str) -> str:
+    """Translate text between languages using LiteLLM (best-effort).
+
+    Returns translated text or empty string on failure.
+    """
+    lang_names = {"ru": "Russian", "en": "English"}
+    src_name = lang_names.get(src_lang, src_lang)
+    tgt_name = lang_names.get(tgt_lang, tgt_lang)
+
+    try:
+        import litellm
+        response = litellm.completion(
+            model="openrouter/google/gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Translate the following {src_name} text to {tgt_name}. "
+                        "Output ONLY the translated text, nothing else. "
+                        "Preserve the tone and style of the original."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.3,
+        )
+        translated = response.choices[0].message.content.strip()
+        return translated
+    except Exception as e:
+        logger.error("Translation %s→%s failed: %s", src_lang, tgt_lang, e)
+        return ""
 
 
 def _extract_lang_text(text: str, lang_tag: str) -> str:
