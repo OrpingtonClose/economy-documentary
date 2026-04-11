@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
@@ -610,46 +611,126 @@ def deterministic_production_callback(
 
     video_dir = os.environ.get("VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video")
     total_clips = 0
+    skipped_clips = 0
     errors = []
 
     # Build default negative prompt from visual_style.avoid
     default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
 
-    for concept in concepts:
+    # Check how many GPU workers are available for parallelism
+    worker_urls = os.environ.get("VIDEO_WORKER_URLS", "")
+    num_workers = max(1, len([u for u in worker_urls.split(",") if u.strip()])) if worker_urls else 1
+    logger.info("Video generation: %d GPU worker(s), %d concepts to generate", num_workers, len(concepts))
+
+    def _generate_one_clip(concept: dict) -> dict:
+        """Generate a single video clip (thread-safe for parallel execution)."""
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
-        duration = min(concept.get("duration", 5.0), 10.0)  # Cap at 10s to avoid OOM
+        duration = min(concept.get("duration", 5.0), 10.0)
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)
-        # Per-clip negative prompt from visual concepter, or fall back to movie-level
         clip_negative = concept.get("negative_prompt", default_negative)
-
         output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}.mp4")
 
-        try:
-            # Generate video
-            gen_result_json = generate_video_clip(
-                prompt=prompt,
-                duration_sec=duration,
+        # Skip already-generated clips (resume support)
+        status_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}_status.json")
+        if os.path.exists(output_path) and os.path.exists(status_path):
+            try:
+                with open(status_path) as sf:
+                    prev_status = json.load(sf)
+                prev_quality = prev_status.get("quality", "unknown")
+                if prev_quality in ("good", "excellent"):
+                    logger.info(
+                        "Skipping scene_%03d_phrase_%03d (already generated, quality=%s)",
+                        scene_num, phrase_idx, prev_quality,
+                    )
+                    return {"skipped": True, "output_path": output_path, "scene_num": scene_num,
+                            "phrase_idx": phrase_idx, "duration": duration, "lora_id": lora_id}
+            except (json.JSONDecodeError, OSError):
+                pass  # re-generate if status file is corrupt
+
+        gen_result_json = generate_video_clip(
+            prompt=prompt,
+            duration_sec=duration,
+            lora_id=lora_id,
+            lora_weight=lora_weight,
+            output_path=output_path,
+            negative_prompt=clip_negative,
+            visual_style=visual_style_str,
+        )
+        gen_result = json.loads(gen_result_json)
+        gen_result["scene_num"] = scene_num
+        gen_result["phrase_idx"] = phrase_idx
+        gen_result["duration"] = duration
+        gen_result["lora_id"] = lora_id
+        gen_result["_output_path"] = output_path
+        return gen_result
+
+    # Generate clips in parallel across available GPU workers
+    results = []
+    if num_workers > 1:
+        logger.info("Parallel video generation: %d workers, %d clips", num_workers, len(concepts))
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_concept = {
+                executor.submit(_generate_one_clip, c): c for c in concepts
+            }
+            for future in as_completed(future_to_concept):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    c = future_to_concept[future]
+                    err_msg = f"Error producing scene {c.get('scene_num')} phrase {c.get('phrase_idx')}: {e}"
+                    logger.error(err_msg)
+                    errors.append(err_msg)
+    else:
+        # Sequential fallback (single worker)
+        for concept in concepts:
+            try:
+                results.append(_generate_one_clip(concept))
+            except Exception as e:
+                err_msg = f"Error producing scene {concept.get('scene_num')} phrase {concept.get('phrase_idx')}: {e}"
+                logger.error(err_msg)
+                errors.append(err_msg)
+
+    # Process results: probe + add to OTIO timeline (must be sequential for OTIO)
+    for result in sorted(results, key=lambda r: (r.get("scene_num", 0), r.get("phrase_idx", 0))):
+        scene_num = result.get("scene_num", 0)
+        phrase_idx = result.get("phrase_idx", 0)
+        duration = result.get("duration", 5.0)
+        lora_id = result.get("lora_id", "documentary-realism")
+        output_path = result.get("_output_path") or result.get("output_path", "")
+
+        if result.get("skipped"):
+            # Still need to add skipped clips to OTIO timeline
+            probe_result_json = probe_clip(mp4_path=output_path)
+            probe_result = json.loads(probe_result_json)
+            actual_duration = probe_result.get("duration", duration * 1.15)
+            clip_result_json = add_video_clip(
+                scene_num=scene_num,
+                phrase_idx=phrase_idx,
+                mp4_path=output_path,
+                duration=duration,
+                source_range=duration,
+                available_range=actual_duration,
                 lora_id=lora_id,
-                lora_weight=lora_weight,
-                output_path=output_path,
-                negative_prompt=clip_negative,
-                visual_style=visual_style_str,
+                tool_context=_MockToolContext(state),
             )
-            gen_result = json.loads(gen_result_json)
+            clip_result = json.loads(clip_result_json)
+            if "error" not in clip_result:
+                skipped_clips += 1
+                total_clips += 1
+            continue
 
-            if gen_result.get("status") == "error":
-                errors.append(f"scene_{scene_num}_phrase_{phrase_idx}: {gen_result.get('error')}")
-                continue
+        if result.get("status") == "error":
+            errors.append(f"scene_{scene_num}_phrase_{phrase_idx}: {result.get('error')}")
+            continue
 
-            # Probe clip
+        try:
             probe_result_json = probe_clip(mp4_path=output_path)
             probe_result = json.loads(probe_result_json)
             actual_duration = probe_result.get("duration", duration * 1.15)
 
-            # Add to OTIO timeline
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
@@ -665,17 +746,19 @@ def deterministic_production_callback(
                 errors.append(f"OTIO error scene {scene_num} phrase {phrase_idx}: {clip_result['error']}")
             else:
                 total_clips += 1
-
         except Exception as e:
-            err_msg = f"Error producing scene {scene_num} phrase {phrase_idx}: {e}"
+            err_msg = f"Error adding scene {scene_num} phrase {phrase_idx} to timeline: {e}"
             logger.error(err_msg)
             errors.append(err_msg)
 
     summary_parts = [
         f"Production complete: {total_clips} video clips generated and added to timeline.",
     ]
+    if skipped_clips:
+        summary_parts.append(f"Skipped {skipped_clips} already-generated clips (resume).")
     if errors:
         summary_parts.append(f"Errors: {len(errors)} - {'; '.join(errors[:3])}")
+    summary_parts.append(f"Workers used: {num_workers}.")
 
     logger.info("Deterministic production: %d clips generated", total_clips)
 
