@@ -176,7 +176,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         session_id=session.id,
     )
 
-    state = final_session.state.to_dict() if final_session else {}
+    state = dict(final_session.state) if final_session else {}
     state["_elapsed_sec"] = round(elapsed, 1)
     state["_final_response"] = final_response
 
