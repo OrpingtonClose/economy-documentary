@@ -39,7 +39,6 @@ Usage::
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -48,7 +47,6 @@ import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -162,7 +160,8 @@ class InfraAgent:
         self._current_stage: Optional[StageTimingEntry] = None
         self._paused = False
         self._pause_reason = ""
-        self._shutdown_event = asyncio.Event()
+        self._shutdown_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
 
         # Escalation log
         self._escalations: list[EscalationEvent] = []
@@ -580,45 +579,49 @@ class InfraAgent:
     # Main loop
     # ------------------------------------------------------------------
 
-    async def run(self) -> None:
-        """Main monitoring loop.  Runs until ``shutdown()`` is called.
+    def start(self) -> None:
+        """Start the monitoring loop on a daemon thread.
 
-        Call this as an asyncio task::
+        The thread runs independently of the asyncio event loop, so
+        ``time.sleep()`` in pipeline callbacks (``check_infra_pause()``)
+        cannot deadlock the monitoring loop.
+        """
+        if self._thread is not None and self._thread.is_alive():
+            logger.warning("InfraAgent: already running")
+            return
+        self._shutdown_event.clear()
+        self._thread = threading.Thread(
+            target=self._run_loop,
+            name="infra-agent",
+            daemon=True,
+        )
+        self._thread.start()
 
-            task = asyncio.create_task(agent.run())
+    def _run_loop(self) -> None:
+        """Main monitoring loop (runs on a daemon thread).
+
+        Uses ``threading.Event.wait(timeout)`` for interruptible sleep.
         """
         logger.info("InfraAgent: monitoring started (poll_interval=%.0fs)", self._poll_interval)
 
         # Initial health check
-        await asyncio.get_event_loop().run_in_executor(None, self._poll_all_workers)
+        self._poll_all_workers()
         logger.info("InfraAgent: initial health: %s", self.get_worker_summary())
 
         poll_count = 0
         while not self._shutdown_event.is_set():
-            try:
-                await asyncio.wait_for(
-                    self._shutdown_event.wait(),
-                    timeout=self._poll_interval,
-                )
+            # Sleep for poll_interval, waking early if shutdown is requested
+            if self._shutdown_event.wait(timeout=self._poll_interval):
                 break  # shutdown was requested
-            except asyncio.TimeoutError:
-                pass  # normal — poll interval elapsed
 
-            # Run blocking health checks in executor (avoid blocking event loop)
-            await asyncio.get_event_loop().run_in_executor(
-                None, self._poll_all_workers,
-            )
-
-            # Check stage timing
+            self._poll_all_workers()
             self._check_stage_timing()
 
             poll_count += 1
 
             # Upload status to B2 every 5 polls (reduce API calls)
             if poll_count % 5 == 0:
-                await asyncio.get_event_loop().run_in_executor(
-                    None, self._upload_status_to_b2,
-                )
+                self._upload_status_to_b2()
 
             # Auto-unpause if workers recovered
             if self._paused:
@@ -659,13 +662,17 @@ class InfraAgent:
                 return
 
     def shutdown(self) -> None:
-        """Signal the monitoring loop to stop.
+        """Signal the monitoring loop to stop and wait for it.
 
-        Thread-safe.  The ``run()`` coroutine will exit after the current
+        Thread-safe.  The daemon thread will exit after the current
         poll cycle completes.
         """
         logger.info("InfraAgent: shutdown requested")
         self._shutdown_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+            if self._thread.is_alive():
+                logger.warning("InfraAgent: thread did not stop within 5s")
 
     # ------------------------------------------------------------------
     # Worker management helpers

@@ -181,6 +181,14 @@ def _scenario_phase_setup(callback_context):
     from google.genai import types as genai_types
     state = callback_context.state
     state["pipeline_phase"] = "scenario"
+
+    # INFRA: notify stage start for timing watchdog
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("scenario")
+    check_infra_pause()
+
     stages_complete = state.get("_b2_stages_complete", [])
     if "scenario" in stages_complete:
         logger.info("B2: scenario stage already complete, skipping LoopAgent")

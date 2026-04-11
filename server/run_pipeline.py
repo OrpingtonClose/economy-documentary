@@ -142,13 +142,17 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         f"{language_instruction}"
     )
 
-    # Start infra agent for continuous health monitoring
+    # Start infra agent for continuous health monitoring.
+    # Runs on a daemon thread (not an asyncio task) so that time.sleep()
+    # in pipeline callbacks (check_infra_pause) cannot deadlock the
+    # monitoring loop.
     from infra_agent import start_infra_agent
     infra = start_infra_agent(poll_interval=30.0, max_consecutive_failures=3)
-    infra_task = asyncio.create_task(infra.run())
-    logger.info("InfraAgent started as background task")
+    infra.start()
+    logger.info("InfraAgent started on daemon thread")
 
-    # Run the pipeline
+    # Run the pipeline — wrapped in try/finally so the infra agent is
+    # always cleaned up, even if the pipeline raises an exception.
     start_time = time.time()
     logger.info("Starting pipeline run...")
 
@@ -158,30 +162,27 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     )
 
     final_response = None
-    async for event in runner.run_async(
-        user_id="pipeline_runner",
-        session_id=session.id,
-        new_message=content,
-    ):
-        if event.content and event.content.parts:
-            text = "".join(p.text or "" for p in event.content.parts if hasattr(p, "text"))
-            if text.strip():
-                agent_name = event.author or "unknown"
-                # Truncate for logging
-                preview = text[:200] + "..." if len(text) > 200 else text
-                logger.info("[%s] %s", agent_name, preview)
-                final_response = text
+    try:
+        async for event in runner.run_async(
+            user_id="pipeline_runner",
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                text = "".join(p.text or "" for p in event.content.parts if hasattr(p, "text"))
+                if text.strip():
+                    agent_name = event.author or "unknown"
+                    # Truncate for logging
+                    preview = text[:200] + "..." if len(text) > 200 else text
+                    logger.info("[%s] %s", agent_name, preview)
+                    final_response = text
+    finally:
+        # Shutdown infra agent regardless of how the pipeline exits
+        infra.shutdown()
+        logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
 
     elapsed = time.time() - start_time
     logger.info("Pipeline completed in %.1f seconds", elapsed)
-
-    # Shutdown infra agent
-    infra.shutdown()
-    try:
-        await asyncio.wait_for(infra_task, timeout=5.0)
-    except asyncio.TimeoutError:
-        logger.warning("InfraAgent did not shut down cleanly within 5s")
-    logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
 
     # Get final session state
     final_session = await session_service.get_session(
