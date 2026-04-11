@@ -27,14 +27,12 @@ Architecture invariants enforced:
 
 Usage::
 
-    from infra_agent import InfraAgent
+    from infra_agent import start_infra_agent
 
-    agent = InfraAgent()
-    # Start monitoring in a background asyncio task
-    task = asyncio.create_task(agent.run())
+    infra = start_infra_agent(poll_interval=30.0)
+    infra.start()          # launches a daemon thread
     # ... run the pipeline ...
-    agent.shutdown()
-    await task
+    infra.shutdown()        # joins the thread
 """
 
 from __future__ import annotations
@@ -411,10 +409,11 @@ class InfraAgent:
 
     def _pause(self, reason: str) -> None:
         """Pause the pipeline (set flag that callbacks check)."""
-        if self._paused:
-            return  # already paused
-        self._paused = True
-        self._pause_reason = reason
+        with self._lock:
+            if self._paused:
+                return  # already paused
+            self._paused = True
+            self._pause_reason = reason
         self._escalate(
             severity=Severity.CRITICAL,
             source="pipeline",
@@ -427,11 +426,12 @@ class InfraAgent:
         Thread-safe.  Called by an operator (or future auto-recovery logic)
         after the root cause is fixed.
         """
-        if not self._paused:
-            return
-        self._paused = False
-        old_reason = self._pause_reason
-        self._pause_reason = ""
+        with self._lock:
+            if not self._paused:
+                return
+            self._paused = False
+            old_reason = self._pause_reason
+            self._pause_reason = ""
         self._escalate(
             severity=Severity.INFO,
             source="pipeline",
@@ -444,11 +444,13 @@ class InfraAgent:
         Thread-safe.  Pipeline callbacks should call this before starting
         expensive work (TTS generation, video generation).
         """
-        return self._paused
+        with self._lock:
+            return self._paused
 
     def get_pause_reason(self) -> str:
         """Return the reason the pipeline was paused, or empty string."""
-        return self._pause_reason
+        with self._lock:
+            return self._pause_reason
 
     # ------------------------------------------------------------------
     # Escalation
@@ -530,13 +532,17 @@ class InfraAgent:
                 for e in self._escalations[-20:]  # last 20
             ]
 
+            paused = self._paused
+            pause_reason = self._pause_reason
+            total_escalations = len(self._escalations)
+
         return {
-            "paused": self._paused,
-            "pause_reason": self._pause_reason,
+            "paused": paused,
+            "pause_reason": pause_reason,
             "workers": workers,
             "current_stage": stage,
             "recent_escalations": recent_escalations,
-            "total_escalations": len(self._escalations),
+            "total_escalations": total_escalations,
         }
 
     def get_worker_summary(self) -> str:
@@ -624,21 +630,21 @@ class InfraAgent:
                 self._upload_status_to_b2()
 
             # Auto-unpause if workers recovered
-            if self._paused:
+            if self.is_paused():
                 self._check_auto_resume()
 
         logger.info("InfraAgent: monitoring stopped after %d polls", poll_count)
 
     def _check_auto_resume(self) -> None:
         """Auto-resume pipeline if the worker that caused the pause has recovered."""
-        if not self._paused:
-            return
-
         with self._lock:
+            if not self._paused:
+                return
+            pause_reason = self._pause_reason
             workers = list(self._workers)
 
         # Check if the pause was caused by TTS or video worker
-        if "TTS worker" in self._pause_reason:
+        if "TTS worker" in pause_reason:
             tts_healthy = any(
                 w.role == WorkerRole.TTS and w.status == WorkerStatus.HEALTHY
                 for w in workers
@@ -648,7 +654,7 @@ class InfraAgent:
                 self.resume()
                 return
 
-        if "video workers" in self._pause_reason.lower():
+        if "video workers" in pause_reason.lower():
             healthy_video = sum(
                 1 for w in workers
                 if w.role == WorkerRole.VIDEO and w.status == WorkerStatus.HEALTHY
@@ -732,7 +738,7 @@ def start_infra_agent(
 ) -> InfraAgent:
     """Create and return the global InfraAgent singleton.
 
-    The caller is responsible for running ``agent.run()`` in an asyncio task.
+    The caller should call ``agent.start()`` to launch the daemon thread.
     """
     global _infra_agent
     with _infra_lock:
