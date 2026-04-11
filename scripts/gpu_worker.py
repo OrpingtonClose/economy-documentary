@@ -456,12 +456,21 @@ def _generate_video(
     # Retry loop with Qwen-Omni visual QA (bearnaise pattern).
     # After each generation: brightness/contrast check first (fast, free),
     # then Qwen-Omni visual QA for semantic evaluation.
+    #
+    # Tracks passing (brightness OK) and failing results separately so that
+    # any brightness-passing frame is always preferred over a failing one,
+    # even if the failing frame has a higher raw score.
     max_attempts = 3
     current_seed = seed
-    best_frames = None
-    best_score = -1.0
-    best_seed = seed
-    best_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
+    # Best result that passed brightness/contrast thresholds
+    best_passing_frames = None
+    best_passing_score = -1.0
+    best_passing_seed = seed
+    best_passing_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
+    # Best result among brightness-failing attempts (fallback only)
+    best_failing_frames = None
+    best_failing_score = -1.0
+    best_failing_seed = seed
     final_attempt = 0
 
     for attempt in range(1, max_attempts + 1):
@@ -492,21 +501,22 @@ def _generate_video(
             logger.warning(
                 "Video too dark/flat — skipping Qwen QA, retrying..."
             )
-            if score > best_score:
-                best_frames = candidate_frames
-                best_score = score
-                best_seed = current_seed
+            # Track best among failing attempts (fallback only)
+            if score > best_failing_score:
+                best_failing_frames = candidate_frames
+                best_failing_score = score
+                best_failing_seed = current_seed
             if attempt < max_attempts:
                 current_seed = (current_seed + 7919) % (2**31)
                 continue
             else:
                 break
 
-        # Keep best by brightness/contrast score
-        if score > best_score:
-            best_frames = candidate_frames
-            best_score = score
-            best_seed = current_seed
+        # Brightness passed — track among passing attempts
+        if score > best_passing_score:
+            best_passing_frames = candidate_frames
+            best_passing_score = score
+            best_passing_seed = current_seed
 
         # Stage 2: Qwen-Omni visual QA (semantic evaluation)
         n = len(candidate_frames)
@@ -521,13 +531,13 @@ def _generate_video(
         )
 
         if qa_result["quality"] in ("good", "excellent"):
-            best_frames = candidate_frames
-            best_seed = current_seed
-            best_qa = qa_result
+            best_passing_frames = candidate_frames
+            best_passing_seed = current_seed
+            best_passing_qa = qa_result
             break
 
-        # QA says poor or unknown — update best and retry
-        best_qa = qa_result
+        # QA says poor or unknown — update QA for this passing attempt and retry
+        best_passing_qa = qa_result
         if attempt < max_attempts:
             logger.warning(
                 "Qwen QA rated '%s' — retrying with new seed...",
@@ -540,7 +550,15 @@ def _generate_video(
                 qa_result["quality"], max_attempts,
             )
 
-    video_frames = best_frames
+    # Prefer any brightness-passing frame over a brightness-failing one
+    if best_passing_frames is not None:
+        video_frames = best_passing_frames
+        best_seed = best_passing_seed
+        best_qa = best_passing_qa
+    else:
+        video_frames = best_failing_frames
+        best_seed = best_failing_seed
+        best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
 
     elapsed = time.time() - t0
     logger.info("Video generated in %.1fs (seed=%d, qa=%s)",
