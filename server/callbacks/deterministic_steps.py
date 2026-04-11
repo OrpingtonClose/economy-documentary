@@ -431,6 +431,10 @@ def deterministic_audio_callback(
     raw_scenes = state.get("scenes", "[]")
     scenes = extract_json_array(str(raw_scenes))
     if not scenes:
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("audio")
         return genai_types.Content(
             role="model",
             parts=[genai_types.Part(text="ERROR: No valid scenes JSON in state")],
@@ -889,6 +893,10 @@ def deterministic_production_callback(
                 })
 
     if not concepts:
+        # Notify stage complete so the timing watchdog doesn't fire spuriously
+        _infra = get_infra_agent()
+        if _infra:
+            _infra.notify_stage_complete("production")
         return genai_types.Content(
             role="model",
             parts=[genai_types.Part(text="ERROR: No visual concepts found")],
