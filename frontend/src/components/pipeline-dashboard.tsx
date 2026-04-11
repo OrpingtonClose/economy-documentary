@@ -16,8 +16,15 @@ export function PipelineDashboard() {
     eventSource.onopen = () => setConnected(true);
     eventSource.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data) as PipelineSnapshot;
-        setSnapshot(data);
+        const data = JSON.parse(event.data);
+        // SSE sends {"status":"idle"} when no pipeline is active —
+        // only update snapshot when we have a real run payload.
+        if (data.run_id) {
+          setSnapshot(data as PipelineSnapshot);
+        } else if (data.status === "idle") {
+          setSnapshot(null);
+          setConnected(true);
+        }
       } catch {
         // ignore parse errors
       }
@@ -93,10 +100,10 @@ export function PipelineDashboard() {
           Recent Events
         </h2>
         <div className="space-y-1 max-h-64 overflow-auto">
-          {snapshot.recent_events.map((event, idx) => (
+          {(snapshot.recent_events ?? []).map((event, idx) => (
             <ToolCallCard key={idx} event={event} />
           ))}
-          {snapshot.recent_events.length === 0 && (
+          {(snapshot.recent_events ?? []).length === 0 && (
             <div className="text-pipeline-muted text-sm">No events yet</div>
           )}
         </div>

@@ -20,8 +20,10 @@ bf16 only — no FP8, no quantization.
 from __future__ import annotations
 
 import argparse
+import base64
 import gc
 import io
+import json
 import logging
 import os
 import threading
@@ -74,8 +76,8 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 8  # distilled model uses 8 steps
-    guidance_scale: float = 1.0  # distilled model uses CFG=1
+    num_inference_steps: int = 30  # dev/full model: 20-50 steps
+    guidance_scale: float = 3.5  # dev/full model: CFG 2.0-5.0 (recommended 3.0-3.5)
 
 
 class HealthResponse(BaseModel):
@@ -246,6 +248,170 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 
 
 # ---------------------------------------------------------------------------
+# Video quality validation helpers
+# ---------------------------------------------------------------------------
+
+# Minimum thresholds for post-render quality check.
+# Brightness: average pixel value (0-255 scale). Below this = too dark.
+# Contrast: std dev of pixel values. Below this = flat/washed out.
+_MIN_BRIGHTNESS = 40.0  # ~16% of max — very conservative, rejects near-black
+_MIN_CONTRAST = 20.0    # rejects flat single-tone frames
+
+
+def _measure_frame_brightness(frames: list) -> float:
+    """Measure average brightness across sampled frames.
+
+    Args:
+        frames: List of PIL Images or numpy arrays from diffusers output.
+
+    Returns:
+        Average brightness on 0-255 scale.
+    """
+    if not frames:
+        return 0.0
+
+    # Sample up to 5 evenly spaced frames
+    n = len(frames)
+    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+    indices = sorted(set(indices))
+
+    total_brightness = 0.0
+    for idx in indices:
+        frame = frames[idx]
+        arr = np.array(frame, dtype=np.float32)
+        total_brightness += arr.mean()
+
+    return total_brightness / len(indices)
+
+
+def _measure_frame_contrast(frames: list) -> float:
+    """Measure average contrast (std dev of pixel values) across sampled frames.
+
+    Args:
+        frames: List of PIL Images or numpy arrays from diffusers output.
+
+    Returns:
+        Average contrast (std dev on 0-255 scale).
+    """
+    if not frames:
+        return 0.0
+
+    n = len(frames)
+    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+    indices = sorted(set(indices))
+
+    total_contrast = 0.0
+    for idx in indices:
+        frame = frames[idx]
+        arr = np.array(frame, dtype=np.float32)
+        total_contrast += arr.std()
+
+    return total_contrast / len(indices)
+
+
+# ---------------------------------------------------------------------------
+# Qwen-Omni Visual QA via OpenRouter (bearnaise pattern)
+# ---------------------------------------------------------------------------
+
+# OpenRouter API key — set via env var on the GPU VM
+_OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
+# Model for video QA — Qwen3.5-Plus supports text, image, video input
+_QA_MODEL: str = "qwen/qwen3.5-plus-02-15"
+
+
+def _frames_to_base64(frames: list, indices: list[int]) -> list[str]:
+    """Convert selected PIL frames to base64-encoded JPEG strings."""
+    from PIL import Image
+
+    result = []
+    for idx in indices:
+        frame = frames[idx]
+        if not isinstance(frame, Image.Image):
+            frame = Image.fromarray(np.array(frame))
+        buf = io.BytesIO()
+        frame.save(buf, format="JPEG", quality=85)
+        b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+        result.append(b64)
+    return result
+
+
+def _qwen_visual_qa(prompt: str, frames_b64: list[str]) -> dict:
+    """Send frames to Qwen-Omni via OpenRouter for visual quality assessment.
+
+    Returns dict with keys: quality ("poor"/"good"/"excellent"), qa_reason (str).
+    Following bearnaise pattern: per-clip LLM-based visual QA.
+    """
+    import httpx
+
+    if not _OPENROUTER_API_KEY:
+        logger.warning("OPENROUTER_API_KEY not set — skipping visual QA")
+        return {"quality": "unknown", "qa_reason": "No API key for visual QA"}
+
+    # Build multimodal content: frames as images + evaluation prompt
+    content_parts = []
+    for i, b64 in enumerate(frames_b64):
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+        })
+
+    content_parts.append({
+        "type": "text",
+        "text": (
+            f"You are a video quality assessor for AI-generated documentary footage.\n\n"
+            f"The video was generated from this prompt:\n"
+            f'"{prompt}"\n\n'
+            f"These {len(frames_b64)} frames are sampled from the start, middle, and end of the clip.\n\n"
+            f"Evaluate the video quality:\n"
+            f"1. Does the visual content match what the prompt describes?\n"
+            f"2. Is the image clear, well-lit, and visually coherent?\n"
+            f"3. Are there artifacts, extreme darkness, blur, or nonsensical imagery?\n\n"
+            f"Respond in EXACTLY this JSON format (no markdown, no extra text):\n"
+            f'{{"quality": "poor|good|excellent", "qa_reason": "brief description of what the video shows and why you rated it this way"}}'
+        ),
+    })
+
+    try:
+        resp = httpx.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": _QA_MODEL,
+                "messages": [{"role": "user", "content": content_parts}],
+                "max_tokens": 300,
+                "temperature": 0.1,
+            },
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"].strip()
+
+        # Parse JSON from response — handle markdown fencing
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        result = json.loads(text)
+        quality = result.get("quality", "unknown").lower()
+        qa_reason = result.get("qa_reason", "No reason provided")
+
+        if quality not in ("poor", "good", "excellent"):
+            quality = "unknown"
+
+        return {"quality": quality, "qa_reason": qa_reason}
+
+    except Exception as e:
+        logger.error("Visual QA failed: %s", e, exc_info=True)
+        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}"}
+
+
+# ---------------------------------------------------------------------------
 # Video generation (LTX-2.3 via diffusers LTX2Pipeline)
 # ---------------------------------------------------------------------------
 
@@ -258,10 +424,11 @@ def _generate_video(
     seed: int,
     num_inference_steps: int,
     guidance_scale: float,
-) -> bytes:
-    """Generate video clip using LTX-2.3 distilled via diffusers.
+) -> tuple[bytes, dict]:
+    """Generate video clip using LTX-2.3 dev (full) model via diffusers.
 
-    Returns raw MP4 bytes.
+    Returns (raw_mp4_bytes, qa_status) where qa_status follows bearnaise
+    pattern: {quality, qa_reason, attempts, seed}.
     Caller must hold _model_lock.
     """
     _load_ltx()
@@ -277,10 +444,8 @@ def _generate_video(
 
     negative_prompt = (
         "worst quality, inconsistent motion, blurry, jittery, distorted, "
-        "static, low resolution"
+        "static, low resolution, dark, underexposed"
     )
-
-    generator = torch.Generator("cpu").manual_seed(seed)
 
     logger.info(
         "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
@@ -288,19 +453,119 @@ def _generate_video(
     )
     t0 = time.time()
 
-    result = _ltx_pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        width=width,
-        height=height,
-        num_frames=num_frames,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=guidance_scale,
-        generator=generator,
-    )
+    # Retry loop with Qwen-Omni visual QA (bearnaise pattern).
+    # After each generation: brightness/contrast check first (fast, free),
+    # then Qwen-Omni visual QA for semantic evaluation.
+    #
+    # Tracks passing (brightness OK) and failing results separately so that
+    # any brightness-passing frame is always preferred over a failing one,
+    # even if the failing frame has a higher raw score.
+    max_attempts = 3
+    current_seed = seed
+    # Best result that passed brightness/contrast thresholds
+    best_passing_frames = None
+    best_passing_score = -1.0
+    best_passing_seed = seed
+    best_passing_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
+    # Best result among brightness-failing attempts (fallback only)
+    best_failing_frames = None
+    best_failing_score = -1.0
+    best_failing_seed = seed
+    final_attempt = 0
+
+    for attempt in range(1, max_attempts + 1):
+        final_attempt = attempt
+        gen = torch.Generator("cpu").manual_seed(current_seed)
+        result = _ltx_pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_frames=num_frames,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            generator=gen,
+        )
+        candidate_frames = result.frames[0]
+
+        # Stage 1: Fast brightness/contrast check (free, instant)
+        brightness = _measure_frame_brightness(candidate_frames)
+        contrast = _measure_frame_contrast(candidate_frames)
+        score = brightness + contrast
+        logger.info(
+            "Brightness check (attempt %d/%d): brightness=%.1f/255, contrast=%.1f, seed=%d",
+            attempt, max_attempts, brightness, contrast, current_seed,
+        )
+
+        if brightness < _MIN_BRIGHTNESS or contrast < _MIN_CONTRAST:
+            logger.warning(
+                "Video too dark/flat — skipping Qwen QA, retrying..."
+            )
+            # Track best among failing attempts (fallback only)
+            if score > best_failing_score:
+                best_failing_frames = candidate_frames
+                best_failing_score = score
+                best_failing_seed = current_seed
+            if attempt < max_attempts:
+                current_seed = (current_seed + 7919) % (2**31)
+                continue
+            else:
+                break
+
+        # Brightness passed — track among passing attempts.
+        # QA is paired with frames so metadata always describes the selected output.
+        is_new_best = score > best_passing_score
+        if is_new_best:
+            best_passing_frames = candidate_frames
+            best_passing_score = score
+            best_passing_seed = current_seed
+
+        # Stage 2: Qwen-Omni visual QA (semantic evaluation)
+        n = len(candidate_frames)
+        sample_indices = [0, n // 2, n - 1] if n >= 3 else list(range(n))
+        frames_b64 = _frames_to_base64(candidate_frames, sample_indices)
+        qa_result = _qwen_visual_qa(prompt, frames_b64)
+
+        logger.info(
+            "Qwen QA (attempt %d/%d): quality=%s, reason=%.120s",
+            attempt, max_attempts, qa_result["quality"],
+            qa_result.get("qa_reason", ""),
+        )
+
+        if qa_result["quality"] in ("good", "excellent"):
+            best_passing_frames = candidate_frames
+            best_passing_seed = current_seed
+            best_passing_qa = qa_result
+            break
+
+        # QA says poor or unknown — only update QA if these are the best frames
+        if is_new_best:
+            best_passing_qa = qa_result
+        if attempt < max_attempts:
+            logger.warning(
+                "Qwen QA rated '%s' — retrying with new seed...",
+                qa_result["quality"],
+            )
+            current_seed = (current_seed + 7919) % (2**31)
+        else:
+            logger.warning(
+                "Video still rated '%s' after %d attempts. Using best result.",
+                qa_result["quality"], max_attempts,
+            )
+
+    # Prefer any brightness-passing frame over a brightness-failing one
+    if best_passing_frames is not None:
+        video_frames = best_passing_frames
+        best_seed = best_passing_seed
+        best_qa = best_passing_qa
+    else:
+        video_frames = best_failing_frames
+        best_seed = best_failing_seed
+        best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
 
     elapsed = time.time() - t0
-    logger.info("Video generated in %.1fs", elapsed)
+    logger.info("Video generated in %.1fs (seed=%d, qa=%s)",
+                elapsed, best_seed, best_qa.get("quality", "unknown"))
 
     # Export to MP4
     output_path = os.path.join(
@@ -308,7 +573,6 @@ def _generate_video(
     )
     os.makedirs(_output_dir, exist_ok=True)
 
-    video_frames = result.frames[0]
     export_to_video(video_frames, output_path, fps=fps)
 
     with open(output_path, "rb") as f:
@@ -319,7 +583,17 @@ def _generate_video(
     except OSError:
         pass
 
-    return data
+    # Bearnaise-style per-clip QA status
+    qa_status = {
+        "quality": best_qa.get("quality", "unknown"),
+        "qa_reason": best_qa.get("qa_reason", "Not evaluated"),
+        "attempts": final_attempt,
+        "seed": best_seed,
+        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames else 0,
+        "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames else 0,
+    }
+
+    return data, qa_status
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +680,7 @@ def video_endpoint(req: VideoRequest):
 
     with _model_lock:
         try:
-            mp4_bytes = _generate_video(
+            mp4_bytes, qa_status = _generate_video(
                 prompt=req.prompt,
                 duration_sec=req.duration_sec,
                 width=req.width,
@@ -423,7 +697,10 @@ def video_endpoint(req: VideoRequest):
             raise HTTPException(500, f"Video generation failed: {e}")
 
     elapsed = time.time() - t0
-    logger.info("Video done: %d bytes in %.1fs", len(mp4_bytes), elapsed)
+    logger.info(
+        "Video done: %d bytes in %.1fs, qa=%s",
+        len(mp4_bytes), elapsed, qa_status.get("quality", "unknown"),
+    )
 
     return Response(
         content=mp4_bytes,
@@ -431,6 +708,10 @@ def video_endpoint(req: VideoRequest):
         headers={
             "X-Gen-Time": str(round(elapsed, 3)),
             "X-File-Size": str(len(mp4_bytes)),
+            "X-QA-Quality": qa_status.get("quality", "unknown"),
+            "X-QA-Reason": qa_status.get("qa_reason", "")[:200].replace("\n", " ").replace("\r", " "),
+            "X-QA-Attempts": str(qa_status.get("attempts", 1)),
+            "X-QA-Seed": str(qa_status.get("seed", req.seed)),
         },
     )
 

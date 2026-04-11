@@ -24,12 +24,14 @@ from starlette.responses import Response
 
 load_dotenv()
 
+from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+from google.adk.apps import App
+
 from agents.model_config import ADK_MODEL_NAME
 from agents.pipeline import pipeline_agent
-from callbacks.before_model import before_model_callback
-from callbacks.after_model import after_model_callback
-from callbacks.before_tool import before_tool_callback
-from callbacks.after_tool import after_tool_callback
+# Callbacks are wired directly into individual Agent sub-agents
+# (scenario_director.py, visual_director.py) — not at the AG-UI level.
+# See: before_model, after_model, before_tool, after_tool callbacks.
 from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
@@ -157,23 +159,16 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(dashboard_router)
 
 
-# AG-UI endpoint
-@app.post("/")
-async def agui_endpoint(request: Request):
-    """AG-UI endpoint for CopilotKit frontend."""
-    from ag_ui_adk import serve_agent
-
-    plugins = build_plugins()
-
-    return await serve_agent(
-        agent=pipeline_agent,
-        request=request,
-        plugins=plugins,
-        before_model_callback=before_model_callback,
-        after_model_callback=after_model_callback,
-        before_tool_callback=before_tool_callback,
-        after_tool_callback=after_tool_callback,
-    )
+# AG-UI endpoint -- uses App + ADKAgent.from_app() to preserve plugins
+_adk_app = App(
+    name="documentary_pipeline",
+    root_agent=pipeline_agent,
+    plugins=build_plugins(),
+)
+adk_agent = ADKAgent.from_app(
+    app=_adk_app,
+)
+add_adk_fastapi_endpoint(app, adk_agent, path="/")
 
 
 @app.get("/health")

@@ -259,8 +259,9 @@ def run_pipeline(
     # Make sure test mode is off
     env.pop("DOCUMENTARY_TEST_MODE", None)
 
+    # Use poetry run to ensure we're in the correct virtualenv with all deps
     cmd = [
-        sys.executable, "run_pipeline.py",
+        "poetry", "run", "python", "run_pipeline.py",
         "--topic", topic,
         "--corpus", corpus_path,
         "--language", language,

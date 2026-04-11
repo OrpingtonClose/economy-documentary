@@ -151,17 +151,22 @@ def generate_video_clip(
         "height": 512,
         "num_frames": num_frames,
         "seed": seed,
-        "num_inference_steps": 8,
-        "guidance_scale": 1.0,
+        "num_inference_steps": 30,
+        "guidance_scale": 3.5,
     }).encode("utf-8")
 
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
     req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req, timeout=900) as resp:  # 15 min: up to 3 retries × 30 steps
             mp4_bytes = resp.read()
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
+            # Qwen-Omni visual QA status from GPU worker (bearnaise pattern)
+            qa_quality = resp.headers.get("X-QA-Quality", "unknown")
+            qa_reason = resp.headers.get("X-QA-Reason", "")
+            qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
+            qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
     except (URLError, OSError, TimeoutError) as exc:
         logger.error("GPU worker video request failed: %s", exc)
         # Fallback to solid-color so pipeline can continue
@@ -185,6 +190,25 @@ def generate_video_clip(
     with open(output_path, "wb") as f:
         f.write(mp4_bytes)
 
+    # Write per-clip status.json (bearnaise pattern)
+    clip_dir = os.path.dirname(output_path) or "."
+    clip_name = os.path.splitext(os.path.basename(output_path))[0]
+    status_path = os.path.join(clip_dir, f"{clip_name}_status.json")
+    clip_status = {
+        "quality": qa_quality,
+        "qa_reason": qa_reason,
+        "attempts": qa_attempts,
+        "seed": qa_seed,
+        "status": "completed",
+        "prompt_preview": prompt[:200],
+    }
+    try:
+        with open(status_path, "w") as sf:
+            json.dump(clip_status, sf, indent=2)
+        logger.info("Wrote clip status: %s (quality=%s)", status_path, qa_quality)
+    except OSError as e:
+        logger.warning("Failed to write clip status %s: %s", status_path, e)
+
     # Probe the generated clip for actual duration (best-effort, never overwrites video)
     actual_dur = actual_duration
     try:
@@ -194,8 +218,8 @@ def generate_video_clip(
         logger.warning("probe_clip failed (non-fatal): %s", probe_exc)
 
     logger.info(
-        "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f)",
-        output_path, actual_dur, gen_time, lora_id, lora_weight,
+        "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f, qa=%s)",
+        output_path, actual_dur, gen_time, lora_id, lora_weight, qa_quality,
     )
     return json.dumps(
         {
@@ -210,6 +234,10 @@ def generate_video_clip(
             "gen_time": round(gen_time, 2),
             "num_frames": num_frames,
             "resolution": "768x512",
+            "qa_quality": qa_quality,
+            "qa_reason": qa_reason,
+            "qa_attempts": qa_attempts,
+            "qa_seed": qa_seed,
         }
     )
 
