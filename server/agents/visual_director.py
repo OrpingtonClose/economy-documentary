@@ -5,13 +5,13 @@ Architecture::
 
     LoopAgent("visual_director", max_iterations=3)
     ├── Agent("content_analyst")        # semantic analysis + LoRA selection
-    ├── Agent("visual_concepter")       # 6-layer cinematic prompts
+    ├── Agent("visual_concepter")       # simple, direct video prompts
     └── Agent("coherence_evaluator")    # quality gate
 
 Content Analyst reads full narration text + WhisperX timing, identifies
 semantic structure, determines visual breakpoints based on CONTENT SHIFTS.
 
-Visual Concepter creates 6-layer cinematic prompts per visual phrase.
+Visual Concepter creates simple, direct video prompts per visual phrase.
 
 Coherence Evaluator checks visual-narration alignment and rates quality.
 If < GOOD, outputs feedback for next iteration. If >= GOOD, escalates.
@@ -156,8 +156,9 @@ EVALUATION CRITERIA:
    - Diverse range of perspectives throughout
 
 4. PROMPT QUALITY:
-   - All 6 layers present in each prompt
-   - Prompts are specific enough for video generation (no vague descriptions)
+   - Prompts are simple and concrete (1-2 sentences, ONE subject/action/setting)
+   - No abstract concepts, infographics, split-screens, or text overlays
+   - Prompts are specific enough for AI video generation (no vague descriptions)
    - Durations are reasonable (2-15 seconds per visual phrase)
 
 RATING:
@@ -216,7 +217,7 @@ visual_director = LoopAgent(
     name="visual_director",
     description=(
         "Iterative visual planning loop: Content Analyst identifies semantic "
-        "structure and selects LoRAs, Visual Concepter creates 6-layer prompts, "
+        "structure and selects LoRAs, Visual Concepter creates simple direct prompts, "
         "Coherence Evaluator checks narrative-visual alignment. Loops until "
         "GOOD or EXCELLENT rating."
     ),
