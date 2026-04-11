@@ -703,23 +703,30 @@ def deterministic_production_callback(
 
         if result.get("skipped"):
             # Still need to add skipped clips to OTIO timeline
-            probe_result_json = probe_clip(mp4_path=output_path)
-            probe_result = json.loads(probe_result_json)
-            actual_duration = probe_result.get("duration", duration * 1.15)
-            clip_result_json = add_video_clip(
-                scene_num=scene_num,
-                phrase_idx=phrase_idx,
-                mp4_path=output_path,
-                duration=duration,
-                source_range=duration,
-                available_range=actual_duration,
-                lora_id=lora_id,
-                tool_context=_MockToolContext(state),
-            )
-            clip_result = json.loads(clip_result_json)
-            if "error" not in clip_result:
-                skipped_clips += 1
-                total_clips += 1
+            try:
+                probe_result_json = probe_clip(mp4_path=output_path)
+                probe_result = json.loads(probe_result_json)
+                actual_duration = probe_result.get("duration", duration * 1.15)
+                clip_result_json = add_video_clip(
+                    scene_num=scene_num,
+                    phrase_idx=phrase_idx,
+                    mp4_path=output_path,
+                    duration=duration,
+                    source_range=duration,
+                    available_range=actual_duration,
+                    lora_id=lora_id,
+                    tool_context=_MockToolContext(state),
+                )
+                clip_result = json.loads(clip_result_json)
+                if "error" in clip_result:
+                    errors.append(f"OTIO error scene {scene_num} phrase {phrase_idx}: {clip_result['error']}")
+                else:
+                    skipped_clips += 1
+                    total_clips += 1
+            except Exception as e:
+                err_msg = f"Error adding skipped scene {scene_num} phrase {phrase_idx} to timeline: {e}"
+                logger.error(err_msg)
+                errors.append(err_msg)
             continue
 
         if result.get("status") == "error":
