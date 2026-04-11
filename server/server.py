@@ -161,7 +161,7 @@ app.include_router(dashboard_router)
 
 # AG-UI endpoint -- uses App + ADKAgent.from_app() to preserve plugins
 _adk_app = App(
-    name="documentary-pipeline",
+    name="documentary_pipeline",
     root_agent=pipeline_agent,
     plugins=build_plugins(),
 )
