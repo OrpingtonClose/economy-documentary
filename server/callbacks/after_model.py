@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
 _SCENES_BACKUP = os.path.join(_TIMELINE_DIR, "_scenes_backup.json")
+_VISUAL_STYLE_BACKUP = os.path.join(_TIMELINE_DIR, "_visual_style_backup.json")
 
 
 def after_model_callback(
@@ -73,7 +74,7 @@ def after_model_callback(
             len(reasoning_text),
         )
 
-    # -- Scene capture (scenario_generator only) -----------------------------
+    # -- Scene + visual_style capture (scenario_generator only) ---------------
     # ADK output_key only saves the *final* text response.  When the generator
     # outputs scenes and then calls create_timeline, the post-tool response is
     # often empty → output_key silently discards the scenes.  We capture them
@@ -81,7 +82,24 @@ def after_model_callback(
     # always have them.
     agent_name = getattr(callback_context, "agent_name", "unknown")
     if agent_name == "scenario_generator" and response_text:
-        from callbacks.deterministic_steps import extract_json_array
+        from callbacks.deterministic_steps import extract_json_array, extract_json_object
+
+        # --- Capture visual_style (JSON object) --------------------------------
+        # The scenario director outputs visual_style as a JSON object.
+        # We look for it in the response text and persist to state + disk.
+        vs_obj = extract_json_object(response_text)
+        if vs_obj and "style" in vs_obj and "avoid" in vs_obj:
+            vs_json = json.dumps(vs_obj, ensure_ascii=False)
+            state["visual_style"] = vs_json
+            os.makedirs(os.path.dirname(_VISUAL_STYLE_BACKUP) or ".", exist_ok=True)
+            with open(_VISUAL_STYLE_BACKUP, "w") as f:
+                f.write(vs_json)
+            logger.info(
+                "Captured visual_style from scenario_generator → state + %s (style=%s)",
+                _VISUAL_STYLE_BACKUP, vs_obj.get("style", "unknown"),
+            )
+
+        # --- Capture scenes (JSON array) ---------------------------------------
         scenes = extract_json_array(response_text)
         if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
             scenes_json = json.dumps(scenes, ensure_ascii=False)

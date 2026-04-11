@@ -145,20 +145,30 @@ def extract_json_object(text: str) -> Optional[dict]:
 def clean_scenes_after_scenario(
     callback_context: CallbackContext,
 ) -> Optional[genai_types.Content]:
-    """After scenario_director: extract clean JSON from state['scenes'].
+    """After scenario_director: extract clean JSON from state['scenes'] and state['visual_style'].
 
     ADK's output_key only saves the *final* text response from the LLM.
     When the generator outputs scenes then calls create_timeline, the
     post-tool response is often empty, so output_key silently discards
-    the scenes.  The after_model_callback captures scenes to both state
-    and a backup file on disk.  This callback reads from whichever
-    source has the data.
+    the scenes.  The after_model_callback captures scenes and visual_style
+    to both state and backup files on disk.  This callback reads from
+    whichever source has the data.
     """
     state = callback_context.state
-    scenes_file = os.path.join(
-        os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
-        "_scenes_backup.json",
-    )
+    timeline_dir = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+    scenes_file = os.path.join(timeline_dir, "_scenes_backup.json")
+    visual_style_file = os.path.join(timeline_dir, "_visual_style_backup.json")
+
+    # --- Recover visual_style (may be lost by LoopAgent state scoping) -----
+    raw_vs = str(state.get("visual_style", ""))
+    if not raw_vs.strip() or raw_vs.strip() == "":
+        if os.path.exists(visual_style_file):
+            logger.info("State visual_style empty, recovering from backup %s", visual_style_file)
+            with open(visual_style_file) as f:
+                state["visual_style"] = f.read()
+            logger.info("Recovered visual_style from disk backup")
+    else:
+        logger.info("visual_style present in state (%d chars)", len(raw_vs))
 
     # --- Try state first, then backup file ---------------------------------
     raw_str = str(state.get("scenes", ""))
