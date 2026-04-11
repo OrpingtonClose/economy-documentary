@@ -207,10 +207,9 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Model-level CPU offload: entire components move on/off GPU.
-    # Requires 48GB+ VRAM (A100 80GB / L40S) to fit the Gemma3 text
-    # encoder as a single component. Much faster than sequential offload.
-    pipe.enable_model_cpu_offload()
+    # Move entire pipeline to GPU — no offloading of any kind.
+    # A100 80GB has plenty of headroom (~48GB model + ~30GB free).
+    pipe.to("cuda")
     _ltx_pipe = pipe
     _active_model = "ltx"
 
