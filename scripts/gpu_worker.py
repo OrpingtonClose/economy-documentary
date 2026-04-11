@@ -512,8 +512,10 @@ def _generate_video(
             else:
                 break
 
-        # Brightness passed — track among passing attempts
-        if score > best_passing_score:
+        # Brightness passed — track among passing attempts.
+        # QA is paired with frames so metadata always describes the selected output.
+        is_new_best = score > best_passing_score
+        if is_new_best:
             best_passing_frames = candidate_frames
             best_passing_score = score
             best_passing_seed = current_seed
@@ -536,8 +538,9 @@ def _generate_video(
             best_passing_qa = qa_result
             break
 
-        # QA says poor or unknown — update QA for this passing attempt and retry
-        best_passing_qa = qa_result
+        # QA says poor or unknown — only update QA if these are the best frames
+        if is_new_best:
+            best_passing_qa = qa_result
         if attempt < max_attempts:
             logger.warning(
                 "Qwen QA rated '%s' — retrying with new seed...",
