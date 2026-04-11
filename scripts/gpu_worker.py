@@ -79,8 +79,8 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 30  # dev/full model: 20-50 steps
-    guidance_scale: float = 3.5  # dev/full model: CFG 2.0-5.0 (recommended 3.0-3.5)
+    num_inference_steps: int = 8  # distilled model: 4-8 steps (CFG=1)
+    guidance_scale: float = 1.0  # distilled model: CFG=1 (no classifier-free guidance needed)
 
 
 class HealthResponse(BaseModel):
@@ -207,11 +207,10 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Move entire pipeline to GPU — no offloading of any kind.
-    # H200 140GB VRAM has massive headroom for the full model (~85GB)
-    # plus inference working memory.  Avoids any CPU↔GPU transfer
-    # latency and ensures maximum generation quality.
-    pipe.to("cuda")
+    # Use cpu_offload per official dg845 example — moves idle components
+    # to CPU while active component runs on GPU.  Same bf16 precision,
+    # just memory management.  Required for long clips on any GPU size.
+    pipe.enable_model_cpu_offload(device="cuda")
     pipe.vae.enable_tiling()  # Required for quality output per official docs
     _ltx_pipe = pipe
     _active_model = "ltx"
