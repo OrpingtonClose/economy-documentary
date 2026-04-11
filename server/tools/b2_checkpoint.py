@@ -373,7 +373,10 @@ def restore_directory(b2_prefix: str, local_dir: str) -> int:
 
 
 def _list_all_run_ids() -> list[str]:
-    """List all run IDs in the B2 bucket by scanning for stage_markers.
+    """List all run IDs in the B2 bucket by scanning for any sub-path.
+
+    Detects runs by the first path component of every file in the bucket,
+    so even partially-uploaded runs (no stage markers yet) are found.
 
     Returns a list of unique run_id strings (sorted, latest last).
     """
@@ -385,9 +388,11 @@ def _list_all_run_ids() -> list[str]:
         seen_runs: list[str] = []
         for file_version, _ in bucket.ls("", recursive=True):
             fname = file_version.file_name
-            if "/stage_markers/" in fname:
-                run_id = fname.split("/stage_markers/")[0]
-                if run_id not in seen_runs:
+            # Extract the top-level directory as the run_id
+            parts = fname.split("/", 1)
+            if len(parts) >= 2:
+                run_id = parts[0]
+                if run_id and run_id not in seen_runs:
                     seen_runs.append(run_id)
         seen_runs.sort()
         return seen_runs
