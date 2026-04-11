@@ -145,14 +145,44 @@ def clean_scenes_after_scenario(
     raw_scenes = state.get("scenes", "")
     if not raw_scenes:
         logger.warning("No scenes in state after scenario director")
-        return None
+        # Fallback: check if scenes were saved to file by create_timeline
+        scenes_file = os.path.join(
+            os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
+            "_scenes_backup.json",
+        )
+        if os.path.exists(scenes_file):
+            with open(scenes_file) as f:
+                state["scenes"] = f.read()
+            logger.info("Recovered scenes from backup file")
+        else:
+            from callbacks.timeline_guardian import timeline_guardian_callback
+            return timeline_guardian_callback(callback_context)
 
-    scenes = extract_json_array(str(raw_scenes))
+    raw_str = str(state.get("scenes", ""))
+    logger.info("Raw scenes state (type=%s, len=%d): %.500s",
+                type(state.get("scenes")).__name__, len(raw_str), raw_str)
+
+    scenes = extract_json_array(raw_str)
     if scenes:
         state["scenes"] = json.dumps(scenes)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
     else:
-        logger.error("Failed to extract JSON array from scenes state")
+        # Fallback: check backup file
+        scenes_file = os.path.join(
+            os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
+            "_scenes_backup.json",
+        )
+        if os.path.exists(scenes_file):
+            with open(scenes_file) as f:
+                backup_data = f.read()
+            scenes = extract_json_array(backup_data)
+            if scenes:
+                state["scenes"] = json.dumps(scenes)
+                logger.info("Recovered %d scenes from backup file", len(scenes))
+            else:
+                logger.error("Failed to extract JSON from both state and backup")
+        else:
+            logger.error("Failed to extract JSON array from scenes state and no backup")
 
     # Run timeline guardian after cleaning
     from callbacks.timeline_guardian import timeline_guardian_callback
