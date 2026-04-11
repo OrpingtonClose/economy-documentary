@@ -85,40 +85,78 @@ content_analyst = Agent(
 _VISUAL_CONCEPTER_INSTRUCTION = """\
 You are the Visual Concepter for a documentary pipeline.
 
-Read the content analysis from {content_analysis} which contains:
-- Per-scene semantic maps with visual phrase boundaries
-- Content types and LoRA selections
-- Visual mood keywords
+Read the content analysis from {content_analysis} and the MOVIE-LEVEL VISUAL
+STYLE from {visual_style}. The visual_style defines the ENTIRE FILM'S look.
+Every prompt you write MUST conform to this style directive.
 
-For EACH visual phrase, create a SIMPLE, DIRECT PROMPT:
+You are writing prompts for LTX-2.3, an AI video generation model. LTX-2.3
+responds to prompts written like CINEMATOGRAPHY SHOT DESCRIPTIONS, not keyword
+tags. Think like a Director of Photography planning each shot.
 
-Write prompts as SHORT, CONCRETE descriptions (1-2 sentences max).
-Focus on ONE clear subject doing ONE clear action in ONE clear setting.
+PROMPT FORMAT (mandatory — follow this structure for EVERY prompt):
+Write a SINGLE FLOWING PARAGRAPH (4-6 sentences) covering these elements in order:
+1. SHOT SIZE + SUBJECT + ACTION: "A medium close-up of golden cloudberries
+   glistening on a mossy bog as morning dew drips from their surfaces."
+2. ENVIRONMENT + ATMOSPHERE: "The scene takes place in a vast Finnish
+   marshland at dawn, thin mist hovering above dark peat water."
+3. CAMERA MOVEMENT: "The camera performs a slow dolly forward at low angle,
+   gliding just above the moss surface." (use ONE movement per shot)
+4. LIGHTING + STYLE: "Lighting is soft golden-hour key with warm highlights
+   and cool shadow fill. Shot on a 50mm lens, natural color." Include the
+   realism_anchors from the visual_style (e.g. "4K", "raw footage").
+5. TEMPORAL CHANGE: "Over time, the mist thins slightly as sunlight
+   intensifies across the berries."
 
-GOOD prompts (simple, concrete, filmable):
-- "Golden cloudberries growing on a mossy bog in Finnish Lapland, soft morning light"
-- "Close-up of hands picking ripe orange berries from low bushes, shallow depth of field"
-- "Aerial view of vast Nordic marshland dotted with orange berries, golden hour"
-- "Finnish 2-euro coin rotating slowly, cloudberry design visible, dark background"
+USE PRESENT-TENSE VERBS: "walks", "glows", "tilts" — never past tense.
 
-BAD prompts (too complex, abstract, multi-layered):
-- "A vibrant tapestry of cloudberry cultivation unfolds across the boreal landscape, 
-   camera tracking through misty valleys as golden light illuminates..."
-- "Split-screen infographic showing economic data overlaid on pastoral scenes..."
-- "Conceptual visualization of market dynamics through abstract flowing shapes..."
+INCLUDE REALISM ANCHORS from visual_style.realism_anchors in every prompt
+(e.g. "4K", "raw footage", "no CGI", "live action").
+
+AVOID everything in visual_style.avoid (these become the negative prompt).
+
+LTX-2.3 STRENGTHS (lean into these):
+- Cinematic compositions with thoughtful lighting and shallow depth of field
+- Single-subject emotional expressions and subtle gestures
+- Atmosphere: fog, mist, golden-hour light, rain, reflections
+- Clear camera language: "slow dolly in", "handheld tracking", "crane up"
+- Stylized aesthetics when requested by visual_style
+
+LTX-2.3 WEAKNESSES (avoid these entirely):
+- Complex human figures in historical/period scenarios (causes cartoon look)
+- Multiple characters interacting in the same frame
+- Text, logos, or readable writing
+- Complex physics or chaotic motion
+- Overloaded scenes with too many subjects or actions
+
+INSTEAD OF HUMAN FIGURES, use:
+- Close-ups of objects, tools, artifacts, hands
+- Landscapes and environments that evoke the era
+- Macro details: textures, materials, surfaces
+- Atmospheric establishing shots
+- Animals, nature, weather
+
+CAMERA MOVEMENTS (pick ONE per shot):
+- Tripod-locked (extremely stable)
+- Slow dolly in / dolly out
+- Crane up / crane down
+- Pan left / pan right
+- Truck left / truck right
+- Slow orbit (partial arc)
+- Handheld (controlled micro-shake)
 
 RULES:
 - ONE subject, ONE action, ONE setting per prompt
 - NO abstract concepts, infographics, split-screens, or text overlays
-- NO multi-clause descriptions — keep it filmable by AI video generation
-- Vary camera angles between phrases (close-up, wide, aerial, tracking)
+- NO human figures in complex historical scenarios
+- Vary camera movements between consecutive phrases
 - Duration of each visual phrase comes from the content analysis timing
 
 OUTPUT: JSON array of visual concepts, each containing:
 - scene_num, phrase_idx, start_time, end_time, duration
-- prompt (simple 1-2 sentence description)
+- prompt (flowing cinematography paragraph, 4-6 sentences)
+- negative_prompt (auto-generated from visual_style.avoid)
 - lora_id, lora_weight
-- Camera style, environment, mood
+- camera_movement, environment, mood
 
 Store the result in state["visual_concepts"].
 """
@@ -136,40 +174,54 @@ visual_concepter = Agent(
 _COHERENCE_EVALUATOR_INSTRUCTION = """\
 You are the Coherence Evaluator for a documentary visual pipeline.
 
-Read the visual concepts from {visual_concepts} and the content analysis
-from {content_analysis}.
+Read the visual concepts from {visual_concepts}, the content analysis
+from {content_analysis}, and the MOVIE-LEVEL VISUAL STYLE from {visual_style}.
 
 EVALUATION CRITERIA:
 
-1. NARRATIVE-VISUAL CONNECTION:
+1. MOVIE-LEVEL STYLE CONSISTENCY:
+   Does EVERY prompt conform to the visual_style directive?
+   - Style: Does each prompt's aesthetic match visual_style.style?
+   - Realism anchors: Are visual_style.realism_anchors present in each prompt?
+   - Avoidance: Does any prompt contain elements from visual_style.avoid?
+   - Palette: Is the lighting/colour direction consistent with visual_style.palette?
+   - Camera: Does the camera language match visual_style.camera_language?
+   THIS IS THE MOST IMPORTANT CHECK. A beautifully written prompt that
+   contradicts the movie's visual identity is a FAILURE.
+
+2. LTX-2.3 PROMPT FORMAT:
+   - Each prompt is a SINGLE FLOWING PARAGRAPH (4-6 sentences)
+   - Uses present-tense verbs ("walks", "glows", not "walking", "glowing")
+   - Follows the cinematography structure: shot+subject+action → environment →
+     camera movement → lighting+style → temporal change
+   - ONE camera movement per shot (no stacking)
+   - ONE subject, ONE action, ONE setting (no overloading)
+   - NO human figures in complex historical/period scenarios
+   - NO abstract concepts, infographics, split-screens, or text overlays
+
+3. NARRATIVE-VISUAL CONNECTION:
    Does each visual deeply connect to what the narration communicates at that
    exact moment? A clip about "rising inflation" shouldn't show generic cityscapes.
 
-2. LORA TRANSITION MOTIVATION:
-   Are LoRA style transitions motivated by narrative shifts? Style changes
-   should feel intentional, not random. Check that transition_affinity rules
-   from the LoRA catalog are respected.
-
-3. VISUAL VARIETY:
-   - No consecutive visual phrases with the same camera style
+4. VISUAL VARIETY:
+   - No consecutive visual phrases with the same camera movement
    - No consecutive visual phrases with the same environment
    - Diverse range of perspectives throughout
 
-4. PROMPT QUALITY:
-   - Prompts are simple and concrete (1-2 sentences, ONE subject/action/setting)
-   - No abstract concepts, infographics, split-screens, or text overlays
-   - Prompts are specific enough for AI video generation (no vague descriptions)
-   - Durations are reasonable (2-15 seconds per visual phrase)
+5. NEGATIVE PROMPT:
+   - Each concept includes a negative_prompt derived from visual_style.avoid
 
 RATING:
-- POOR: Major disconnects between narration and visuals
-- FAIR: Some connection but lacks intentionality
-- GOOD: Strong connection with minor issues
-- EXCELLENT: Every visual choice is motivated and compelling
+- POOR: Style violations, human figures in historical scenes, or major narrative disconnects
+- FAIR: Mostly consistent but some prompts deviate from visual_style or use weak format
+- GOOD: Strong style consistency with minor issues
+- EXCELLENT: Every prompt is a perfectly formatted cinematography paragraph that
+  matches the movie's visual identity
 
 If POOR or FAIR:
 - Output specific feedback for each problematic visual phrase
 - Explain what the visual SHOULD convey vs what it currently conveys
+- Flag any style violations against visual_style
 
 If GOOD or EXCELLENT:
 - Output "APPROVED: true"

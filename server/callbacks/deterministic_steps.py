@@ -557,6 +557,19 @@ def deterministic_production_callback(
         if obj and "visual_concepts" in obj:
             concepts = obj["visual_concepts"]
 
+    # Extract movie-level visual style for QA enforcement
+    raw_visual_style = state.get("visual_style", "")
+    visual_style_str = ""
+    visual_style_avoid = []
+    if raw_visual_style:
+        try:
+            vs = json.loads(str(raw_visual_style)) if isinstance(raw_visual_style, str) else raw_visual_style
+            if isinstance(vs, dict):
+                visual_style_str = json.dumps(vs)
+                visual_style_avoid = vs.get("avoid", [])
+        except (json.JSONDecodeError, TypeError):
+            visual_style_str = str(raw_visual_style)
+
     if not concepts:
         # Fallback: generate a simple concept per scene from scenes data
         raw_scenes = state.get("scenes", "[]")
@@ -589,6 +602,9 @@ def deterministic_production_callback(
     total_clips = 0
     errors = []
 
+    # Build default negative prompt from visual_style.avoid
+    default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
+
     for concept in concepts:
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
@@ -596,6 +612,8 @@ def deterministic_production_callback(
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)
+        # Per-clip negative prompt from visual concepter, or fall back to movie-level
+        clip_negative = concept.get("negative_prompt", default_negative)
 
         output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}.mp4")
 
@@ -607,6 +625,8 @@ def deterministic_production_callback(
                 lora_id=lora_id,
                 lora_weight=lora_weight,
                 output_path=output_path,
+                negative_prompt=clip_negative,
+                visual_style=visual_style_str,
             )
             gen_result = json.loads(gen_result_json)
 

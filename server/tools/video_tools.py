@@ -72,6 +72,8 @@ def generate_video_clip(
     lora_id: str,
     lora_weight: float,
     output_path: str,
+    negative_prompt: str = "",
+    visual_style: str = "",
     tool_context=None,
 ) -> str:
     """Generate a video clip using LTX-2.3.
@@ -82,6 +84,8 @@ def generate_video_clip(
         lora_id: LoRA style identifier.
         lora_weight: LoRA weight (0.0-1.0).
         output_path: Path for the output MP4 file.
+        negative_prompt: Per-clip negative prompt from visual_style.avoid.
+        visual_style: Movie-level visual style description for QA enforcement.
 
     Returns:
         JSON string with generation results.
@@ -149,6 +153,8 @@ def generate_video_clip(
 
     payload = json.dumps({
         "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "visual_style": visual_style,
         "duration_sec": actual_duration,
         "width": 768,
         "height": 512,

@@ -74,6 +74,8 @@ class TTSRequest(BaseModel):
 
 class VideoRequest(BaseModel):
     prompt: str
+    negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
+    visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
     width: int = 768
     height: int = 512
@@ -368,11 +370,17 @@ def _frames_to_base64(frames, indices: list[int]) -> list[str]:
     return result
 
 
-def _qwen_visual_qa(prompt: str, frames_b64: list[str]) -> dict:
+def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
     """Send frames to Qwen-Omni via OpenRouter for visual quality assessment.
 
     Returns dict with keys: quality ("poor"/"good"/"excellent"), qa_reason (str).
     Following bearnaise pattern: per-clip LLM-based visual QA.
+
+    Args:
+        prompt: The generation prompt for this clip.
+        frames_b64: Base64-encoded JPEG frames (start, middle, end).
+        visual_style: Movie-level visual style description. When provided,
+            QA checks that the clip conforms to the film's declared aesthetic.
     """
     import httpx
 
@@ -388,17 +396,36 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str]) -> dict:
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
         })
 
+    # Build the style enforcement section
+    style_section = ""
+    if visual_style:
+        style_section = (
+            f"\nMOVIE-LEVEL VISUAL STYLE (the entire film must look like this):\n"
+            f"{visual_style}\n\n"
+            f"CHECK: Does this clip conform to the movie's declared visual style?\n"
+            f"If the movie style says 'photorealistic' but the clip looks like a \n"
+            f"cartoon, illustration, or CGI render, rate it POOR regardless of \n"
+            f"other qualities.\n"
+        )
+
     content_parts.append({
         "type": "text",
         "text": (
-            f"You are a video quality assessor for AI-generated documentary footage.\n\n"
+            f"You are a video quality assessor for AI-generated footage.\n\n"
             f"The video was generated from this prompt:\n"
-            f'"{prompt}"\n\n'
+            f'"{prompt}"\n'
+            f"{style_section}\n"
             f"These {len(frames_b64)} frames are sampled from the start, middle, and end of the clip.\n\n"
             f"Evaluate the video quality:\n"
             f"1. Does the visual content match what the prompt describes?\n"
-            f"2. Is the image clear, well-lit, and visually coherent?\n"
-            f"3. Are there artifacts, extreme darkness, blur, or nonsensical imagery?\n\n"
+            f"2. Does the clip match the movie's visual style? (most important)\n"
+            f"3. Are there blatant AI artifacts: distorted shapes, impossible \n"
+            f"   geometry, morphing, grid patterns, or incoherent motion?\n"
+            f"4. Is the output clearly the WRONG medium (e.g. cartoon when the \n"
+            f"   movie style requires photorealism)?\n\n"
+            f"Be LENIENT on minor imperfections (slight blur, small lighting \n"
+            f"differences). Only rate POOR for blatant failures: wrong medium, \n"
+            f"AI wonkiness, or complete prompt mismatch.\n\n"
             f"Respond in EXACTLY this JSON format (no markdown, no extra text):\n"
             f'{{"quality": "poor|good|excellent", "qa_reason": "brief description of what the video shows and why you rated it this way"}}'
         ),
@@ -457,12 +484,19 @@ def _generate_video(
     seed: int,
     num_inference_steps: int,
     guidance_scale: float,
+    negative_prompt: str = "",
+    visual_style: str = "",
 ) -> tuple[bytes, dict]:
     """Generate video clip using LTX-2.3 dev (full) model via diffusers.
 
     Returns (raw_mp4_bytes, qa_status) where qa_status follows bearnaise
     pattern: {quality, qa_reason, attempts, seed}.
     Caller must hold _model_lock.
+
+    Args:
+        negative_prompt: Per-clip negative prompt from visual_style.avoid.
+            Merged with baseline negatives.
+        visual_style: Movie-level visual style description passed to QA.
     """
     _load_ltx()
 
@@ -475,10 +509,16 @@ def _generate_video(
         # Round to nearest valid frame count: 8k+1
         num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
 
-    negative_prompt = (
+    # Baseline negatives + per-clip negatives from visual_style.avoid
+    baseline_negatives = (
         "worst quality, inconsistent motion, blurry, jittery, distorted, "
-        "static, low resolution, dark, underexposed"
+        "static, low resolution, morphing, warping, flicker, "
+        "text, watermark, logo"
     )
+    if negative_prompt:
+        negative_prompt = f"{negative_prompt}, {baseline_negatives}"
+    else:
+        negative_prompt = baseline_negatives
 
     logger.info(
         "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
@@ -579,7 +619,7 @@ def _generate_video(
         n = candidate_frames.shape[0] if hasattr(candidate_frames, 'shape') else len(candidate_frames)
         sample_indices = [0, n // 2, n - 1] if n >= 3 else list(range(n))
         frames_b64 = _frames_to_base64(candidate_frames, sample_indices)
-        qa_result = _qwen_visual_qa(prompt, frames_b64)
+        qa_result = _qwen_visual_qa(prompt, frames_b64, visual_style=visual_style)
 
         logger.info(
             "Qwen QA (attempt %d/%d): quality=%s, reason=%.120s",
@@ -781,6 +821,8 @@ def video_endpoint(req: VideoRequest):
                 seed=req.seed,
                 num_inference_steps=req.num_inference_steps,
                 guidance_scale=req.guidance_scale,
+                negative_prompt=req.negative_prompt,
+                visual_style=req.visual_style,
             )
         except HTTPException:
             raise
