@@ -111,10 +111,18 @@ def _save_generator_scenes(callback_context):
     if raw:
         scenes = extract_json_array(str(raw))
         if scenes:
-            state["_approved_scenes_backup"] = json.dumps(scenes)
-            logger.info(
-                "Saved generator scenes backup: %d scenes", len(scenes)
-            )
+            # Only save if the evaluator hasn't already saved an approved backup.
+            # Otherwise, the generator's unapproved output would overwrite the
+            # evaluator-approved scenes when the LoopAgent re-runs.
+            if not state.get("_approved_scenes_backup"):
+                state["_approved_scenes_backup"] = json.dumps(scenes)
+                logger.info(
+                    "Saved generator scenes backup: %d scenes", len(scenes)
+                )
+            else:
+                logger.info(
+                    "Skipping generator backup: evaluator-approved backup already exists"
+                )
     return None
 
 
