@@ -798,8 +798,13 @@ def main():
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
 
-    # Pre-load the designated model at startup — no lazy loading, no swapping
-    if _worker_mode in ("tts", "both"):
+    # Pre-load the designated model at startup.
+    # In single-mode, pre-load the one model this worker serves.
+    # In 'both' mode, only pre-load LTX (the heavier model) — TTS will be
+    # lazily loaded on first request.  Loading both is pointless because
+    # _load_ltx() always unloads TTS first (OOM safety), so the TTS load
+    # would be immediately discarded.
+    if _worker_mode == "tts":
         try:
             with _model_lock:
                 _load_tts()
