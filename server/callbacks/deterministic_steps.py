@@ -50,13 +50,18 @@ def extract_json_array(text: str) -> Optional[list]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Strategy 2: Extract from markdown code fences
-    fence_pattern = re.compile(r'```(?:json)?\s*\n(.*?)```', re.DOTALL)
+    # Strategy 2: Extract from markdown code fences (handle optional newline)
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
         try:
             result = json.loads(match.group(1).strip())
             if isinstance(result, list):
                 return result
+            # If the fenced content is a dict with an array value, try extracting it
+            if isinstance(result, dict):
+                for v in result.values():
+                    if isinstance(v, list):
+                        return v
         except (json.JSONDecodeError, ValueError):
             continue
 
@@ -96,8 +101,8 @@ def extract_json_object(text: str) -> Optional[dict]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Strategy 2: Extract from markdown fences
-    fence_pattern = re.compile(r'```(?:json)?\s*\n(.*?)```', re.DOTALL)
+    # Strategy 2: Extract from markdown fences (handle optional newline)
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
         try:
             result = json.loads(match.group(1).strip())
@@ -561,6 +566,8 @@ def deterministic_production_callback(
                     "phrase_idx": 0,
                     "duration": scene.get("duration_sec", 30),
                     "prompt": f"Documentary footage: {scene.get('title', 'scene')}. {scene.get('visual_notes', '')}",
+                    "start_time": 0.0,
+                    "end_time": min(scene.get('duration_sec', 5), 8.0),
                     "lora_id": "documentary-realism",
                     "lora_weight": 0.75,
                 })
@@ -581,7 +588,7 @@ def deterministic_production_callback(
     for concept in concepts:
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
-        duration = concept.get("duration", 5.0)
+        duration = min(concept.get("duration", 5.0), 10.0)  # Cap at 10s to avoid OOM
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)

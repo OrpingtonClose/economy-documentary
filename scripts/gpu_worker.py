@@ -207,9 +207,12 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Move entire pipeline to GPU — no offloading of any kind.
-    # A100 80GB has plenty of headroom (~48GB model + ~30GB free).
-    pipe.to("cuda")
+    # Model-level CPU offload: entire components move on/off GPU as needed.
+    # Keeps idle components (e.g. text encoder after encoding) in CPU RAM
+    # while active component (e.g. transformer) runs on GPU.  No quality
+    # loss — same bf16 precision.  Frees ~20GB VRAM headroom for inference
+    # working memory (intermediate tensors, attention KV cache, etc.).
+    pipe.enable_model_cpu_offload()
     _ltx_pipe = pipe
     _active_model = "ltx"
 
