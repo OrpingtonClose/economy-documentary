@@ -7,6 +7,7 @@ For test run: generates silent WAV files with correct estimated duration (no GPU
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -76,33 +77,56 @@ def generate_narration(
 
     duration = _estimate_duration(text)
 
-    # Skip regeneration if WAV already exists and is non-empty
+    # Skip regeneration if WAV already exists, is non-empty, and matches current text
+    text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
+    sidecar_path = wav_path.replace(".wav", ".txt")
     if os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0:
-        # Read actual duration from WAV header
+        # Validate text content matches (prevent stale cache from different script)
+        text_matches = False
+        if os.path.isfile(sidecar_path):
+            try:
+                with open(sidecar_path, "r") as sf:
+                    cached_hash = sf.read().strip()
+                text_matches = cached_hash == text_hash
+            except OSError:
+                pass
+        if not text_matches:
+            logger.info("Text changed for %s, regenerating", wav_path)
+        else:
+            # Read actual duration from WAV header
+            try:
+                with wave.open(wav_path, "r") as wf:
+                    actual_duration = wf.getnframes() / wf.getframerate()
+                    actual_sr = wf.getframerate()
+                logger.info(
+                    "Skipping existing WAV %s (%.2fs)", wav_path, actual_duration
+                )
+                return json.dumps(
+                    {
+                        "status": "skipped",
+                        "mode": "cached",
+                        "wav_path": wav_path,
+                        "duration": round(actual_duration, 2),
+                        "sample_rate": actual_sr,
+                        "text_length": len(text),
+                        "word_count": len(text.split()),
+                    }
+                )
+            except wave.Error:
+                logger.warning("Corrupt WAV %s, regenerating", wav_path)
+
+    def _write_sidecar(path: str, h: str) -> None:
+        """Write text hash sidecar so cache can detect stale content."""
         try:
-            with wave.open(wav_path, "r") as wf:
-                actual_duration = wf.getnframes() / wf.getframerate()
-                actual_sr = wf.getframerate()
-            logger.info(
-                "Skipping existing WAV %s (%.2fs)", wav_path, actual_duration
-            )
-            return json.dumps(
-                {
-                    "status": "skipped",
-                    "mode": "cached",
-                    "wav_path": wav_path,
-                    "duration": round(actual_duration, 2),
-                    "sample_rate": actual_sr,
-                    "text_length": len(text),
-                    "word_count": len(text.split()),
-                }
-            )
-        except wave.Error:
-            logger.warning("Corrupt WAV %s, regenerating", wav_path)
+            with open(path, "w") as f:
+                f.write(h)
+        except OSError:
+            pass
 
     if _TEST_MODE:
         # Test mode: generate silent WAV with correct duration
         _generate_silent_wav(wav_path, duration)
+        _write_sidecar(sidecar_path, text_hash)
         logger.info(
             "Test mode: generated silent WAV %s (%.2fs)", wav_path, duration
         )
@@ -168,6 +192,7 @@ def generate_narration(
         os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
         with open(wav_path, "wb") as f:
             f.write(wav_bytes)
+        _write_sidecar(sidecar_path, text_hash)
 
         logger.info(
             "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",

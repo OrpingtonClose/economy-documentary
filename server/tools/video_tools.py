@@ -153,8 +153,8 @@ def generate_video_clip(
         "height": 512,
         "num_frames": num_frames,
         "seed": seed,
-        "num_inference_steps": 30,
-        "guidance_scale": 3.5,
+        "num_inference_steps": 8,   # distilled model: 4-8 steps
+        "guidance_scale": 1.0,      # distilled model: CFG=1 (no classifier-free guidance)
     }).encode("utf-8")
 
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
