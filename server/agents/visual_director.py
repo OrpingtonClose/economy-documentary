@@ -267,6 +267,8 @@ def _visual_phase_setup(callback_context):
     from google.genai import types as genai_types
     state = callback_context.state
     state["pipeline_phase"] = "visual_direction"
+
+    # B2 skip check FIRST — avoid blocking on infra pause for a completed stage
     stages_complete = state.get("_b2_stages_complete", [])
     if "visual_direction" in stages_complete:
         logger.info("B2: visual_direction stage already complete, skipping LoopAgent")
@@ -274,6 +276,14 @@ def _visual_phase_setup(callback_context):
             role="model",
             parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
         )
+
+    # INFRA: notify stage start for timing watchdog (only if stage will actually run)
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("visual_direction")
+    check_infra_pause()
+
     return None
 
 

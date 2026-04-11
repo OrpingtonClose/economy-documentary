@@ -109,3 +109,22 @@ async def dashboard_active():
             ]
         }
     )
+
+
+@router.get("/infra")
+async def dashboard_infra():
+    """Return infra agent status: worker health, stage timing, escalations.
+
+    This is the active monitoring counterpart to the passive contract
+    checks.  Poll this endpoint (or the SSE stream) to see real-time
+    worker health and any escalation events.
+    """
+    from infra_agent import get_infra_agent
+
+    agent = get_infra_agent()
+    if agent is None:
+        return JSONResponse(
+            {"status": "not_running", "message": "InfraAgent has not been started"},
+            status_code=200,
+        )
+    return JSONResponse(agent.get_status())
