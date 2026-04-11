@@ -202,10 +202,22 @@ def generate_video_clip(
             except (URLError, OSError, TimeoutError) as retry_exc:
                 logger.error("Retry %d/%d failed: %s", retry, max_retries, retry_exc)
                 if retry == max_retries:
+                    # Fallback to solid-color placeholder so pipeline can continue
+                    logger.warning("All retries exhausted — generating placeholder MP4")
+                    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+                    success = _generate_solid_color_mp4(output_path, actual_duration)
+                    if not success:
+                        return json.dumps(
+                            {"status": "error", "error": f"GPU worker failed after {max_retries} retries and fallback failed: {retry_exc}"}
+                        )
                     return json.dumps(
                         {
-                            "status": "error",
-                            "error": f"GPU worker failed after {max_retries} retries: {retry_exc}",
+                            "status": "generated",
+                            "mode": "fallback",
+                            "output_path": output_path,
+                            "target_duration": round(duration_sec, 2),
+                            "actual_duration": round(actual_duration, 2),
+                            "error": str(retry_exc),
                         }
                     )
 

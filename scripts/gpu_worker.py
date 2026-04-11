@@ -877,24 +877,28 @@ def main():
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
 
-    # Pre-load the designated model at startup.
-    # In single-mode, pre-load the one model this worker serves.
-    # In 'both' mode, only pre-load LTX (the heavier model) — TTS will be
-    # lazily loaded on first request.  Loading both is pointless because
-    # _load_ltx() always unloads TTS first (OOM safety), so the TTS load
-    # would be immediately discarded.
-    if _worker_mode == "tts":
-        try:
-            with _model_lock:
-                _load_tts()
-        except Exception as e:
-            logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
-    if _worker_mode in ("ltx", "both"):
-        try:
-            with _model_lock:
-                _load_ltx()
-        except Exception as e:
-            logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
+    # Pre-load models in a background thread so uvicorn starts immediately.
+    # The /health endpoint reports tts_loaded/ltx_loaded status, so callers
+    # can poll until the model they need is ready.
+    import threading
+
+    def _background_preload():
+        if _worker_mode == "tts":
+            try:
+                with _model_lock:
+                    _load_tts()
+            except Exception as e:
+                logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
+        if _worker_mode in ("ltx", "both"):
+            try:
+                with _model_lock:
+                    _load_ltx()
+            except Exception as e:
+                logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
+
+    preload_thread = threading.Thread(target=_background_preload, daemon=True)
+    preload_thread.start()
+    logger.info("Model pre-loading started in background thread")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
