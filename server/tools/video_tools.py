@@ -149,25 +149,15 @@ def generate_video_clip(
         )
 
     # Production mode: call LTX-2.3 on GPU worker
-    # Uses round-robin across VIDEO_WORKER_URLS if multiple workers available
+    # ARCHITECTURE INVARIANT: Video generation MUST use a real GPU worker.
+    # Never fall back to solid-color placeholder — that produces garbage that
+    # wastes all downstream assembly time and is unwatchable.
     gpu_worker_url = _get_next_worker_url()
     if not gpu_worker_url:
-        # Fallback: generate solid-color placeholder if no GPU worker
-        logger.warning("GPU_WORKER_URL not set, generating solid-color placeholder")
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        success = _generate_solid_color_mp4(output_path, actual_duration)
-        if not success:
-            return json.dumps({"status": "error", "error": "Failed to generate placeholder video"})
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "placeholder",
-                "output_path": output_path,
-                "target_duration": round(duration_sec, 2),
-                "actual_duration": round(actual_duration, 2),
-                "lora_id": lora_id,
-                "lora_weight": lora_weight,
-            }
+        raise RuntimeError(
+            "No video worker URL configured. Set VIDEO_WORKER_URLS or "
+            "GPU_WORKER_URL to at least one LTX-dedicated GPU VM. "
+            "The pipeline MUST NOT fall back to placeholder video."
         )
 
     # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
@@ -235,24 +225,13 @@ def generate_video_clip(
             except (URLError, OSError, TimeoutError) as retry_exc:
                 logger.error("Retry %d/%d failed: %s", retry, max_retries, retry_exc)
                 if retry == max_retries:
-                    # Fallback to solid-color placeholder so pipeline can continue
-                    logger.warning("All retries exhausted — generating placeholder MP4")
-                    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-                    success = _generate_solid_color_mp4(output_path, actual_duration)
-                    if not success:
-                        return json.dumps(
-                            {"status": "error", "error": f"GPU worker failed after {max_retries} retries and fallback failed: {retry_exc}"}
-                        )
-                    return json.dumps(
-                        {
-                            "status": "generated",
-                            "mode": "fallback",
-                            "output_path": output_path,
-                            "target_duration": round(duration_sec, 2),
-                            "actual_duration": round(actual_duration, 2),
-                            "error": str(retry_exc),
-                        }
-                    )
+                    # ARCHITECTURE INVARIANT: Never silently degrade.
+                    # All retries exhausted — pipeline must stop.
+                    raise RuntimeError(
+                        f"All {max_retries} video worker retries exhausted. "
+                        f"Last error: {retry_exc}. "
+                        f"Check GPU worker VM health and restart the pipeline."
+                    ) from retry_exc
 
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
