@@ -212,6 +212,7 @@ def _load_ltx():
     # plus inference working memory.  Avoids any CPU↔GPU transfer
     # latency and ensures maximum generation quality.
     pipe.to("cuda")
+    pipe.vae.enable_tiling()  # Required for quality output per official docs
     _ltx_pipe = pipe
     _active_model = "ltx"
 
@@ -266,55 +267,60 @@ _MIN_BRIGHTNESS = 40.0  # ~16% of max — very conservative, rejects near-black
 _MIN_CONTRAST = 10.0    # rejects flat single-tone frames (cinematic footage can be low-contrast)
 
 
-def _measure_frame_brightness(frames: list) -> float:
+def _measure_frame_brightness(frames) -> float:
     """Measure average brightness across sampled frames.
 
     Args:
-        frames: List of PIL Images or numpy arrays from diffusers output.
+        frames: numpy array (T, H, W, C) in [0,1] float range,
+                or list of PIL Images / numpy arrays.
 
     Returns:
         Average brightness on 0-255 scale.
     """
-    if not frames:
+    if frames is None:
         return 0.0
+    arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:
+        # (T, H, W, C) — sample up to 5 evenly spaced frames
+        n = arr.shape[0]
+        indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+        indices = sorted(set(indices))
+        sampled = arr[indices]
+    elif arr.ndim == 3:
+        sampled = arr[np.newaxis]  # single frame
+    else:
+        return 0.0
+    # Scale to 0-255 if in [0,1] float range
+    if sampled.max() <= 1.0:
+        sampled = sampled * 255.0
+    return float(sampled.mean())
 
-    # Sample up to 5 evenly spaced frames
-    n = len(frames)
-    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
-    indices = sorted(set(indices))
 
-    total_brightness = 0.0
-    for idx in indices:
-        frame = frames[idx]
-        arr = np.array(frame, dtype=np.float32)
-        total_brightness += arr.mean()
-
-    return total_brightness / len(indices)
-
-
-def _measure_frame_contrast(frames: list) -> float:
+def _measure_frame_contrast(frames) -> float:
     """Measure average contrast (std dev of pixel values) across sampled frames.
 
     Args:
-        frames: List of PIL Images or numpy arrays from diffusers output.
+        frames: numpy array (T, H, W, C) in [0,1] float range,
+                or list of PIL Images / numpy arrays.
 
     Returns:
         Average contrast (std dev on 0-255 scale).
     """
-    if not frames:
+    if frames is None:
         return 0.0
-
-    n = len(frames)
-    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
-    indices = sorted(set(indices))
-
-    total_contrast = 0.0
-    for idx in indices:
-        frame = frames[idx]
-        arr = np.array(frame, dtype=np.float32)
-        total_contrast += arr.std()
-
-    return total_contrast / len(indices)
+    arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:
+        n = arr.shape[0]
+        indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+        indices = sorted(set(indices))
+        sampled = arr[indices]
+    elif arr.ndim == 3:
+        sampled = arr[np.newaxis]
+    else:
+        return 0.0
+    if sampled.max() <= 1.0:
+        sampled = sampled * 255.0
+    return float(sampled.std())
 
 
 # ---------------------------------------------------------------------------
@@ -327,17 +333,25 @@ _OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 _QA_MODEL: str = "qwen/qwen3.5-plus-02-15"
 
 
-def _frames_to_base64(frames: list, indices: list[int]) -> list[str]:
-    """Convert selected PIL frames to base64-encoded JPEG strings."""
+def _frames_to_base64(frames, indices: list[int]) -> list[str]:
+    """Convert selected frames to base64-encoded JPEG strings.
+
+    Args:
+        frames: numpy array (T, H, W, C) in [0,1] float or uint8,
+                or list of PIL Images.
+    """
     from PIL import Image
 
+    arr = np.asarray(frames)
     result = []
     for idx in indices:
-        frame = frames[idx]
-        if not isinstance(frame, Image.Image):
-            frame = Image.fromarray(np.array(frame))
+        frame = arr[idx]
+        # Convert [0,1] float to uint8 if needed
+        if frame.dtype != np.uint8:
+            frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8)
+        img = Image.fromarray(frame)
         buf = io.BytesIO()
-        frame.save(buf, format="JPEG", quality=85)
+        img.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         result.append(b64)
     return result
@@ -483,18 +497,35 @@ def _generate_video(
 
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
-        gen = torch.Generator("cpu").manual_seed(current_seed)
-        result = _ltx_pipe(
+        gen = torch.Generator("cuda").manual_seed(current_seed)
+        # Official dg845 LTX-2.3 parameters for quality output:
+        # - stg_scale: spatio-temporal guidance for coherent motion
+        # - modality_scale: balances video vs audio generation
+        # - guidance_rescale: prevents oversaturation from high CFG
+        # - spatio_temporal_guidance_blocks: which transformer blocks apply STG
+        # - output_type "np": proper numpy output for frame processing
+        video_out, audio_out = _ltx_pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
             width=width,
             height=height,
             num_frames=num_frames,
+            frame_rate=fps,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            stg_scale=1.0,
+            modality_scale=3.0,
+            guidance_rescale=0.7,
+            audio_guidance_scale=7.0,
+            audio_stg_scale=1.0,
+            audio_modality_scale=3.0,
+            audio_guidance_rescale=0.7,
+            spatio_temporal_guidance_blocks=[28],
             generator=gen,
+            output_type="np",
+            return_dict=False,
         )
-        candidate_frames = result.frames[0]
+        candidate_frames = video_out[0]  # numpy array (T, H, W, C)
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)
@@ -529,7 +560,7 @@ def _generate_video(
             best_passing_seed = current_seed
 
         # Stage 2: Qwen-Omni visual QA (semantic evaluation)
-        n = len(candidate_frames)
+        n = candidate_frames.shape[0] if hasattr(candidate_frames, 'shape') else len(candidate_frames)
         sample_indices = [0, n // 2, n - 1] if n >= 3 else list(range(n))
         frames_b64 = _frames_to_base64(candidate_frames, sample_indices)
         qa_result = _qwen_visual_qa(prompt, frames_b64)
@@ -581,7 +612,26 @@ def _generate_video(
     )
     os.makedirs(_output_dir, exist_ok=True)
 
-    export_to_video(video_frames, output_path, fps=fps)
+    # Use diffusers encode_video for proper MP4 encoding
+    try:
+        from diffusers.pipelines.ltx2.export_utils import encode_video as ltx_encode_video
+        ltx_encode_video(
+            video_frames,
+            fps=fps,
+            output_path=output_path,
+        )
+    except (ImportError, Exception) as exc:
+        logger.warning("encode_video failed (%s), falling back to export_to_video", exc)
+        # Fallback: convert numpy [0,1] to uint8 PIL frames for export_to_video
+        if isinstance(video_frames, np.ndarray) and video_frames.dtype != np.uint8:
+            from PIL import Image
+            pil_frames = [
+                Image.fromarray((np.clip(f, 0, 1) * 255).astype(np.uint8))
+                for f in video_frames
+            ]
+            export_to_video(pil_frames, output_path, fps=fps)
+        else:
+            export_to_video(video_frames, output_path, fps=fps)
 
     with open(output_path, "rb") as f:
         data = f.read()
