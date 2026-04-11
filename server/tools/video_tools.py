@@ -154,7 +154,7 @@ def generate_video_clip(
         "height": 512,
         "num_frames": num_frames,
         "seed": seed,
-        "num_inference_steps": 8,   # distilled model: 4-8 steps
+        "num_inference_steps": 20,  # distilled model: 20 steps for quality
         "guidance_scale": 1.0,      # distilled model: CFG=1 (no classifier-free guidance)
     }).encode("utf-8")
 

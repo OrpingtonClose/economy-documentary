@@ -79,7 +79,7 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 8  # distilled model: 4-8 steps (CFG=1)
+    num_inference_steps: int = 20  # distilled model: 20 steps for quality (CFG=1)
     guidance_scale: float = 1.0  # distilled model: CFG=1 (no classifier-free guidance needed)
 
 

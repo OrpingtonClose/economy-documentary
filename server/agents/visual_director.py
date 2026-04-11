@@ -90,24 +90,33 @@ Read the content analysis from {content_analysis} which contains:
 - Content types and LoRA selections
 - Visual mood keywords
 
-For EACH visual phrase, create a 6-LAYER CINEMATIC PROMPT:
-1. SUBJECT: What is the primary visual focus? (person, object, concept visualization)
-2. ACTION: What movement or change is happening? (camera or subject motion)
-3. ENVIRONMENT: Where does this take place? (setting, backdrop, context)
-4. LIGHTING: What is the light quality? (natural, dramatic, soft, harsh, neon)
-5. CAMERA: What camera style? (handheld, steadicam, crane, macro, wide, close-up)
-6. MOOD: What emotional quality? (tense, warm, cold, energetic, contemplative)
+For EACH visual phrase, create a SIMPLE, DIRECT PROMPT:
+
+Write prompts as SHORT, CONCRETE descriptions (1-2 sentences max).
+Focus on ONE clear subject doing ONE clear action in ONE clear setting.
+
+GOOD prompts (simple, concrete, filmable):
+- "Golden cloudberries growing on a mossy bog in Finnish Lapland, soft morning light"
+- "Close-up of hands picking ripe orange berries from low bushes, shallow depth of field"
+- "Aerial view of vast Nordic marshland dotted with orange berries, golden hour"
+- "Finnish 2-euro coin rotating slowly, cloudberry design visible, dark background"
+
+BAD prompts (too complex, abstract, multi-layered):
+- "A vibrant tapestry of cloudberry cultivation unfolds across the boreal landscape, 
+   camera tracking through misty valleys as golden light illuminates..."
+- "Split-screen infographic showing economic data overlaid on pastoral scenes..."
+- "Conceptual visualization of market dynamics through abstract flowing shapes..."
 
 RULES:
-- Each prompt must DEEPLY CONNECT to what the narration communicates at that moment
-- No two consecutive visual phrases should have the same camera style
-- No two consecutive visual phrases should have the same environment
-- LoRA selection per phrase based on Content Analyst's semantic understanding
+- ONE subject, ONE action, ONE setting per prompt
+- NO abstract concepts, infographics, split-screens, or text overlays
+- NO multi-clause descriptions — keep it filmable by AI video generation
+- Vary camera angles between phrases (close-up, wide, aerial, tracking)
 - Duration of each visual phrase comes from the content analysis timing
 
 OUTPUT: JSON array of visual concepts, each containing:
 - scene_num, phrase_idx, start_time, end_time, duration
-- prompt (6-layer cinematic description as single string)
+- prompt (simple 1-2 sentence description)
 - lora_id, lora_weight
 - Camera style, environment, mood
 
