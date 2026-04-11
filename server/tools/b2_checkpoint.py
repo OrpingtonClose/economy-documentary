@@ -294,10 +294,16 @@ def check_stage_complete(stage: str) -> bool:
     if bucket is None:
         return False
 
-    key = _b2_key(f"stage_markers/{stage}.done")
+    # List the stage_markers/ folder and look for the specific .done file.
+    # NOTE: bucket.ls() treats its argument as a *folder prefix*, not an exact
+    # key.  Passing the full filename (e.g. "run/stage_markers/audio.done")
+    # returns nothing because B2 looks for files *inside* that "folder".
+    target_name = f"stage_markers/{stage}.done"
+    prefix = _b2_key("stage_markers/")
+    target_key = _b2_key(target_name)
     try:
-        for file_version, _ in bucket.ls(key):
-            if file_version.file_name == key:
+        for file_version, _ in bucket.ls(prefix):
+            if file_version.file_name == target_key:
                 return True
         return False
     except Exception:
