@@ -259,8 +259,21 @@ coherence_evaluator = Agent(
 
 
 def _visual_phase_setup(callback_context):
-    """Set pipeline phase before visual director runs."""
-    callback_context.state["pipeline_phase"] = "visual_direction"
+    """Set pipeline phase before visual director runs.
+
+    If the visual_direction stage was already completed in B2, skip the
+    entire LoopAgent by returning Content.
+    """
+    from google.genai import types as genai_types
+    state = callback_context.state
+    state["pipeline_phase"] = "visual_direction"
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "visual_direction" in stages_complete:
+        logger.info("B2: visual_direction stage already complete, skipping LoopAgent")
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
+        )
     return None
 
 

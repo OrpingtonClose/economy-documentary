@@ -16,4 +16,5 @@ dependencies = [
     "soundfile",
     "numpy",
     "vastai",
+    "b2sdk (>=2.10.4,<3.0.0)",
 ]

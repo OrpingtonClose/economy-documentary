@@ -204,6 +204,14 @@ def generate_narration(
             "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
             wav_path, actual_duration, gen_time, len(text.split()),
         )
+
+        # Upload TTS clip to B2 immediately after creation
+        try:
+            from tools.b2_checkpoint import upload_tts_clip
+            upload_tts_clip(wav_path, sidecar_path)
+        except Exception as b2_err:
+            logger.warning("B2 upload failed for TTS clip %s: %s", wav_path, b2_err)
+
         return json.dumps(
             {
                 "status": "generated",

@@ -66,6 +66,28 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     initial_state["corpus_path"] = corpus_path
     initial_state["language"] = language
 
+    # Restore from B2 if a previous run exists for this topic
+    from tools.b2_checkpoint import restore_pipeline, set_run_id, get_run_id
+    os.environ["DOCUMENTARY_TOPIC"] = topic  # used by get_run_id() for new runs
+    restored = restore_pipeline(topic)
+    stages_complete = restored.get("stages_complete", [])
+    if restored["run_id"]:
+        logger.info(
+            "B2 restored run '%s': stages=%s, files=%d",
+            restored["run_id"], stages_complete, restored["restored_files"],
+        )
+        # Merge restored state into initial state (restored takes precedence)
+        for k, v in restored.get("state", {}).items():
+            if v and str(v).strip() not in ("", "[]", "{}", "(not yet analyzed)",
+                                              "(not yet generated)", "(not yet evaluated)"):
+                initial_state[k] = v
+    else:
+        # New run — generate run_id
+        logger.info("No previous B2 run found, starting fresh")
+
+    # Store stages_complete in state so callbacks can skip completed stages
+    initial_state["_b2_stages_complete"] = stages_complete
+
     # Set up ADK session
     session_service = InMemorySessionService()
     runner = Runner(
@@ -178,6 +200,12 @@ def main():
     os.makedirs("/tmp/documentary-pipeline/audio", exist_ok=True)
     os.makedirs("/tmp/documentary-pipeline/video", exist_ok=True)
     os.makedirs("/tmp/documentary-pipeline/assembly", exist_ok=True)
+
+    # Ensure B2 credentials are available
+    if not os.environ.get("B2_KEY_ID"):
+        logger.warning("B2_KEY_ID not set -- B2 checkpointing will be disabled")
+    if not os.environ.get("B2_APPLICATION_KEY"):
+        logger.warning("B2_APPLICATION_KEY not set -- B2 checkpointing will be disabled")
 
     logger.info("=== Documentary Pipeline Runner ===")
 
