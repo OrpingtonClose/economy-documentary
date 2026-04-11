@@ -99,8 +99,11 @@ def after_model_callback(
                 _VISUAL_STYLE_BACKUP, vs_obj.get("style", "unknown"),
             )
 
-        # --- Capture scenes (JSON array) ---------------------------------------
-        scenes = extract_json_array(response_text)
+        # --- Capture scenes (JSON array of objects with scene_num) ---------------
+        # The response may contain multiple JSON arrays (e.g. realism_anchors,
+        # avoid list inside visual_style).  We need the SCENES array specifically
+        # — an array of objects where each has a "scene_num" key.
+        scenes = _extract_scenes_array(response_text)
         if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
             scenes_json = json.dumps(scenes, ensure_ascii=False)
             # Persist to state immediately (survives within LoopAgent scope)
@@ -118,5 +121,69 @@ def after_model_callback(
     _c = get_active_collector()
     if _c:
         _c.llm_end(agent_name, 0.0, len(response_text) // 4)
+
+    return None
+
+
+def _extract_scenes_array(text: str) -> list | None:
+    """Extract the scenes JSON array from text that may contain other arrays.
+
+    The LLM response often contains multiple JSON arrays (realism_anchors,
+    avoid list inside visual_style object).  This function finds ALL arrays
+    and returns the one that looks like scenes — an array of dicts where at
+    least one dict has a ``scene_num`` key.
+    """
+    import re
+
+    if not text or not text.strip():
+        return None
+
+    candidates: list[list] = []
+
+    # Strategy 1: Look inside markdown fences first
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
+    for match in fence_pattern.finditer(text):
+        try:
+            result = json.loads(match.group(1).strip())
+            if isinstance(result, list):
+                candidates.append(result)
+            elif isinstance(result, dict):
+                # Check for a "scenes" key inside fenced JSON
+                for key in ("scenes",):
+                    if key in result and isinstance(result[key], list):
+                        candidates.append(result[key])
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    # Strategy 2: Find all [...] blocks in the text
+    bracket_depth = 0
+    start_idx = None
+    for i, ch in enumerate(text):
+        if ch == '[' and bracket_depth == 0:
+            start_idx = i
+            bracket_depth = 1
+        elif ch == '[':
+            bracket_depth += 1
+        elif ch == ']':
+            bracket_depth -= 1
+            if bracket_depth == 0 and start_idx is not None:
+                try:
+                    result = json.loads(text[start_idx:i + 1])
+                    if isinstance(result, list):
+                        candidates.append(result)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                start_idx = None
+
+    # Pick the candidate that looks like a scenes array
+    for candidate in candidates:
+        if len(candidate) >= 2 and all(isinstance(item, dict) for item in candidate):
+            if any("scene_num" in item for item in candidate):
+                return candidate
+
+    # Fallback: return the largest array of dicts (likely scenes)
+    dict_arrays = [c for c in candidates if len(c) >= 2 and all(isinstance(item, dict) for item in c)]
+    if dict_arrays:
+        return max(dict_arrays, key=len)
 
     return None
