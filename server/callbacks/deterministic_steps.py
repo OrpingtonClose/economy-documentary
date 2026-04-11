@@ -364,7 +364,7 @@ def clean_scenes_after_scenario(
         from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
         vs_raw = str(state.get("visual_style", ""))
         _b2_ok = upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
-        _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
+        _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
         # Upload timeline if it exists
         tp = state.get("_timeline_path", "")
         if tp and os.path.exists(tp):
@@ -407,6 +407,11 @@ def deterministic_audio_callback(
             role="model",
             parts=[genai_types.Part(text="Audio stage restored from B2 checkpoint — skipped.")],
         )
+
+    # CONTRACT: validate preconditions before starting audio stage
+    from contracts import AUDIO_CONTRACT, validate_preconditions
+    validate_preconditions(AUDIO_CONTRACT, state.to_dict())
+
     state["pipeline_phase"] = "audio"
 
     # Parse scenes
@@ -509,6 +514,8 @@ def deterministic_audio_callback(
                             align_key = f"scene_{scene_num:03d}_{voice_suffix}"
                             alignment_data[align_key] = json.loads(align_result_json)
 
+                    except RuntimeError:
+                        raise  # TTS failures are fatal — never swallow
                     except Exception as e:
                         err_msg = f"Error processing scene {scene_num} {voice_suffix}: {e}"
                         logger.error(err_msg)
@@ -552,6 +559,8 @@ def deterministic_audio_callback(
                         align_key = f"scene_{scene_num:03d}_{voice}"
                         alignment_data[align_key] = json.loads(align_result_json)
 
+                except RuntimeError:
+                    raise  # TTS failures are fatal — never swallow
                 except Exception as e:
                     err_msg = f"Error processing scene {scene_num} {voice}: {e}"
                     logger.error(err_msg)
@@ -562,7 +571,7 @@ def deterministic_audio_callback(
 
     # Upload audio stage completion to B2
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
-    _b2_ok = upload_pipeline_state(dict(state))
+    _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -756,7 +765,7 @@ def write_visual_metadata_to_otio(
     raw_vc = str(callback_context.state.get("visual_concepts", ""))
     if raw_vc:
         _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
-    _b2_ok = upload_pipeline_state(dict(callback_context.state)) and _b2_ok
+    _b2_ok = upload_pipeline_state(callback_context.state.to_dict()) and _b2_ok
     tp = callback_context.state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -792,6 +801,11 @@ def deterministic_production_callback(
             role="model",
             parts=[genai_types.Part(text="Production stage restored from B2 checkpoint — skipped.")],
         )
+
+    # CONTRACT: validate preconditions before starting production stage
+    from contracts import PRODUCTION_CONTRACT, validate_preconditions
+    validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
+
     state["pipeline_phase"] = "production"
 
     raw_concepts = state.get("visual_concepts", "")
@@ -911,6 +925,8 @@ def deterministic_production_callback(
             for future in as_completed(future_to_concept):
                 try:
                     results.append(future.result())
+                except RuntimeError:
+                    raise  # Video generation failures are fatal — never swallow
                 except Exception as e:
                     c = future_to_concept[future]
                     err_msg = f"Error producing scene {c.get('scene_num')} phrase {c.get('phrase_idx')}: {e}"
@@ -921,6 +937,8 @@ def deterministic_production_callback(
         for concept in concepts:
             try:
                 results.append(_generate_one_clip(concept))
+            except RuntimeError:
+                raise  # Video generation failures are fatal — never swallow
             except Exception as e:
                 err_msg = f"Error producing scene {concept.get('scene_num')} phrase {concept.get('phrase_idx')}: {e}"
                 logger.error(err_msg)
@@ -993,7 +1011,7 @@ def deterministic_production_callback(
 
     # Upload production stage completion to B2
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
-    _b2_ok = upload_pipeline_state(dict(state))
+    _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1041,6 +1059,11 @@ def deterministic_assembly_callback(
             role="model",
             parts=[genai_types.Part(text="Assembly stage restored from B2 checkpoint — skipped.")],
         )
+
+    # CONTRACT: validate preconditions before starting assembly stage
+    from contracts import ASSEMBLY_CONTRACT, validate_preconditions
+    validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
+
     state["pipeline_phase"] = "assembly"
 
     timeline_path = state.get("_timeline_path", "")
@@ -1379,7 +1402,7 @@ def deterministic_assembly_callback(
         _b2_ok = upload_final_output(final_path) and _b2_ok
     if alt_final_path and os.path.exists(alt_final_path):
         _b2_ok = upload_final_output(alt_final_path) and _b2_ok
-    _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
+    _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
     # Only mark stage complete if critical artifacts uploaded
     if _b2_ok:
         upload_stage_marker("assembly")

@@ -25,6 +25,8 @@ import logging
 import os
 import sys
 import time
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 # Force test mode if --test-mode is passed (must be before imports)
 if "--test-mode" in sys.argv:
@@ -209,6 +211,14 @@ def main():
 
     logger.info("=== Documentary Pipeline Runner ===")
 
+    # ── Pre-flight checks ─────────────────────────────────────────
+    # ARCHITECTURE INVARIANT: Every required worker must be healthy
+    # before the pipeline starts.  Never silently degrade to
+    # synthetic/placeholder media — that wastes hours of GPU time on
+    # downstream stages that depend on real upstream artifacts.
+    if not args.test_mode:
+        _preflight_check_workers()
+
     result = asyncio.run(run_pipeline(
         topic=args.topic,
         corpus_path=args.corpus,
@@ -255,6 +265,118 @@ def main():
         print(f"\nFailed to save state: {e}")
 
     print("=" * 60)
+
+
+class PreflightError(RuntimeError):
+    """Raised when a pre-flight worker health check fails."""
+
+
+def _check_worker(name: str, url: str, expected_capability: str) -> None:
+    """Verify a single GPU worker is reachable and has the expected model loaded.
+
+    Raises ``PreflightError`` if the worker is unreachable or the required
+    model is not loaded.  This enforces the architecture invariant:
+    **every required service must be confirmed healthy before pipeline start.**
+    """
+    health_url = f"{url.rstrip('/')}/health"
+    try:
+        req = Request(health_url)
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as exc:
+        msg = f"PRE-FLIGHT FAILED: {name} worker at {url} is unreachable: {exc}"
+        logger.error(msg)
+        raise PreflightError(msg) from exc
+
+    if data.get("status") != "ok":
+        msg = (
+            f"PRE-FLIGHT FAILED: {name} worker at {url} reports "
+            f"unhealthy status: {data}"
+        )
+        logger.error(msg)
+        raise PreflightError(msg)
+
+    # Check that the required model is actually loaded
+    loaded_key = f"{expected_capability}_loaded"
+    if not data.get(loaded_key, False):
+        msg = (
+            f"PRE-FLIGHT FAILED: {name} worker at {url} does not have "
+            f"{expected_capability} loaded. Health response: {data}. "
+            f"Each model MUST run on its own dedicated VM — never swap or share models."
+        )
+        logger.error(msg)
+        raise PreflightError(msg)
+
+    vram_gb = data.get("vram_used_gb", "?")
+    vram_total = data.get("vram_total_gb", "?")
+    logger.info(
+        "PRE-FLIGHT OK: %s worker at %s — %s loaded, VRAM %s/%s GB",
+        name, url, expected_capability, vram_gb, vram_total,
+    )
+
+
+def _preflight_check_workers() -> None:
+    """Validate that ALL required GPU workers are healthy before pipeline start.
+
+    Architecture invariants enforced:
+    1. TTS worker must be reachable and have TTS model loaded.
+    2. At least one video worker must be reachable and have LTX loaded.
+    3. Each model runs on its own dedicated VM — never shared.
+
+    If any check fails the pipeline exits immediately with a clear error
+    message instead of silently degrading to synthetic/placeholder media.
+    """
+    logger.info("=== Pre-flight worker checks ===")
+
+    # -- TTS worker (required: real narration drives all downstream timing) --
+    tts_url = os.environ.get("TTS_WORKER_URL", "")
+    if not tts_url:
+        logger.error(
+            "PRE-FLIGHT FAILED: TTS_WORKER_URL is not set. "
+            "A dedicated TTS worker VM is REQUIRED — the pipeline cannot start "
+            "without real narration because all video timing depends on it. "
+            "Provision a TTS VM and set TTS_WORKER_URL before restarting."
+        )
+        sys.exit(1)
+    try:
+        _check_worker("TTS", tts_url, "tts")
+    except PreflightError:
+        sys.exit(1)
+
+    # -- Video workers (at least one required) --
+    video_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
+    gpu_url = os.environ.get("GPU_WORKER_URL", "")
+    video_urls = [u.strip() for u in video_urls_str.split(",") if u.strip()] if video_urls_str else []
+    if gpu_url and gpu_url not in video_urls:
+        video_urls.append(gpu_url)
+
+    if not video_urls:
+        logger.error(
+            "PRE-FLIGHT FAILED: No video worker URLs configured. "
+            "Set VIDEO_WORKER_URLS or GPU_WORKER_URL to at least one "
+            "LTX-dedicated GPU worker VM."
+        )
+        sys.exit(1)
+
+    healthy_video = 0
+    for vurl in video_urls:
+        try:
+            _check_worker("Video", vurl, "ltx")
+            healthy_video += 1
+        except PreflightError:
+            logger.warning("Video worker %s failed pre-flight, skipping", vurl)
+
+    if healthy_video == 0:
+        logger.error(
+            "PRE-FLIGHT FAILED: No healthy video workers found. "
+            "At least one LTX-dedicated GPU VM must be running."
+        )
+        sys.exit(1)
+
+    logger.info(
+        "=== Pre-flight PASSED: TTS worker OK, %d/%d video workers OK ===",
+        healthy_video, len(video_urls),
+    )
 
 
 if __name__ == "__main__":

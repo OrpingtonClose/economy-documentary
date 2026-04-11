@@ -146,25 +146,17 @@ def generate_narration(
         )
 
     # Production mode: call Qwen3-TTS on GPU worker
-    # TTS_WORKER_URL takes priority (dedicated TTS VM), falls back to GPU_WORKER_URL
-    gpu_worker_url = os.environ.get("TTS_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
+    # ARCHITECTURE INVARIANT: TTS must run on a dedicated VM.
+    # TTS_WORKER_URL is REQUIRED in production — never fall back to silent audio
+    # because all downstream timing (visual direction, video generation) depends
+    # on real narration durations.
+    gpu_worker_url = os.environ.get("TTS_WORKER_URL", "")
     if not gpu_worker_url:
-        # Fallback: generate silent WAV if no GPU worker configured
-        logger.warning("GPU_WORKER_URL not set, generating silent WAV placeholder")
-        _generate_silent_wav(wav_path, duration)
-        # Remove stale sidecar so this placeholder isn't mistaken for real audio
-        if os.path.isfile(sidecar_path):
-            os.remove(sidecar_path)
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "placeholder",
-                "wav_path": wav_path,
-                "duration": round(duration, 2),
-                "sample_rate": _SAMPLE_RATE,
-                "text_length": len(text),
-                "word_count": len(text.split()),
-            }
+        raise RuntimeError(
+            "TTS_WORKER_URL is not set. A dedicated TTS worker VM is REQUIRED "
+            "for production runs. The pipeline MUST NOT fall back to silent audio "
+            "because all video timing depends on real narration. "
+            "Provision a TTS VM and set TTS_WORKER_URL before restarting."
         )
 
     # Determine language: explicit param takes priority, then suffix convention
@@ -225,22 +217,13 @@ def generate_narration(
             }
         )
     except (URLError, OSError, TimeoutError) as exc:
-        logger.error("GPU worker TTS request failed: %s", exc)
-        # Fallback to silent WAV so pipeline can continue
-        _generate_silent_wav(wav_path, duration)
-        # Remove stale sidecar so this placeholder isn't mistaken for real audio
-        if os.path.isfile(sidecar_path):
-            os.remove(sidecar_path)
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "fallback",
-                "wav_path": wav_path,
-                "duration": round(duration, 2),
-                "sample_rate": _SAMPLE_RATE,
-                "error": str(exc),
-            }
-        )
+        # ARCHITECTURE INVARIANT: Never silently degrade to synthetic audio.
+        # If TTS fails, the pipeline must stop and report the error.
+        raise RuntimeError(
+            f"TTS worker at {gpu_worker_url} failed: {exc}. "
+            "The pipeline cannot continue without real narration — all video "
+            "timing depends on it. Check the TTS worker VM health and restart."
+        ) from exc
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------
