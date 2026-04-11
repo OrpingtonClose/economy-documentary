@@ -126,7 +126,10 @@ def generate_narration(
     if _TEST_MODE:
         # Test mode: generate silent WAV with correct duration
         _generate_silent_wav(wav_path, duration)
-        _write_sidecar(sidecar_path, text_hash)
+        # Do NOT write sidecar for test mode — prevents silent WAVs from being
+        # mistakenly cached as production audio when switching modes.
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         logger.info(
             "Test mode: generated silent WAV %s (%.2fs)", wav_path, duration
         )
