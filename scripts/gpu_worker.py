@@ -486,11 +486,13 @@ def _generate_video(
     current_seed = seed
     # Best result that passed brightness/contrast thresholds
     best_passing_frames = None
+    best_passing_audio = None
     best_passing_score = -1.0
     best_passing_seed = seed
     best_passing_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
     # Best result among brightness-failing attempts (fallback only)
     best_failing_frames = None
+    best_failing_audio = None
     best_failing_score = -1.0
     best_failing_seed = seed
     final_attempt = 0
@@ -526,6 +528,7 @@ def _generate_video(
             return_dict=False,
         )
         candidate_frames = video_out[0]  # numpy array (T, H, W, C)
+        candidate_audio = audio_out[0] if audio_out is not None else None
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)
@@ -543,6 +546,7 @@ def _generate_video(
             # Track best among failing attempts (fallback only)
             if score > best_failing_score:
                 best_failing_frames = candidate_frames
+                best_failing_audio = candidate_audio
                 best_failing_score = score
                 best_failing_seed = current_seed
             if attempt < max_attempts:
@@ -556,6 +560,7 @@ def _generate_video(
         is_new_best = score > best_passing_score
         if is_new_best:
             best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
             best_passing_score = score
             best_passing_seed = current_seed
 
@@ -573,6 +578,7 @@ def _generate_video(
 
         if qa_result["quality"] in ("good", "excellent"):
             best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
             best_passing_seed = current_seed
             best_passing_qa = qa_result
             break
@@ -595,10 +601,12 @@ def _generate_video(
     # Prefer any brightness-passing frame over a brightness-failing one
     if best_passing_frames is not None:
         video_frames = best_passing_frames
+        video_audio = best_passing_audio
         best_seed = best_passing_seed
         best_qa = best_passing_qa
     else:
         video_frames = best_failing_frames
+        video_audio = best_failing_audio
         best_seed = best_failing_seed
         best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
 
@@ -612,14 +620,25 @@ def _generate_video(
     )
     os.makedirs(_output_dir, exist_ok=True)
 
-    # Use diffusers encode_video for proper MP4 encoding
+    # Use diffusers encode_video for proper MP4 encoding (with audio)
     try:
         from diffusers.pipelines.ltx2.export_utils import encode_video as ltx_encode_video
-        ltx_encode_video(
-            video_frames,
-            fps=fps,
-            output_path=output_path,
-        )
+        # encode_video requires audio and audio_sample_rate
+        audio_sr = 44100  # LTX-2.3 default audio sample rate
+        if video_audio is not None:
+            ltx_encode_video(
+                video_frames,
+                audio=video_audio,
+                audio_sample_rate=audio_sr,
+                fps=fps,
+                output_path=output_path,
+            )
+        else:
+            ltx_encode_video(
+                video_frames,
+                fps=fps,
+                output_path=output_path,
+            )
     except (ImportError, Exception) as exc:
         logger.warning("encode_video failed (%s), falling back to export_to_video", exc)
         # Fallback: convert numpy [0,1] to uint8 PIL frames for export_to_video
