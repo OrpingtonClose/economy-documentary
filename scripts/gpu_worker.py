@@ -789,7 +789,10 @@ def video_endpoint(req: VideoRequest):
             "X-Gen-Time": str(round(elapsed, 3)),
             "X-File-Size": str(len(mp4_bytes)),
             "X-QA-Quality": qa_status.get("quality", "unknown"),
-            "X-QA-Reason": qa_status.get("qa_reason", "")[:200].replace("\n", " ").replace("\r", " "),
+            "X-QA-Reason": "".join(
+                c if 0x20 <= ord(c) <= 0x7E else " "
+                for c in qa_status.get("qa_reason", "")[:200]
+            ),
             "X-QA-Attempts": str(qa_status.get("attempts", 1)),
             "X-QA-Seed": str(qa_status.get("seed", req.seed)),
         },
