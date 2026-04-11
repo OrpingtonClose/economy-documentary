@@ -7,6 +7,7 @@ For test run: generates silent WAV files with correct estimated duration (no GPU
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -76,9 +77,59 @@ def generate_narration(
 
     duration = _estimate_duration(text)
 
+    # Skip regeneration if WAV already exists, is non-empty, and matches current text
+    text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
+    sidecar_path = wav_path.replace(".wav", ".txt")
+    if os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0:
+        # Validate text content matches (prevent stale cache from different script)
+        text_matches = False
+        if os.path.isfile(sidecar_path):
+            try:
+                with open(sidecar_path, "r") as sf:
+                    cached_hash = sf.read().strip()
+                text_matches = cached_hash == text_hash
+            except OSError:
+                pass
+        if not text_matches:
+            logger.info("Text changed for %s, regenerating", wav_path)
+        else:
+            # Read actual duration from WAV header
+            try:
+                with wave.open(wav_path, "r") as wf:
+                    actual_duration = wf.getnframes() / wf.getframerate()
+                    actual_sr = wf.getframerate()
+                logger.info(
+                    "Skipping existing WAV %s (%.2fs)", wav_path, actual_duration
+                )
+                return json.dumps(
+                    {
+                        "status": "skipped",
+                        "mode": "cached",
+                        "wav_path": wav_path,
+                        "duration": round(actual_duration, 2),
+                        "sample_rate": actual_sr,
+                        "text_length": len(text),
+                        "word_count": len(text.split()),
+                    }
+                )
+            except wave.Error:
+                logger.warning("Corrupt WAV %s, regenerating", wav_path)
+
+    def _write_sidecar(path: str, h: str) -> None:
+        """Write text hash sidecar so cache can detect stale content."""
+        try:
+            with open(path, "w") as f:
+                f.write(h)
+        except OSError:
+            pass
+
     if _TEST_MODE:
         # Test mode: generate silent WAV with correct duration
         _generate_silent_wav(wav_path, duration)
+        # Do NOT write sidecar for test mode — prevents silent WAVs from being
+        # mistakenly cached as production audio when switching modes.
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         logger.info(
             "Test mode: generated silent WAV %s (%.2fs)", wav_path, duration
         )
@@ -95,11 +146,15 @@ def generate_narration(
         )
 
     # Production mode: call Qwen3-TTS on GPU worker
-    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    # TTS_WORKER_URL takes priority (dedicated TTS VM), falls back to GPU_WORKER_URL
+    gpu_worker_url = os.environ.get("TTS_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
     if not gpu_worker_url:
         # Fallback: generate silent WAV if no GPU worker configured
         logger.warning("GPU_WORKER_URL not set, generating silent WAV placeholder")
         _generate_silent_wav(wav_path, duration)
+        # Remove stale sidecar so this placeholder isn't mistaken for real audio
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         return json.dumps(
             {
                 "status": "generated",
@@ -134,7 +189,7 @@ def generate_narration(
     req = Request(tts_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=120) as resp:
+        with urlopen(req, timeout=300) as resp:  # 5 min: first call loads model
             wav_bytes = resp.read()
             actual_duration = float(resp.headers.get("X-Audio-Duration", str(duration)))
             actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
@@ -143,6 +198,7 @@ def generate_narration(
         os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
         with open(wav_path, "wb") as f:
             f.write(wav_bytes)
+        _write_sidecar(sidecar_path, text_hash)
 
         logger.info(
             "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
@@ -164,6 +220,9 @@ def generate_narration(
         logger.error("GPU worker TTS request failed: %s", exc)
         # Fallback to silent WAV so pipeline can continue
         _generate_silent_wav(wav_path, duration)
+        # Remove stale sidecar so this placeholder isn't mistaken for real audio
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
         return json.dumps(
             {
                 "status": "generated",

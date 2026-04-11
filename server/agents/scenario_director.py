@@ -42,7 +42,22 @@ _GENERATOR_INSTRUCTION = """\
 You are the Scenario Director for an ADHD-friendly documentary pipeline.
 
 Read the research corpus from {corpus_path} and the topic "{topic}".
-Generate a SCENARIO document as a JSON array of scenes.
+
+You must output TWO things:
+
+1. A MOVIE-LEVEL VISUAL STYLE directive in state["visual_style"] — a JSON object:
+   {{
+     "style": "<overall aesthetic, e.g. photorealistic documentary, stylized animation, painterly, etc.>",
+     "realism_anchors": ["<terms that anchor the look, e.g. 4K, raw footage, no CGI, live action>"],
+     "avoid": ["<things to avoid, e.g. cartoon, anime, CGI, morphing, illustration>"],
+     "palette": "<colour/lighting direction, e.g. warm natural tones, golden hour>",
+     "camera_language": "<default camera feel, e.g. stabilized handheld, tripod-locked, slow dolly>",
+     "reference_genre": "<genre tag for LTX-2.3, e.g. Documentary, Period drama, Cinematic>"
+   }}
+   This is the ENTIRE FILM'S visual identity. Every downstream visual prompt and
+   quality check will enforce it. Choose the style that best serves the topic.
+
+2. A SCENARIO document as a JSON array of scenes in state["scenes"].
 
 Each scene MUST have:
 - scene_num: integer (1-based)
@@ -53,7 +68,7 @@ Each scene MUST have:
   - V2: "The Expert" — provides data, evidence, nuance
   - V3: "The Storyteller" — human angle, emotional connection
   Each voice block has: voice (V1/V2/V3), text (the narration), tone (descriptor)
-- visual_notes: brief notes on visual style for this scene
+- visual_notes: brief notes on visual approach for this scene
 - dopamine_hook: what makes this scene grab attention in first 3 seconds
 
 LANGUAGE MODE: "{language}"
@@ -70,12 +85,14 @@ RULES:
 4. Each scene MUST specify different visual approaches for variety
 5. Open with a dopamine hook — surprising fact, counterintuitive claim, or vivid image
 6. Build narrative arc across scenes: hook → tension → insight → resolution
+7. The visual_style MUST be consistent and appropriate for the topic
 
-After generating scenes, create the OTIO timeline by calling
+After generating both visual_style and scenes, create the OTIO timeline by calling
 create_timeline(topic, num_scenes) where num_scenes = len(scenes).
 This MUST be done before the Audio Agent runs.
 
-Output the scene array as valid JSON in state["scenes"].
+Output the scene array as valid JSON in state["scenes"] and the visual style
+object in state["visual_style"].
 """
 
 scenario_generator = Agent(
@@ -83,7 +100,12 @@ scenario_generator = Agent(
     model=build_model(),
     instruction=_GENERATOR_INSTRUCTION,
     tools=[create_timeline_tool],
-    output_key="scenes",
+    # NOTE: output_key="scenes" was removed intentionally.
+    # ADK's output_key only saves the *final* text response.  When the
+    # generator outputs scenes then calls create_timeline, the post-tool
+    # response is often empty → output_key silently discards the scenes.
+    # Instead, after_model_callback captures scenes from every LLM response
+    # and persists them to both state["scenes"] and _scenes_backup.json.
     before_model_callback=before_model_callback,
     after_model_callback=after_model_callback,
     before_tool_callback=before_tool_callback,

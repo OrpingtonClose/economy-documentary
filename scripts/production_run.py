@@ -272,7 +272,7 @@ def run_pipeline(
         cmd,
         cwd=SERVER_DIR,
         env=env,
-        timeout=1800,  # 30 min max
+        timeout=7200,  # 2 hours — 15 clips × ~5 min each + assembly
     )
     return result.returncode
 

@@ -12,11 +12,13 @@ Rules:
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import os
 import subprocess
+import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -70,6 +72,8 @@ def generate_video_clip(
     lora_id: str,
     lora_weight: float,
     output_path: str,
+    negative_prompt: str = "",
+    visual_style: str = "",
     tool_context=None,
 ) -> str:
     """Generate a video clip using LTX-2.3.
@@ -80,6 +84,8 @@ def generate_video_clip(
         lora_id: LoRA style identifier.
         lora_weight: LoRA weight (0.0-1.0).
         output_path: Path for the output MP4 file.
+        negative_prompt: Per-clip negative prompt from visual_style.avoid.
+        visual_style: Movie-level visual style description for QA enforcement.
 
     Returns:
         JSON string with generation results.
@@ -116,7 +122,8 @@ def generate_video_clip(
         )
 
     # Production mode: call LTX-2.3 on GPU worker
-    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    # VIDEO_WORKER_URL takes priority (dedicated LTX VM), falls back to GPU_WORKER_URL
+    gpu_worker_url = os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
     if not gpu_worker_url:
         # Fallback: generate solid-color placeholder if no GPU worker
         logger.warning("GPU_WORKER_URL not set, generating solid-color placeholder")
@@ -146,44 +153,79 @@ def generate_video_clip(
 
     payload = json.dumps({
         "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "visual_style": visual_style,
         "duration_sec": actual_duration,
         "width": 768,
         "height": 512,
         "num_frames": num_frames,
         "seed": seed,
-        "num_inference_steps": 30,
-        "guidance_scale": 3.5,
+        "num_inference_steps": 20,  # distilled model: 20 steps for quality
+        "guidance_scale": 1.0,      # distilled model: CFG=1 (no classifier-free guidance)
     }).encode("utf-8")
 
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
     req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=900) as resp:  # 15 min: up to 3 retries × 30 steps
+        with urlopen(req, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
             mp4_bytes = resp.read()
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
             # Qwen-Omni visual QA status from GPU worker (bearnaise pattern)
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-            qa_reason = resp.headers.get("X-QA-Reason", "")
+            _raw_reason = resp.headers.get("X-QA-Reason", "")
+            try:
+                qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
+            except Exception:
+                qa_reason = _raw_reason  # fallback: use raw value
             qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
             qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
     except (URLError, OSError, TimeoutError) as exc:
         logger.error("GPU worker video request failed: %s", exc)
-        # Fallback to solid-color so pipeline can continue
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        success = _generate_solid_color_mp4(output_path, actual_duration)
-        if not success:
-            return json.dumps({"status": "error", "error": f"GPU worker failed and fallback failed: {exc}"})
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "fallback",
-                "output_path": output_path,
-                "target_duration": round(duration_sec, 2),
-                "actual_duration": round(actual_duration, 2),
-                "error": str(exc),
-            }
-        )
+        # Retry with backoff — GPU worker may be temporarily down
+        max_retries = 5
+        for retry in range(1, max_retries + 1):
+            backoff = min(30 * retry, 120)  # 30s, 60s, 90s, 120s, 120s
+            logger.info(
+                "Retrying GPU worker (attempt %d/%d) after %ds backoff...",
+                retry, max_retries, backoff,
+            )
+            time.sleep(backoff)
+            try:
+                req2 = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
+                with urlopen(req2, timeout=3600) as resp:
+                    mp4_bytes = resp.read()
+                    gen_time = float(resp.headers.get("X-Gen-Time", "0"))
+                    qa_quality = resp.headers.get("X-QA-Quality", "unknown")
+                    _raw_reason = resp.headers.get("X-QA-Reason", "")
+                    try:
+                        qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
+                    except Exception:
+                        qa_reason = _raw_reason
+                    qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
+                    qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
+                break  # success — exit retry loop
+            except (URLError, OSError, TimeoutError) as retry_exc:
+                logger.error("Retry %d/%d failed: %s", retry, max_retries, retry_exc)
+                if retry == max_retries:
+                    # Fallback to solid-color placeholder so pipeline can continue
+                    logger.warning("All retries exhausted — generating placeholder MP4")
+                    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+                    success = _generate_solid_color_mp4(output_path, actual_duration)
+                    if not success:
+                        return json.dumps(
+                            {"status": "error", "error": f"GPU worker failed after {max_retries} retries and fallback failed: {retry_exc}"}
+                        )
+                    return json.dumps(
+                        {
+                            "status": "generated",
+                            "mode": "fallback",
+                            "output_path": output_path,
+                            "target_duration": round(duration_sec, 2),
+                            "actual_duration": round(actual_duration, 2),
+                            "error": str(retry_exc),
+                        }
+                    )
 
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

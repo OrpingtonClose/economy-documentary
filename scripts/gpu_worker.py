@@ -5,7 +5,9 @@ Runs on a Vast.ai GPU VM. Exposes HTTP endpoints that the pipeline
 calls to generate narration (Qwen3-TTS) and video clips (LTX-2.3).
 
 Usage:
-    python gpu_worker.py [--port 8880] [--models-dir /workspace/models]
+    python gpu_worker.py --mode tts  [--port 8880] [--models-dir ...]  # TTS-only VM
+    python gpu_worker.py --mode ltx  [--port 8880] [--models-dir ...]  # LTX-only VM
+    python gpu_worker.py --mode both [--port 8880] [--models-dir ...]  # shared (legacy)
 
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
@@ -55,6 +57,7 @@ _active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
 _model_lock = threading.Lock()  # Serialise all model load/unload/inference
+_worker_mode: str = "both"  # "tts", "ltx", or "both"
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -71,13 +74,15 @@ class TTSRequest(BaseModel):
 
 class VideoRequest(BaseModel):
     prompt: str
+    negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
+    visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
     width: int = 768
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 30  # dev/full model: 20-50 steps
-    guidance_scale: float = 3.5  # dev/full model: CFG 2.0-5.0 (recommended 3.0-3.5)
+    num_inference_steps: int = 20  # distilled model: 20 steps for quality (CFG=1)
+    guidance_scale: float = 1.0  # distilled model: CFG=1 (no classifier-free guidance needed)
 
 
 class HealthResponse(BaseModel):
@@ -145,13 +150,15 @@ def _unload_ltx():
 def _load_tts():
     """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
 
-    Unloads LTX first if it's on GPU to free VRAM.
+    Always unloads LTX first if loaded — prevents OOM from both models
+    coexisting in VRAM.  In single-mode (--mode tts) LTX should never be
+    loaded, so the guard is a safety net rather than normal path.
     """
     global _tts_model, _active_model
     if _tts_model is not None:
         return
 
-    # Free VRAM if LTX is loaded
+    # Always free VRAM if LTX is loaded — OOM safety net
     if _ltx_pipe is not None:
         _unload_ltx()
 
@@ -174,7 +181,9 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
-    Unloads TTS first if it's on GPU to free VRAM.
+    Always unloads TTS first if loaded — prevents OOM from both models
+    coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
+    loaded, so the guard is a safety net rather than normal path.
     Uses enable_model_cpu_offload() to keep idle components in CPU RAM
     while the active component runs on GPU. Requires 48GB+ VRAM
     for the Gemma3 text encoder (~24GB bf16 weights).
@@ -183,27 +192,35 @@ def _load_ltx():
     if _ltx_pipe is not None:
         return
 
-    # Free VRAM if TTS is loaded
+    # Always free VRAM if TTS is loaded — OOM safety net
     if _tts_model is not None:
         _unload_tts()
 
     from diffusers import LTX2Pipeline
 
-    model_path = os.path.join(_models_dir, "ltx2")
+    # Try models_dir/ltx2 first (standard layout), then models_dir itself
+    # (when --models-dir points directly at the model directory).
+    candidate = os.path.join(_models_dir, "ltx2")
+    if os.path.isfile(os.path.join(candidate, "model_index.json")):
+        model_path = candidate
+    elif os.path.isfile(os.path.join(_models_dir, "model_index.json")):
+        model_path = _models_dir
+    else:
+        raise FileNotFoundError(
+            f"model_index.json not found in {candidate} or {_models_dir}"
+        )
     logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
     t0 = time.time()
-
-    if not os.path.isfile(os.path.join(model_path, "model_index.json")):
-        raise FileNotFoundError(f"model_index.json not found in {model_path}")
 
     pipe = LTX2Pipeline.from_pretrained(
         model_path,
         torch_dtype=torch.bfloat16,
     )
-    # Model-level CPU offload: entire components move on/off GPU.
-    # Requires 48GB+ VRAM (A100 80GB / L40S) to fit the Gemma3 text
-    # encoder as a single component. Much faster than sequential offload.
-    pipe.enable_model_cpu_offload()
+    # Use cpu_offload per official dg845 example — moves idle components
+    # to CPU while active component runs on GPU.  Same bf16 precision,
+    # just memory management.  Required for long clips on any GPU size.
+    pipe.enable_model_cpu_offload(device="cuda")
+    pipe.vae.enable_tiling()  # Required for quality output per official docs
     _ltx_pipe = pipe
     _active_model = "ltx"
 
@@ -254,59 +271,69 @@ def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int
 # Minimum thresholds for post-render quality check.
 # Brightness: average pixel value (0-255 scale). Below this = too dark.
 # Contrast: std dev of pixel values. Below this = flat/washed out.
-_MIN_BRIGHTNESS = 40.0  # ~16% of max — very conservative, rejects near-black
-_MIN_CONTRAST = 20.0    # rejects flat single-tone frames
+_MIN_BRIGHTNESS = 20.0  # ~8% of max — only rejects near-black frames
+_MIN_CONTRAST = 3.0     # only rejects truly flat/single-tone frames; cinematic footage can be low-contrast
 
 
-def _measure_frame_brightness(frames: list) -> float:
+def _measure_frame_brightness(frames) -> float:
     """Measure average brightness across sampled frames.
 
     Args:
-        frames: List of PIL Images or numpy arrays from diffusers output.
+        frames: numpy array (T, H, W, C) in [0,1] float range,
+                or list of PIL Images / numpy arrays.
 
     Returns:
         Average brightness on 0-255 scale.
     """
-    if not frames:
+    if frames is None:
         return 0.0
+    arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:
+        # (T, H, W, C) — sample up to 5 evenly spaced frames
+        n = arr.shape[0]
+        indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+        indices = sorted(set(indices))
+        sampled = arr[indices]
+    elif arr.ndim == 3:
+        sampled = arr[np.newaxis]  # single frame
+    else:
+        return 0.0
+    # Scale to 0-255 if in [0,1] float range (use 1.5 threshold —
+    # VAE decode can produce values slightly > 1.0 due to fp imprecision)
+    if sampled.size == 0:
+        return 0.0
+    if sampled.max() <= 1.5:
+        sampled = sampled * 255.0
+    return float(sampled.mean())
 
-    # Sample up to 5 evenly spaced frames
-    n = len(frames)
-    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
-    indices = sorted(set(indices))
 
-    total_brightness = 0.0
-    for idx in indices:
-        frame = frames[idx]
-        arr = np.array(frame, dtype=np.float32)
-        total_brightness += arr.mean()
-
-    return total_brightness / len(indices)
-
-
-def _measure_frame_contrast(frames: list) -> float:
+def _measure_frame_contrast(frames) -> float:
     """Measure average contrast (std dev of pixel values) across sampled frames.
 
     Args:
-        frames: List of PIL Images or numpy arrays from diffusers output.
+        frames: numpy array (T, H, W, C) in [0,1] float range,
+                or list of PIL Images / numpy arrays.
 
     Returns:
         Average contrast (std dev on 0-255 scale).
     """
-    if not frames:
+    if frames is None:
         return 0.0
-
-    n = len(frames)
-    indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
-    indices = sorted(set(indices))
-
-    total_contrast = 0.0
-    for idx in indices:
-        frame = frames[idx]
-        arr = np.array(frame, dtype=np.float32)
-        total_contrast += arr.std()
-
-    return total_contrast / len(indices)
+    arr = np.asarray(frames, dtype=np.float32)
+    if arr.ndim == 4:
+        n = arr.shape[0]
+        indices = [i * (n - 1) // 4 for i in range(5)] if n >= 5 else list(range(n))
+        indices = sorted(set(indices))
+        sampled = arr[indices]
+    elif arr.ndim == 3:
+        sampled = arr[np.newaxis]
+    else:
+        return 0.0
+    if sampled.size == 0:
+        return 0.0
+    if sampled.max() <= 1.5:
+        sampled = sampled * 255.0
+    return float(np.mean([sampled[i].std() for i in range(sampled.shape[0])]))
 
 
 # ---------------------------------------------------------------------------
@@ -319,27 +346,41 @@ _OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 _QA_MODEL: str = "qwen/qwen3.5-plus-02-15"
 
 
-def _frames_to_base64(frames: list, indices: list[int]) -> list[str]:
-    """Convert selected PIL frames to base64-encoded JPEG strings."""
+def _frames_to_base64(frames, indices: list[int]) -> list[str]:
+    """Convert selected frames to base64-encoded JPEG strings.
+
+    Args:
+        frames: numpy array (T, H, W, C) in [0,1] float or uint8,
+                or list of PIL Images.
+    """
     from PIL import Image
 
+    arr = np.asarray(frames)
     result = []
     for idx in indices:
-        frame = frames[idx]
-        if not isinstance(frame, Image.Image):
-            frame = Image.fromarray(np.array(frame))
+        frame = arr[idx]
+        # Convert [0,1] float to uint8 if needed
+        if frame.dtype != np.uint8:
+            frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8)
+        img = Image.fromarray(frame)
         buf = io.BytesIO()
-        frame.save(buf, format="JPEG", quality=85)
+        img.save(buf, format="JPEG", quality=85)
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
         result.append(b64)
     return result
 
 
-def _qwen_visual_qa(prompt: str, frames_b64: list[str]) -> dict:
+def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
     """Send frames to Qwen-Omni via OpenRouter for visual quality assessment.
 
     Returns dict with keys: quality ("poor"/"good"/"excellent"), qa_reason (str).
     Following bearnaise pattern: per-clip LLM-based visual QA.
+
+    Args:
+        prompt: The generation prompt for this clip.
+        frames_b64: Base64-encoded JPEG frames (start, middle, end).
+        visual_style: Movie-level visual style description. When provided,
+            QA checks that the clip conforms to the film's declared aesthetic.
     """
     import httpx
 
@@ -355,17 +396,36 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str]) -> dict:
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
         })
 
+    # Build the style enforcement section
+    style_section = ""
+    if visual_style:
+        style_section = (
+            f"\nMOVIE-LEVEL VISUAL STYLE (the entire film must look like this):\n"
+            f"{visual_style}\n\n"
+            f"CHECK: Does this clip conform to the movie's declared visual style?\n"
+            f"If the movie style says 'photorealistic' but the clip looks like a \n"
+            f"cartoon, illustration, or CGI render, rate it POOR regardless of \n"
+            f"other qualities.\n"
+        )
+
     content_parts.append({
         "type": "text",
         "text": (
-            f"You are a video quality assessor for AI-generated documentary footage.\n\n"
+            f"You are a video quality assessor for AI-generated footage.\n\n"
             f"The video was generated from this prompt:\n"
-            f'"{prompt}"\n\n'
+            f'"{prompt}"\n'
+            f"{style_section}\n"
             f"These {len(frames_b64)} frames are sampled from the start, middle, and end of the clip.\n\n"
             f"Evaluate the video quality:\n"
             f"1. Does the visual content match what the prompt describes?\n"
-            f"2. Is the image clear, well-lit, and visually coherent?\n"
-            f"3. Are there artifacts, extreme darkness, blur, or nonsensical imagery?\n\n"
+            f"2. Does the clip match the movie's visual style? (most important)\n"
+            f"3. Are there blatant AI artifacts: distorted shapes, impossible \n"
+            f"   geometry, morphing, grid patterns, or incoherent motion?\n"
+            f"4. Is the output clearly the WRONG medium (e.g. cartoon when the \n"
+            f"   movie style requires photorealism)?\n\n"
+            f"Be LENIENT on minor imperfections (slight blur, small lighting \n"
+            f"differences). Only rate POOR for blatant failures: wrong medium, \n"
+            f"AI wonkiness, or complete prompt mismatch.\n\n"
             f"Respond in EXACTLY this JSON format (no markdown, no extra text):\n"
             f'{{"quality": "poor|good|excellent", "qa_reason": "brief description of what the video shows and why you rated it this way"}}'
         ),
@@ -424,12 +484,19 @@ def _generate_video(
     seed: int,
     num_inference_steps: int,
     guidance_scale: float,
+    negative_prompt: str = "",
+    visual_style: str = "",
 ) -> tuple[bytes, dict]:
     """Generate video clip using LTX-2.3 dev (full) model via diffusers.
 
     Returns (raw_mp4_bytes, qa_status) where qa_status follows bearnaise
     pattern: {quality, qa_reason, attempts, seed}.
     Caller must hold _model_lock.
+
+    Args:
+        negative_prompt: Per-clip negative prompt from visual_style.avoid.
+            Merged with baseline negatives.
+        visual_style: Movie-level visual style description passed to QA.
     """
     _load_ltx()
 
@@ -442,10 +509,16 @@ def _generate_video(
         # Round to nearest valid frame count: 8k+1
         num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
 
-    negative_prompt = (
+    # Baseline negatives + per-clip negatives from visual_style.avoid
+    baseline_negatives = (
         "worst quality, inconsistent motion, blurry, jittery, distorted, "
-        "static, low resolution, dark, underexposed"
+        "static, low resolution, morphing, warping, flicker, "
+        "text, watermark, logo"
     )
+    if negative_prompt:
+        negative_prompt = f"{negative_prompt}, {baseline_negatives}"
+    else:
+        negative_prompt = baseline_negatives
 
     logger.info(
         "Generating video: %d frames (%.1fs), %dx%d, seed=%d",
@@ -464,29 +537,49 @@ def _generate_video(
     current_seed = seed
     # Best result that passed brightness/contrast thresholds
     best_passing_frames = None
+    best_passing_audio = None
     best_passing_score = -1.0
     best_passing_seed = seed
     best_passing_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
     # Best result among brightness-failing attempts (fallback only)
     best_failing_frames = None
+    best_failing_audio = None
     best_failing_score = -1.0
     best_failing_seed = seed
     final_attempt = 0
 
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
-        gen = torch.Generator("cpu").manual_seed(current_seed)
-        result = _ltx_pipe(
+        gen = torch.Generator("cuda").manual_seed(current_seed)
+        # Official dg845 LTX-2.3 parameters for quality output:
+        # - stg_scale: spatio-temporal guidance for coherent motion
+        # - modality_scale: balances video vs audio generation
+        # - guidance_rescale: prevents oversaturation from high CFG
+        # - spatio_temporal_guidance_blocks: which transformer blocks apply STG
+        # - output_type "np": proper numpy output for frame processing
+        video_out, audio_out = _ltx_pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
             width=width,
             height=height,
             num_frames=num_frames,
+            frame_rate=fps,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            stg_scale=1.0,
+            modality_scale=3.0,
+            guidance_rescale=0.7,
+            audio_guidance_scale=7.0,
+            audio_stg_scale=1.0,
+            audio_modality_scale=3.0,
+            audio_guidance_rescale=0.7,
+            spatio_temporal_guidance_blocks=[28],
             generator=gen,
+            output_type="np",
+            return_dict=False,
         )
-        candidate_frames = result.frames[0]
+        candidate_frames = video_out[0]  # numpy array (T, H, W, C)
+        candidate_audio = audio_out[0] if audio_out is not None else None
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)
@@ -504,6 +597,7 @@ def _generate_video(
             # Track best among failing attempts (fallback only)
             if score > best_failing_score:
                 best_failing_frames = candidate_frames
+                best_failing_audio = candidate_audio
                 best_failing_score = score
                 best_failing_seed = current_seed
             if attempt < max_attempts:
@@ -517,14 +611,15 @@ def _generate_video(
         is_new_best = score > best_passing_score
         if is_new_best:
             best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
             best_passing_score = score
             best_passing_seed = current_seed
 
         # Stage 2: Qwen-Omni visual QA (semantic evaluation)
-        n = len(candidate_frames)
+        n = candidate_frames.shape[0] if hasattr(candidate_frames, 'shape') else len(candidate_frames)
         sample_indices = [0, n // 2, n - 1] if n >= 3 else list(range(n))
         frames_b64 = _frames_to_base64(candidate_frames, sample_indices)
-        qa_result = _qwen_visual_qa(prompt, frames_b64)
+        qa_result = _qwen_visual_qa(prompt, frames_b64, visual_style=visual_style)
 
         logger.info(
             "Qwen QA (attempt %d/%d): quality=%s, reason=%.120s",
@@ -534,6 +629,7 @@ def _generate_video(
 
         if qa_result["quality"] in ("good", "excellent"):
             best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
             best_passing_seed = current_seed
             best_passing_qa = qa_result
             break
@@ -556,10 +652,12 @@ def _generate_video(
     # Prefer any brightness-passing frame over a brightness-failing one
     if best_passing_frames is not None:
         video_frames = best_passing_frames
+        video_audio = best_passing_audio
         best_seed = best_passing_seed
         best_qa = best_passing_qa
     else:
         video_frames = best_failing_frames
+        video_audio = best_failing_audio
         best_seed = best_failing_seed
         best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
 
@@ -573,7 +671,37 @@ def _generate_video(
     )
     os.makedirs(_output_dir, exist_ok=True)
 
-    export_to_video(video_frames, output_path, fps=fps)
+    # Use diffusers encode_video for proper MP4 encoding (with audio)
+    try:
+        from diffusers.pipelines.ltx2.export_utils import encode_video as ltx_encode_video
+        # encode_video requires audio and audio_sample_rate
+        audio_sr = 44100  # LTX-2.3 default audio sample rate
+        if video_audio is not None:
+            ltx_encode_video(
+                video_frames,
+                audio=video_audio,
+                audio_sample_rate=audio_sr,
+                fps=fps,
+                output_path=output_path,
+            )
+        else:
+            ltx_encode_video(
+                video_frames,
+                fps=fps,
+                output_path=output_path,
+            )
+    except (ImportError, Exception) as exc:
+        logger.warning("encode_video failed (%s), falling back to export_to_video", exc)
+        # Fallback: convert numpy [0,1] to uint8 PIL frames for export_to_video
+        if isinstance(video_frames, np.ndarray) and video_frames.dtype != np.uint8:
+            from PIL import Image
+            pil_frames = [
+                Image.fromarray((np.clip(f, 0, 1) * 255).astype(np.uint8))
+                for f in video_frames
+            ]
+            export_to_video(pil_frames, output_path, fps=fps)
+        else:
+            export_to_video(video_frames, output_path, fps=fps)
 
     with open(output_path, "rb") as f:
         data = f.read()
@@ -589,8 +717,8 @@ def _generate_video(
         "qa_reason": best_qa.get("qa_reason", "Not evaluated"),
         "attempts": final_attempt,
         "seed": best_seed,
-        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames else 0,
-        "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames else 0,
+        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames is not None else 0,
+        "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames is not None else 0,
     }
 
     return data, qa_status
@@ -623,6 +751,8 @@ async def health() -> HealthResponse:
 @app.post("/tts")
 def tts_endpoint(req: TTSRequest):
     """Generate narration audio. Returns WAV bytes."""
+    if _worker_mode == "ltx":
+        raise HTTPException(503, "This worker is in LTX-only mode. Use the TTS worker.")
     if not req.text.strip():
         raise HTTPException(400, "Text must not be empty")
 
@@ -665,6 +795,8 @@ def tts_endpoint(req: TTSRequest):
 @app.post("/video")
 def video_endpoint(req: VideoRequest):
     """Generate video clip. Returns MP4 bytes."""
+    if _worker_mode == "tts":
+        raise HTTPException(503, "This worker is in TTS-only mode. Use the video worker.")
     if not req.prompt.strip():
         raise HTTPException(400, "Prompt must not be empty")
     if req.duration_sec <= 0:
@@ -689,6 +821,8 @@ def video_endpoint(req: VideoRequest):
                 seed=req.seed,
                 num_inference_steps=req.num_inference_steps,
                 guidance_scale=req.guidance_scale,
+                negative_prompt=req.negative_prompt,
+                visual_style=req.visual_style,
             )
         except HTTPException:
             raise
@@ -709,7 +843,9 @@ def video_endpoint(req: VideoRequest):
             "X-Gen-Time": str(round(elapsed, 3)),
             "X-File-Size": str(len(mp4_bytes)),
             "X-QA-Quality": qa_status.get("quality", "unknown"),
-            "X-QA-Reason": qa_status.get("qa_reason", "")[:200].replace("\n", " ").replace("\r", " "),
+            "X-QA-Reason": base64.b64encode(
+                qa_status.get("qa_reason", "")[:500].encode("utf-8")
+            ).decode("ascii"),
             "X-QA-Attempts": str(qa_status.get("attempts", 1)),
             "X-QA-Seed": str(qa_status.get("seed", req.seed)),
         },
@@ -720,9 +856,18 @@ def video_endpoint(req: VideoRequest):
 def load_models(model: str = "tts"):
     """Load a specific model into VRAM (unloads the other first).
 
+    In single-mode workers, rejects requests for the wrong model type
+    to prevent accidentally loading both models and causing OOM.
+
     Args:
         model: Which model to load — "tts" or "ltx". Default: "tts".
     """
+    # Reject wrong-model requests in single-mode workers
+    if _worker_mode == "tts" and model == "ltx":
+        raise HTTPException(503, "This worker is in TTS-only mode. Cannot load LTX.")
+    if _worker_mode == "ltx" and model == "tts":
+        raise HTTPException(503, "This worker is in LTX-only mode. Cannot load TTS.")
+
     results = {}
 
     with _model_lock:
@@ -730,14 +875,14 @@ def load_models(model: str = "tts"):
             try:
                 _load_tts()
                 results["tts"] = "loaded"
-                results["ltx"] = "unloaded (VRAM constraint)"
+                results["ltx"] = "unloaded" if _ltx_pipe is None else "still loaded (unexpected)"
             except Exception as e:
                 results["tts"] = f"error: {e}"
         elif model == "ltx":
             try:
                 _load_ltx()
                 results["ltx"] = "loaded"
-                results["tts"] = "unloaded (VRAM constraint)"
+                results["tts"] = "unloaded" if _tts_model is None else "still loaded (unexpected)"
             except Exception as e:
                 results["ltx"] = f"error: {e}"
         else:
@@ -756,17 +901,50 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--models-dir", type=str, default="/workspace/models")
     parser.add_argument("--output-dir", type=str, default="/workspace/output")
+    parser.add_argument(
+        "--mode", type=str, default="both",
+        choices=["tts", "ltx", "both"],
+        help=(
+            "Which model to serve. 'tts' = Qwen3-TTS only (cheap GPU), "
+            "'ltx' = LTX-2.3 only (A100), 'both' = shared (legacy, not "
+            "recommended — model swapping causes lock contention)."
+        ),
+    )
     args = parser.parse_args()
 
-    global _models_dir, _output_dir
+    global _models_dir, _output_dir, _worker_mode
     _models_dir = args.models_dir
     _output_dir = args.output_dir
+    _worker_mode = args.mode
 
     os.makedirs(_output_dir, exist_ok=True)
 
-    logger.info("Starting GPU Worker on %s:%d", args.host, args.port)
+    logger.info("Starting GPU Worker on %s:%d (mode=%s)", args.host, args.port, _worker_mode)
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
+
+    # Pre-load models in a background thread so uvicorn starts immediately.
+    # The /health endpoint reports tts_loaded/ltx_loaded status, so callers
+    # can poll until the model they need is ready.
+    import threading
+
+    def _background_preload():
+        if _worker_mode == "tts":
+            try:
+                with _model_lock:
+                    _load_tts()
+            except Exception as e:
+                logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
+        if _worker_mode in ("ltx", "both"):
+            try:
+                with _model_lock:
+                    _load_ltx()
+            except Exception as e:
+                logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
+
+    preload_thread = threading.Thread(target=_background_preload, daemon=True)
+    preload_thread.start()
+    logger.info("Model pre-loading started in background thread")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

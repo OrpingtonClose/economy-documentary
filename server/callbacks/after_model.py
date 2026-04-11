@@ -7,7 +7,9 @@ extraction -- documentary pipeline uses OTIO timeline as output).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Any, Optional
 
 from google.adk.agents.callback_context import CallbackContext
@@ -16,6 +18,10 @@ from callbacks.before_model import release_llm_semaphore_if_held
 from dashboard import get_active_collector
 
 logger = logging.getLogger(__name__)
+
+_TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+_SCENES_BACKUP = os.path.join(_TIMELINE_DIR, "_scenes_backup.json")
+_VISUAL_STYLE_BACKUP = os.path.join(_TIMELINE_DIR, "_visual_style_backup.json")
 
 
 def after_model_callback(
@@ -68,10 +74,116 @@ def after_model_callback(
             len(reasoning_text),
         )
 
+    # -- Scene + visual_style capture (scenario_generator only) ---------------
+    # ADK output_key only saves the *final* text response.  When the generator
+    # outputs scenes and then calls create_timeline, the post-tool response is
+    # often empty → output_key silently discards the scenes.  We capture them
+    # from every LLM response and persist to disk + state so downstream agents
+    # always have them.
+    agent_name = getattr(callback_context, "agent_name", "unknown")
+    if agent_name == "scenario_generator" and response_text:
+        from callbacks.deterministic_steps import extract_json_array, extract_json_object
+
+        # --- Capture visual_style (JSON object) --------------------------------
+        # The scenario director outputs visual_style as a JSON object.
+        # We look for it in the response text and persist to state + disk.
+        vs_obj = extract_json_object(response_text)
+        if vs_obj and "style" in vs_obj and "avoid" in vs_obj:
+            vs_json = json.dumps(vs_obj, ensure_ascii=False)
+            state["visual_style"] = vs_json
+            os.makedirs(os.path.dirname(_VISUAL_STYLE_BACKUP) or ".", exist_ok=True)
+            with open(_VISUAL_STYLE_BACKUP, "w") as f:
+                f.write(vs_json)
+            logger.info(
+                "Captured visual_style from scenario_generator → state + %s (style=%s)",
+                _VISUAL_STYLE_BACKUP, vs_obj.get("style", "unknown"),
+            )
+
+        # --- Capture scenes (JSON array of objects with scene_num) ---------------
+        # The response may contain multiple JSON arrays (e.g. realism_anchors,
+        # avoid list inside visual_style).  We need the SCENES array specifically
+        # — an array of objects where each has a "scene_num" key.
+        scenes = _extract_scenes_array(response_text)
+        if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
+            scenes_json = json.dumps(scenes, ensure_ascii=False)
+            # Persist to state immediately (survives within LoopAgent scope)
+            state["scenes"] = scenes_json
+            # Persist to disk (survives LoopAgent state scoping)
+            os.makedirs(os.path.dirname(_SCENES_BACKUP) or ".", exist_ok=True)
+            with open(_SCENES_BACKUP, "w") as f:
+                f.write(scenes_json)
+            logger.info(
+                "Captured %d scenes from scenario_generator → state + %s",
+                len(scenes), _SCENES_BACKUP,
+            )
+
     # Record LLM end in dashboard
     _c = get_active_collector()
     if _c:
-        agent_name = getattr(callback_context, "agent_name", "")
         _c.llm_end(agent_name, 0.0, len(response_text) // 4)
+
+    return None
+
+
+def _extract_scenes_array(text: str) -> list | None:
+    """Extract the scenes JSON array from text that may contain other arrays.
+
+    The LLM response often contains multiple JSON arrays (realism_anchors,
+    avoid list inside visual_style object).  This function finds ALL arrays
+    and returns the one that looks like scenes — an array of dicts where at
+    least one dict has a ``scene_num`` key.
+    """
+    import re
+
+    if not text or not text.strip():
+        return None
+
+    candidates: list[list] = []
+
+    # Strategy 1: Look inside markdown fences first
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
+    for match in fence_pattern.finditer(text):
+        try:
+            result = json.loads(match.group(1).strip())
+            if isinstance(result, list):
+                candidates.append(result)
+            elif isinstance(result, dict):
+                # Check for a "scenes" key inside fenced JSON
+                for key in ("scenes",):
+                    if key in result and isinstance(result[key], list):
+                        candidates.append(result[key])
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    # Strategy 2: Find all [...] blocks in the text
+    bracket_depth = 0
+    start_idx = None
+    for i, ch in enumerate(text):
+        if ch == '[' and bracket_depth == 0:
+            start_idx = i
+            bracket_depth = 1
+        elif ch == '[':
+            bracket_depth += 1
+        elif ch == ']':
+            bracket_depth -= 1
+            if bracket_depth == 0 and start_idx is not None:
+                try:
+                    result = json.loads(text[start_idx:i + 1])
+                    if isinstance(result, list):
+                        candidates.append(result)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                start_idx = None
+
+    # Pick the candidate that looks like a scenes array
+    for candidate in candidates:
+        if len(candidate) >= 2 and all(isinstance(item, dict) for item in candidate):
+            if any("scene_num" in item for item in candidate):
+                return candidate
+
+    # Fallback: return the largest array of dicts (likely scenes)
+    dict_arrays = [c for c in candidates if len(c) >= 2 and all(isinstance(item, dict) for item in c)]
+    if dict_arrays:
+        return max(dict_arrays, key=len)
 
     return None

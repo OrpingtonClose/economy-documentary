@@ -50,13 +50,22 @@ def extract_json_array(text: str) -> Optional[list]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Strategy 2: Extract from markdown code fences
-    fence_pattern = re.compile(r'```(?:json)?\s*\n(.*?)```', re.DOTALL)
+    # Strategy 2: Extract from markdown code fences (handle optional newline)
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
         try:
             result = json.loads(match.group(1).strip())
             if isinstance(result, list):
                 return result
+            # If the fenced content is a dict with an array value, try extracting it
+            if isinstance(result, dict):
+                # Prefer known keys first
+                for key in ("scenes", "visual_concepts", "content_analysis"):
+                    if key in result and isinstance(result[key], list):
+                        return result[key]
+                for v in result.values():
+                    if isinstance(v, list):
+                        return v
         except (json.JSONDecodeError, ValueError):
             continue
 
@@ -96,8 +105,8 @@ def extract_json_object(text: str) -> Optional[dict]:
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Strategy 2: Extract from markdown fences
-    fence_pattern = re.compile(r'```(?:json)?\s*\n(.*?)```', re.DOTALL)
+    # Strategy 2: Extract from markdown fences (handle optional newline)
+    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
     for match in fence_pattern.finditer(text):
         try:
             result = json.loads(match.group(1).strip())
@@ -136,23 +145,49 @@ def extract_json_object(text: str) -> Optional[dict]:
 def clean_scenes_after_scenario(
     callback_context: CallbackContext,
 ) -> Optional[genai_types.Content]:
-    """After scenario_director: extract clean JSON from state['scenes'].
+    """After scenario_director: extract clean JSON from state['scenes'] and state['visual_style'].
 
-    The LLM often wraps JSON in preamble text and markdown fences.
-    This callback extracts the pure JSON array and stores it back.
+    ADK's output_key only saves the *final* text response from the LLM.
+    When the generator outputs scenes then calls create_timeline, the
+    post-tool response is often empty, so output_key silently discards
+    the scenes.  The after_model_callback captures scenes and visual_style
+    to both state and backup files on disk.  This callback reads from
+    whichever source has the data.
     """
     state = callback_context.state
-    raw_scenes = state.get("scenes", "")
-    if not raw_scenes:
-        logger.warning("No scenes in state after scenario director")
-        return None
+    timeline_dir = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+    scenes_file = os.path.join(timeline_dir, "_scenes_backup.json")
+    visual_style_file = os.path.join(timeline_dir, "_visual_style_backup.json")
 
-    scenes = extract_json_array(str(raw_scenes))
+    # --- Recover visual_style (may be lost by LoopAgent state scoping) -----
+    raw_vs = str(state.get("visual_style", ""))
+    if not raw_vs.strip() or raw_vs.strip() == "":
+        if os.path.exists(visual_style_file):
+            logger.info("State visual_style empty, recovering from backup %s", visual_style_file)
+            with open(visual_style_file) as f:
+                state["visual_style"] = f.read()
+            logger.info("Recovered visual_style from disk backup")
+    else:
+        logger.info("visual_style present in state (%d chars)", len(raw_vs))
+
+    # --- Try state first, then backup file ---------------------------------
+    raw_str = str(state.get("scenes", ""))
+    scenes = extract_json_array(raw_str) if raw_str.strip() not in ("", "[]") else None
+
+    if not scenes and os.path.exists(scenes_file):
+        logger.info("State scenes empty/invalid, recovering from backup %s", scenes_file)
+        with open(scenes_file) as f:
+            backup_data = f.read()
+        scenes = extract_json_array(backup_data)
+
     if scenes:
-        state["scenes"] = json.dumps(scenes)
+        state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
     else:
-        logger.error("Failed to extract JSON array from scenes state")
+        logger.error(
+            "Failed to extract scenes from state (len=%d) and backup (exists=%s)",
+            len(raw_str), os.path.exists(scenes_file),
+        )
 
     # Run timeline guardian after cleaning
     from callbacks.timeline_guardian import timeline_guardian_callback
@@ -210,6 +245,28 @@ def deterministic_audio_callback(
                 for lang_code, lang_tag in [("ru", "[RU]"), ("en", "[EN]")]:
                     # Extract language-specific text
                     lang_text = _extract_lang_text(text, lang_tag)
+                    if not lang_text:
+                        # Fallback: if no [RU] tag, use raw text as Russian
+                        if lang_code == "ru":
+                            lang_text = text.strip()
+                            logger.warning(
+                                "Scene %d %s: no [RU] tag, using raw text",
+                                scene_num, voice,
+                            )
+                        # Fallback: if no [EN] tag, translate RU text via LLM
+                        elif lang_code == "en":
+                            ru_text = _extract_lang_text(text, "[RU]") or text.strip()
+                            lang_text = _translate_via_llm(ru_text, "ru", "en")
+                            if not lang_text:
+                                logger.error(
+                                    "Scene %d %s: [EN] missing and translation failed",
+                                    scene_num, voice,
+                                )
+                                continue
+                            logger.info(
+                                "Scene %d %s: translated RU→EN (%d chars)",
+                                scene_num, voice, len(lang_text),
+                            )
                     if not lang_text:
                         continue
 
@@ -316,6 +373,39 @@ def deterministic_audio_callback(
         role="model",
         parts=[genai_types.Part(text="\n".join(summary_parts))],
     )
+
+
+def _translate_via_llm(text: str, src_lang: str, tgt_lang: str) -> str:
+    """Translate text between languages using LiteLLM (best-effort).
+
+    Returns translated text or empty string on failure.
+    """
+    lang_names = {"ru": "Russian", "en": "English"}
+    src_name = lang_names.get(src_lang, src_lang)
+    tgt_name = lang_names.get(tgt_lang, tgt_lang)
+
+    try:
+        import litellm
+        response = litellm.completion(
+            model="openrouter/google/gemini-2.5-flash",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Translate the following {src_name} text to {tgt_name}. "
+                        "Output ONLY the translated text, nothing else. "
+                        "Preserve the tone and style of the original."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            temperature=0.3,
+        )
+        translated = response.choices[0].message.content.strip()
+        return translated
+    except Exception as e:
+        logger.error("Translation %s→%s failed: %s", src_lang, tgt_lang, e)
+        return ""
 
 
 def _extract_lang_text(text: str, lang_tag: str) -> str:
@@ -477,6 +567,19 @@ def deterministic_production_callback(
         if obj and "visual_concepts" in obj:
             concepts = obj["visual_concepts"]
 
+    # Extract movie-level visual style for QA enforcement
+    raw_visual_style = state.get("visual_style", "")
+    visual_style_str = ""
+    visual_style_avoid = []
+    if raw_visual_style:
+        try:
+            vs = json.loads(str(raw_visual_style)) if isinstance(raw_visual_style, str) else raw_visual_style
+            if isinstance(vs, dict):
+                visual_style_str = json.dumps(vs)
+                visual_style_avoid = vs.get("avoid", [])
+        except (json.JSONDecodeError, TypeError):
+            visual_style_str = str(raw_visual_style)
+
     if not concepts:
         # Fallback: generate a simple concept per scene from scenes data
         raw_scenes = state.get("scenes", "[]")
@@ -488,8 +591,10 @@ def deterministic_production_callback(
                 concepts.append({
                     "scene_num": sn,
                     "phrase_idx": 0,
-                    "duration": scene.get("duration_sec", 30),
+                    "duration": min(scene.get("duration_sec", 5), 10.0),
                     "prompt": f"Documentary footage: {scene.get('title', 'scene')}. {scene.get('visual_notes', '')}",
+                    "start_time": 0.0,
+                    "end_time": min(scene.get('duration_sec', 5), 10.0),
                     "lora_id": "documentary-realism",
                     "lora_weight": 0.75,
                 })
@@ -507,13 +612,18 @@ def deterministic_production_callback(
     total_clips = 0
     errors = []
 
+    # Build default negative prompt from visual_style.avoid
+    default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
+
     for concept in concepts:
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
-        duration = concept.get("duration", 5.0)
+        duration = min(concept.get("duration", 5.0), 10.0)  # Cap at 10s to avoid OOM
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)
+        # Per-clip negative prompt from visual concepter, or fall back to movie-level
+        clip_negative = concept.get("negative_prompt", default_negative)
 
         output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}.mp4")
 
@@ -525,6 +635,8 @@ def deterministic_production_callback(
                 lora_id=lora_id,
                 lora_weight=lora_weight,
                 output_path=output_path,
+                negative_prompt=clip_negative,
+                visual_style=visual_style_str,
             )
             gen_result = json.loads(gen_result_json)
 
