@@ -196,12 +196,19 @@ def _load_ltx():
 
     from diffusers import LTX2Pipeline
 
-    model_path = os.path.join(_models_dir, "ltx2")
+    # Try models_dir/ltx2 first (standard layout), then models_dir itself
+    # (when --models-dir points directly at the model directory).
+    candidate = os.path.join(_models_dir, "ltx2")
+    if os.path.isfile(os.path.join(candidate, "model_index.json")):
+        model_path = candidate
+    elif os.path.isfile(os.path.join(_models_dir, "model_index.json")):
+        model_path = _models_dir
+    else:
+        raise FileNotFoundError(
+            f"model_index.json not found in {candidate} or {_models_dir}"
+        )
     logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
     t0 = time.time()
-
-    if not os.path.isfile(os.path.join(model_path, "model_index.json")):
-        raise FileNotFoundError(f"model_index.json not found in {model_path}")
 
     pipe = LTX2Pipeline.from_pretrained(
         model_path,
