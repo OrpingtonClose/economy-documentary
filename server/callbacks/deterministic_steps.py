@@ -138,51 +138,37 @@ def clean_scenes_after_scenario(
 ) -> Optional[genai_types.Content]:
     """After scenario_director: extract clean JSON from state['scenes'].
 
-    The LLM often wraps JSON in preamble text and markdown fences.
-    This callback extracts the pure JSON array and stores it back.
+    ADK's output_key only saves the *final* text response from the LLM.
+    When the generator outputs scenes then calls create_timeline, the
+    post-tool response is often empty, so output_key silently discards
+    the scenes.  The after_model_callback captures scenes to both state
+    and a backup file on disk.  This callback reads from whichever
+    source has the data.
     """
     state = callback_context.state
-    raw_scenes = state.get("scenes", "")
-    if not raw_scenes:
-        logger.warning("No scenes in state after scenario director")
-        # Fallback: check if scenes were saved to file by create_timeline
-        scenes_file = os.path.join(
-            os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
-            "_scenes_backup.json",
-        )
-        if os.path.exists(scenes_file):
-            with open(scenes_file) as f:
-                state["scenes"] = f.read()
-            logger.info("Recovered scenes from backup file")
-        else:
-            from callbacks.timeline_guardian import timeline_guardian_callback
-            return timeline_guardian_callback(callback_context)
+    scenes_file = os.path.join(
+        os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
+        "_scenes_backup.json",
+    )
 
+    # --- Try state first, then backup file ---------------------------------
     raw_str = str(state.get("scenes", ""))
-    logger.info("Raw scenes state (type=%s, len=%d): %.500s",
-                type(state.get("scenes")).__name__, len(raw_str), raw_str)
+    scenes = extract_json_array(raw_str) if raw_str.strip() not in ("", "[]") else None
 
-    scenes = extract_json_array(raw_str)
+    if not scenes and os.path.exists(scenes_file):
+        logger.info("State scenes empty/invalid, recovering from backup %s", scenes_file)
+        with open(scenes_file) as f:
+            backup_data = f.read()
+        scenes = extract_json_array(backup_data)
+
     if scenes:
-        state["scenes"] = json.dumps(scenes)
+        state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
     else:
-        # Fallback: check backup file
-        scenes_file = os.path.join(
-            os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
-            "_scenes_backup.json",
+        logger.error(
+            "Failed to extract scenes from state (len=%d) and backup (exists=%s)",
+            len(raw_str), os.path.exists(scenes_file),
         )
-        if os.path.exists(scenes_file):
-            with open(scenes_file) as f:
-                backup_data = f.read()
-            scenes = extract_json_array(backup_data)
-            if scenes:
-                state["scenes"] = json.dumps(scenes)
-                logger.info("Recovered %d scenes from backup file", len(scenes))
-            else:
-                logger.error("Failed to extract JSON from both state and backup")
-        else:
-            logger.error("Failed to extract JSON array from scenes state and no backup")
 
     # Run timeline guardian after cleaning
     from callbacks.timeline_guardian import timeline_guardian_callback

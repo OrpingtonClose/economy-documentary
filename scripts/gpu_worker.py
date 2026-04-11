@@ -5,7 +5,9 @@ Runs on a Vast.ai GPU VM. Exposes HTTP endpoints that the pipeline
 calls to generate narration (Qwen3-TTS) and video clips (LTX-2.3).
 
 Usage:
-    python gpu_worker.py [--port 8880] [--models-dir /workspace/models]
+    python gpu_worker.py --mode tts  [--port 8880] [--models-dir ...]  # TTS-only VM
+    python gpu_worker.py --mode ltx  [--port 8880] [--models-dir ...]  # LTX-only VM
+    python gpu_worker.py --mode both [--port 8880] [--models-dir ...]  # shared (legacy)
 
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
@@ -55,6 +57,7 @@ _active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
 _model_lock = threading.Lock()  # Serialise all model load/unload/inference
+_worker_mode: str = "both"  # "tts", "ltx", or "both"
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -145,14 +148,15 @@ def _unload_ltx():
 def _load_tts():
     """Load Qwen3-TTS VoiceDesign model via qwen-tts package.
 
-    Unloads LTX first if it's on GPU to free VRAM.
+    In single-mode (--mode tts), no unloading needed — TTS owns the GPU.
+    In shared mode (--mode both), unloads LTX first to free VRAM.
     """
     global _tts_model, _active_model
     if _tts_model is not None:
         return
 
-    # Free VRAM if LTX is loaded
-    if _ltx_pipe is not None:
+    # Free VRAM if LTX is loaded (only relevant in shared mode)
+    if _worker_mode == "both" and _ltx_pipe is not None:
         _unload_ltx()
 
     from qwen_tts import Qwen3TTSModel
@@ -174,7 +178,8 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
-    Unloads TTS first if it's on GPU to free VRAM.
+    In single-mode (--mode ltx), no unloading needed — LTX owns the GPU.
+    In shared mode (--mode both), unloads TTS first to free VRAM.
     Uses enable_model_cpu_offload() to keep idle components in CPU RAM
     while the active component runs on GPU. Requires 48GB+ VRAM
     for the Gemma3 text encoder (~24GB bf16 weights).
@@ -183,8 +188,8 @@ def _load_ltx():
     if _ltx_pipe is not None:
         return
 
-    # Free VRAM if TTS is loaded
-    if _tts_model is not None:
+    # Free VRAM if TTS is loaded (only relevant in shared mode)
+    if _worker_mode == "both" and _tts_model is not None:
         _unload_tts()
 
     from diffusers import LTX2Pipeline
@@ -623,6 +628,8 @@ async def health() -> HealthResponse:
 @app.post("/tts")
 def tts_endpoint(req: TTSRequest):
     """Generate narration audio. Returns WAV bytes."""
+    if _worker_mode == "ltx":
+        raise HTTPException(503, "This worker is in LTX-only mode. Use the TTS worker.")
     if not req.text.strip():
         raise HTTPException(400, "Text must not be empty")
 
@@ -665,6 +672,8 @@ def tts_endpoint(req: TTSRequest):
 @app.post("/video")
 def video_endpoint(req: VideoRequest):
     """Generate video clip. Returns MP4 bytes."""
+    if _worker_mode == "tts":
+        raise HTTPException(503, "This worker is in TTS-only mode. Use the video worker.")
     if not req.prompt.strip():
         raise HTTPException(400, "Prompt must not be empty")
     if req.duration_sec <= 0:
@@ -756,17 +765,41 @@ def main():
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--models-dir", type=str, default="/workspace/models")
     parser.add_argument("--output-dir", type=str, default="/workspace/output")
+    parser.add_argument(
+        "--mode", type=str, default="both",
+        choices=["tts", "ltx", "both"],
+        help=(
+            "Which model to serve. 'tts' = Qwen3-TTS only (cheap GPU), "
+            "'ltx' = LTX-2.3 only (A100), 'both' = shared (legacy, not "
+            "recommended — model swapping causes lock contention)."
+        ),
+    )
     args = parser.parse_args()
 
-    global _models_dir, _output_dir
+    global _models_dir, _output_dir, _worker_mode
     _models_dir = args.models_dir
     _output_dir = args.output_dir
+    _worker_mode = args.mode
 
     os.makedirs(_output_dir, exist_ok=True)
 
-    logger.info("Starting GPU Worker on %s:%d", args.host, args.port)
+    logger.info("Starting GPU Worker on %s:%d (mode=%s)", args.host, args.port, _worker_mode)
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
+
+    # Pre-load the designated model at startup — no lazy loading, no swapping
+    if _worker_mode in ("tts", "both"):
+        try:
+            with _model_lock:
+                _load_tts()
+        except Exception as e:
+            logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
+    if _worker_mode in ("ltx", "both"):
+        try:
+            with _model_lock:
+                _load_ltx()
+        except Exception as e:
+            logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

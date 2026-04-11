@@ -117,7 +117,8 @@ def generate_video_clip(
         )
 
     # Production mode: call LTX-2.3 on GPU worker
-    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    # VIDEO_WORKER_URL takes priority (dedicated LTX VM), falls back to GPU_WORKER_URL
+    gpu_worker_url = os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
     if not gpu_worker_url:
         # Fallback: generate solid-color placeholder if no GPU worker
         logger.warning("GPU_WORKER_URL not set, generating solid-color placeholder")

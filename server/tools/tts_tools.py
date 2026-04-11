@@ -95,7 +95,8 @@ def generate_narration(
         )
 
     # Production mode: call Qwen3-TTS on GPU worker
-    gpu_worker_url = os.environ.get("GPU_WORKER_URL", "")
+    # TTS_WORKER_URL takes priority (dedicated TTS VM), falls back to GPU_WORKER_URL
+    gpu_worker_url = os.environ.get("TTS_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
     if not gpu_worker_url:
         # Fallback: generate silent WAV if no GPU worker configured
         logger.warning("GPU_WORKER_URL not set, generating silent WAV placeholder")

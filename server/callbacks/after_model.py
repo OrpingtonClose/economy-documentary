@@ -7,7 +7,9 @@ extraction -- documentary pipeline uses OTIO timeline as output).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Any, Optional
 
 from google.adk.agents.callback_context import CallbackContext
@@ -16,6 +18,9 @@ from callbacks.before_model import release_llm_semaphore_if_held
 from dashboard import get_active_collector
 
 logger = logging.getLogger(__name__)
+
+_TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+_SCENES_BACKUP = os.path.join(_TIMELINE_DIR, "_scenes_backup.json")
 
 
 def after_model_callback(
@@ -68,10 +73,32 @@ def after_model_callback(
             len(reasoning_text),
         )
 
+    # -- Scene capture (scenario_generator only) -----------------------------
+    # ADK output_key only saves the *final* text response.  When the generator
+    # outputs scenes and then calls create_timeline, the post-tool response is
+    # often empty → output_key silently discards the scenes.  We capture them
+    # from every LLM response and persist to disk + state so downstream agents
+    # always have them.
+    agent_name = getattr(callback_context, "agent_name", "unknown")
+    if agent_name == "scenario_generator" and response_text:
+        from callbacks.deterministic_steps import extract_json_array
+        scenes = extract_json_array(response_text)
+        if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
+            scenes_json = json.dumps(scenes, ensure_ascii=False)
+            # Persist to state immediately (survives within LoopAgent scope)
+            state["scenes"] = scenes_json
+            # Persist to disk (survives LoopAgent state scoping)
+            os.makedirs(os.path.dirname(_SCENES_BACKUP) or ".", exist_ok=True)
+            with open(_SCENES_BACKUP, "w") as f:
+                f.write(scenes_json)
+            logger.info(
+                "Captured %d scenes from scenario_generator → state + %s",
+                len(scenes), _SCENES_BACKUP,
+            )
+
     # Record LLM end in dashboard
     _c = get_active_collector()
     if _c:
-        agent_name = getattr(callback_context, "agent_name", "")
         _c.llm_end(agent_name, 0.0, len(response_text) // 4)
 
     return None

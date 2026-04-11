@@ -83,7 +83,12 @@ scenario_generator = Agent(
     model=build_model(),
     instruction=_GENERATOR_INSTRUCTION,
     tools=[create_timeline_tool],
-    output_key="scenes",
+    # NOTE: output_key="scenes" was removed intentionally.
+    # ADK's output_key only saves the *final* text response.  When the
+    # generator outputs scenes then calls create_timeline, the post-tool
+    # response is often empty → output_key silently discards the scenes.
+    # Instead, after_model_callback captures scenes from every LLM response
+    # and persists them to both state["scenes"] and _scenes_backup.json.
     before_model_callback=before_model_callback,
     after_model_callback=after_model_callback,
     before_tool_callback=before_tool_callback,
