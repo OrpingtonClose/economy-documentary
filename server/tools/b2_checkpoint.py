@@ -207,11 +207,15 @@ def upload_stage_marker(stage: str) -> bool:
 # Convenience uploaders for each artifact type
 # ---------------------------------------------------------------------------
 
-def upload_scenario(scenes_json: str, visual_style_json: str) -> None:
-    """Upload scenario output (scenes + visual_style) immediately."""
-    upload_json(scenes_json, "state/scenes.json")
-    upload_json(visual_style_json, "state/visual_style.json")
-    logger.info("B2: scenario artifacts uploaded")
+def upload_scenario(scenes_json: str, visual_style_json: str) -> bool:
+    """Upload scenario output (scenes + visual_style) immediately.
+
+    Returns True if both uploads succeeded.
+    """
+    ok1 = upload_json(scenes_json, "state/scenes.json")
+    ok2 = upload_json(visual_style_json, "state/visual_style.json")
+    logger.info("B2: scenario artifacts uploaded (ok=%s)", ok1 and ok2)
+    return ok1 and ok2
 
 
 def upload_tts_clip(wav_path: str, sidecar_path: str = "") -> None:
@@ -222,10 +226,14 @@ def upload_tts_clip(wav_path: str, sidecar_path: str = "") -> None:
         upload_file(sidecar_path, f"audio/{os.path.basename(sidecar_path)}")
 
 
-def upload_visual_concepts(visual_concepts_json: str) -> None:
-    """Upload visual direction output immediately."""
-    upload_json(visual_concepts_json, "state/visual_concepts.json")
-    logger.info("B2: visual concepts uploaded")
+def upload_visual_concepts(visual_concepts_json: str) -> bool:
+    """Upload visual direction output immediately.
+
+    Returns True if the upload succeeded.
+    """
+    ok = upload_json(visual_concepts_json, "state/visual_concepts.json")
+    logger.info("B2: visual concepts uploaded (ok=%s)", ok)
+    return ok
 
 
 def upload_video_clip(mp4_path: str, status_path: str = "") -> None:
@@ -248,14 +256,20 @@ def upload_assembly_file(local_path: str) -> None:
     upload_file(local_path, f"assembly/{basename}")
 
 
-def upload_final_output(local_path: str) -> None:
-    """Upload final documentary MP4."""
+def upload_final_output(local_path: str) -> bool:
+    """Upload final documentary MP4.
+
+    Returns True if the upload succeeded.
+    """
     basename = os.path.basename(local_path)
-    upload_file(local_path, f"output/{basename}")
+    return upload_file(local_path, f"output/{basename}")
 
 
-def upload_pipeline_state(state: dict) -> None:
-    """Upload full pipeline state snapshot."""
+def upload_pipeline_state(state: dict) -> bool:
+    """Upload full pipeline state snapshot.
+
+    Returns True if the upload succeeded.
+    """
     # Filter non-serialisable values
     serialisable = {}
     for k, v in state.items():
@@ -264,7 +278,7 @@ def upload_pipeline_state(state: dict) -> None:
             serialisable[k] = v
         except (TypeError, ValueError):
             serialisable[k] = str(v)
-    upload_json(serialisable, "state/pipeline_state.json")
+    return upload_json(serialisable, "state/pipeline_state.json")
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +315,10 @@ def restore_state_json(b2_relative_path: str) -> Optional[str]:
 
     key = _b2_key(b2_relative_path)
     try:
-        from b2sdk.v2 import DownloadDestBytes
-        dest = DownloadDestBytes()
-        bucket.download_file_by_name(key).save(dest)
-        return dest.get_bytes_written().decode("utf-8")
+        import io
+        buffer = io.BytesIO()
+        bucket.download_file_by_name(key).save(buffer)
+        return buffer.getvalue().decode("utf-8")
     except Exception:
         return None
 

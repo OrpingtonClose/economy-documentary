@@ -191,13 +191,15 @@ def clean_scenes_after_scenario(
         # Upload scenario artifacts to B2 immediately
         from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
         vs_raw = str(state.get("visual_style", ""))
-        upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
-        upload_stage_marker("scenario")
-        upload_pipeline_state(dict(state))
+        _b2_ok = upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
+        _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
         # Upload timeline if it exists
         tp = state.get("_timeline_path", "")
         if tp and os.path.exists(tp):
             upload_timeline(tp)
+        # Only mark stage complete if critical artifacts uploaded
+        if _b2_ok:
+            upload_stage_marker("scenario")
     else:
         logger.error(
             "Failed to extract scenes from state (len=%d) and backup (exists=%s)",
@@ -387,11 +389,13 @@ def deterministic_audio_callback(
 
     # Upload audio stage completion to B2
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
-    upload_stage_marker("audio")
-    upload_pipeline_state(dict(state))
+    _b2_ok = upload_pipeline_state(dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("audio")
 
     summary_parts = [
         f"Audio generation complete: {total_clips} narration clips added to timeline.",
@@ -575,14 +579,17 @@ def write_visual_metadata_to_otio(
 
     # Upload visual direction artifacts to B2 immediately
     from tools.b2_checkpoint import upload_visual_concepts, upload_stage_marker, upload_pipeline_state, upload_timeline
+    _b2_ok = True
     raw_vc = str(callback_context.state.get("visual_concepts", ""))
     if raw_vc:
-        upload_visual_concepts(raw_vc)
-    upload_stage_marker("visual_direction")
-    upload_pipeline_state(dict(callback_context.state))
+        _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
+    _b2_ok = upload_pipeline_state(dict(callback_context.state)) and _b2_ok
     tp = callback_context.state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("visual_direction")
 
     # Run timeline guardian
     from callbacks.timeline_guardian import timeline_guardian_callback
@@ -813,11 +820,13 @@ def deterministic_production_callback(
 
     # Upload production stage completion to B2
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
-    upload_stage_marker("production")
-    upload_pipeline_state(dict(state))
+    _b2_ok = upload_pipeline_state(dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("production")
 
     summary_parts = [
         f"Production complete: {total_clips} video clips generated and added to timeline.",
@@ -1192,12 +1201,15 @@ def deterministic_assembly_callback(
 
     # Upload final outputs + assembly stage marker to B2
     from tools.b2_checkpoint import upload_final_output, upload_stage_marker, upload_pipeline_state
+    _b2_ok = True
     if os.path.exists(final_path):
-        upload_final_output(final_path)
+        _b2_ok = upload_final_output(final_path) and _b2_ok
     if alt_final_path and os.path.exists(alt_final_path):
-        upload_final_output(alt_final_path)
-    upload_stage_marker("assembly")
-    upload_pipeline_state(dict(state))
+        _b2_ok = upload_final_output(alt_final_path) and _b2_ok
+    _b2_ok = upload_pipeline_state(dict(state)) and _b2_ok
+    # Only mark stage complete if critical artifacts uploaded
+    if _b2_ok:
+        upload_stage_marker("assembly")
 
     logger.info("Deterministic assembly: %d scenes, final=%s", len(muxed_paths), final_path)
 
