@@ -372,43 +372,101 @@ def restore_directory(b2_prefix: str, local_dir: str) -> int:
     return count
 
 
-def find_latest_run_id(topic: str = "") -> Optional[str]:
-    """Find the most recent run ID in the B2 bucket, optionally filtered by topic.
+def _list_all_run_ids() -> list[str]:
+    """List all run IDs in the B2 bucket by scanning for any sub-path.
 
-    Looks for stage_markers/ directories to identify runs.
+    Detects runs by the first path component of every file in the bucket,
+    so even partially-uploaded runs (no stage markers yet) are found.
 
-    Returns:
-        The run_id string, or None if no runs found.
+    Returns a list of unique run_id strings (sorted, latest last).
+    """
+    bucket = _get_bucket()
+    if bucket is None:
+        return []
+
+    try:
+        seen_runs: list[str] = []
+        for file_version, _ in bucket.ls("", recursive=True):
+            fname = file_version.file_name
+            # Extract the top-level directory as the run_id
+            parts = fname.split("/", 1)
+            if len(parts) >= 2:
+                run_id = parts[0]
+                if run_id and run_id not in seen_runs:
+                    seen_runs.append(run_id)
+        seen_runs.sort()
+        return seen_runs
+    except Exception as e:
+        logger.error("B2 _list_all_run_ids failed: %s", e)
+        return []
+
+
+def _read_run_state(run_id: str) -> Optional[dict]:
+    """Download and parse pipeline_state.json for a specific run.
+
+    Returns the parsed dict, or None if unavailable.
     """
     bucket = _get_bucket()
     if bucket is None:
         return None
 
-    safe_topic = ""
-    if topic:
-        safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
-
+    key = f"{run_id}/state/pipeline_state.json"
     try:
-        # List top-level "directories" by looking for stage_markers
-        seen_runs = []
-        for file_version, _ in bucket.ls("", recursive=True):
-            fname = file_version.file_name
-            if "/stage_markers/" in fname:
-                run_id = fname.split("/stage_markers/")[0]
-                if run_id not in seen_runs:
-                    if safe_topic and not run_id.startswith(safe_topic):
-                        continue
-                    seen_runs.append(run_id)
-
-        if not seen_runs:
-            return None
-
-        # Return the latest (lexicographic sort — timestamp suffix makes this work)
-        seen_runs.sort()
-        return seen_runs[-1]
-    except Exception as e:
-        logger.error("B2 find_latest_run_id failed: %s", e)
+        import io
+        buffer = io.BytesIO()
+        bucket.download_file_by_name(key).save(buffer)
+        return json.loads(buffer.getvalue().decode("utf-8"))
+    except Exception:
         return None
+
+
+def find_latest_run_id(topic: str = "") -> Optional[str]:
+    """Find the most recent run ID in the B2 bucket that matches the topic.
+
+    Content-addressable: scans every run's stored pipeline_state.json for a
+    matching ``topic`` field.  Falls back to prefix matching on the run ID
+    when the state file is missing or unreadable.  This means the pipeline
+    can resume from *any* prior run about the same topic regardless of how
+    the run_id was generated.
+
+    Returns:
+        The run_id string, or None if no matching runs found.
+    """
+    if not topic:
+        return None
+
+    all_runs = _list_all_run_ids()
+    if not all_runs:
+        return None
+
+    safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
+
+    # Pass 1 — content-addressable: check stored topic in pipeline_state.json
+    content_matches: list[str] = []
+    prefix_matches: list[str] = []
+    for rid in all_runs:
+        # Quick prefix check (cheap, no download)
+        if safe_topic and rid.startswith(safe_topic):
+            prefix_matches.append(rid)
+
+        # Deep content check (downloads state file)
+        state = _read_run_state(rid)
+        if state and state.get("topic", "").strip().lower() == topic.strip().lower():
+            content_matches.append(rid)
+            logger.info("B2: run '%s' matches topic '%s' (content match)", rid, topic)
+
+    # Prefer content matches, fall back to prefix matches
+    matches = content_matches or prefix_matches
+    if not matches:
+        logger.info("B2: no run matches topic '%s' (checked %d runs)", topic, len(all_runs))
+        return None
+
+    # Return the latest match
+    matches.sort()
+    best = matches[-1]
+    match_type = "content" if best in content_matches else "prefix"
+    logger.info("B2: selected run '%s' for topic '%s' (%s match)", best, topic, match_type)
+    return best
 
 
 def restore_pipeline(topic: str, pipeline_base: str = "/tmp/documentary-pipeline") -> dict:
