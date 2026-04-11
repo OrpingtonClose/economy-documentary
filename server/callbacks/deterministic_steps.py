@@ -410,7 +410,7 @@ def deterministic_audio_callback(
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
-    validate_preconditions(AUDIO_CONTRACT, dict(state))
+    validate_preconditions(AUDIO_CONTRACT, state.to_dict())
 
     state["pipeline_phase"] = "audio"
 
@@ -804,7 +804,7 @@ def deterministic_production_callback(
 
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
-    validate_preconditions(PRODUCTION_CONTRACT, dict(state))
+    validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
 
     state["pipeline_phase"] = "production"
 
@@ -925,6 +925,8 @@ def deterministic_production_callback(
             for future in as_completed(future_to_concept):
                 try:
                     results.append(future.result())
+                except RuntimeError:
+                    raise  # Video generation failures are fatal — never swallow
                 except Exception as e:
                     c = future_to_concept[future]
                     err_msg = f"Error producing scene {c.get('scene_num')} phrase {c.get('phrase_idx')}: {e}"
@@ -935,6 +937,8 @@ def deterministic_production_callback(
         for concept in concepts:
             try:
                 results.append(_generate_one_clip(concept))
+            except RuntimeError:
+                raise  # Video generation failures are fatal — never swallow
             except Exception as e:
                 err_msg = f"Error producing scene {concept.get('scene_num')} phrase {concept.get('phrase_idx')}: {e}"
                 logger.error(err_msg)
@@ -1058,7 +1062,7 @@ def deterministic_assembly_callback(
 
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
-    validate_preconditions(ASSEMBLY_CONTRACT, dict(state))
+    validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
 
     state["pipeline_phase"] = "assembly"
 
