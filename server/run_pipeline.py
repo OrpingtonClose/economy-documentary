@@ -267,11 +267,15 @@ def main():
     print("=" * 60)
 
 
+class PreflightError(RuntimeError):
+    """Raised when a pre-flight worker health check fails."""
+
+
 def _check_worker(name: str, url: str, expected_capability: str) -> None:
     """Verify a single GPU worker is reachable and has the expected model loaded.
 
-    Raises ``SystemExit`` if the worker is unreachable or the required model
-    is not loaded.  This enforces the architecture invariant:
+    Raises ``PreflightError`` if the worker is unreachable or the required
+    model is not loaded.  This enforces the architecture invariant:
     **every required service must be confirmed healthy before pipeline start.**
     """
     health_url = f"{url.rstrip('/')}/health"
@@ -279,30 +283,29 @@ def _check_worker(name: str, url: str, expected_capability: str) -> None:
         req = Request(health_url)
         with urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
-    except (URLError, OSError, json.JSONDecodeError, TimeoutError) as exc:
-        logger.error(
-            "PRE-FLIGHT FAILED: %s worker at %s is unreachable: %s",
-            name, url, exc,
-        )
-        sys.exit(1)
+    except Exception as exc:
+        msg = f"PRE-FLIGHT FAILED: {name} worker at {url} is unreachable: {exc}"
+        logger.error(msg)
+        raise PreflightError(msg) from exc
 
     if data.get("status") != "ok":
-        logger.error(
-            "PRE-FLIGHT FAILED: %s worker at %s reports unhealthy status: %s",
-            name, url, data,
+        msg = (
+            f"PRE-FLIGHT FAILED: {name} worker at {url} reports "
+            f"unhealthy status: {data}"
         )
-        sys.exit(1)
+        logger.error(msg)
+        raise PreflightError(msg)
 
     # Check that the required model is actually loaded
     loaded_key = f"{expected_capability}_loaded"
     if not data.get(loaded_key, False):
-        logger.error(
-            "PRE-FLIGHT FAILED: %s worker at %s does not have %s loaded. "
-            "Health response: %s.  Each model MUST run on its own dedicated VM — "
-            "never swap or share models.",
-            name, url, expected_capability, data,
+        msg = (
+            f"PRE-FLIGHT FAILED: {name} worker at {url} does not have "
+            f"{expected_capability} loaded. Health response: {data}. "
+            f"Each model MUST run on its own dedicated VM — never swap or share models."
         )
-        sys.exit(1)
+        logger.error(msg)
+        raise PreflightError(msg)
 
     vram_gb = data.get("vram_used_gb", "?")
     vram_total = data.get("vram_total_gb", "?")
@@ -335,7 +338,10 @@ def _preflight_check_workers() -> None:
             "Provision a TTS VM and set TTS_WORKER_URL before restarting."
         )
         sys.exit(1)
-    _check_worker("TTS", tts_url, "tts")
+    try:
+        _check_worker("TTS", tts_url, "tts")
+    except PreflightError:
+        sys.exit(1)
 
     # -- Video workers (at least one required) --
     video_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
@@ -357,7 +363,7 @@ def _preflight_check_workers() -> None:
         try:
             _check_worker("Video", vurl, "ltx")
             healthy_video += 1
-        except SystemExit:
+        except PreflightError:
             logger.warning("Video worker %s failed pre-flight, skipping", vurl)
 
     if healthy_video == 0:
