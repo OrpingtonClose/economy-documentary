@@ -134,7 +134,7 @@ def generate_narration(
     req = Request(tts_url, data=payload, headers={"Content-Type": "application/json"})
 
     try:
-        with urlopen(req, timeout=120) as resp:
+        with urlopen(req, timeout=300) as resp:  # 5 min: first call loads model
             wav_bytes = resp.read()
             actual_duration = float(resp.headers.get("X-Audio-Duration", str(duration)))
             actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
