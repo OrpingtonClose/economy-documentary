@@ -182,13 +182,7 @@ def _scenario_phase_setup(callback_context):
     state = callback_context.state
     state["pipeline_phase"] = "scenario"
 
-    # INFRA: notify stage start for timing watchdog
-    from infra_agent import get_infra_agent, check_infra_pause
-    _infra = get_infra_agent()
-    if _infra:
-        _infra.notify_stage_start("scenario")
-    check_infra_pause()
-
+    # B2 skip check FIRST — avoid blocking on infra pause for a completed stage
     stages_complete = state.get("_b2_stages_complete", [])
     if "scenario" in stages_complete:
         logger.info("B2: scenario stage already complete, skipping LoopAgent")
@@ -196,6 +190,14 @@ def _scenario_phase_setup(callback_context):
             role="model",
             parts=[genai_types.Part(text="Scenario restored from B2 checkpoint — skipped.")],
         )
+
+    # INFRA: notify stage start for timing watchdog (only if stage will actually run)
+    from infra_agent import get_infra_agent, check_infra_pause
+    _infra = get_infra_agent()
+    if _infra:
+        _infra.notify_stage_start("scenario")
+    check_infra_pause()
+
     return None
 
 
