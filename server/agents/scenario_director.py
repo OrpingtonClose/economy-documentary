@@ -22,6 +22,7 @@ Architecture::
 
 from __future__ import annotations
 
+import json
 import logging
 
 from google.adk.agents import Agent
@@ -32,7 +33,7 @@ from callbacks.before_model import before_model_callback
 from callbacks.after_model import after_model_callback
 from callbacks.before_tool import before_tool_callback
 from callbacks.after_tool import after_tool_callback
-from callbacks.deterministic_steps import clean_scenes_after_scenario
+from callbacks.deterministic_steps import clean_scenes_after_scenario, extract_json_array
 from tools.otio_tools import create_timeline_tool
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,36 @@ Output the scene array as valid JSON in state["scenes"] and the visual style
 object in state["visual_style"].
 """
 
+def _save_generator_scenes(callback_context):
+    """After generator: save scenes backup unconditionally.
+
+    The generator's output_key writes to state['scenes'] before this
+    callback fires.  We parse and save the scenes immediately so that
+    clean_scenes_after_scenario has a fallback even if:
+    - the evaluator's output_key overwrites state['scenes'],
+    - the LoopAgent re-runs the generator with empty/malformed output,
+    - the evaluator calls exit_loop() and ADK skips output_key.
+    """
+    state = callback_context.state
+    raw = state.get("scenes", "")
+    if raw:
+        scenes = extract_json_array(str(raw))
+        if scenes:
+            # Only save if the evaluator hasn't already saved an approved backup.
+            # Otherwise, the generator's unapproved output would overwrite the
+            # evaluator-approved scenes when the LoopAgent re-runs.
+            if not state.get("_approved_scenes_backup"):
+                state["_approved_scenes_backup"] = json.dumps(scenes)
+                logger.info(
+                    "Saved generator scenes backup: %d scenes", len(scenes)
+                )
+            else:
+                logger.info(
+                    "Skipping generator backup: evaluator-approved backup already exists"
+                )
+    return None
+
+
 scenario_generator = Agent(
     name="scenario_generator",
     model=build_model(),
@@ -110,17 +141,34 @@ scenario_generator = Agent(
     after_model_callback=after_model_callback,
     before_tool_callback=before_tool_callback,
     after_tool_callback=after_tool_callback,
+    after_agent_callback=_save_generator_scenes,
 )
 
 # -- Callbacks (defined before agents that reference them) ---------------------
 
 
 def _check_scenario_approval(callback_context):
-    """After evaluator: log when scenario is approved."""
+    """After evaluator: save a backup of scenes when approved.
+
+    The LoopAgent may re-run the generator even after GOOD approval
+    (if the LLM forgot to call exit_loop). The second generator output
+    may produce malformed JSON that overwrites state["scenes"].
+    We save a backup here so clean_scenes_after_scenario can recover.
+    """
     state = callback_context.state
     eval_output = state.get("_last_evaluator_output", "")
     if "APPROVED: true" in eval_output or "RATING: EXCELLENT" in eval_output or "RATING: GOOD" in eval_output:
         logger.info("Scenario approved by evaluator")
+        # Save a backup of the current scenes state in case the loop
+        # re-runs and the next generator output is malformed.
+        raw_scenes = state.get("scenes", "")
+        if raw_scenes:
+            scenes = extract_json_array(str(raw_scenes))
+            if scenes:
+                state["_approved_scenes_backup"] = json.dumps(scenes)
+                logger.info(
+                    "Saved approved scenes backup: %d scenes", len(scenes)
+                )
     return None
 
 
