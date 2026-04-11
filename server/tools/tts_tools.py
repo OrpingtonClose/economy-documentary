@@ -76,6 +76,30 @@ def generate_narration(
 
     duration = _estimate_duration(text)
 
+    # Skip regeneration if WAV already exists and is non-empty
+    if os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0:
+        # Read actual duration from WAV header
+        try:
+            with wave.open(wav_path, "r") as wf:
+                actual_duration = wf.getnframes() / wf.getframerate()
+                actual_sr = wf.getframerate()
+            logger.info(
+                "Skipping existing WAV %s (%.2fs)", wav_path, actual_duration
+            )
+            return json.dumps(
+                {
+                    "status": "skipped",
+                    "mode": "cached",
+                    "wav_path": wav_path,
+                    "duration": round(actual_duration, 2),
+                    "sample_rate": actual_sr,
+                    "text_length": len(text),
+                    "word_count": len(text.split()),
+                }
+            )
+        except wave.Error:
+            logger.warning("Corrupt WAV %s, regenerating", wav_path)
+
     if _TEST_MODE:
         # Test mode: generate silent WAV with correct duration
         _generate_silent_wav(wav_path, duration)
