@@ -320,7 +320,7 @@ def _measure_frame_contrast(frames) -> float:
         return 0.0
     if sampled.max() <= 1.0:
         sampled = sampled * 255.0
-    return float(sampled.std())
+    return float(np.mean([sampled[i].std() for i in range(sampled.shape[0])]))
 
 
 # ---------------------------------------------------------------------------
@@ -647,8 +647,8 @@ def _generate_video(
         "qa_reason": best_qa.get("qa_reason", "Not evaluated"),
         "attempts": final_attempt,
         "seed": best_seed,
-        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames else 0,
-        "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames else 0,
+        "brightness": round(_measure_frame_brightness(video_frames), 1) if video_frames is not None else 0,
+        "contrast": round(_measure_frame_contrast(video_frames), 1) if video_frames is not None else 0,
     }
 
     return data, qa_status
