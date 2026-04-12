@@ -89,7 +89,7 @@ pip install --no-cache-dir \
     'python-dotenv>=1.0.0' \
     'opentimelineio>=0.17.0' \
     'litellm>=1.0.0' \
-    'b2>=4.0.0' \
+    'b2sdk>=2.10.4,<3.0.0' \
     'httpx>=0.24.0' \
     'pydantic>=2.0.0' \
     'opentelemetry-sdk>=1.20.0' \
