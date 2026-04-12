@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-output")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
+# Auto-approve all stages in test mode (no human needed)
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
 
@@ -56,13 +59,24 @@ def _write_approval_state(state: dict) -> None:
 
 
 def is_stage_approved(stage: str) -> bool:
-    """Check if a stage has been approved by the human."""
+    """Check if a stage has been approved by the human.
+
+    In test mode, all stages are auto-approved.
+    """
+    if _TEST_MODE:
+        return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
 
 
 def mark_stage_ready(stage: str) -> None:
-    """Mark a stage as ready for human review (but not yet approved)."""
+    """Mark a stage as ready for human review (but not yet approved).
+
+    In test mode, stages are auto-approved — skip disk I/O entirely.
+    """
+    if _TEST_MODE:
+        logger.info("Stage '%s' auto-approved (test mode)", stage)
+        return
     state = _read_approval_state()
     if stage not in state:
         state[stage] = {}
@@ -76,7 +90,11 @@ def wait_for_approval(stage: str) -> bool:
     """Block until the human approves the given stage.
 
     Returns True if approved, False if timed out.
+    In test mode, returns immediately.
     """
+    if _TEST_MODE:
+        logger.info("Stage '%s' auto-approved (test mode)", stage)
+        return True
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)
 
