@@ -27,6 +27,10 @@ export interface VisualConcept {
   camera_style: string;
   environment: string;
   mood: string;
+  quality?: string;
+  qa_reason?: string;
+  attempts?: number;
+  status?: string;
 }
 
 export interface AlignmentWord {

@@ -89,13 +89,13 @@ export function PromptReviewer() {
               Scene {concept.scene_num}, Phrase {concept.phrase_idx}
             </h3>
             <span className="text-sm text-pipeline-muted">
-              {(concept as Record<string, unknown>).quality === "acceptable" ? (
+              {concept.quality === "acceptable" ? (
                 <span className="text-green-400">QA: pass</span>
-              ) : (concept as Record<string, unknown>).quality === "unknown" ? (
+              ) : concept.quality === "unknown" ? (
                 <span className="text-yellow-400">QA: pending</span>
               ) : (
                 <span className="text-red-400">
-                  QA: {String((concept as Record<string, unknown>).quality || "pending")}
+                  QA: {concept.quality || "pending"}
                 </span>
               )}
             </span>
