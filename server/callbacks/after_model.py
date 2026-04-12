@@ -64,8 +64,8 @@ def after_model_callback(
         state["reasoning_traces"].append(
             {
                 "agent": agent_name,
-                "reasoning": reasoning_text[:5000],
-                "response_preview": response_text[:500],
+                "reasoning": reasoning_text,
+                "response_preview": response_text,
             }
         )
         logger.info(

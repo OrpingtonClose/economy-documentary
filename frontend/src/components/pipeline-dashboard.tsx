@@ -338,8 +338,8 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
           <div>QA: {artifact.qa_scores.quality}</div>
         )}
         {artifact.metadata?.prompt ? (
-          <div className="truncate" title={String(artifact.metadata.prompt)}>
-            {String(artifact.metadata.prompt).slice(0, 60)}...
+          <div className="whitespace-pre-wrap break-words" title={String(artifact.metadata.prompt)}>
+            {String(artifact.metadata.prompt)}
           </div>
         ) : null}
       </div>
@@ -484,7 +484,7 @@ function EscalationCard({ escalation }: { escalation: Escalation }) {
               <div key={idx} className="text-xs text-gray-400 bg-gray-800 rounded px-2 py-1">
                 L{attempt.level} #{attempt.attempt}: {attempt.strategy}
                 {attempt.error && (
-                  <span className="text-red-400 ml-1">— {attempt.error.slice(0, 80)}</span>
+                  <span className="text-red-400 ml-1">— {attempt.error}</span>
                 )}
               </div>
             ))}

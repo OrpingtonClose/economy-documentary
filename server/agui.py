@@ -195,7 +195,7 @@ class FeedbackStore:
             feedback.feedback_type.value,
             feedback.artifact_id or "pipeline",
             feedback.scene_num,
-            feedback.comment[:100] if feedback.comment else "(no comment)",
+            feedback.comment if feedback.comment else "(no comment)",
         )
 
     def get_feedback_for_scene(self, scene_num: int) -> list[dict]:
@@ -608,7 +608,7 @@ async def get_visual_concepts():
             concepts.append({
                 "scene_num": scene_num,
                 "phrase_idx": phrase_idx,
-                "prompt": data.get("prompt_preview", ""),
+                "prompt": data.get("prompt_full", data.get("prompt_preview", "")),
                 "quality": data.get("quality", "unknown"),
                 "qa_reason": data.get("qa_reason", ""),
                 "attempts": data.get("attempts", 0),
@@ -671,7 +671,7 @@ async def get_clips():
                 "scene_num": scene_num,
                 "phrase_idx": phrase_idx,
                 "video_path": video_path if os.path.exists(video_path) else "",
-                "narration_text": data.get("prompt_preview", "")[:200],
+                "narration_text": data.get("prompt_full", data.get("prompt_preview", "")),
                 "duration": data.get("duration", 0.0),
                 "lora_id": data.get("lora_id", ""),
                 "status": "approved" if data.get("quality") == "acceptable" else "pending",
