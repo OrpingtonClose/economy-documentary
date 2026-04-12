@@ -272,15 +272,16 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
                     matched_any = True
                     break
             if not matched_any:
-                # Report the mismatch with the primary (first) language
-                primary_lang = sorted(langs_present)[0] if langs_present else ""
-                total_audio = audio_by_scene_lang.get((sn, primary_lang), 0.0)
-                if total_audio > 0:
-                    errors.append(
-                        f"Scene {sn} timing mismatch: video source_range total "
-                        f"({total_video:.2f}s) vs narration/{primary_lang or 'default'} "
-                        f"({total_audio:.2f}s) \u2014 drift > 1s"
-                    )
+                # Report the mismatch with whichever language has audio
+                for report_lang in sorted(langs_present):
+                    total_audio = audio_by_scene_lang.get((sn, report_lang), 0.0)
+                    if total_audio > 0:
+                        errors.append(
+                            f"Scene {sn} timing mismatch: video source_range total "
+                            f"({total_video:.2f}s) vs narration/{report_lang or 'default'} "
+                            f"({total_audio:.2f}s) \u2014 drift > 1s"
+                        )
+                        break
 
     return "; ".join(errors) if errors else None
 
