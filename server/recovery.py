@@ -119,10 +119,15 @@ def _tts_amend_chunk(kwargs: dict) -> dict:
     if len(text) > 200:
         # Truncate at last sentence boundary before midpoint
         mid = len(text) // 2
+        truncated = False
         for i in range(mid, 0, -1):
             if text[i] in ".!?":
                 kwargs["text"] = text[:i + 1]
+                truncated = True
                 break
+        if not truncated:
+            # Fallback: hard-truncate at word boundary with ellipsis
+            kwargs["text"] = text[:mid].rsplit(" ", 1)[0] + "..."
         logger.info("Recovery L2: chunked TTS text from %d to %d chars",
                      len(text), len(kwargs["text"]))
     return kwargs

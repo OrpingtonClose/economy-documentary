@@ -24,6 +24,7 @@ Architecture:
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import threading
@@ -272,21 +273,21 @@ def get_feedback_store() -> FeedbackStore:
 # ---------------------------------------------------------------------------
 
 _event_lock = threading.Lock()
-_event_subscribers: list[list[dict]] = []  # each subscriber has a queue
+_event_subscribers: list[collections.deque] = []  # each subscriber has a deque
 
 
-def subscribe_agui_events() -> list[dict]:
+def subscribe_agui_events() -> collections.deque:
     """Create a new subscriber queue and return it.
 
-    The SSE endpoint appends to this list and the generator reads from it.
+    Uses collections.deque which is thread-safe for append/popleft.
     """
-    queue: list[dict] = []
+    queue: collections.deque = collections.deque()
     with _event_lock:
         _event_subscribers.append(queue)
     return queue
 
 
-def unsubscribe_agui_events(queue: list[dict]) -> None:
+def unsubscribe_agui_events(queue: collections.deque) -> None:
     """Remove a subscriber queue."""
     with _event_lock:
         try:
@@ -319,12 +320,13 @@ async def agui_stream():
         try:
             while True:
                 if queue:
-                    event = queue.pop(0)
+                    event = queue.popleft()
                     yield f"data: {json.dumps(event)}\n\n"
+                    await asyncio.sleep(0.05)  # small yield for burst draining
                 else:
                     # Heartbeat
                     yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
-                await asyncio.sleep(1.0)
+                    await asyncio.sleep(1.0)
         finally:
             unsubscribe_agui_events(queue)
 
