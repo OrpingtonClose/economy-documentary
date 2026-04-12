@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
@@ -448,6 +449,10 @@ def deterministic_audio_callback(
     from tools.whisperx_tools import align_narration
     from tools.otio_tools import add_narration_clip
 
+    # AG-UI: emit artifact events as narration clips are generated
+    from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
+    _feedback_store = get_feedback_store()
+
     alignment_data = {}
     total_clips = 0
     errors = []
@@ -495,6 +500,18 @@ def deterministic_audio_callback(
                     voice_suffix = f"{voice}_{lang_code.upper()}"
 
                     try:
+                        # AG-UI: emit "generating" narration artifact
+                        narr_artifact_id = f"narr-s{scene_num:03d}-{voice_suffix}"
+                        _feedback_store.register_artifact(ArtifactEvent(
+                            id=narr_artifact_id,
+                            artifact_type=ArtifactType.NARRATION,
+                            status=ArtifactStatus.GENERATING,
+                            scene_num=scene_num,
+                            language=lang_code,
+                            metadata={"voice": voice_suffix, "text_len": len(lang_text)},
+                            timestamp=time.time(),
+                        ))
+
                         # Generate narration
                         result_json = generate_narration(
                             scene_num=scene_num,
@@ -506,6 +523,19 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # AG-UI: update narration artifact
+                            _feedback_store.register_artifact(ArtifactEvent(
+                                id=narr_artifact_id,
+                                artifact_type=ArtifactType.NARRATION,
+                                status=ArtifactStatus.PENDING_REVIEW,
+                                scene_num=scene_num,
+                                language=lang_code,
+                                preview_url=wav_path,
+                                duration_sec=duration,
+                                metadata={"voice": voice_suffix, "text_len": len(lang_text)},
+                                timestamp=time.time(),
+                            ))
+
                             # Add clip to OTIO timeline
                             clip_result_json = add_narration_clip(
                                 scene_num=scene_num,
@@ -905,6 +935,10 @@ def deterministic_production_callback(
     from tools.video_tools import generate_video_clip, probe_clip
     from tools.otio_tools import add_video_clip
 
+    # AG-UI: emit artifact events as clips are generated
+    from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
+    _feedback_store = get_feedback_store()
+
     video_dir = os.environ.get("VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video")
     total_clips = 0
     skipped_clips = 0
@@ -946,6 +980,19 @@ def deterministic_production_callback(
             except (json.JSONDecodeError, OSError):
                 pass  # re-generate if status file is corrupt
 
+        # AG-UI: emit "generating" artifact event
+        artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}"
+        _feedback_store.register_artifact(ArtifactEvent(
+            id=artifact_id,
+            artifact_type=ArtifactType.VIDEO_CLIP,
+            status=ArtifactStatus.GENERATING,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+            duration_sec=duration,
+            metadata={"prompt": prompt[:200], "lora_id": lora_id},
+            timestamp=time.time(),
+        ))
+
         gen_result_json = generate_video_clip(
             prompt=prompt,
             duration_sec=duration,
@@ -961,6 +1008,25 @@ def deterministic_production_callback(
         gen_result["duration"] = duration
         gen_result["lora_id"] = lora_id
         gen_result["_output_path"] = output_path
+
+        # AG-UI: update artifact with result
+        qa_scores = {}
+        if gen_result.get("qa_quality"):
+            qa_scores["quality"] = gen_result["qa_quality"]
+            qa_scores["reason"] = gen_result.get("qa_reason", "")
+        _feedback_store.register_artifact(ArtifactEvent(
+            id=artifact_id,
+            artifact_type=ArtifactType.VIDEO_CLIP,
+            status=ArtifactStatus.PENDING_REVIEW,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+            duration_sec=gen_result.get("actual_duration", duration),
+            preview_url=output_path,
+            qa_scores=qa_scores,
+            metadata={"prompt": prompt[:200], "lora_id": lora_id},
+            timestamp=time.time(),
+        ))
+
         return gen_result
 
     # Generate clips in parallel across available GPU workers

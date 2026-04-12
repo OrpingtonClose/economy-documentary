@@ -180,50 +180,91 @@ def generate_narration(
     tts_url = f"{gpu_worker_url.rstrip('/')}/tts"
     req = Request(tts_url, data=payload, headers={"Content-Type": "application/json"})
 
-    try:
-        with urlopen(req, timeout=300) as resp:  # 5 min: first call loads model
-            wav_bytes = resp.read()
-            actual_duration = float(resp.headers.get("X-Audio-Duration", str(duration)))
-            actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
-            gen_time = float(resp.headers.get("X-Gen-Time", "0"))
-
-        os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
-        with open(wav_path, "wb") as f:
-            f.write(wav_bytes)
-        _write_sidecar(sidecar_path, text_hash)
-
-        logger.info(
-            "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
-            wav_path, actual_duration, gen_time, len(text.split()),
-        )
-
-        # Upload TTS clip to B2 immediately after creation
-        try:
-            from tools.b2_checkpoint import upload_tts_clip
-            upload_tts_clip(wav_path, sidecar_path)
-        except Exception as b2_err:
-            logger.warning("B2 upload failed for TTS clip %s: %s", wav_path, b2_err)
-
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "production",
-                "wav_path": wav_path,
-                "duration": round(actual_duration, 2),
-                "sample_rate": actual_sample_rate,
-                "text_length": len(text),
-                "word_count": len(text.split()),
-                "gen_time": round(gen_time, 2),
+    # Use graduated recovery middleware instead of bare RuntimeError.
+    # The middleware handles: retry → creative amendment → env assessment → human escalation.
+    # Build payload from logical params inside the function so creative amendments
+    # (e.g. _tts_amend_chunk shortening text) actually reach the TTS worker.
+    def _call_tts_worker(url=tts_url, text=text, voice=voice, language=lang, scene_num=scene_num):
+        inner_payload = json.dumps({
+            "text": text,
+            "voice": voice,
+            "language": language,
+            "scene_num": scene_num,
+        }).encode("utf-8")
+        req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
+        with urlopen(req_inner, timeout=300) as resp:  # 5 min: first call loads model
+            result_bytes = resp.read()
+            return {
+                "wav_bytes": result_bytes,
+                "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
+                "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
+                "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+                "actual_text": text,  # track what text was actually sent (may differ after amendment)
             }
-        )
-    except (URLError, OSError, TimeoutError) as exc:
-        # ARCHITECTURE INVARIANT: Never silently degrade to synthetic audio.
-        # If TTS fails, the pipeline must stop and report the error.
+
+    from recovery import execute_with_recovery, TTS_POLICY
+    tts_result = execute_with_recovery(
+        operation=_call_tts_worker,
+        operation_name=f"tts_scene{scene_num}_{voice_role}",
+        kwargs={"url": tts_url, "text": text, "voice": voice, "language": lang, "scene_num": scene_num},
+        policy=TTS_POLICY,
+        context={"scene_num": scene_num, "voice": voice_role, "text_len": len(text)},
+    )
+
+    # If recovery returned None (human chose "skip"), raise so pipeline stops
+    if tts_result is None:
         raise RuntimeError(
-            f"TTS worker at {gpu_worker_url} failed: {exc}. "
-            "The pipeline cannot continue without real narration — all video "
-            "timing depends on it. Check the TTS worker VM health and restart."
-        ) from exc
+            f"TTS generation for scene {scene_num} {voice_role} skipped by human. "
+            "Pipeline cannot continue without narration — all video timing depends on it."
+        )
+
+    wav_bytes = tts_result["wav_bytes"]
+    actual_duration = tts_result["actual_duration"]
+    actual_sample_rate = tts_result["actual_sample_rate"]
+    gen_time = tts_result["gen_time"]
+
+    os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
+    with open(wav_path, "wb") as f:
+        f.write(wav_bytes)
+    # Only write sidecar if the text wasn't amended by recovery (e.g. _tts_amend_chunk).
+    # If recovery shortened the text, the WAV doesn't match the original — don't cache it
+    # or the next run would falsely serve truncated audio as a cache hit.
+    actual_text = tts_result.get("actual_text", text)
+    if actual_text == text:
+        _write_sidecar(sidecar_path, text_hash)
+    else:
+        logger.warning(
+            "TTS text was amended by recovery (orig=%d chars, actual=%d chars) — skipping sidecar",
+            len(text), len(actual_text),
+        )
+        # Remove stale sidecar if it exists
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
+
+    logger.info(
+        "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
+        wav_path, actual_duration, gen_time, len(text.split()),
+    )
+
+    # Upload TTS clip to B2 immediately after creation
+    try:
+        from tools.b2_checkpoint import upload_tts_clip
+        upload_tts_clip(wav_path, sidecar_path)
+    except Exception as b2_err:
+        logger.warning("B2 upload failed for TTS clip %s: %s", wav_path, b2_err)
+
+    return json.dumps(
+        {
+            "status": "generated",
+            "mode": "production",
+            "wav_path": wav_path,
+            "duration": round(actual_duration, 2),
+            "sample_rate": actual_sample_rate,
+            "text_length": len(text),
+            "word_count": len(text.split()),
+            "gen_time": round(gen_time, 2),
+        }
+    )
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------

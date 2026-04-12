@@ -184,54 +184,86 @@ def generate_video_clip(
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
     req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
+    # Use graduated recovery middleware instead of ad-hoc retry loops.
+    # The middleware handles: retry → creative amendment → env assessment → human escalation.
+    # Build payload from logical params inside the function so creative amendments
+    # (e.g. _video_amend_seed, _video_amend_steps) actually reach the GPU worker.
+    def _call_gpu_worker(
+        url=video_url,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        visual_style=visual_style,
+        duration_sec=actual_duration,
+        width=768,
+        height=512,
+        num_frames=num_frames,
+        seed=seed,
+        num_inference_steps=20,
+        guidance_scale=1.0,
+    ):
+        inner_payload = json.dumps({
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "visual_style": visual_style,
+            "duration_sec": duration_sec,
+            "width": width,
+            "height": height,
+            "num_frames": num_frames,
+            "seed": seed,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+        }).encode("utf-8")
+        req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
+        with urlopen(req_inner, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
+            result_bytes = resp.read()
+            result_meta = {
+                "mp4_bytes": result_bytes,
+                "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+                "qa_quality": resp.headers.get("X-QA-Quality", "unknown"),
+                "qa_reason_raw": resp.headers.get("X-QA-Reason", ""),
+                "qa_attempts": int(resp.headers.get("X-QA-Attempts", "1")),
+                "qa_seed": int(resp.headers.get("X-QA-Seed", str(seed))),
+            }
+            return result_meta
+
+    from recovery import execute_with_recovery, VIDEO_POLICY
+    gpu_result = execute_with_recovery(
+        operation=_call_gpu_worker,
+        operation_name=f"video_gen_scene{prompt[:30]}",
+        kwargs={
+            "url": video_url,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "visual_style": visual_style,
+            "duration_sec": actual_duration,
+            "width": 768,
+            "height": 512,
+            "num_frames": num_frames,
+            "seed": seed,
+            "num_inference_steps": 20,
+            "guidance_scale": 1.0,
+        },
+        policy=VIDEO_POLICY,
+        context={"prompt": prompt[:200], "duration": actual_duration},
+    )
+
+    # If recovery returned None (human chose "skip"), return error status
+    if gpu_result is None:
+        return json.dumps({
+            "status": "error",
+            "error": "Video generation skipped by human decision during recovery",
+        })
+
+    mp4_bytes = gpu_result["mp4_bytes"]
+    gen_time = gpu_result["gen_time"]
+    qa_quality = gpu_result["qa_quality"]
+    _raw_reason = gpu_result["qa_reason_raw"]
     try:
-        with urlopen(req, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
-            mp4_bytes = resp.read()
-            gen_time = float(resp.headers.get("X-Gen-Time", "0"))
-            # Qwen-Omni visual QA status from GPU worker (bearnaise pattern)
-            qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-            _raw_reason = resp.headers.get("X-QA-Reason", "")
-            try:
-                qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
-            except Exception:
-                qa_reason = _raw_reason  # fallback: use raw value
-            qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
-            qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
-    except (URLError, OSError, TimeoutError) as exc:
-        logger.error("GPU worker video request failed: %s", exc)
-        # Retry with backoff — GPU worker may be temporarily down
-        max_retries = 5
-        for retry in range(1, max_retries + 1):
-            backoff = min(30 * retry, 120)  # 30s, 60s, 90s, 120s, 120s
-            logger.info(
-                "Retrying GPU worker (attempt %d/%d) after %ds backoff...",
-                retry, max_retries, backoff,
-            )
-            time.sleep(backoff)
-            try:
-                req2 = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
-                with urlopen(req2, timeout=3600) as resp:
-                    mp4_bytes = resp.read()
-                    gen_time = float(resp.headers.get("X-Gen-Time", "0"))
-                    qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-                    _raw_reason = resp.headers.get("X-QA-Reason", "")
-                    try:
-                        qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
-                    except Exception:
-                        qa_reason = _raw_reason
-                    qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
-                    qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
-                break  # success — exit retry loop
-            except (URLError, OSError, TimeoutError) as retry_exc:
-                logger.error("Retry %d/%d failed: %s", retry, max_retries, retry_exc)
-                if retry == max_retries:
-                    # ARCHITECTURE INVARIANT: Never silently degrade.
-                    # All retries exhausted — pipeline must stop.
-                    raise RuntimeError(
-                        f"All {max_retries} video worker retries exhausted. "
-                        f"Last error: {retry_exc}. "
-                        f"Check GPU worker VM health and restart the pipeline."
-                    ) from retry_exc
+        qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
+    except Exception:
+        qa_reason = _raw_reason  # fallback: use raw value
+    qa_attempts = gpu_result["qa_attempts"]
+    qa_seed = gpu_result["qa_seed"]
 
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

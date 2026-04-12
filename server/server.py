@@ -36,6 +36,7 @@ from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
 from dashboard.sse import router as dashboard_router
+from agui import router as agui_router
 from plugins import build_plugins, setup_otel
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,9 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # Dashboard routes
 app.include_router(dashboard_router)
+
+# AG-UI routes (artifact feedback, escalations, regeneration)
+app.include_router(agui_router)
 
 
 # AG-UI endpoint -- uses App + ADKAgent.from_app() to preserve plugins
