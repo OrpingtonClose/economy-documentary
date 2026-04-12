@@ -34,13 +34,18 @@ def get_active_collector() -> Optional["PipelineCollector"]:
 
 
 def get_any_active_collector() -> Optional["PipelineCollector"]:
-    """Get any active collector (for dashboard endpoints)."""
+    """Get the most recent active collector (for dashboard endpoints).
+
+    Returns the latest collector by insertion order so the dashboard
+    always shows the newest pipeline run, not a stale completed one.
+    """
     c = _active_collector.get()
     if c is not None:
         return c
     with _registry_lock:
         if _all_collectors:
-            return next(iter(_all_collectors.values()))
+            # Python 3.7+ dicts preserve insertion order — return last
+            return list(_all_collectors.values())[-1]
     return None
 
 
