@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { TimelineStatus, TimelineTrack } from "@/lib/types";
 
 const BACKEND_URL =
@@ -14,23 +14,47 @@ const BACKEND_URL =
  */
 export function TimelineView() {
   const [timeline, setTimeline] = useState<TimelineStatus | null>(null);
+  const [gateBlocked, setGateBlocked] = useState(false);
+  const [gateMessage, setGateMessage] = useState("");
 
-  // Poll for timeline updates
-  useEffect(() => {
-    const fetchTimeline = async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/dashboard/latest`);
-        const data = await res.json();
-        // Timeline data would come from the pipeline state
-        // For now, use a placeholder
-      } catch {
-        // ignore fetch errors
+  // Poll AG-UI /timeline endpoint
+  const fetchTimeline = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/timeline`);
+      const data = await res.json();
+      if (data.gate?.blocked) {
+        setGateBlocked(true);
+        setGateMessage(data.gate.message || "Waiting for previous stage approval");
+        return;
       }
-    };
+      setGateBlocked(false);
+      if (data.timeline) {
+        setTimeline(data.timeline as TimelineStatus);
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }, []);
 
+  useEffect(() => {
+    fetchTimeline();
     const interval = setInterval(fetchTimeline, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchTimeline]);
+
+  if (gateBlocked) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="text-xl mb-2 text-yellow-400">Waiting for Approval</div>
+          <div className="text-pipeline-muted">{gateMessage}</div>
+          <div className="mt-4 text-sm text-pipeline-muted">
+            Approve clips on the Clip Reviewer tab to unlock this stage
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!timeline) {
     return (
@@ -80,7 +104,7 @@ function TrackRow({ track }: { track: TimelineTrack }) {
           <h3 className="font-semibold">{track.name}</h3>
         </div>
         <span className="text-sm text-pipeline-muted">
-          {track.total_clips} clips, {track.total_gaps} gaps
+          {track.total_clips + track.total_gaps} items
         </span>
       </div>
 
@@ -98,9 +122,9 @@ function TrackRow({ track }: { track: TimelineTrack }) {
         {track.gaps.map((gap, idx) => (
           <div
             key={`gap-${idx}`}
-            className="min-w-12 p-2 bg-red-900/20 border border-red-800 rounded text-xs"
+            className="min-w-24 p-2 bg-pipeline-bg border border-pipeline-blue rounded text-xs"
           >
-            <div className="text-red-400 truncate">{gap.name}</div>
+            <div className="font-medium truncate">{gap.name}</div>
           </div>
         ))}
         {track.total_clips === 0 && track.total_gaps === 0 && (

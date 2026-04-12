@@ -53,6 +53,7 @@ app = FastAPI(title="Documentary GPU Worker")
 # ---------------------------------------------------------------------------
 _tts_model = None  # Qwen3TTSModel instance
 _ltx_pipe = None
+_ltx_upsample_pipe = None  # LTX2LatentUpsamplePipeline for two-stage generation
 _active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
@@ -134,12 +135,15 @@ def _unload_tts():
 
 def _unload_ltx():
     """Move LTX pipeline off GPU and free VRAM."""
-    global _ltx_pipe, _active_model
+    global _ltx_pipe, _ltx_upsample_pipe, _active_model
     if _ltx_pipe is None:
         return
     logger.info("Unloading LTX from GPU...")
     del _ltx_pipe
     _ltx_pipe = None
+    if _ltx_upsample_pipe is not None:
+        del _ltx_upsample_pipe
+        _ltx_upsample_pipe = None
     _active_model = ""
     gc.collect()
     torch.cuda.empty_cache()
@@ -181,13 +185,17 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
 
+    Two-stage pipeline: Stage 1 generates latents, then LTX2LatentUpsamplePipeline
+    upsamples 2x in latent space before VAE decode.  This is the official
+    production-quality approach and eliminates grid-pattern artifacts.
+
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
     loaded, so the guard is a safety net rather than normal path.
     Loads all components fully on GPU (no cpu_offload). Requires 80GB+ VRAM
     (model is ~71GB bf16). H200 (141GB) or A100 80GB recommended.
     """
-    global _ltx_pipe, _active_model
+    global _ltx_pipe, _ltx_upsample_pipe, _active_model
     if _ltx_pipe is not None:
         return
 
@@ -196,17 +204,25 @@ def _load_ltx():
         _unload_tts()
 
     from diffusers import LTX2Pipeline
+    from diffusers.pipelines.ltx2 import LTX2LatentUpsamplePipeline
+    from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
 
-    # Try models_dir/ltx2 first (standard layout), then models_dir itself
-    # (when --models-dir points directly at the model directory).
-    candidate = os.path.join(_models_dir, "ltx2")
-    if os.path.isfile(os.path.join(candidate, "model_index.json")):
-        model_path = candidate
+    # Try official dg845/LTX-2.3-Diffusers first (ltx23), then fall back
+    # to ltx2 or models_dir itself.
+    # Requires diffusers >= 0.38.0.dev0 from git main (PR #13217) for
+    # native LTX-2.3 support (video_mod_param_num=9 scale_shift_table).
+    candidate_ltx23 = os.path.join(_models_dir, "ltx23")
+    candidate_ltx2 = os.path.join(_models_dir, "ltx2")
+    if os.path.isfile(os.path.join(candidate_ltx23, "model_index.json")):
+        model_path = candidate_ltx23
+    elif os.path.isfile(os.path.join(candidate_ltx2, "model_index.json")):
+        model_path = candidate_ltx2
     elif os.path.isfile(os.path.join(_models_dir, "model_index.json")):
         model_path = _models_dir
     else:
         raise FileNotFoundError(
-            f"model_index.json not found in {candidate} or {_models_dir}"
+            f"model_index.json not found in {candidate_ltx23}, "
+            f"{candidate_ltx2}, or {_models_dir}"
         )
     logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
     t0 = time.time()
@@ -215,14 +231,39 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=False,
-    ).to("cuda")
-    # NOTE: VAE tiling disabled — it causes grid artifacts at 768x512.
-    # The H200 NVL has 140GB VRAM, so tiling is unnecessary.
-    # pipe.vae.enable_tiling()
+    )
+    # Audio components kept loaded — official LTX-2.3 connectors handle
+    # cross-modal bridging correctly.  Narration audio uses separate
+    # Qwen3-TTS worker.
+    pipe = pipe.to("cuda")
     _ltx_pipe = pipe
-    _active_model = "ltx"
 
-    logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
+    # Load latent upsampler for two-stage generation (2x spatial upsample).
+    # This is the key to eliminating grid-pattern artifacts.
+    upsampler_path = os.path.join(model_path, "latent_upsampler")
+    if os.path.isdir(upsampler_path):
+        logger.info("Loading LTX2 latent upsampler from %s ...", upsampler_path)
+        latent_upsampler = LTX2LatentUpsamplerModel.from_pretrained(
+            model_path,
+            subfolder="latent_upsampler",
+            torch_dtype=torch.bfloat16,
+        )
+        upsample_pipe = LTX2LatentUpsamplePipeline(
+            vae=pipe.vae, latent_upsampler=latent_upsampler
+        )
+        upsample_pipe = upsample_pipe.to("cuda")
+        # Enable VAE tiling for upsample decode — output is 2x resolution
+        upsample_pipe.vae.enable_tiling()
+        _ltx_upsample_pipe = upsample_pipe
+        logger.info("Latent upsampler loaded.")
+    else:
+        logger.warning(
+            "latent_upsampler not found at %s — falling back to single-stage",
+            upsampler_path,
+        )
+
+    _active_model = "ltx"
+    logger.info("LTX-2 loaded in %.1fs", time.time() - t0)
 
 
 # ---------------------------------------------------------------------------
@@ -576,24 +617,51 @@ def _generate_video(
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
         gen = torch.Generator("cuda").manual_seed(current_seed)
-        # Use pipeline defaults for stg/modality/rescale — these are tuned
-        # for the full (non-distilled) LTX-2.3 model.
-        # output_type "np": proper numpy output for frame processing
-        video_out, audio_out = _ltx_pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            num_frames=num_frames,
-            frame_rate=fps,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            generator=gen,
-            output_type="np",
-            return_dict=False,
-        )
-        candidate_frames = video_out[0]  # numpy array (T, H, W, C)
-        candidate_audio = audio_out[0] if audio_out is not None else None
+        # Two-stage pipeline (official LTX-2.3 production approach):
+        #   Stage 1: generate latents at target resolution
+        #   Stage 2: latent upsample 2x → VAE decode at 2x resolution
+        # This eliminates grid-pattern artifacts from single-stage decode.
+        if _ltx_upsample_pipe is not None:
+            # Stage 1: generate raw latents (no VAE decode yet)
+            video_latent, audio_latent = _ltx_pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                frame_rate=fps,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                generator=gen,
+                output_type="latent",
+                return_dict=False,
+            )
+            logger.info("Stage 1 latents generated, upsampling 2x...")
+            # Stage 2: upsample latents 2x in latent space → decode to numpy
+            upsample_out = _ltx_upsample_pipe(
+                latents=video_latent,
+                output_type="np",
+                return_dict=False,
+            )
+            candidate_frames = upsample_out[0][0]  # (frames,) → numpy (T, H, W, C)
+            candidate_audio = None  # We use Qwen3-TTS, not LTX audio
+        else:
+            # Fallback: single-stage (no upsampler available)
+            video_out, audio_out = _ltx_pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                width=width,
+                height=height,
+                num_frames=num_frames,
+                frame_rate=fps,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                generator=gen,
+                output_type="np",
+                return_dict=False,
+            )
+            candidate_frames = video_out[0]  # numpy array (T, H, W, C)
+            candidate_audio = audio_out[0] if audio_out is not None else None
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)

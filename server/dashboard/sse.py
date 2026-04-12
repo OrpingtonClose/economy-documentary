@@ -14,14 +14,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
-
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.responses import StreamingResponse
 
-from dashboard import get_all_active_collectors, get_any_active_collector
-from dashboard.event_store import get_all_runs, get_run_detail
+from dashboard import get_all_active_collectors, get_any_active_collector, set_active_collector
+from dashboard.collector import PipelineCollector
+from dashboard.event_store import get_all_runs, get_run_detail, insert_run
 from dashboard.html_report import generate_dashboard_html
 
 logger = logging.getLogger(__name__)
@@ -109,6 +108,81 @@ async def dashboard_active():
             ]
         }
     )
+
+
+@router.post("/ingest")
+async def dashboard_ingest(request: Request):
+    """Ingest a status update from an external pipeline runner.
+
+    This bridges run_pipeline.py (separate process) with the dashboard
+    SSE stream served by server.py.  The runner POSTs JSON snapshots
+    here and the dashboard picks them up via get_any_active_collector().
+
+    Accepted body fields:
+        run_id:          str  — unique run identifier
+        topic:           str  — documentary topic
+        event_type:      str  — "phase_start", "phase_end", "tool_start",
+                                "tool_end", "llm_start", "llm_end",
+                                "heartbeat", "finalize"
+        phase:           str  — phase name (for phase_start/phase_end)
+        status:          str  — status string (for phase_end / finalize)
+        tool_name:       str  — tool name (for tool_start/tool_end)
+        agent:           str  — agent name
+        args_summary:    str  — tool args summary
+        duration:        float — tool duration
+        result_chars:    int  — tool result chars
+        estimated_tokens: int — LLM estimated tokens
+        output_tokens:   int — LLM output tokens
+    """
+    body = await request.json()
+    run_id = body.get("run_id", "external")
+    topic = body.get("topic", "")
+    event_type = body.get("event_type", "heartbeat")
+
+    # Get or create collector for this run
+    collectors = get_all_active_collectors()
+    collector = collectors.get(run_id)
+    if collector is None:
+        collector = PipelineCollector(run_id=run_id, topic=topic)
+        set_active_collector(collector)
+        insert_run(run_id, topic=topic)
+        logger.info("Dashboard ingest: created collector for run %s (topic=%s)", run_id, topic)
+
+    # Update topic if provided
+    if topic and not collector.topic:
+        collector.topic = topic
+
+    # Dispatch event
+    if event_type == "phase_start":
+        collector.phase_start(body.get("phase", "unknown"))
+    elif event_type == "phase_end":
+        collector.phase_end(body.get("phase", "unknown"), body.get("status", "completed"))
+    elif event_type == "tool_start":
+        collector.tool_start(
+            body.get("tool_name", "unknown"),
+            body.get("agent", "unknown"),
+            body.get("args_summary", ""),
+        )
+    elif event_type == "tool_end":
+        collector.tool_end(
+            body.get("tool_name", "unknown"),
+            body.get("agent", "unknown"),
+            body.get("duration", 0.0),
+            body.get("result_chars", 0),
+        )
+    elif event_type == "llm_start":
+        collector.llm_start(body.get("agent", "unknown"), body.get("estimated_tokens", 0))
+    elif event_type == "llm_end":
+        collector.llm_end(
+            body.get("agent", "unknown"),
+            body.get("duration", 0.0),
+            body.get("output_tokens", 0),
+        )
+    elif event_type == "finalize":
+        collector.finalize(body.get("status", "completed"))
+    # heartbeat: just keeps the collector alive, no action needed
+
+    return JSONResponse({"status": "ok", "run_id": run_id})
 
 
 @router.get("/infra")

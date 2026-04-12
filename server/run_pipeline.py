@@ -24,7 +24,10 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
+import uuid
+from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -45,6 +48,66 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class DashboardReporter:
+    """Lightweight HTTP reporter that bridges run_pipeline.py to server.py's dashboard.
+
+    Posts status updates to the /dashboard/ingest endpoint so the SSE stream
+    can show real-time pipeline progress to the frontend.
+    """
+
+    def __init__(self, run_id: str, topic: str, server_url: str = ""):
+        self.run_id = run_id
+        self.topic = topic
+        self.server_url = server_url or os.environ.get(
+            "DASHBOARD_SERVER_URL", "http://localhost:8000"
+        )
+        self._queue: list[dict] = []
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(target=self._sender_loop, daemon=True)
+        self._thread.start()
+        logger.info("DashboardReporter started -> %s", self.server_url)
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def send(self, event_type: str, **kwargs: Any) -> None:
+        payload = {
+            "run_id": self.run_id,
+            "topic": self.topic,
+            "event_type": event_type,
+            **kwargs,
+        }
+        with self._lock:
+            self._queue.append(payload)
+
+    def _sender_loop(self) -> None:
+        """Background thread that drains the queue and POSTs to server."""
+        url = f"{self.server_url.rstrip('/')}/dashboard/ingest"
+        while self._running or self._queue:
+            batch: list[dict] = []
+            with self._lock:
+                batch, self._queue = self._queue[:], []
+
+            for payload in batch:
+                try:
+                    data = json.dumps(payload).encode()
+                    req = Request(url, data=data, method="POST")
+                    req.add_header("Content-Type", "application/json")
+                    with urlopen(req, timeout=5) as resp:
+                        resp.read()
+                except Exception as exc:
+                    logger.debug("DashboardReporter POST failed: %s", exc)
+
+            time.sleep(1.0)
 
 
 async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en") -> dict:
@@ -151,6 +214,12 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     infra.start()
     logger.info("InfraAgent started on daemon thread")
 
+    # Start dashboard reporter — bridges this process to server.py's SSE
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+    reporter = DashboardReporter(run_id=run_id, topic=topic)
+    reporter.start()
+    reporter.send("phase_start", phase="scenario")
+
     # Run the pipeline — wrapped in try/finally so the infra agent is
     # always cleaned up, even if the pipeline raises an exception.
     start_time = time.time()
@@ -162,6 +231,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     )
 
     final_response = None
+    _last_phase = "scenario"
     try:
         async for event in runner.run_async(
             user_id="pipeline_runner",
@@ -176,7 +246,23 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
                     preview = text[:200] + "..." if len(text) > 200 else text
                     logger.info("[%s] %s", agent_name, preview)
                     final_response = text
+
+                    # Track phase transitions for dashboard
+                    lower = text.lower()
+                    for phase in ("audio", "visual_direction", "production", "assembly"):
+                        if phase.replace("_", " ") in lower or phase in lower:
+                            if phase != _last_phase:
+                                reporter.send("phase_end", phase=_last_phase, status="completed")
+                                reporter.send("phase_start", phase=phase)
+                                _last_phase = phase
+                                break
+
+                    # Track tool calls from agent messages
+                    reporter.send("llm_end", agent=agent_name, duration=0.0, output_tokens=len(text) // 3)
     finally:
+        reporter.send("phase_end", phase=_last_phase, status="completed")
+        reporter.send("finalize", status="completed")
+        reporter.stop()
         # Shutdown infra agent regardless of how the pipeline exits
         infra.shutdown()
         logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())

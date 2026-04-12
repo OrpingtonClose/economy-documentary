@@ -337,11 +337,11 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
         {artifact.qa_scores?.quality && (
           <div>QA: {artifact.qa_scores.quality}</div>
         )}
-        {artifact.metadata?.prompt && (
+        {artifact.metadata?.prompt ? (
           <div className="truncate" title={String(artifact.metadata.prompt)}>
             {String(artifact.metadata.prompt).slice(0, 60)}...
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* Feedback Buttons */}

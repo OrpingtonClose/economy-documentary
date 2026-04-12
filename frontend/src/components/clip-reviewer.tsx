@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 /**
  * Gate 3: Clip Reviewer — video + text rejection interface.
  *
  * Displays generated video clips alongside their narration text.
  * User can approve, reject, or request regeneration of individual clips.
+ *
+ * Data source: GET /agui/clips (reads video status files on disk)
  */
 
 interface ClipReviewItem {
@@ -17,10 +22,91 @@ interface ClipReviewItem {
   duration: number;
   lora_id: string;
   status: "pending" | "approved" | "rejected";
+  quality?: string;
+  qa_reason?: string;
+  attempts?: number;
 }
 
 export function ClipReviewer() {
   const [clips, setClips] = useState<ClipReviewItem[]>([]);
+  const [gateBlocked, setGateBlocked] = useState(false);
+  const [gateMessage, setGateMessage] = useState("");
+  const [stageApproved, setStageApproved] = useState(false);
+  const [approving, setApproving] = useState(false);
+
+  // Poll AG-UI /clips endpoint
+  const fetchClips = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/clips`);
+      const data = await res.json();
+      if (data.gate?.blocked) {
+        setGateBlocked(true);
+        setGateMessage(data.gate.message || "Waiting for previous stage approval");
+        return;
+      }
+      setGateBlocked(false);
+      if (data.clips && data.clips.length > 0) {
+        setClips(data.clips);
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }, []);
+
+  // Check approval state
+  const fetchApprovalState = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approval-state`);
+      const data = await res.json();
+      if (data.state?.clips?.approved) {
+        setStageApproved(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchClips();
+    fetchApprovalState();
+    const interval = setInterval(() => {
+      fetchClips();
+      fetchApprovalState();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchClips, fetchApprovalState]);
+
+  const handleApproveAll = async () => {
+    setApproving(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "clips" }),
+      });
+      if (res.ok) {
+        setStageApproved(true);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  if (gateBlocked) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="text-xl mb-2 text-yellow-400">Waiting for Approval</div>
+          <div className="text-pipeline-muted">{gateMessage}</div>
+          <div className="mt-4 text-sm text-pipeline-muted">
+            Approve visual prompts on the Prompt Reviewer tab to unlock this stage
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (clips.length === 0) {
     return (
@@ -45,6 +131,19 @@ export function ClipReviewer() {
           Clip Review: {clips.length} Clips
         </h2>
         <div className="flex gap-4 text-sm">
+          {stageApproved ? (
+            <span className="px-3 py-1 bg-green-900 text-green-300 rounded-md">
+              Clips Approved
+            </span>
+          ) : (
+            <button
+              onClick={handleApproveAll}
+              disabled={approving}
+              className="px-3 py-1 bg-green-700 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+            >
+              {approving ? "Approving..." : "Approve All Clips"}
+            </button>
+          )}
           <span className="text-green-400">{approvedCount} approved</span>
           <span className="text-red-400">{rejectedCount} rejected</span>
           <span className="text-pipeline-muted">
@@ -61,17 +160,48 @@ export function ClipReviewer() {
             </h3>
             <div className="flex items-center gap-2">
               <span className="text-sm text-pipeline-muted">
-                {clip.duration.toFixed(1)}s
+                {clip.duration > 0 ? `${clip.duration.toFixed(1)}s` : ""}
               </span>
-              <span className="text-xs px-2 py-1 rounded bg-pipeline-blue">
-                {clip.lora_id}
-              </span>
+              {clip.lora_id && (
+                <span className="text-xs px-2 py-1 rounded bg-pipeline-blue">
+                  {clip.lora_id}
+                </span>
+              )}
             </div>
+          </div>
+
+          {/* QA Status */}
+          <div className="mb-3 flex items-center gap-2">
+            <span
+              className={`text-xs px-2 py-1 rounded-full ${
+                clip.quality === "acceptable"
+                  ? "bg-green-800 text-green-200"
+                  : clip.quality === "unknown"
+                  ? "bg-yellow-800 text-yellow-200"
+                  : "bg-red-800 text-red-200"
+              }`}
+            >
+              QA: {clip.quality || "pending"}
+            </span>
+            {clip.attempts && clip.attempts > 1 && (
+              <span className="text-xs text-pipeline-muted">
+                ({clip.attempts} attempts)
+              </span>
+            )}
+            {clip.qa_reason && (
+              <span className="text-xs text-pipeline-muted truncate max-w-xs">
+                {clip.qa_reason}
+              </span>
+            )}
           </div>
 
           {/* Video preview placeholder */}
           <div className="mb-3 bg-pipeline-bg rounded-lg aspect-video flex items-center justify-center">
-            <span className="text-pipeline-muted">Video Preview</span>
+            {clip.video_path ? (
+              <span className="text-green-400 text-sm">Video generated</span>
+            ) : (
+              <span className="text-pipeline-muted">Generating...</span>
+            )}
           </div>
 
           {/* Narration text */}

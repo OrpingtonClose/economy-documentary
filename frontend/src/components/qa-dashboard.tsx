@@ -1,10 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { QAResult, PipelinePhase } from "@/lib/types";
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 /**
  * QA Dashboard -- displays Timeline Guardian validation results.
+ *
+ * Data source: GET /agui/qa-results (derives pass/fail from pipeline output files)
  */
 export function QADashboard() {
   const [results, setResults] = useState<QAResult[]>([]);
@@ -16,6 +21,25 @@ export function QADashboard() {
     "production",
     "assembly",
   ];
+
+  // Poll AG-UI /qa-results endpoint
+  const fetchQA = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/qa-results`);
+      const data = await res.json();
+      if (data.results && data.results.length > 0) {
+        setResults(data.results);
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchQA();
+    const interval = setInterval(fetchQA, 5000);
+    return () => clearInterval(interval);
+  }, [fetchQA]);
 
   if (results.length === 0) {
     return (
