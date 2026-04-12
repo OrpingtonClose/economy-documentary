@@ -18,12 +18,22 @@ const BACKEND_URL =
 export function PromptReviewer() {
   const [concepts, setConcepts] = useState<VisualConcept[]>([]);
   const [visualStyle, setVisualStyle] = useState<Record<string, string>>({});
+  const [gateBlocked, setGateBlocked] = useState(false);
+  const [gateMessage, setGateMessage] = useState("");
+  const [approved, setApproved] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // Poll AG-UI /visual-concepts endpoint
   const fetchConcepts = useCallback(async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/agui/visual-concepts`);
       const data = await res.json();
+      if (data.gate?.blocked) {
+        setGateBlocked(true);
+        setGateMessage(data.gate.message || "Waiting for previous stage approval");
+        return;
+      }
+      setGateBlocked(false);
       if (data.concepts && data.concepts.length > 0) {
         setConcepts(data.concepts);
       }
@@ -35,11 +45,60 @@ export function PromptReviewer() {
     }
   }, []);
 
+  // Check approval state
+  const fetchApprovalState = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approval-state`);
+      const data = await res.json();
+      if (data.state?.prompts?.approved) {
+        setApproved(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchConcepts();
-    const interval = setInterval(fetchConcepts, 5000);
+    fetchApprovalState();
+    const interval = setInterval(() => {
+      fetchConcepts();
+      fetchApprovalState();
+    }, 5000);
     return () => clearInterval(interval);
-  }, [fetchConcepts]);
+  }, [fetchConcepts, fetchApprovalState]);
+
+  const handleApproveAll = async () => {
+    setApproving(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "prompts" }),
+      });
+      if (res.ok) {
+        setApproved(true);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  if (gateBlocked) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="text-xl mb-2 text-yellow-400">Waiting for Approval</div>
+          <div className="text-pipeline-muted">{gateMessage}</div>
+          <div className="mt-4 text-sm text-pipeline-muted">
+            Approve the scenario on the Scenario Editor tab to unlock this stage
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (concepts.length === 0) {
     return (
@@ -76,9 +135,19 @@ export function PromptReviewer() {
           Visual Prompts: {concepts.length} Phrases
         </h2>
         <div className="flex gap-2">
-          <button className="px-4 py-2 bg-green-700 text-white rounded-md text-sm hover:bg-green-600">
-            Approve All
-          </button>
+          {approved ? (
+            <span className="px-4 py-2 bg-green-900 text-green-300 rounded-md text-sm">
+              Prompts Approved
+            </span>
+          ) : (
+            <button
+              onClick={handleApproveAll}
+              disabled={approving}
+              className="px-4 py-2 bg-green-700 text-white rounded-md text-sm hover:bg-green-600 disabled:opacity-50"
+            >
+              {approving ? "Approving..." : "Approve All"}
+            </button>
+          )}
         </div>
       </div>
 

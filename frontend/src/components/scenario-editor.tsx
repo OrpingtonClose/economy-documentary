@@ -18,6 +18,8 @@ const BACKEND_URL =
 export function ScenarioEditor() {
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [editingScene, setEditingScene] = useState<number | null>(null);
+  const [approved, setApproved] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // Make scenes readable by CopilotKit
   useCopilotReadable({
@@ -38,11 +40,46 @@ export function ScenarioEditor() {
     }
   }, []);
 
+  // Check approval state
+  const fetchApprovalState = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approval-state`);
+      const data = await res.json();
+      if (data.state?.scenario?.approved) {
+        setApproved(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchScenes();
-    const interval = setInterval(fetchScenes, 5000);
+    fetchApprovalState();
+    const interval = setInterval(() => {
+      fetchScenes();
+      fetchApprovalState();
+    }, 5000);
     return () => clearInterval(interval);
-  }, [fetchScenes]);
+  }, [fetchScenes, fetchApprovalState]);
+
+  const handleApproveAll = async () => {
+    setApproving(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "scenario" }),
+      });
+      if (res.ok) {
+        setApproved(true);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setApproving(false);
+    }
+  };
 
   if (scenes.length === 0) {
     return (
@@ -64,9 +101,19 @@ export function ScenarioEditor() {
           Scenario: {scenes.length} Scenes
         </h2>
         <div className="flex gap-2">
-          <button className="px-4 py-2 bg-green-700 text-white rounded-md text-sm hover:bg-green-600">
-            Approve All
-          </button>
+          {approved ? (
+            <span className="px-4 py-2 bg-green-900 text-green-300 rounded-md text-sm">
+              Scenario Approved
+            </span>
+          ) : (
+            <button
+              onClick={handleApproveAll}
+              disabled={approving}
+              className="px-4 py-2 bg-green-700 text-white rounded-md text-sm hover:bg-green-600 disabled:opacity-50"
+            >
+              {approving ? "Approving..." : "Approve All"}
+            </button>
+          )}
           <button className="px-4 py-2 bg-pipeline-accent text-white rounded-md text-sm hover:bg-red-500">
             Regenerate
           </button>

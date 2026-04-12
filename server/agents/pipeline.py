@@ -5,12 +5,15 @@ Architecture::
 
     SequentialAgent("documentary_pipeline")
     ├── LoopAgent("scenario_director")        # script generation + ADHD eval
+    │   └── [APPROVAL GATE: human approves scenario]
     ├── Agent("audio_agent")                  # TTS + WhisperX alignment
     ├── LoopAgent("visual_director")          # visual planning loop
     │   ├── Agent("content_analyst")
     │   ├── Agent("visual_concepter")
     │   └── Agent("coherence_evaluator")
+    │   └── [APPROVAL GATE: human approves visual prompts]
     ├── Agent("production_supervisor")        # GPU video generation
+    │   └── [APPROVAL GATE: human approves clips]
     └── Agent("assembler_agent")              # final assembly
 
 Data flows via session state (blackboard pattern):
@@ -19,6 +22,11 @@ Data flows via session state (blackboard pattern):
   - visual_director -> state["content_analysis"], state["visual_concepts"]
   - production_supervisor -> OTIO timeline clips
   - assembler_agent -> final documentary output
+
+Human-in-the-loop gates (AG-UI approval workflow):
+  Each stage pauses after completion and waits for human approval
+  on the dashboard before the next stage proceeds.  The pipeline
+  polls .approval_state.json on disk until the human clicks "Approve".
 """
 
 from __future__ import annotations
@@ -35,11 +43,134 @@ from agents.audio_agent import audio_agent
 from agents.production_supervisor import production_supervisor
 from agents.scenario_director import scenario_director
 from agents.visual_director import visual_director
+from callbacks.approval_gate import (
+    is_stage_approved,
+    mark_stage_ready,
+    wait_for_approval,
+)
 from callbacks.state_manager import build_pipeline_state
 from tools.otio_tools import _timeline_path
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Approval-gate wrappers that compose with existing sub-agent callbacks
+# ---------------------------------------------------------------------------
+# We monkey-patch the sub-agents' after_agent_callback and
+# before_agent_callback to inject approval gate logic.  This avoids
+# editing every individual agent file and keeps the gate logic central.
+
+_orig_scenario_after = scenario_director.after_agent_callback
+_orig_audio_before = audio_agent.before_agent_callback
+_orig_visual_after = visual_director.after_agent_callback
+_orig_production_before = production_supervisor.before_agent_callback
+_orig_production_after = production_supervisor.after_agent_callback
+_orig_assembly_before = assembler_agent.before_agent_callback
+
+
+def _scenario_after_with_gate(callback_context):
+    """After scenario_director: run original callback, then mark ready."""
+    result = None
+    if _orig_scenario_after:
+        result = _orig_scenario_after(callback_context)
+    mark_stage_ready("scenario")
+    logger.info("APPROVAL GATE: scenario stage ready — waiting for human approval")
+    approved = wait_for_approval("scenario")
+    if not approved:
+        logger.error("APPROVAL GATE: timed out waiting for scenario approval")
+    return result
+
+
+def _audio_before_with_gate(callback_context):
+    """Before audio_agent: wait for scenario approval, then run original."""
+    if not is_stage_approved("scenario"):
+        logger.info("APPROVAL GATE: audio waiting for scenario approval...")
+        approved = wait_for_approval("scenario")
+        if not approved:
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text="ERROR: Timed out waiting for scenario approval."
+                )],
+            )
+    if _orig_audio_before:
+        return _orig_audio_before(callback_context)
+    return None
+
+
+def _visual_after_with_gate(callback_context):
+    """After visual_director: run original callback, then mark prompts ready."""
+    result = None
+    if _orig_visual_after:
+        result = _orig_visual_after(callback_context)
+    mark_stage_ready("prompts")
+    logger.info("APPROVAL GATE: prompts stage ready — waiting for human approval")
+    approved = wait_for_approval("prompts")
+    if not approved:
+        logger.error("APPROVAL GATE: timed out waiting for prompts approval")
+    return result
+
+
+def _production_before_with_gate(callback_context):
+    """Before production_supervisor: wait for prompts approval, then run original."""
+    if not is_stage_approved("prompts"):
+        logger.info("APPROVAL GATE: production waiting for prompts approval...")
+        approved = wait_for_approval("prompts")
+        if not approved:
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text="ERROR: Timed out waiting for prompts approval."
+                )],
+            )
+    if _orig_production_before:
+        return _orig_production_before(callback_context)
+    return None
+
+
+def _production_after_with_gate(callback_context):
+    """After production_supervisor: run original callback, then mark clips ready."""
+    result = None
+    if _orig_production_after:
+        result = _orig_production_after(callback_context)
+    mark_stage_ready("clips")
+    logger.info("APPROVAL GATE: clips stage ready — waiting for human approval")
+    approved = wait_for_approval("clips")
+    if not approved:
+        logger.error("APPROVAL GATE: timed out waiting for clips approval")
+    return result
+
+
+def _assembly_before_with_gate(callback_context):
+    """Before assembler_agent: wait for clips approval, then run original."""
+    if not is_stage_approved("clips"):
+        logger.info("APPROVAL GATE: assembly waiting for clips approval...")
+        approved = wait_for_approval("clips")
+        if not approved:
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text="ERROR: Timed out waiting for clips approval."
+                )],
+            )
+    if _orig_assembly_before:
+        return _orig_assembly_before(callback_context)
+    return None
+
+
+# Wire approval gates into sub-agents
+scenario_director.after_agent_callback = _scenario_after_with_gate
+audio_agent.before_agent_callback = _audio_before_with_gate
+visual_director.after_agent_callback = _visual_after_with_gate
+production_supervisor.before_agent_callback = _production_before_with_gate
+production_supervisor.after_agent_callback = _production_after_with_gate
+assembler_agent.before_agent_callback = _assembly_before_with_gate
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-level callbacks
+# ---------------------------------------------------------------------------
 
 def _init_pipeline_state(
     callback_context: CallbackContext,
@@ -75,6 +206,7 @@ def _cleanup_pipeline_state(
     """Cleanup after pipeline completes."""
     state = callback_context.state
     state["pipeline_phase"] = "completed"
+    mark_stage_ready("assembly")
     logger.info(
         "Pipeline completed: pipeline_key=%s",
         state.get("_pipeline_key", "unknown"),
@@ -88,7 +220,8 @@ pipeline_agent = SequentialAgent(
         "ADHD-friendly documentary pipeline: scenario generation with "
         "evaluate-optimize loop, TTS narration with WhisperX alignment, "
         "iterative visual planning with LoRA selection, GPU video production, "
-        "and final assembly. All phases validated by Timeline Guardian."
+        "and final assembly. All phases validated by Timeline Guardian. "
+        "Each stage pauses for human approval before the next one begins."
     ),
     sub_agents=[
         scenario_director,

@@ -29,12 +29,22 @@ interface ClipReviewItem {
 
 export function ClipReviewer() {
   const [clips, setClips] = useState<ClipReviewItem[]>([]);
+  const [gateBlocked, setGateBlocked] = useState(false);
+  const [gateMessage, setGateMessage] = useState("");
+  const [stageApproved, setStageApproved] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   // Poll AG-UI /clips endpoint
   const fetchClips = useCallback(async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/agui/clips`);
       const data = await res.json();
+      if (data.gate?.blocked) {
+        setGateBlocked(true);
+        setGateMessage(data.gate.message || "Waiting for previous stage approval");
+        return;
+      }
+      setGateBlocked(false);
       if (data.clips && data.clips.length > 0) {
         setClips(data.clips);
       }
@@ -43,11 +53,60 @@ export function ClipReviewer() {
     }
   }, []);
 
+  // Check approval state
+  const fetchApprovalState = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approval-state`);
+      const data = await res.json();
+      if (data.state?.clips?.approved) {
+        setStageApproved(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
   useEffect(() => {
     fetchClips();
-    const interval = setInterval(fetchClips, 5000);
+    fetchApprovalState();
+    const interval = setInterval(() => {
+      fetchClips();
+      fetchApprovalState();
+    }, 5000);
     return () => clearInterval(interval);
-  }, [fetchClips]);
+  }, [fetchClips, fetchApprovalState]);
+
+  const handleApproveAll = async () => {
+    setApproving(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "clips" }),
+      });
+      if (res.ok) {
+        setStageApproved(true);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  if (gateBlocked) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="text-xl mb-2 text-yellow-400">Waiting for Approval</div>
+          <div className="text-pipeline-muted">{gateMessage}</div>
+          <div className="mt-4 text-sm text-pipeline-muted">
+            Approve visual prompts on the Prompt Reviewer tab to unlock this stage
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (clips.length === 0) {
     return (
@@ -72,6 +131,19 @@ export function ClipReviewer() {
           Clip Review: {clips.length} Clips
         </h2>
         <div className="flex gap-4 text-sm">
+          {stageApproved ? (
+            <span className="px-3 py-1 bg-green-900 text-green-300 rounded-md">
+              Clips Approved
+            </span>
+          ) : (
+            <button
+              onClick={handleApproveAll}
+              disabled={approving}
+              className="px-3 py-1 bg-green-700 text-white rounded-md hover:bg-green-600 disabled:opacity-50"
+            >
+              {approving ? "Approving..." : "Approve All Clips"}
+            </button>
+          )}
           <span className="text-green-400">{approvedCount} approved</span>
           <span className="text-red-400">{rejectedCount} rejected</span>
           <span className="text-pipeline-muted">

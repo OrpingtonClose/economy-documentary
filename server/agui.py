@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -520,6 +520,44 @@ async def respond_to_escalation(escalation_id: str, body: dict):
 
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-output")
 
+# Approval gate: sequential workflow state
+# Stages: scenario -> prompts -> clips -> timeline -> assembly
+# Shared module used by both the backend (this file) and the pipeline callbacks.
+from callbacks.approval_gate import (
+    _read_approval_state,
+    _write_approval_state,
+    is_stage_approved as _is_stage_approved,
+)
+
+_STAGE_ORDER = ["scenario", "prompts", "clips", "timeline", "assembly"]
+
+
+@router.get("/approval-state")
+async def get_approval_state():
+    """Return current approval state for all stages."""
+    state = _read_approval_state()
+    return JSONResponse({"state": state, "stage_order": _STAGE_ORDER})
+
+
+@router.post("/approve")
+async def approve_stage(request: Request):
+    """Approve a pipeline stage, unlocking the next one.
+
+    Body: {"stage": "scenario" | "prompts" | "clips" | "timeline"}
+    """
+    body = await request.json()
+    stage = body.get("stage", "")
+    if stage not in _STAGE_ORDER:
+        return JSONResponse(
+            {"error": f"Invalid stage: {stage}. Must be one of {_STAGE_ORDER}"},
+            status_code=400,
+        )
+    state = _read_approval_state()
+    state[stage] = {"approved": True, "timestamp": time.time()}
+    _write_approval_state(state)
+    logger.info("Stage '%s' approved", stage)
+    return JSONResponse({"status": "approved", "stage": stage})
+
 
 @router.get("/scenes")
 async def get_scenes():
@@ -543,10 +581,14 @@ async def get_scenes():
 async def get_visual_concepts():
     """Return visual concepts derived from video status files.
 
-    Each video status JSON has a prompt_preview and scene/phrase info
-    embedded in its filename (scene_NNN_phrase_NNN_status.json).
-    Also reads _visual_style_backup.json for global style info.
+    Gated: requires 'scenario' stage to be approved first.
     """
+    if not _is_stage_approved("scenario"):
+        return JSONResponse({
+            "concepts": [],
+            "visual_style": {},
+            "gate": {"blocked": True, "requires": "scenario", "message": "Approve the scenario first to unlock visual prompts"},
+        })
     import glob as _glob
     import re as _re
 
@@ -598,7 +640,15 @@ async def get_visual_concepts():
 
 @router.get("/clips")
 async def get_clips():
-    """Return video clips with QA status for the Clip Reviewer tab."""
+    """Return video clips with QA status for the Clip Reviewer tab.
+
+    Gated: requires 'prompts' stage to be approved first.
+    """
+    if not _is_stage_approved("prompts"):
+        return JSONResponse({
+            "clips": [],
+            "gate": {"blocked": True, "requires": "prompts", "message": "Approve visual prompts first to unlock clip review"},
+        })
     import glob as _glob
     import re as _re
 
@@ -637,7 +687,15 @@ async def get_clips():
 
 @router.get("/timeline")
 async def get_timeline():
-    """Read the OTIO timeline file and return structured track/clip data."""
+    """Read the OTIO timeline file and return structured track/clip data.
+
+    Gated: requires 'clips' stage to be approved first.
+    """
+    if not _is_stage_approved("clips"):
+        return JSONResponse({
+            "timeline": None,
+            "gate": {"blocked": True, "requires": "clips", "message": "Approve clips first to unlock the timeline"},
+        })
     import glob as _glob
 
     # Find the most recent OTIO file (skip backups starting with _)
