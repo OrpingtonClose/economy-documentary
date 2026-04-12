@@ -16,7 +16,6 @@ const BACKEND_URL =
  * Data source: GET /agui/scenes (reads _scenes_backup.json on disk)
  */
 export function ScenarioEditor() {
-  const [mounted, setMounted] = useState(false);
   const [scenes, setScenes] = useState<Scene[]>([]);
   const [editingScene, setEditingScene] = useState<number | null>(null);
   const [approved, setApproved] = useState(false);
@@ -62,7 +61,6 @@ export function ScenarioEditor() {
   }, []);
 
   useEffect(() => {
-    setMounted(true);
     fetchScenes();
     fetchApprovalState();
     const interval = setInterval(() => {
@@ -107,7 +105,7 @@ export function ScenarioEditor() {
     setRegenModal({ open: false, comment: "" });
   };
 
-  if (!mounted || scenes.length === 0) {
+  if (scenes.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="text-center">

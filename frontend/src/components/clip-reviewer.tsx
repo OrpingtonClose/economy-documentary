@@ -28,7 +28,6 @@ interface ClipReviewItem {
 }
 
 export function ClipReviewer() {
-  const [mounted, setMounted] = useState(false);
   const [clips, setClips] = useState<ClipReviewItem[]>([]);
   const [gateBlocked, setGateBlocked] = useState(false);
   const [gateMessage, setGateMessage] = useState("");
@@ -77,7 +76,6 @@ export function ClipReviewer() {
   }, []);
 
   useEffect(() => {
-    setMounted(true);
     fetchClips();
     fetchApprovalState();
     const interval = setInterval(() => {
@@ -152,16 +150,6 @@ export function ClipReviewer() {
     }
     setFeedbackModal({ open: false, type: "approve", clipIdx: -1, comment: "" });
   };
-
-  if (!mounted) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="text-xl mb-2">Loading...</div>
-        </div>
-      </div>
-    );
-  }
 
   if (gateBlocked) {
     return (
