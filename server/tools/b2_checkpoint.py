@@ -548,6 +548,44 @@ def restore_pipeline(topic: str, pipeline_base: str = "/tmp/documentary-pipeline
             logger.info("B2: restored %d files from %s -> %s", n, b2_prefix, local_dir)
 
     result["restored_files"] = total
+
+    # Validate restored stages: if a stage is marked complete but its
+    # required files are missing from disk, remove it from stages_complete
+    # so the stage re-runs instead of crashing downstream.
+    _STAGE_FILE_REQUIREMENTS = {
+        "audio": (os.path.join(pipeline_base, "audio"), ".wav"),
+        "production": (os.path.join(pipeline_base, "video"), ".mp4"),
+        "assembly": (os.path.join(pipeline_base, "output"), ".mp4"),
+    }
+    invalid_stages = []
+    for stage, (required_dir, required_ext) in _STAGE_FILE_REQUIREMENTS.items():
+        if stage not in result["stages_complete"]:
+            continue
+        if not os.path.isdir(required_dir):
+            invalid_stages.append(stage)
+            logger.warning(
+                "B2: stage '%s' marked complete but directory %s missing — will re-run",
+                stage, required_dir,
+            )
+            continue
+        matching = [f for f in os.listdir(required_dir) if f.endswith(required_ext)]
+        if not matching:
+            invalid_stages.append(stage)
+            logger.warning(
+                "B2: stage '%s' marked complete but no %s files in %s — will re-run",
+                stage, required_ext, required_dir,
+            )
+
+    # Remove invalid stages and all stages that depend on them
+    if invalid_stages:
+        stage_order = ["scenario", "audio", "visual_direction", "production", "assembly"]
+        earliest_idx = min(stage_order.index(s) for s in invalid_stages if s in stage_order)
+        # Invalidate this stage and all subsequent stages
+        for s in stage_order[earliest_idx:]:
+            if s in result["stages_complete"]:
+                result["stages_complete"].remove(s)
+                logger.info("B2: invalidated stage '%s' (missing files or downstream dependency)", s)
+
     logger.info(
         "B2 restore complete: run_id=%s, stages=%s, files=%d",
         run_id, result["stages_complete"], total,
