@@ -39,6 +39,19 @@ from tools.otio_tools import create_timeline_tool
 logger = logging.getLogger(__name__)
 
 # -- Generator agent -----------------------------------------------------------
+_QUICK_TEST_RULES = """
+
+QUICK TEST MODE IS ACTIVE.
+You MUST follow these STRICT constraints for a ~1-minute test movie:
+- Generate EXACTLY 2 scenes (no more, no fewer)
+- Each scene MUST be 10-15 seconds when spoken (~25-37 words per scene total across all voices)
+- Each voice block should be 1-2 SHORT sentences only
+- Total movie duration MUST be under 60 seconds
+- Keep visual_notes very brief (one sentence)
+- Keep dopamine_hook very brief (one phrase)
+- The 2 scenes should still form a mini narrative arc: hook → payoff
+"""
+
 _GENERATOR_INSTRUCTION = """\
 You are the Scenario Director for an ADHD-friendly documentary pipeline.
 
@@ -78,9 +91,9 @@ LANGUAGE MODE: "{language}"
 - If "dual_ru_en": write EACH voice block with BOTH languages using this format:
     "text": "[RU] <Russian narration>\n[EN] <English translation>"
   The Russian text is the PRIMARY narration; the English is a faithful translation.
-
+{quick_test_rules}
 RULES:
-1. Each scene MUST be <= 45 seconds when spoken at natural pace (~150 words/min)
+1. Each scene MUST be <= {max_scene_duration} seconds when spoken at natural pace (~150 words/min)
 2. Each scene MUST use all 3 voices (V1, V2, V3)
 3. NO rhetorical questions — make declarative statements
 4. Each scene MUST specify different visual approaches for variety
@@ -126,10 +139,21 @@ def _save_generator_scenes(callback_context):
     return None
 
 
+def _build_generator_instruction() -> str:
+    """Build the generator instruction, injecting quick-test rules if active.
+
+    We use {quick_test_rules} and {max_scene_duration} as template vars
+    that will be resolved by ADK from session state at runtime.
+    """
+    # These are template placeholders — ADK resolves them from state at runtime.
+    # The actual values are set in run_pipeline.py when --quick-test is passed.
+    return _GENERATOR_INSTRUCTION
+
+
 scenario_generator = Agent(
     name="scenario_generator",
     model=build_model(),
-    instruction=_GENERATOR_INSTRUCTION,
+    instruction=_build_generator_instruction(),
     tools=[create_timeline_tool],
     # NOTE: output_key="scenes" was removed intentionally.
     # ADK's output_key only saves the *final* text response.  When the
@@ -211,10 +235,10 @@ _EVALUATOR_INSTRUCTION = """\
 You are the ADHD Compliance Evaluator for a documentary script.
 
 Read the generated scenes from {scenes} and evaluate them against these criteria:
-
+{quick_test_rules}
 HARD REQUIREMENTS (any failure = POOR):
 1. Every scene has exactly 3 voice blocks (V1, V2, V3)
-2. No scene exceeds 45 seconds (~112 words per scene max)
+2. No scene exceeds {max_scene_duration} seconds (~{max_words_per_scene} words per scene max)
 3. No rhetorical questions anywhere in the text
 4. The scenes JSON is valid and parseable
 
