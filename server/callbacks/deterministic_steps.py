@@ -1497,7 +1497,10 @@ def deterministic_assembly_callback(
                     )
 
                 combined_video_for_mux = combined_video
-                if video_dur > total_audio_duration + 0.5:
+                duration_diff = video_dur - total_audio_duration
+
+                if duration_diff > 0.5:
+                    # Video longer than audio — trim excess
                     trimmed_path = os.path.join(
                         assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
                     )
@@ -1513,6 +1516,48 @@ def deterministic_assembly_callback(
                             f"safety trim failed: {trim_result['error']}"
                         )
                     combined_video_for_mux = trimmed_path
+
+                elif duration_diff < -0.5:
+                    # Video shorter than audio — this happens when inter-voice
+                    # silence pauses (INTER_VOICE_PAUSE_SEC) are added to the
+                    # audio but not to video clips (which are trimmed strictly
+                    # to OTIO source_range).  Pad with black frames so
+                    # video >= audio, preserving the mux contract.
+                    pad_duration = total_audio_duration - video_dur
+                    logger.info(
+                        "Scene %d%s: video %.2fs < audio %.2fs "
+                        "(inter-voice pauses), padding %.2fs with black frames",
+                        scene_num, lang_suffix, video_dur,
+                        total_audio_duration, pad_duration,
+                    )
+                    black_pad_path = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_black_pad.mp4",
+                    )
+                    black_pad = _generate_black_video(
+                        pad_duration, black_pad_path,
+                    )
+                    if not black_pad:
+                        raise RuntimeError(
+                            f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
+                            f"failed to generate black pad ({pad_duration:.2f}s) "
+                            f"to cover inter-voice pauses"
+                        )
+                    padded_path = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_video_padded.mp4",
+                    )
+                    pad_concat_result = json.loads(concat_clips(
+                        clip_paths=f"{combined_video},{black_pad}",
+                        output_path=padded_path,
+                    ))
+                    if "error" in pad_concat_result:
+                        raise RuntimeError(
+                            f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
+                            f"failed to pad video with black frames: "
+                            f"{pad_concat_result['error']}"
+                        )
+                    combined_video_for_mux = padded_path
 
                 # Mux combined audio + video
                 muxed_path = os.path.join(
