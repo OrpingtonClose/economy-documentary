@@ -191,7 +191,11 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         session_id=session.id,
     )
 
-    state = final_session.state.to_dict() if final_session else {}
+    if final_session:
+        raw = final_session.state
+        state = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw)
+    else:
+        state = {}
     state["_elapsed_sec"] = round(elapsed, 1)
     state["_final_response"] = final_response
 
