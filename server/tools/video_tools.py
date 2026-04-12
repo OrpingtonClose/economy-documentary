@@ -198,8 +198,8 @@ def generate_video_clip(
         height=512,
         num_frames=num_frames,
         seed=seed,
-        num_inference_steps=20,
-        guidance_scale=1.0,
+        num_inference_steps=40,
+        guidance_scale=4.0,
     ):
         inner_payload = json.dumps({
             "prompt": prompt,
@@ -240,8 +240,8 @@ def generate_video_clip(
             "height": 512,
             "num_frames": num_frames,
             "seed": seed,
-            "num_inference_steps": 20,
-            "guidance_scale": 1.0,
+            "num_inference_steps": 40,
+            "guidance_scale": 4.0,
         },
         policy=VIDEO_POLICY,
         context={"prompt": prompt[:200], "duration": actual_duration},
