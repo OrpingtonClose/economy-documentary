@@ -1,14 +1,36 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { CopilotChat } from "@copilotkit/react-ui";
-import { PipelineDashboard } from "@/components/pipeline-dashboard";
-import { ScenarioEditor } from "@/components/scenario-editor";
-import { PromptReviewer } from "@/components/prompt-reviewer";
-import { ClipReviewer } from "@/components/clip-reviewer";
-import { TimelineView } from "@/components/timeline-view";
-import { QADashboard } from "@/components/qa-dashboard";
 import { useState } from "react";
 import type { PipelinePhase } from "@/lib/types";
+
+// Dynamic imports with ssr:false to prevent hydration issues
+// that strip onClick handlers from buttons inside map loops
+const PipelineDashboard = dynamic(
+  () => import("@/components/pipeline-dashboard").then((m) => m.PipelineDashboard),
+  { ssr: false }
+);
+const ScenarioEditor = dynamic(
+  () => import("@/components/scenario-editor").then((m) => m.ScenarioEditor),
+  { ssr: false }
+);
+const PromptReviewer = dynamic(
+  () => import("@/components/prompt-reviewer").then((m) => m.PromptReviewer),
+  { ssr: false }
+);
+const ClipReviewer = dynamic(
+  () => import("@/components/clip-reviewer").then((m) => m.ClipReviewer),
+  { ssr: false }
+);
+const TimelineView = dynamic(
+  () => import("@/components/timeline-view").then((m) => m.TimelineView),
+  { ssr: false }
+);
+const QADashboard = dynamic(
+  () => import("@/components/qa-dashboard").then((m) => m.QADashboard),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("dashboard");
