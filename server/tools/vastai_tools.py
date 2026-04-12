@@ -146,6 +146,8 @@ def provision_gpu_vm(
             continue
         if not rentable:
             continue
+        if not verified:
+            continue
         # GPU type filter (skip if "any")
         if gpu_display and gpu_display != "any" and gpu_display not in gpu_name:
             continue
