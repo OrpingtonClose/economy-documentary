@@ -101,7 +101,8 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
         "--image", "ubuntu:22.04",
         "--disk", str(disk_gb),
         "--onstart-cmd", "apt-get update && apt-get install -y git curl && "
-                         "git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary && "
+                         "(cd /workspace/economy-documentary && git pull origin main || "
+                         "git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary) && "
                          "bash /workspace/economy-documentary/scripts/central_bootstrap.sh",
         "--raw",
     ]

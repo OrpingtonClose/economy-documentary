@@ -259,7 +259,7 @@ rm -f /etc/nginx/sites-enabled/default
 # ---------------------------------------------------------------------------
 echo "=== Starting services ==="
 # Vast.ai containers have no init system — start supervisord explicitly
-supervisord -c /etc/supervisor/supervisord.conf
+supervisord -c /etc/supervisor/supervisord.conf 2>/dev/null || true
 supervisorctl reread
 supervisorctl update
 supervisorctl start documentary:*
