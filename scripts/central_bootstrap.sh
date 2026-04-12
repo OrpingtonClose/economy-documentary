@@ -151,7 +151,8 @@ for var in OPENAI_API_KEY OPENAI_API_BASE ADK_MODEL \
     if [ -n "$val" ]; then
         # Update or append
         if grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
-            sed -i "s|^${var}=.*|${var}=${val}|" "$ENV_FILE"
+            escaped_val=$(printf '%s\n' "$val" | sed 's/[&/\\|]/\\&/g')
+            sed -i "s|^${var}=.*|${var}=${escaped_val}|" "$ENV_FILE"
         else
             echo "${var}=${val}" >> "$ENV_FILE"
         fi
