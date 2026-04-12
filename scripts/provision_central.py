@@ -205,7 +205,7 @@ def main():
     print(f"  Health:    http://{public_ipaddr}:8000/health")
     print()
     print("To configure GPU workers after bootstrap:")
-    print(f"  ssh -p {ssh_port} root@{ssh_host}")
+    print(f"  ssh -p {ssh_port} root@{ssh_host}" if ssh_host and ssh_port else "  (SSH info not yet available — check Vast.ai dashboard)")
     print("  vim /workspace/economy-documentary/server/.env")
     print("  supervisorctl restart documentary:backend")
     print("=" * 60)

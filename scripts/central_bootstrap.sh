@@ -93,7 +93,8 @@ pip install --no-cache-dir \
     'httpx>=0.24.0' \
     'pydantic>=2.0.0' \
     'opentelemetry-sdk>=1.20.0' \
-    'opentelemetry-api>=1.20.0'
+    'opentelemetry-api>=1.20.0' \
+    'vastai'
 
 # ---------------------------------------------------------------------------
 # Frontend dependencies
