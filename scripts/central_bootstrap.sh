@@ -264,7 +264,11 @@ supervisord -c /etc/supervisor/supervisord.conf 2>/dev/null || true
 supervisorctl reread
 supervisorctl update
 supervisorctl start documentary:*
-nginx -t && nginx || echo "WARNING: nginx config test failed, skipping"
+if nginx -t; then
+    nginx -s reload 2>/dev/null || nginx || echo "WARNING: nginx failed to start (check port 80)"
+else
+    echo "WARNING: nginx config test failed, skipping"
+fi
 
 # ---------------------------------------------------------------------------
 # Status report
