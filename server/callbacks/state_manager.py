@@ -27,4 +27,5 @@ def build_pipeline_state() -> dict:
         "otio_violation": None,
         "pipeline_phase": "idle",
         "lora_selections": "{}",
+        "quick_test": "",
     }

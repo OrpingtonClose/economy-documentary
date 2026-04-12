@@ -34,6 +34,8 @@ from urllib.request import Request, urlopen
 # Force test mode if --test-mode is passed (must be before imports)
 if "--test-mode" in sys.argv:
     os.environ["DOCUMENTARY_TEST_MODE"] = "true"
+if "--quick-test" in sys.argv:
+    os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -110,7 +112,7 @@ class DashboardReporter:
             time.sleep(1.0)
 
 
-async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en") -> dict:
+async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
     """Run the full documentary pipeline.
 
     Args:
@@ -130,6 +132,20 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     initial_state["topic"] = topic
     initial_state["corpus_path"] = corpus_path
     initial_state["language"] = language
+
+    # Quick-test mode: inject constraints into state for LLM prompt templates
+    if quick_test:
+        from agents.scenario_director import _QUICK_TEST_RULES
+        initial_state["quick_test"] = "true"
+        initial_state["quick_test_rules"] = _QUICK_TEST_RULES
+        initial_state["max_scene_duration"] = "15"
+        initial_state["max_words_per_scene"] = "37"
+        logger.info("QUICK TEST MODE: 2 scenes, ~15s each, ~1 min total")
+    else:
+        initial_state["quick_test"] = ""
+        initial_state["quick_test_rules"] = ""
+        initial_state["max_scene_duration"] = "45"
+        initial_state["max_words_per_scene"] = "112"
 
     # Restore from B2 if a previous run exists for this topic
     from tools.b2_checkpoint import restore_pipeline, set_run_id, get_run_id
@@ -296,6 +312,8 @@ def main():
                         help="Language mode (default: dual_ru_en)")
     parser.add_argument("--test-mode", action="store_true",
                         help="Run in test mode (synthetic media, no GPU needed)")
+    parser.add_argument("--quick-test", action="store_true",
+                        help="Quick test mode: 2 scenes, ~15s each, ~1 min total movie")
     parser.add_argument("--output-dir", default="/tmp/documentary-pipeline/output",
                         help="Output directory for the final documentary")
     args = parser.parse_args()
@@ -327,6 +345,7 @@ def main():
         topic=args.topic,
         corpus_path=args.corpus,
         language=args.language,
+        quick_test=args.quick_test,
     ))
 
     # Print summary
