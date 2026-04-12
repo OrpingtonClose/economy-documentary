@@ -82,7 +82,7 @@ function TrackRow({ track }: { track: TimelineTrack }) {
           <h3 className="font-semibold">{track.name}</h3>
         </div>
         <span className="text-sm text-pipeline-muted">
-          {track.total_clips} clips, {track.total_gaps} gaps
+          {track.total_clips + track.total_gaps} items
         </span>
       </div>
 
@@ -100,9 +100,9 @@ function TrackRow({ track }: { track: TimelineTrack }) {
         {track.gaps.map((gap, idx) => (
           <div
             key={`gap-${idx}`}
-            className="min-w-12 p-2 bg-red-900/20 border border-red-800 rounded text-xs"
+            className="min-w-24 p-2 bg-pipeline-bg border border-pipeline-blue rounded text-xs"
           >
-            <div className="text-red-400 truncate">{gap.name}</div>
+            <div className="font-medium truncate">{gap.name}</div>
           </div>
         ))}
         {track.total_clips === 0 && track.total_gaps === 0 && (
