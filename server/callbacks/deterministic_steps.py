@@ -1326,13 +1326,43 @@ def deterministic_assembly_callback(
                     if a_clip.source_range:
                         total_audio_duration += a_clip.source_range.duration.to_seconds()
 
-            # Collect ALL video clip paths
+            # OTIO-COMPLIANT: Trim each video clip to its source_range
+            # before concatenation.  The source_range was set during
+            # production to match the narration phrase duration, so
+            # respecting it preserves the phrase↔video timing contract.
             video_paths = []
-            for v_clip in v_clips:
+            for clip_idx, v_clip in enumerate(v_clips):
                 v_path = ""
                 if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
                     v_path = v_clip.media_reference.target_url
-                if v_path and os.path.exists(v_path):
+                if not v_path or not os.path.exists(v_path):
+                    continue
+
+                # If clip has a source_range, trim to it; otherwise use raw file
+                if v_clip.source_range:
+                    src_start = v_clip.source_range.start_time.to_seconds()
+                    src_dur = v_clip.source_range.duration.to_seconds()
+                    if src_dur <= 0:
+                        continue
+                    trimmed_clip_path = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_vclip_{clip_idx:03d}_trimmed.mp4",
+                    )
+                    trim_res = json.loads(trim_clip(
+                        input_path=v_path,
+                        start_sec=src_start,
+                        duration_sec=src_dur,
+                        output_path=trimmed_clip_path,
+                    ))
+                    if "error" in trim_res:
+                        logger.warning(
+                            "OTIO trim failed for %s (start=%.2f, dur=%.2f): %s — using raw clip",
+                            v_path, src_start, src_dur, trim_res["error"],
+                        )
+                        video_paths.append(v_path)
+                    else:
+                        video_paths.append(trimmed_clip_path)
+                else:
                     video_paths.append(v_path)
 
             if not video_paths or not audio_paths:
@@ -1364,7 +1394,7 @@ def deterministic_assembly_callback(
                     logger.info("Combined %d narration clips for scene %d%s",
                                 len(audio_paths), scene_num, lang_suffix)
 
-                # Concatenate video clips if more than one
+                # Concatenate OTIO-trimmed video clips
                 if len(video_paths) == 1:
                     combined_video = video_paths[0]
                 else:
@@ -1382,32 +1412,44 @@ def deterministic_assembly_callback(
                             f"{concat_video_result['error']}"
                         )
                         continue
-                    logger.info("Combined %d video clips for scene %d%s",
+                    logger.info("Combined %d OTIO-trimmed video clips for scene %d%s",
                                 len(video_paths), scene_num, lang_suffix)
 
-                # Trim combined video to match total narration duration
-                trimmed_path = os.path.join(
-                    assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
-                )
-                trim_result = json.loads(trim_clip(
-                    input_path=combined_video,
-                    start_sec=0,
-                    duration_sec=total_audio_duration,
-                    output_path=trimmed_path,
-                ))
-                if "error" in trim_result:
-                    track_errors.append(
-                        f"Scene {scene_num}{lang_suffix} trim: {trim_result['error']}"
-                    )
-                    continue
+                # Final safety trim: if combined video is shorter than audio,
+                # keep as-is (video will end early); if longer, trim to audio.
+                # This respects OTIO source_range as the primary timing, with
+                # audio duration as a ceiling.
+                combined_video_for_mux = combined_video
+                try:
+                    probe_res = json.loads(probe_clip(mp4_path=combined_video))
+                    video_dur = probe_res.get("duration", 0)
+                    if video_dur > total_audio_duration + 0.5:
+                        trimmed_path = os.path.join(
+                            assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
+                        )
+                        trim_result = json.loads(trim_clip(
+                            input_path=combined_video,
+                            start_sec=0,
+                            duration_sec=total_audio_duration,
+                            output_path=trimmed_path,
+                        ))
+                        if "error" not in trim_result:
+                            combined_video_for_mux = trimmed_path
+                        else:
+                            logger.warning(
+                                "Scene %d%s safety trim failed: %s — using untrimmed",
+                                scene_num, lang_suffix, trim_result["error"],
+                            )
+                except Exception as probe_exc:
+                    logger.warning("Scene %d%s probe failed: %s", scene_num, lang_suffix, probe_exc)
 
-                # Mux combined audio + trimmed video
+                # Mux combined audio + video
                 muxed_path = os.path.join(
                     assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_muxed.mp4"
                 )
                 mux_result = json.loads(mux_audio_video(
                     audio_path=combined_audio,
-                    video_path=trimmed_path,
+                    video_path=combined_video_for_mux,
                     output_path=muxed_path,
                 ))
                 if "error" in mux_result:
