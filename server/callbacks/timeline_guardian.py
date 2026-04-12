@@ -168,7 +168,7 @@ def _validate_visual_direction(timeline, state: dict) -> Optional[str]:
 
 def _validate_production(timeline, state: dict) -> Optional[str]:
     """Validate after production: video clips have MP4, durations match,
-    source_range > 0, and all scene gaps replaced."""
+    source_range > 0, all scene gaps replaced, and audio-video timing consistent."""
     errors = []
 
     video_track = _get_track(timeline, "V1_Video")
@@ -177,6 +177,8 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
 
     import opentimelineio as otio
 
+    # Collect video clip durations by scene for cross-validation
+    video_by_scene: dict[int, list[float]] = {}  # scene_num -> [source_range durations]
     clip_count = 0
     for item in video_track:
         if isinstance(item, otio.schema.Gap):
@@ -220,8 +222,40 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
                             f"exceeds available_range ({avail_dur:.2f}s)"
                         )
 
+                # Track for cross-validation
+                meta = item.metadata.get("documentary", {})
+                sn = meta.get("scene_num", 0)
+                if sn:
+                    video_by_scene.setdefault(sn, []).append(src_dur)
+
     if clip_count == 0:
         errors.append("No video clips found on V1_Video after production")
+
+    # FIX 5: Cross-validate audio vs video timing per scene.
+    # After production, every video clip's source_range should match
+    # its corresponding narration clip's source_range (same scene).
+    narration_track = _get_track(timeline, "A1_Narration")
+    if narration_track is not None and video_by_scene:
+        audio_by_scene: dict[int, float] = {}  # scene_num -> total narration duration
+        for item in narration_track:
+            if isinstance(item, otio.schema.Clip) and item.source_range:
+                meta = item.metadata.get("documentary", {})
+                sn = meta.get("scene_num", 0)
+                if sn:
+                    audio_by_scene[sn] = (
+                        audio_by_scene.get(sn, 0.0)
+                        + item.source_range.duration.to_seconds()
+                    )
+
+        for sn, video_durs in video_by_scene.items():
+            total_video = sum(video_durs)
+            total_audio = audio_by_scene.get(sn, 0.0)
+            if total_audio > 0 and abs(total_video - total_audio) > 1.0:
+                errors.append(
+                    f"Scene {sn} timing mismatch: video source_range total "
+                    f"({total_video:.2f}s) vs narration ({total_audio:.2f}s) "
+                    f"\u2014 drift > 1s"
+                )
 
     return "; ".join(errors) if errors else None
 

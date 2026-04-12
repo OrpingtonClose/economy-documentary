@@ -388,8 +388,11 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
     import httpx
 
     if not _QA_BACKEND:
-        logger.error("DASHSCOPE_API_KEY and OPENROUTER_API_KEY both missing — visual QA UNAVAILABLE")
-        return {"quality": "unknown", "qa_reason": "No API key for visual QA (DASHSCOPE_API_KEY or OPENROUTER_API_KEY required)"}
+        raise RuntimeError(
+            "OTIO VIOLATION: visual QA unavailable — neither DASHSCOPE_API_KEY "
+            "nor OPENROUTER_API_KEY is set. QA is mandatory; the pipeline "
+            "cannot accept clips without quality verification."
+        )
 
     # Build multimodal content: frames as images + evaluation prompt
     content_parts = []

@@ -1413,6 +1413,26 @@ def deterministic_assembly_callback(
                         f"source_range (start={src_start:.2f}, dur={src_dur:.2f}): "
                         f"{trim_res['error']}"
                     )
+
+                # FIX 6: Post-trim ffprobe verification — confirm the
+                # trimmed clip's actual duration matches the OTIO
+                # source_range.  This catches ffmpeg silently producing
+                # the wrong duration (e.g. codec delay, keyframe issues).
+                verify_res = json.loads(probe_clip(mp4_path=trimmed_clip_path))
+                actual_dur = verify_res.get("duration", 0)
+                if actual_dur <= 0:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: trimmed clip {trimmed_clip_path} "
+                        f"has zero duration after ffprobe verification"
+                    )
+                if abs(actual_dur - src_dur) > 0.5:  # 500ms tolerance
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: trimmed clip {v_clip.name} actual "
+                        f"duration ({actual_dur:.2f}s) deviates from OTIO "
+                        f"source_range ({src_dur:.2f}s) by "
+                        f"{abs(actual_dur - src_dur):.2f}s — trim failed"
+                    )
+
                 video_paths.append(trimmed_clip_path)
 
             if not video_paths or not audio_paths:
