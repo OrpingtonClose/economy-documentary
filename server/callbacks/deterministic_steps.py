@@ -415,6 +415,12 @@ def deterministic_audio_callback(
             parts=[genai_types.Part(text="Audio stage restored from B2 checkpoint — skipped.")],
         )
 
+    # OTIO GATE: refuse to proceed if a previous stage flagged a violation
+    if state.get("otio_violation"):
+        raise RuntimeError(
+            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        )
+
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
     validate_preconditions(AUDIO_CONTRACT, state.to_dict())
@@ -546,11 +552,11 @@ def deterministic_audio_callback(
                             )
                             clip_result = json.loads(clip_result_json)
                             if "error" in clip_result:
-                                err_msg = f"OTIO error scene {scene_num} {voice_suffix}: {clip_result['error']}"
-                                logger.error(err_msg)
-                                errors.append(err_msg)
-                            else:
-                                total_clips += 1
+                                raise RuntimeError(
+                                    f"OTIO VIOLATION: failed to add narration clip "
+                                    f"scene {scene_num} {voice_suffix}: {clip_result['error']}"
+                                )
+                            total_clips += 1
 
                             # Run alignment
                             align_result_json = align_narration(
@@ -592,11 +598,11 @@ def deterministic_audio_callback(
                         )
                         clip_result = json.loads(clip_result_json)
                         if "error" in clip_result:
-                            err_msg = f"OTIO error scene {scene_num} {voice}: {clip_result['error']}"
-                            logger.error(err_msg)
-                            errors.append(err_msg)
-                        else:
-                            total_clips += 1
+                            raise RuntimeError(
+                                f"OTIO VIOLATION: failed to add narration clip "
+                                f"scene {scene_num} {voice}: {clip_result['error']}"
+                            )
+                        total_clips += 1
 
                         align_result_json = align_narration(
                             wav_path=wav_path,
@@ -870,6 +876,12 @@ def deterministic_production_callback(
             parts=[genai_types.Part(text="Production stage restored from B2 checkpoint — skipped.")],
         )
 
+    # OTIO GATE: refuse to proceed if a previous stage flagged a violation
+    if state.get("otio_violation"):
+        raise RuntimeError(
+            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        )
+
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
     validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
@@ -1085,10 +1097,14 @@ def deterministic_production_callback(
                 )
                 clip_result = json.loads(clip_result_json)
                 if "error" in clip_result:
-                    errors.append(f"OTIO error scene {scene_num} phrase {phrase_idx}: {clip_result['error']}")
-                else:
-                    skipped_clips += 1
-                    total_clips += 1
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: failed to add video clip "
+                        f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
+                    )
+                skipped_clips += 1
+                total_clips += 1
+            except RuntimeError:
+                raise  # OTIO violations are fatal — never swallow
             except Exception as e:
                 err_msg = f"Error adding skipped scene {scene_num} phrase {phrase_idx} to timeline: {e}"
                 logger.error(err_msg)
@@ -1116,9 +1132,13 @@ def deterministic_production_callback(
             )
             clip_result = json.loads(clip_result_json)
             if "error" in clip_result:
-                errors.append(f"OTIO error scene {scene_num} phrase {phrase_idx}: {clip_result['error']}")
-            else:
-                total_clips += 1
+                raise RuntimeError(
+                    f"OTIO VIOLATION: failed to add video clip "
+                    f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
+                )
+            total_clips += 1
+        except RuntimeError:
+            raise  # OTIO violations are fatal — never swallow
         except Exception as e:
             err_msg = f"Error adding scene {scene_num} phrase {phrase_idx} to timeline: {e}"
             logger.error(err_msg)
@@ -1180,6 +1200,12 @@ def deterministic_assembly_callback(
             parts=[genai_types.Part(text="Assembly stage restored from B2 checkpoint — skipped.")],
         )
 
+    # OTIO GATE: refuse to proceed if a previous stage flagged a violation
+    if state.get("otio_violation"):
+        raise RuntimeError(
+            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        )
+
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
     validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
@@ -1195,13 +1221,9 @@ def deterministic_assembly_callback(
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
-        # Notify stage complete so the timing watchdog doesn't fire spuriously
-        _infra = get_infra_agent()
-        if _infra:
-            _infra.notify_stage_complete("assembly")
-        return genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(text="ERROR: Timeline not found")],
+        raise RuntimeError(
+            f"OTIO VIOLATION: timeline not found at '{timeline_path}' "
+            f"— cannot assemble without OTIO timeline"
         )
 
     import opentimelineio as otio
@@ -1227,13 +1249,14 @@ def deterministic_assembly_callback(
             narration_track = track
 
     if video_track is None or narration_track is None:
-        # Notify stage complete so the timing watchdog doesn't fire spuriously
-        _infra = get_infra_agent()
-        if _infra:
-            _infra.notify_stage_complete("assembly")
-        return genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(text="ERROR: Missing V1_Video or A1_Narration track")],
+        missing = []
+        if video_track is None:
+            missing.append("V1_Video")
+        if narration_track is None:
+            missing.append("A1_Narration")
+        raise RuntimeError(
+            f"OTIO VIOLATION: required track(s) missing: {', '.join(missing)} "
+            f"— timeline is damaged"
         )
 
     # Collect video clips by scene
@@ -1309,31 +1332,132 @@ def deterministic_assembly_callback(
                 a_path = ""
                 if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
                     a_path = a_clip.media_reference.target_url
-                if a_path and os.path.exists(a_path):
-                    # Insert a silence gap before every clip after the first
-                    if idx > 0:
-                        silence_path = _generate_silence(
-                            INTER_VOICE_PAUSE_SEC,
-                            os.path.join(
-                                assembly_dir,
-                                f"silence_scene{scene_num:03d}{lang_suffix}_v{idx}.wav",
-                            ),
-                        )
-                        if silence_path:
-                            audio_paths.append(silence_path)
-                            total_audio_duration += INTER_VOICE_PAUSE_SEC
-                    audio_paths.append(a_path)
-                    if a_clip.source_range:
-                        total_audio_duration += a_clip.source_range.duration.to_seconds()
 
-            # Collect ALL video clip paths
+                # HARD RULE: every narration clip must have a valid file
+                if not a_path or not os.path.exists(a_path):
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: narration clip {a_clip.name} references "
+                        f"missing file: {a_path}"
+                    )
+
+                # HARD RULE: every narration clip must have source_range
+                if not a_clip.source_range:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: narration clip {a_clip.name} has no "
+                        f"source_range — timeline is damaged"
+                    )
+
+                # Insert a silence gap before every clip after the first
+                if idx > 0:
+                    silence_path = _generate_silence(
+                        INTER_VOICE_PAUSE_SEC,
+                        os.path.join(
+                            assembly_dir,
+                            f"silence_scene{scene_num:03d}{lang_suffix}_v{idx}.wav",
+                        ),
+                    )
+                    if not silence_path:
+                        raise RuntimeError(
+                            f"OTIO VIOLATION: failed to generate inter-voice "
+                            f"silence for scene {scene_num}{lang_suffix}"
+                        )
+                    audio_paths.append(silence_path)
+                    total_audio_duration += INTER_VOICE_PAUSE_SEC
+                audio_paths.append(a_path)
+                total_audio_duration += a_clip.source_range.duration.to_seconds()
+
+            # OTIO-COMPLIANT: Trim each video clip to its source_range
+            # before concatenation.  The source_range was set during
+            # production to match the narration phrase duration, so
+            # respecting it preserves the phrase↔video timing contract.
+            #
+            # SYNC FIX: interleave black-frame video segments between
+            # clips to mirror the inter-voice silence pauses in the
+            # audio track.  Without this, V2 video starts playing
+            # during V1's trailing silence and the desync accumulates.
             video_paths = []
-            for v_clip in v_clips:
+            for clip_idx, v_clip in enumerate(v_clips):
                 v_path = ""
                 if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
                     v_path = v_clip.media_reference.target_url
-                if v_path and os.path.exists(v_path):
-                    video_paths.append(v_path)
+                if not v_path or not os.path.exists(v_path):
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: video clip {v_clip.name} references "
+                        f"missing file: {v_path}"
+                    )
+
+                # HARD RULE: every clip MUST have a source_range from OTIO.
+                # A clip without source_range means the timeline is damaged.
+                if not v_clip.source_range:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: video clip {v_clip.name} has no "
+                        f"source_range — timeline is damaged"
+                    )
+
+                src_start = v_clip.source_range.start_time.to_seconds()
+                src_dur = v_clip.source_range.duration.to_seconds()
+                if src_dur <= 0:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: video clip {v_clip.name} has "
+                        f"source_range duration={src_dur:.3f}s — must be >0"
+                    )
+
+                # Insert a black-frame gap before every clip after the
+                # first, matching the inter-voice silence pause in audio.
+                # This keeps video and audio aligned throughout playback.
+                if clip_idx > 0 and INTER_VOICE_PAUSE_SEC > 0:
+                    black_gap_path = os.path.join(
+                        assembly_dir,
+                        f"scene_{scene_num:03d}{lang_suffix}_vgap_{clip_idx:03d}.mp4",
+                    )
+                    black_gap = _generate_black_video(
+                        INTER_VOICE_PAUSE_SEC, black_gap_path,
+                    )
+                    if not black_gap:
+                        raise RuntimeError(
+                            f"OTIO VIOLATION: failed to generate inter-voice "
+                            f"video gap for scene {scene_num}{lang_suffix} "
+                            f"clip {clip_idx}"
+                        )
+                    video_paths.append(black_gap)
+
+                trimmed_clip_path = os.path.join(
+                    assembly_dir,
+                    f"scene_{scene_num:03d}{lang_suffix}_vclip_{clip_idx:03d}_trimmed.mp4",
+                )
+                trim_res = json.loads(trim_clip(
+                    input_path=v_path,
+                    start_sec=src_start,
+                    duration_sec=src_dur,
+                    output_path=trimmed_clip_path,
+                ))
+                if "error" in trim_res:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: failed to trim {v_clip.name} to "
+                        f"source_range (start={src_start:.2f}, dur={src_dur:.2f}): "
+                        f"{trim_res['error']}"
+                    )
+
+                # FIX 6: Post-trim ffprobe verification — confirm the
+                # trimmed clip's actual duration matches the OTIO
+                # source_range.  This catches ffmpeg silently producing
+                # the wrong duration (e.g. codec delay, keyframe issues).
+                verify_res = json.loads(probe_clip(mp4_path=trimmed_clip_path))
+                actual_dur = verify_res.get("duration", 0)
+                if actual_dur <= 0:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: trimmed clip {trimmed_clip_path} "
+                        f"has zero duration after ffprobe verification"
+                    )
+                if abs(actual_dur - src_dur) > 0.5:  # 500ms tolerance
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: trimmed clip {v_clip.name} actual "
+                        f"duration ({actual_dur:.2f}s) deviates from OTIO "
+                        f"source_range ({src_dur:.2f}s) by "
+                        f"{abs(actual_dur - src_dur):.2f}s — trim failed"
+                    )
+
+                video_paths.append(trimmed_clip_path)
 
             if not video_paths or not audio_paths:
                 track_errors.append(
@@ -1364,7 +1488,7 @@ def deterministic_assembly_callback(
                     logger.info("Combined %d narration clips for scene %d%s",
                                 len(audio_paths), scene_num, lang_suffix)
 
-                # Concatenate video clips if more than one
+                # Concatenate OTIO-trimmed video clips
                 if len(video_paths) == 1:
                     combined_video = video_paths[0]
                 else:
@@ -1382,32 +1506,62 @@ def deterministic_assembly_callback(
                             f"{concat_video_result['error']}"
                         )
                         continue
-                    logger.info("Combined %d video clips for scene %d%s",
+                    logger.info("Combined %d OTIO-trimmed video clips for scene %d%s",
                                 len(video_paths), scene_num, lang_suffix)
 
-                # Trim combined video to match total narration duration
-                trimmed_path = os.path.join(
-                    assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
-                )
-                trim_result = json.loads(trim_clip(
-                    input_path=combined_video,
-                    start_sec=0,
-                    duration_sec=total_audio_duration,
-                    output_path=trimmed_path,
-                ))
-                if "error" in trim_result:
-                    track_errors.append(
-                        f"Scene {scene_num}{lang_suffix} trim: {trim_result['error']}"
+                # HARD RULE: verify combined video duration against audio.
+                # OTIO source_range is the primary timing authority; audio
+                # duration is the ceiling.  Any deviation is an error.
+                probe_res = json.loads(probe_clip(mp4_path=combined_video))
+                video_dur = probe_res.get("duration", 0)
+                if video_dur <= 0:
+                    raise RuntimeError(
+                        f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
+                        f"combined video has zero duration"
                     )
-                    continue
 
-                # Mux combined audio + trimmed video
+                combined_video_for_mux = combined_video
+                duration_diff = video_dur - total_audio_duration
+
+                if duration_diff > 0.5:
+                    # Video longer than audio — trim excess
+                    trimmed_path = os.path.join(
+                        assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
+                    )
+                    trim_result = json.loads(trim_clip(
+                        input_path=combined_video,
+                        start_sec=0,
+                        duration_sec=total_audio_duration,
+                        output_path=trimmed_path,
+                    ))
+                    if "error" in trim_result:
+                        raise RuntimeError(
+                            f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
+                            f"safety trim failed: {trim_result['error']}"
+                        )
+                    combined_video_for_mux = trimmed_path
+
+                elif duration_diff < -0.5:
+                    # Video still shorter than audio after interleaving
+                    # black-frame gaps — this shouldn't happen if the
+                    # interleaving matched the audio pauses.  Log a
+                    # warning but don't fail; the mux will still work
+                    # (audio may extend slightly past video at scene end).
+                    logger.warning(
+                        "Scene %d%s: video %.2fs still < audio %.2fs "
+                        "after interleaving (residual %.2fs) — "
+                        "possible clip count mismatch between audio and video",
+                        scene_num, lang_suffix, video_dur,
+                        total_audio_duration, abs(duration_diff),
+                    )
+
+                # Mux combined audio + video
                 muxed_path = os.path.join(
                     assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_muxed.mp4"
                 )
                 mux_result = json.loads(mux_audio_video(
                     audio_path=combined_audio,
-                    video_path=trimmed_path,
+                    video_path=combined_video_for_mux,
                     output_path=muxed_path,
                 ))
                 if "error" in mux_result:
@@ -1418,6 +1572,8 @@ def deterministic_assembly_callback(
 
                 track_muxed.append(muxed_path)
 
+            except RuntimeError:
+                raise  # OTIO violations are fatal — never swallow
             except Exception as e:
                 track_errors.append(f"Scene {scene_num}{lang_suffix} assembly: {e}")
 
