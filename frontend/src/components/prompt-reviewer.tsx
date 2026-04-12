@@ -16,6 +16,7 @@ const BACKEND_URL =
  * Data source: GET /agui/visual-concepts (reads video status files on disk)
  */
 export function PromptReviewer() {
+  const [mounted, setMounted] = useState(false);
   const [concepts, setConcepts] = useState<VisualConcept[]>([]);
   const [visualStyle, setVisualStyle] = useState<Record<string, string>>({});
   const [gateBlocked, setGateBlocked] = useState(false);
@@ -68,6 +69,7 @@ export function PromptReviewer() {
   }, []);
 
   useEffect(() => {
+    setMounted(true);
     fetchConcepts();
     fetchApprovalState();
     const interval = setInterval(() => {
@@ -120,6 +122,16 @@ export function PromptReviewer() {
     }
     setFeedbackModal({ open: false, type: "approve", conceptIdx: -1, comment: "" });
   };
+
+  if (!mounted) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <div className="text-xl mb-2">Loading...</div>
+        </div>
+      </div>
+    );
+  }
 
   if (gateBlocked) {
     return (
