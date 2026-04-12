@@ -281,6 +281,7 @@ def generate_video_clip(
         "seed": qa_seed,
         "status": "completed",
         "prompt_preview": prompt[:200],
+        "prompt_full": prompt,
     }
     try:
         with open(status_path, "w") as sf:
@@ -318,6 +319,7 @@ def generate_video_clip(
             "lora_id": lora_id,
             "lora_weight": lora_weight,
             "prompt_preview": prompt[:200],
+            "prompt_full": prompt,
             "gen_time": round(gen_time, 2),
             "num_frames": num_frames,
             "resolution": "768x512",
