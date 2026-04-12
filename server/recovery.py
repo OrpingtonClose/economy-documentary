@@ -521,6 +521,7 @@ def resolve_escalation(escalation_id: str, response: dict) -> bool:
         "Escalation %s resolved by human: action=%s",
         escalation_id, response.get("action", "unknown"),
     )
+    _emit_escalation_event(req)
     return True
 
 

@@ -199,6 +199,7 @@ def generate_narration(
                 "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
                 "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+                "actual_text": text,  # track what text was actually sent (may differ after amendment)
             }
 
     from recovery import execute_with_recovery, TTS_POLICY
@@ -225,7 +226,20 @@ def generate_narration(
     os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
     with open(wav_path, "wb") as f:
         f.write(wav_bytes)
-    _write_sidecar(sidecar_path, text_hash)
+    # Only write sidecar if the text wasn't amended by recovery (e.g. _tts_amend_chunk).
+    # If recovery shortened the text, the WAV doesn't match the original — don't cache it
+    # or the next run would falsely serve truncated audio as a cache hit.
+    actual_text = tts_result.get("actual_text", text)
+    if actual_text == text:
+        _write_sidecar(sidecar_path, text_hash)
+    else:
+        logger.warning(
+            "TTS text was amended by recovery (orig=%d chars, actual=%d chars) — skipping sidecar",
+            len(text), len(actual_text),
+        )
+        # Remove stale sidecar if it exists
+        if os.path.isfile(sidecar_path):
+            os.remove(sidecar_path)
 
     logger.info(
         "Generated narration WAV %s (%.2fs, gen=%.1fs, %d words)",
