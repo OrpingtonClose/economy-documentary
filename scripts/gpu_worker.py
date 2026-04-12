@@ -81,8 +81,8 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 20  # distilled model: 20 steps for quality (CFG=1)
-    guidance_scale: float = 1.0  # distilled model: CFG=1 (no classifier-free guidance needed)
+    num_inference_steps: int = 40  # full model: 40 steps (pipeline default)
+    guidance_scale: float = 4.0  # full model: CFG=4.0 (pipeline default)
 
 
 class HealthResponse(BaseModel):
@@ -216,7 +216,9 @@ def _load_ltx():
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=False,
     ).to("cuda")
-    pipe.vae.enable_tiling()  # Required for quality output per official docs
+    # NOTE: VAE tiling disabled — it causes grid artifacts at 768x512.
+    # The H200 NVL has 140GB VRAM, so tiling is unnecessary.
+    # pipe.vae.enable_tiling()
     _ltx_pipe = pipe
     _active_model = "ltx"
 
@@ -333,13 +335,18 @@ def _measure_frame_contrast(frames) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Qwen-Omni Visual QA via OpenRouter (bearnaise pattern)
+# Qwen-Omni Visual QA via DashScope (bearnaise pattern)
 # ---------------------------------------------------------------------------
 
-# OpenRouter API key — set via env var on the GPU VM
+# DashScope API key — set via env var on the GPU VM
+# Falls back to OPENROUTER_API_KEY for backward compatibility.
+_DASHSCOPE_API_KEY: str = os.environ.get("DASHSCOPE_API_KEY", "")
 _OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
-# Model for video QA — Qwen3.5-Plus supports text, image, video input
-_QA_MODEL: str = "qwen/qwen3.5-plus-02-15"
+# Which backend to use: DashScope (preferred) or OpenRouter (fallback)
+_QA_BACKEND: str = "dashscope" if _DASHSCOPE_API_KEY else ("openrouter" if _OPENROUTER_API_KEY else "")
+# Model for video QA — Qwen VL model with vision capabilities
+_QA_MODEL_DASHSCOPE: str = "qwen-vl-max"  # Qwen-VL-Max on DashScope
+_QA_MODEL_OPENROUTER: str = "qwen/qwen3.5-plus-02-15"  # fallback on OpenRouter
 
 
 def _frames_to_base64(frames, indices: list[int]) -> list[str]:
@@ -380,9 +387,9 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
     """
     import httpx
 
-    if not _OPENROUTER_API_KEY:
-        logger.warning("OPENROUTER_API_KEY not set — skipping visual QA")
-        return {"quality": "unknown", "qa_reason": "No API key for visual QA"}
+    if not _QA_BACKEND:
+        logger.error("DASHSCOPE_API_KEY and OPENROUTER_API_KEY both missing — visual QA UNAVAILABLE")
+        return {"quality": "unknown", "qa_reason": "No API key for visual QA (DASHSCOPE_API_KEY or OPENROUTER_API_KEY required)"}
 
     # Build multimodal content: frames as images + evaluation prompt
     content_parts = []
@@ -428,14 +435,25 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
     })
 
     try:
+        # Select backend: DashScope (preferred) or OpenRouter (fallback)
+        if _QA_BACKEND == "dashscope":
+            api_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+            api_key = _DASHSCOPE_API_KEY
+            model = _QA_MODEL_DASHSCOPE
+        else:
+            api_url = "https://openrouter.ai/api/v1/chat/completions"
+            api_key = _OPENROUTER_API_KEY
+            model = _QA_MODEL_OPENROUTER
+
+        logger.info("Visual QA using %s (model=%s)", _QA_BACKEND, model)
         resp = httpx.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            api_url,
             headers={
-                "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": _QA_MODEL,
+                "model": model,
                 "messages": [{"role": "user", "content": content_parts}],
                 "max_tokens": 300,
                 "temperature": 0.1,
@@ -547,12 +565,9 @@ def _generate_video(
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
         gen = torch.Generator("cuda").manual_seed(current_seed)
-        # Official dg845 LTX-2.3 parameters for quality output:
-        # - stg_scale: spatio-temporal guidance for coherent motion
-        # - modality_scale: balances video vs audio generation
-        # - guidance_rescale: prevents oversaturation from high CFG
-        # - spatio_temporal_guidance_blocks: which transformer blocks apply STG
-        # - output_type "np": proper numpy output for frame processing
+        # Use pipeline defaults for stg/modality/rescale — these are tuned
+        # for the full (non-distilled) LTX-2.3 model.
+        # output_type "np": proper numpy output for frame processing
         video_out, audio_out = _ltx_pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -562,14 +577,6 @@ def _generate_video(
             frame_rate=fps,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
-            stg_scale=1.0,
-            modality_scale=3.0,
-            guidance_rescale=0.7,
-            audio_guidance_scale=7.0,
-            audio_stg_scale=1.0,
-            audio_modality_scale=3.0,
-            audio_guidance_rescale=0.7,
-            spatio_temporal_guidance_blocks=[28],
             generator=gen,
             output_type="np",
             return_dict=False,
