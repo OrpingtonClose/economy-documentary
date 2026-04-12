@@ -577,6 +577,63 @@ async def get_scenes():
         return JSONResponse({"scenes": []})
 
 
+@router.post("/backfill-prompts")
+async def backfill_prompts():
+    """Backfill old status files that lack prompt_full.
+
+    Reads the full prompt from the visual style backup concepts list
+    and patches each status JSON on disk so that prompt_full is populated.
+    Returns the count of files patched.
+    """
+    import glob as _glob
+    import re as _re
+
+    # Try to load the visual style backup which may contain the full prompts
+    style_path = os.path.join(_OUTPUT_DIR, "timelines", "_visual_style_backup.json")
+    style_data: dict = {}
+    if os.path.exists(style_path):
+        try:
+            with open(style_path) as f:
+                style_data = json.load(f)
+        except Exception:
+            pass
+
+    # Build lookup of full prompts from concepts in style backup
+    concept_prompts: dict[tuple[int, int], str] = {}
+    for concept in style_data.get("concepts", []):
+        key = (concept.get("scene_num", 0), concept.get("phrase_idx", 0))
+        prompt = concept.get("prompt", "")
+        if prompt and len(prompt) > 200:
+            concept_prompts[key] = prompt
+
+    patched = 0
+    pattern = os.path.join(_OUTPUT_DIR, "video", "*_status.json")
+    for path in sorted(_glob.glob(pattern)):
+        fname = os.path.basename(path)
+        m = _re.match(r"scene_(\d+)_phrase_(\d+)_status\.json", fname)
+        if not m:
+            continue
+        scene_num = int(m.group(1))
+        phrase_idx = int(m.group(2))
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            existing_full = data.get("prompt_full", "")
+            preview = data.get("prompt_preview", "")
+            # Only patch if prompt_full is missing or same length as truncated preview
+            if not existing_full or (preview and len(existing_full) <= len(preview)):
+                full_prompt = concept_prompts.get((scene_num, phrase_idx), "")
+                if full_prompt:
+                    data["prompt_full"] = full_prompt
+                    with open(path, "w") as f:
+                        json.dump(data, f, indent=2)
+                    patched += 1
+        except Exception as exc:
+            logger.debug("Failed to backfill %s: %s", path, exc)
+
+    return JSONResponse({"status": "ok", "patched": patched, "total_concepts": len(concept_prompts)})
+
+
 @router.get("/visual-concepts")
 async def get_visual_concepts():
     """Return visual concepts derived from video status files.
@@ -592,6 +649,27 @@ async def get_visual_concepts():
     import glob as _glob
     import re as _re
 
+    # Load visual style backup for global info and concept-level prompt reasoning
+    style_path = os.path.join(_OUTPUT_DIR, "timelines", "_visual_style_backup.json")
+    style: dict = {}
+    concept_reasoning: dict[tuple[int, int], str] = {}
+    concept_full_prompts: dict[tuple[int, int], str] = {}
+    if os.path.exists(style_path):
+        try:
+            with open(style_path) as f:
+                style = json.load(f)
+            # Extract per-concept reasoning and full prompts from backup
+            for concept in style.get("concepts", []):
+                key = (concept.get("scene_num", 0), concept.get("phrase_idx", 0))
+                reasoning = concept.get("prompt_reasoning", concept.get("reasoning", ""))
+                if reasoning:
+                    concept_reasoning[key] = reasoning
+                full_prompt = concept.get("prompt", "")
+                if full_prompt:
+                    concept_full_prompts[key] = full_prompt
+        except Exception:
+            pass
+
     concepts: list[dict] = []
     pattern = os.path.join(_OUTPUT_DIR, "video", "*_status.json")
     for path in sorted(_glob.glob(pattern)):
@@ -605,10 +683,16 @@ async def get_visual_concepts():
         try:
             with open(path) as f:
                 data = json.load(f)
+            key = (scene_num, phrase_idx)
+            # Use prompt_full from status file, falling back to style backup, then preview
+            prompt = data.get("prompt_full", "")
+            if not prompt or len(prompt) <= 200:
+                prompt = concept_full_prompts.get(key, data.get("prompt_preview", ""))
             concepts.append({
                 "scene_num": scene_num,
                 "phrase_idx": phrase_idx,
-                "prompt": data.get("prompt_full", data.get("prompt_preview", "")),
+                "prompt": prompt,
+                "prompt_reasoning": concept_reasoning.get(key, data.get("prompt_reasoning", "")),
                 "quality": data.get("quality", "unknown"),
                 "qa_reason": data.get("qa_reason", ""),
                 "attempts": data.get("attempts", 0),
@@ -624,16 +708,6 @@ async def get_visual_concepts():
             })
         except Exception as exc:
             logger.debug("Failed to read %s: %s", path, exc)
-
-    # Also read visual style backup for global info
-    style_path = os.path.join(_OUTPUT_DIR, "timelines", "_visual_style_backup.json")
-    style = {}
-    if os.path.exists(style_path):
-        try:
-            with open(style_path) as f:
-                style = json.load(f)
-        except Exception:
-            pass
 
     return JSONResponse({"concepts": concepts, "visual_style": style})
 
@@ -760,7 +834,7 @@ async def get_qa_results():
     """Return QA results by checking pipeline output completeness.
 
     Derives pass/fail per phase by checking whether expected output
-    files exist and have valid content.
+    files exist and have valid content.  Includes per-clip detail.
     """
     results: list[dict] = []
 
@@ -771,10 +845,20 @@ async def get_qa_results():
             with open(scenes_path) as f:
                 scenes = json.load(f)
             if scenes and len(scenes) > 0:
+                scene_details = []
+                for s in scenes:
+                    scene_details.append({
+                        "scene_num": s.get("scene_num", 0),
+                        "title": s.get("title", ""),
+                        "duration_sec": s.get("duration_sec", 0),
+                        "voices": len(s.get("voices", [])),
+                        "has_hook": bool(s.get("dopamine_hook")),
+                    })
                 results.append({
                     "phase": "scenario",
                     "valid": True,
                     "message": f"{len(scenes)} scenes generated with V1/V2/V3 voices",
+                    "details": scene_details,
                 })
             else:
                 results.append({
@@ -791,12 +875,14 @@ async def get_qa_results():
 
     # Audio: check WAV files exist
     import glob as _glob
-    wavs = _glob.glob(os.path.join(_OUTPUT_DIR, "audio", "*.wav"))
+    wavs = sorted(_glob.glob(os.path.join(_OUTPUT_DIR, "audio", "*.wav")))
     if wavs:
+        audio_details = [{"file": os.path.basename(w), "size_kb": round(os.path.getsize(w) / 1024, 1)} for w in wavs]
         results.append({
             "phase": "audio",
             "valid": True,
             "message": f"{len(wavs)} narration WAV files produced",
+            "details": audio_details,
         })
     elif os.path.exists(os.path.join(_OUTPUT_DIR, "audio")):
         results.append({
@@ -808,26 +894,55 @@ async def get_qa_results():
     # Visual Direction: check visual style backup exists
     style_path = os.path.join(_OUTPUT_DIR, "timelines", "_visual_style_backup.json")
     if os.path.exists(style_path):
-        results.append({
-            "phase": "visual_direction",
-            "valid": True,
-            "message": "Visual style and concepts generated",
-        })
+        try:
+            with open(style_path) as f:
+                vs = json.load(f)
+            concept_count = len(vs.get("concepts", []))
+            results.append({
+                "phase": "visual_direction",
+                "valid": True,
+                "message": f"Visual style generated with {concept_count} concepts",
+                "details": [{"style": vs.get("style", ""), "palette": vs.get("palette", ""), "concepts": concept_count}],
+            })
+        except Exception:
+            results.append({
+                "phase": "visual_direction",
+                "valid": True,
+                "message": "Visual style and concepts generated",
+            })
 
-    # Production: check video files
-    videos = _glob.glob(os.path.join(_OUTPUT_DIR, "video", "*.mp4"))
-    status_files = _glob.glob(os.path.join(_OUTPUT_DIR, "video", "*_status.json"))
-    if videos:
+    # Production: check video files with per-clip QA detail
+    import re as _re
+    videos = sorted(_glob.glob(os.path.join(_OUTPUT_DIR, "video", "*.mp4")))
+    status_files = sorted(_glob.glob(os.path.join(_OUTPUT_DIR, "video", "*_status.json")))
+    if videos or status_files:
+        clip_details = []
+        for sf in status_files:
+            fname = os.path.basename(sf)
+            m = _re.match(r"scene_(\d+)_phrase_(\d+)_status\.json", fname)
+            if not m:
+                continue
+            try:
+                with open(sf) as f:
+                    sd = json.load(f)
+                clip_details.append({
+                    "scene_num": int(m.group(1)),
+                    "phrase_idx": int(m.group(2)),
+                    "quality": sd.get("quality", "unknown"),
+                    "qa_reason": sd.get("qa_reason", ""),
+                    "attempts": sd.get("attempts", 0),
+                    "has_video": os.path.exists(sf.replace("_status.json", ".mp4")),
+                })
+            except Exception:
+                pass
+        passed = sum(1 for c in clip_details if c["quality"] in ("acceptable", "excellent", "good"))
+        failed = sum(1 for c in clip_details if c["quality"] not in ("acceptable", "excellent", "good", "unknown"))
         results.append({
             "phase": "production",
-            "valid": True,
-            "message": f"{len(videos)} video clips produced ({len(status_files)} with QA)",
-        })
-    elif status_files:
-        results.append({
-            "phase": "production",
-            "valid": False,
-            "errors": f"QA status files exist ({len(status_files)}) but no MP4 files",
+            "valid": len(videos) > 0,
+            "message": f"{len(videos)} video clips produced ({passed} passed QA, {failed} failed)",
+            "errors": f"QA status files exist ({len(status_files)}) but no MP4 files" if not videos else "",
+            "details": clip_details,
         })
 
     # Assembly: check for final documentary
@@ -838,6 +953,7 @@ async def get_qa_results():
             "phase": "assembly",
             "valid": True,
             "message": f"Final documentary assembled: {os.path.basename(final_vids[0])}",
+            "details": [{"file": os.path.basename(v), "size_mb": round(os.path.getsize(v) / (1024*1024), 1)} for v in final_vids],
         })
 
     return JSONResponse({"results": results})

@@ -22,6 +22,7 @@ export interface VisualConcept {
   end_time: number;
   duration: number;
   prompt: string;
+  prompt_reasoning?: string;
   lora_id: string;
   lora_weight: number;
   camera_style: string;
@@ -99,6 +100,7 @@ export interface QAResult {
   phase: string;
   errors?: string;
   message?: string;
+  details?: Record<string, unknown>[];
 }
 
 export type PipelinePhase =

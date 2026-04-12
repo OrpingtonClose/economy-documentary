@@ -34,6 +34,15 @@ export function ClipReviewer() {
   const [stageApproved, setStageApproved] = useState(false);
   const [approving, setApproving] = useState(false);
 
+  // Feedback modal state
+  const [feedbackModal, setFeedbackModal] = useState<{
+    open: boolean;
+    type: "approve" | "reject" | "regenerate";
+    clipIdx: number;
+    comment: string;
+  }>({ open: false, type: "approve", clipIdx: -1, comment: "" });
+  const [feedbackSent, setFeedbackSent] = useState<Record<number, string>>({});
+
   // Poll AG-UI /clips endpoint
   const fetchClips = useCallback(async () => {
     try {
@@ -94,6 +103,54 @@ export function ClipReviewer() {
     }
   };
 
+  const openFeedbackModal = (type: "approve" | "reject" | "regenerate", clipIdx: number) => {
+    setFeedbackModal({ open: true, type, clipIdx, comment: "" });
+  };
+
+  const submitClipFeedback = async () => {
+    const { type, clipIdx, comment } = feedbackModal;
+    const clip = clips[clipIdx];
+    if (!clip) return;
+
+    try {
+      if (type === "regenerate") {
+        await fetch(`${BACKEND_URL}/agui/regenerate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            level: "clip",
+            artifact_id: `clip_s${clip.scene_num}_p${clip.phrase_idx}`,
+            scene_num: clip.scene_num,
+            comment,
+          }),
+        });
+      } else {
+        await fetch(`${BACKEND_URL}/agui/feedback`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            feedback_type: type,
+            artifact_id: `clip_s${clip.scene_num}_p${clip.phrase_idx}`,
+            scene_num: clip.scene_num,
+            comment,
+          }),
+        });
+      }
+      setFeedbackSent((prev) => ({ ...prev, [clipIdx]: type }));
+      // Also update local state
+      const updated = [...clips];
+      if (type === "approve") {
+        updated[clipIdx] = { ...clip, status: "approved" };
+      } else if (type === "reject") {
+        updated[clipIdx] = { ...clip, status: "rejected" };
+      }
+      setClips(updated);
+    } catch {
+      // ignore
+    }
+    setFeedbackModal({ open: false, type: "approve", clipIdx: -1, comment: "" });
+  };
+
   if (gateBlocked) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -126,6 +183,66 @@ export function ClipReviewer() {
 
   return (
     <div className="space-y-6">
+      {/* Feedback Modal */}
+      {feedbackModal.open && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-pipeline-card border border-gray-600 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold mb-3">
+              {feedbackModal.type === "approve" ? (
+                <span className="text-green-400">Approve Clip</span>
+              ) : feedbackModal.type === "reject" ? (
+                <span className="text-red-400">Reject Clip</span>
+              ) : (
+                <span className="text-purple-400">Regenerate Clip</span>
+              )}
+            </h3>
+            <p className="text-sm text-pipeline-muted mb-3">
+              Scene {clips[feedbackModal.clipIdx]?.scene_num}, Phrase{" "}
+              {clips[feedbackModal.clipIdx]?.phrase_idx}
+            </p>
+            <textarea
+              className="w-full bg-pipeline-bg border border-gray-600 rounded p-3 text-sm text-white placeholder-gray-500 focus:border-pipeline-accent focus:outline-none"
+              rows={4}
+              placeholder={
+                feedbackModal.type === "approve"
+                  ? "Why approve? (optional — e.g., good motion, matches mood)"
+                  : feedbackModal.type === "reject"
+                  ? "Why reject? (required — e.g., artifacts, wrong movement, doesn't match prompt)"
+                  : "Regeneration guidance (required — e.g., needs slower camera, wrong color grade)"
+              }
+              value={feedbackModal.comment}
+              onChange={(e) =>
+                setFeedbackModal((prev) => ({ ...prev, comment: e.target.value }))
+              }
+              autoFocus
+            />
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={submitClipFeedback}
+                disabled={feedbackModal.type !== "approve" && !feedbackModal.comment.trim()}
+                className={`flex-1 py-2 rounded text-sm font-medium transition-colors disabled:opacity-40 ${
+                  feedbackModal.type === "approve"
+                    ? "bg-green-700 hover:bg-green-600 text-white"
+                    : feedbackModal.type === "reject"
+                    ? "bg-red-700 hover:bg-red-600 text-white"
+                    : "bg-purple-700 hover:bg-purple-600 text-white"
+                }`}
+              >
+                Submit
+              </button>
+              <button
+                onClick={() =>
+                  setFeedbackModal({ open: false, type: "approve", clipIdx: -1, comment: "" })
+                }
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-pipeline-accent">
           Clip Review: {clips.length} Clips
@@ -209,38 +326,54 @@ export function ClipReviewer() {
             &ldquo;{clip.narration_text}&rdquo;
           </div>
 
-          <div className="flex gap-2">
-            <button
-              onClick={() => {
-                const updated = [...clips];
-                updated[idx] = { ...clip, status: "approved" };
-                setClips(updated);
-              }}
-              className={`px-3 py-1 rounded text-xs ${
-                clip.status === "approved"
-                  ? "bg-green-600 text-white"
-                  : "bg-green-800 text-green-200 hover:bg-green-700"
-              }`}
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => {
-                const updated = [...clips];
-                updated[idx] = { ...clip, status: "rejected" };
-                setClips(updated);
-              }}
-              className={`px-3 py-1 rounded text-xs ${
-                clip.status === "rejected"
-                  ? "bg-red-600 text-white"
-                  : "bg-red-800 text-red-200 hover:bg-red-700"
-              }`}
-            >
-              Reject
-            </button>
-            <button className="px-3 py-1 bg-pipeline-blue text-pipeline-text rounded text-xs hover:bg-pipeline-accent">
-              Regenerate
-            </button>
+          <div className="flex gap-2 items-center">
+            {feedbackSent[idx] ? (
+              <span
+                className={`text-xs px-3 py-1 rounded ${
+                  feedbackSent[idx] === "approve"
+                    ? "bg-green-900 text-green-300"
+                    : feedbackSent[idx] === "reject"
+                    ? "bg-red-900 text-red-300"
+                    : "bg-purple-900 text-purple-300"
+                }`}
+              >
+                {feedbackSent[idx] === "approve"
+                  ? "Approved"
+                  : feedbackSent[idx] === "reject"
+                  ? "Rejected"
+                  : "Regenerating"}{" "}
+                — feedback sent
+              </span>
+            ) : (
+              <>
+                <button
+                  onClick={() => openFeedbackModal("approve", idx)}
+                  className={`px-3 py-1 rounded text-xs transition-colors ${
+                    clip.status === "approved"
+                      ? "bg-green-600 text-white"
+                      : "bg-green-800 text-green-200 hover:bg-green-700"
+                  }`}
+                >
+                  Approve
+                </button>
+                <button
+                  onClick={() => openFeedbackModal("reject", idx)}
+                  className={`px-3 py-1 rounded text-xs transition-colors ${
+                    clip.status === "rejected"
+                      ? "bg-red-600 text-white"
+                      : "bg-red-800 text-red-200 hover:bg-red-700"
+                  }`}
+                >
+                  Reject
+                </button>
+                <button
+                  onClick={() => openFeedbackModal("regenerate", idx)}
+                  className="px-3 py-1 bg-pipeline-blue text-pipeline-text rounded text-xs hover:bg-pipeline-accent transition-colors"
+                >
+                  Regenerate
+                </button>
+              </>
+            )}
           </div>
         </div>
       ))}
