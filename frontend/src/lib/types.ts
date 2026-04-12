@@ -125,3 +125,54 @@ export interface ToolCallInfo {
   duration?: number;
   status: "running" | "completed" | "error";
 }
+
+// AG-UI types — artifact feedback, escalations, recovery
+
+export interface Artifact {
+  id: string;
+  type: "video_clip" | "narration" | "scene_script" | "visual_concept" | "assembled_video";
+  status: "generating" | "pending_review" | "approved" | "rejected" | "regenerating";
+  scene_num: number;
+  phrase_idx: number;
+  language: string;
+  preview_url: string;
+  duration_sec: number;
+  qa_scores: Record<string, string>;
+  metadata: Record<string, unknown>;
+  timestamp: number;
+}
+
+export interface Escalation {
+  id: string;
+  operation_name: string;
+  error_chain: EscalationAttempt[];
+  diagnosis: EscalationDiagnosis;
+  proposed_actions: ProposedAction[];
+  severity: "warning" | "critical";
+  timestamp: number;
+  resolved: boolean;
+  response: Record<string, unknown> | null;
+}
+
+export interface EscalationAttempt {
+  level: string;
+  attempt: number;
+  error: string;
+  strategy: string;
+  timestamp: number;
+  success: boolean;
+}
+
+export interface EscalationDiagnosis {
+  root_cause: string;
+  confidence: "confirmed" | "likely" | "possible";
+  checks: Record<string, unknown>[];
+  proposed_fix: string;
+  proposed_action: string;
+}
+
+export interface ProposedAction {
+  action_id: string;
+  description: string;
+  risk_level: "low" | "medium" | "high";
+}
