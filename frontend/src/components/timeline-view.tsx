@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import type { TimelineStatus, TimelineTrack } from "@/lib/types";
 
 const BACKEND_URL =
@@ -15,22 +15,24 @@ const BACKEND_URL =
 export function TimelineView() {
   const [timeline, setTimeline] = useState<TimelineStatus | null>(null);
 
-  // Poll for timeline updates
-  useEffect(() => {
-    const fetchTimeline = async () => {
-      try {
-        const res = await fetch(`${BACKEND_URL}/dashboard/latest`);
-        const data = await res.json();
-        // Timeline data would come from the pipeline state
-        // For now, use a placeholder
-      } catch {
-        // ignore fetch errors
+  // Poll AG-UI /timeline endpoint
+  const fetchTimeline = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/timeline`);
+      const data = await res.json();
+      if (data.timeline) {
+        setTimeline(data.timeline as TimelineStatus);
       }
-    };
+    } catch {
+      // ignore fetch errors
+    }
+  }, []);
 
+  useEffect(() => {
+    fetchTimeline();
     const interval = setInterval(fetchTimeline, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [fetchTimeline]);
 
   if (!timeline) {
     return (

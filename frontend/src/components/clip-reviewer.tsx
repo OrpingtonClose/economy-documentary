@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, useCallback } from "react";
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 /**
  * Gate 3: Clip Reviewer — video + text rejection interface.
  *
  * Displays generated video clips alongside their narration text.
  * User can approve, reject, or request regeneration of individual clips.
+ *
+ * Data source: GET /agui/clips (reads video status files on disk)
  */
 
 interface ClipReviewItem {
@@ -17,10 +22,32 @@ interface ClipReviewItem {
   duration: number;
   lora_id: string;
   status: "pending" | "approved" | "rejected";
+  quality?: string;
+  qa_reason?: string;
+  attempts?: number;
 }
 
 export function ClipReviewer() {
   const [clips, setClips] = useState<ClipReviewItem[]>([]);
+
+  // Poll AG-UI /clips endpoint
+  const fetchClips = useCallback(async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agui/clips`);
+      const data = await res.json();
+      if (data.clips && data.clips.length > 0) {
+        setClips(data.clips);
+      }
+    } catch {
+      // ignore fetch errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchClips();
+    const interval = setInterval(fetchClips, 5000);
+    return () => clearInterval(interval);
+  }, [fetchClips]);
 
   if (clips.length === 0) {
     return (
@@ -61,17 +88,48 @@ export function ClipReviewer() {
             </h3>
             <div className="flex items-center gap-2">
               <span className="text-sm text-pipeline-muted">
-                {clip.duration.toFixed(1)}s
+                {clip.duration > 0 ? `${clip.duration.toFixed(1)}s` : ""}
               </span>
-              <span className="text-xs px-2 py-1 rounded bg-pipeline-blue">
-                {clip.lora_id}
-              </span>
+              {clip.lora_id && (
+                <span className="text-xs px-2 py-1 rounded bg-pipeline-blue">
+                  {clip.lora_id}
+                </span>
+              )}
             </div>
+          </div>
+
+          {/* QA Status */}
+          <div className="mb-3 flex items-center gap-2">
+            <span
+              className={`text-xs px-2 py-1 rounded-full ${
+                clip.quality === "acceptable"
+                  ? "bg-green-800 text-green-200"
+                  : clip.quality === "unknown"
+                  ? "bg-yellow-800 text-yellow-200"
+                  : "bg-red-800 text-red-200"
+              }`}
+            >
+              QA: {clip.quality || "pending"}
+            </span>
+            {clip.attempts && clip.attempts > 1 && (
+              <span className="text-xs text-pipeline-muted">
+                ({clip.attempts} attempts)
+              </span>
+            )}
+            {clip.qa_reason && (
+              <span className="text-xs text-pipeline-muted truncate max-w-xs">
+                {clip.qa_reason}
+              </span>
+            )}
           </div>
 
           {/* Video preview placeholder */}
           <div className="mb-3 bg-pipeline-bg rounded-lg aspect-video flex items-center justify-center">
-            <span className="text-pipeline-muted">Video Preview</span>
+            {clip.video_path ? (
+              <span className="text-green-400 text-sm">Video generated</span>
+            ) : (
+              <span className="text-pipeline-muted">Generating...</span>
+            )}
           </div>
 
           {/* Narration text */}
