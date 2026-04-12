@@ -215,7 +215,11 @@ def _load_ltx():
         model_path,
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=False,
-    ).to("cuda")
+    )
+    # Audio components kept loaded — correct connectors (per_modality_projections=true)
+    # from dg845/LTX-2.3-Distilled-Diffusers handle 3840→4096/2048 bridging.
+    # We still use separate Qwen3-TTS for narration audio.
+    pipe = pipe.to("cuda")
     # NOTE: VAE tiling disabled — it causes grid artifacts at 768x512.
     # The H200 NVL has 140GB VRAM, so tiling is unnecessary.
     # pipe.vae.enable_tiling()
