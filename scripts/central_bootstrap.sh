@@ -83,7 +83,7 @@ echo "=== Installing Python dependencies ==="
 cd "$REPO_DIR/server"
 pip install --no-cache-dir \
     'google-adk>=1.5.0' \
-    'ag-ui-adk>=0.1.0' \
+    'ag-ui-adk>=0.5.0' \
     'fastapi>=0.100.0' \
     'uvicorn[standard]>=0.20.0' \
     'python-dotenv>=1.0.0' \
