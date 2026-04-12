@@ -180,6 +180,8 @@ def _init_pipeline_state(
     AG-UI creates sessions without initial state, so the first time the
     pipeline runs we inject the keys that all agents read/write.
     """
+    import os
+
     state = callback_context.state
     if "_pipeline_key" not in state:
         for k, v in build_pipeline_state().items():
@@ -188,6 +190,17 @@ def _init_pipeline_state(
             "Pipeline state initialised: pipeline_key=%s",
             state["_pipeline_key"],
         )
+
+    # Inject quick-test template variables from env if not already set.
+    # run_pipeline.py sets these for the CLI path; this handles the AG-UI path.
+    if os.environ.get("DOCUMENTARY_QUICK_TEST", "").lower() in ("1", "true", "yes"):
+        if not state.get("quick_test_rules"):
+            from agents.scenario_director import _QUICK_TEST_RULES
+            state["quick_test"] = "true"
+            state["quick_test_rules"] = _QUICK_TEST_RULES
+            state["max_scene_duration"] = "15"
+            state["max_words_per_scene"] = "37"
+            logger.info("Quick-test mode enabled from env var")
 
     # Pre-compute and store timeline path so all sub-agents can find it.
     # The scenario director also sets this via create_timeline(), but that

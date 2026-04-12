@@ -28,4 +28,11 @@ def build_pipeline_state() -> dict:
         "pipeline_phase": "idle",
         "lora_selections": "{}",
         "quick_test": "",
+        # Template variables for scenario_director instructions.
+        # Defaults are for standard (non-quick-test) mode.
+        # run_pipeline.py and _init_pipeline_state override these
+        # when DOCUMENTARY_QUICK_TEST is set.
+        "quick_test_rules": "",
+        "max_scene_duration": "45",
+        "max_words_per_scene": "112",
     }
