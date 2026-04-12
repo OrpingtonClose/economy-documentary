@@ -515,6 +515,14 @@ def _generate_video(
             Merged with baseline negatives.
         visual_style: Movie-level visual style description passed to QA.
     """
+    # Fail fast if no QA backend — don't waste GPU time generating frames
+    # that will be rejected anyway.  _QA_BACKEND is a module-level constant.
+    if not _QA_BACKEND:
+        raise RuntimeError(
+            "OTIO VIOLATION: visual QA unavailable — neither DASHSCOPE_API_KEY "
+            "nor OPENROUTER_API_KEY is set. Refusing to generate video without QA."
+        )
+
     _load_ltx()
 
     from diffusers.utils import export_to_video
