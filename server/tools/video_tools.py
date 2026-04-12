@@ -229,7 +229,7 @@ def generate_video_clip(
     from recovery import execute_with_recovery, VIDEO_POLICY
     gpu_result = execute_with_recovery(
         operation=_call_gpu_worker,
-        operation_name=f"video_gen_scene{prompt[:30]}",
+        operation_name=f"video_gen_scene{prompt}",
         kwargs={
             "url": video_url,
             "prompt": prompt,
@@ -244,7 +244,7 @@ def generate_video_clip(
             "guidance_scale": 4.0,
         },
         policy=VIDEO_POLICY,
-        context={"prompt": prompt[:200], "duration": actual_duration},
+        context={"prompt": prompt, "duration": actual_duration},
     )
 
     # If recovery returned None (human chose "skip"), return error status

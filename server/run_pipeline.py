@@ -243,8 +243,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
                 if text.strip():
                     agent_name = event.author or "unknown"
                     # Truncate for logging
-                    preview = text[:200] + "..." if len(text) > 200 else text
-                    logger.info("[%s] %s", agent_name, preview)
+                    logger.info("[%s] %s", agent_name, text)
                     final_response = text
 
                     # Track phase transitions for dashboard
@@ -350,7 +349,7 @@ def main():
                 if isinstance(s, dict):
                     print(f"  Scene {s.get('scene_num', '?')}: {s.get('title', 'untitled')}")
     except (json.JSONDecodeError, TypeError):
-        print(f"Scenes (raw): {str(scenes_raw)[:200]}")
+        print(f"Scenes (raw): {str(scenes_raw)}")
 
     # Save full state
     output_path = os.path.join(args.output_dir, "pipeline_state.json")

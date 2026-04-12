@@ -189,7 +189,7 @@ export function ClipReviewer() {
               </span>
             )}
             {clip.qa_reason && (
-              <span className="text-xs text-pipeline-muted truncate max-w-xs">
+              <span className="text-xs text-pipeline-muted break-words">
                 {clip.qa_reason}
               </span>
             )}

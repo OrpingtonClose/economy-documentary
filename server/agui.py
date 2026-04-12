@@ -195,7 +195,7 @@ class FeedbackStore:
             feedback.feedback_type.value,
             feedback.artifact_id or "pipeline",
             feedback.scene_num,
-            feedback.comment[:100] if feedback.comment else "(no comment)",
+            feedback.comment if feedback.comment else "(no comment)",
         )
 
     def get_feedback_for_scene(self, scene_num: int) -> list[dict]:

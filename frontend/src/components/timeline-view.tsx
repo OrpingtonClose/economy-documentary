@@ -115,7 +115,7 @@ function TrackRow({ track }: { track: TimelineTrack }) {
             className="min-w-24 p-2 bg-pipeline-bg rounded text-xs"
             style={{ flex: `${Math.max(clip.duration, 1)} 0 0` }}
           >
-            <div className="font-medium truncate">{clip.name}</div>
+            <div className="font-medium break-words">{clip.name}</div>
             <div className="text-pipeline-muted">{clip.duration.toFixed(1)}s</div>
           </div>
         ))}
@@ -124,7 +124,7 @@ function TrackRow({ track }: { track: TimelineTrack }) {
             key={`gap-${idx}`}
             className="min-w-24 p-2 bg-pipeline-bg border border-pipeline-blue rounded text-xs"
           >
-            <div className="font-medium truncate">{gap.name}</div>
+            <div className="font-medium break-words">{gap.name}</div>
           </div>
         ))}
         {track.total_clips === 0 && track.total_gaps === 0 && (

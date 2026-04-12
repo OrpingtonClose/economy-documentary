@@ -1001,7 +1001,7 @@ def deterministic_production_callback(
             scene_num=scene_num,
             phrase_idx=phrase_idx,
             duration_sec=duration,
-            metadata={"prompt": prompt[:200], "lora_id": lora_id},
+            metadata={"prompt": prompt, "lora_id": lora_id},
             timestamp=time.time(),
         ))
 
@@ -1035,7 +1035,7 @@ def deterministic_production_callback(
             duration_sec=gen_result.get("actual_duration", duration),
             preview_url=output_path,
             qa_scores=qa_scores,
-            metadata={"prompt": prompt[:200], "lora_id": lora_id},
+            metadata={"prompt": prompt, "lora_id": lora_id},
             timestamp=time.time(),
         ))
 
