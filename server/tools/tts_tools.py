@@ -182,8 +182,16 @@ def generate_narration(
 
     # Use graduated recovery middleware instead of bare RuntimeError.
     # The middleware handles: retry → creative amendment → env assessment → human escalation.
-    def _call_tts_worker(url=tts_url, data=payload, text=text):
-        req_inner = Request(url, data=data, headers={"Content-Type": "application/json"})
+    # Build payload from logical params inside the function so creative amendments
+    # (e.g. _tts_amend_chunk shortening text) actually reach the TTS worker.
+    def _call_tts_worker(url=tts_url, text=text, voice=voice, language=lang, scene_num=scene_num):
+        inner_payload = json.dumps({
+            "text": text,
+            "voice": voice,
+            "language": language,
+            "scene_num": scene_num,
+        }).encode("utf-8")
+        req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         with urlopen(req_inner, timeout=300) as resp:  # 5 min: first call loads model
             result_bytes = resp.read()
             return {
@@ -197,7 +205,7 @@ def generate_narration(
     tts_result = execute_with_recovery(
         operation=_call_tts_worker,
         operation_name=f"tts_scene{scene_num}_{voice_role}",
-        kwargs={"url": tts_url, "data": payload, "text": text},
+        kwargs={"url": tts_url, "text": text, "voice": voice, "language": lang, "scene_num": scene_num},
         policy=TTS_POLICY,
         context={"scene_num": scene_num, "voice": voice_role, "text_len": len(text)},
     )

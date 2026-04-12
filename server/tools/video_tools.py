@@ -186,8 +186,34 @@ def generate_video_clip(
 
     # Use graduated recovery middleware instead of ad-hoc retry loops.
     # The middleware handles: retry → creative amendment → env assessment → human escalation.
-    def _call_gpu_worker(url=video_url, data=payload, seed=seed):
-        req_inner = Request(url, data=data, headers={"Content-Type": "application/json"})
+    # Build payload from logical params inside the function so creative amendments
+    # (e.g. _video_amend_seed, _video_amend_steps) actually reach the GPU worker.
+    def _call_gpu_worker(
+        url=video_url,
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        visual_style=visual_style,
+        duration_sec=actual_duration,
+        width=768,
+        height=512,
+        num_frames=num_frames,
+        seed=seed,
+        num_inference_steps=20,
+        guidance_scale=1.0,
+    ):
+        inner_payload = json.dumps({
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "visual_style": visual_style,
+            "duration_sec": duration_sec,
+            "width": width,
+            "height": height,
+            "num_frames": num_frames,
+            "seed": seed,
+            "num_inference_steps": num_inference_steps,
+            "guidance_scale": guidance_scale,
+        }).encode("utf-8")
+        req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         with urlopen(req_inner, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
             result_bytes = resp.read()
             result_meta = {
@@ -204,7 +230,19 @@ def generate_video_clip(
     gpu_result = execute_with_recovery(
         operation=_call_gpu_worker,
         operation_name=f"video_gen_scene{prompt[:30]}",
-        kwargs={"url": video_url, "data": payload, "seed": seed},
+        kwargs={
+            "url": video_url,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "visual_style": visual_style,
+            "duration_sec": actual_duration,
+            "width": 768,
+            "height": 512,
+            "num_frames": num_frames,
+            "seed": seed,
+            "num_inference_steps": 20,
+            "guidance_scale": 1.0,
+        },
         policy=VIDEO_POLICY,
         context={"prompt": prompt[:200], "duration": actual_duration},
     )

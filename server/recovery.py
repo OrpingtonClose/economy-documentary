@@ -841,16 +841,28 @@ def with_recovery(
 
     The decorated function gains automatic retry, creative amendment,
     environmental assessment, and human escalation.
+
+    Positional arguments are converted to keyword arguments using the
+    function's signature so that creative amendments can modify them.
     """
+    import inspect
+
     _policy = policy or RecoveryPolicy()
 
     def decorator(fn: F) -> F:
+        _sig = inspect.signature(fn)
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            # Bind positional args to their parameter names so creative
+            # amendments (which operate on kwargs dicts) can modify them.
+            bound = _sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            all_kwargs = dict(bound.arguments)
             return execute_with_recovery(
                 operation=fn,
                 operation_name=operation_name,
-                kwargs=kwargs,
+                kwargs=all_kwargs,
                 policy=_policy,
             )
         return wrapper  # type: ignore[return-value]
