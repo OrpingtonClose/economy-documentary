@@ -149,13 +149,12 @@ for var in OPENAI_API_KEY OPENAI_API_BASE ADK_MODEL \
            VIDEO_WORKER_URLS; do
     val="${!var:-}"
     if [ -n "$val" ]; then
-        # Update or append
+        # Remove existing line (if any) and append fresh value.
+        # Avoids all sed/bash escaping issues with $, &, \, backticks.
         if grep -q "^${var}=" "$ENV_FILE" 2>/dev/null; then
-            escaped_val=$(printf '%s\n' "$val" | sed 's/[&/\\|]/\\&/g')
-            sed -i "s|^${var}=.*|${var}=${escaped_val}|" "$ENV_FILE"
-        else
-            echo "${var}=${val}" >> "$ENV_FILE"
+            grep -v "^${var}=" "$ENV_FILE" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "$ENV_FILE"
         fi
+        printf '%s=%s\n' "$var" "$val" >> "$ENV_FILE"
     fi
 done
 
