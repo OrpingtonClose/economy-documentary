@@ -234,28 +234,53 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
     # FIX 5: Cross-validate audio vs video timing per scene.
     # After production, every video clip's source_range should match
     # its corresponding narration clip's source_range (same scene).
+    #
+    # In dual_ru_en mode, both RU and EN narration clips live on
+    # A1_Narration, but video clips are generated once and shared.
+    # So we compare video against each language independently — the
+    # video total should match ONE language's narration, not both.
     narration_track = _get_track(timeline, "A1_Narration")
     if narration_track is not None and video_by_scene:
-        audio_by_scene: dict[int, float] = {}  # scene_num -> total narration duration
+        # Group narration durations by (scene_num, language_suffix).
+        # voice metadata looks like "V1" (single lang) or "V1_RU"/"V1_EN" (dual).
+        audio_by_scene_lang: dict[tuple[int, str], float] = {}
         for item in narration_track:
             if isinstance(item, otio.schema.Clip) and item.source_range:
                 meta = item.metadata.get("documentary", {})
                 sn = meta.get("scene_num", 0)
+                voice = meta.get("voice", "")
+                # Extract language suffix: "V1_RU" -> "RU", "V1" -> ""
+                lang = voice.rsplit("_", 1)[-1] if "_" in voice else ""
                 if sn:
-                    audio_by_scene[sn] = (
-                        audio_by_scene.get(sn, 0.0)
+                    key = (sn, lang)
+                    audio_by_scene_lang[key] = (
+                        audio_by_scene_lang.get(key, 0.0)
                         + item.source_range.duration.to_seconds()
                     )
 
+        # Collect unique languages present
+        langs_present = {lang for (_, lang) in audio_by_scene_lang}
+
         for sn, video_durs in video_by_scene.items():
             total_video = sum(video_durs)
-            total_audio = audio_by_scene.get(sn, 0.0)
-            if total_audio > 0 and abs(total_video - total_audio) > 1.0:
-                errors.append(
-                    f"Scene {sn} timing mismatch: video source_range total "
-                    f"({total_video:.2f}s) vs narration ({total_audio:.2f}s) "
-                    f"\u2014 drift > 1s"
-                )
+            # Check against each language independently; video should
+            # match at least one language's narration within tolerance.
+            matched_any = False
+            for lang in langs_present:
+                total_audio = audio_by_scene_lang.get((sn, lang), 0.0)
+                if total_audio > 0 and abs(total_video - total_audio) <= 1.0:
+                    matched_any = True
+                    break
+            if not matched_any:
+                # Report the mismatch with the primary (first) language
+                primary_lang = sorted(langs_present)[0] if langs_present else ""
+                total_audio = audio_by_scene_lang.get((sn, primary_lang), 0.0)
+                if total_audio > 0:
+                    errors.append(
+                        f"Scene {sn} timing mismatch: video source_range total "
+                        f"({total_video:.2f}s) vs narration/{primary_lang or 'default'} "
+                        f"({total_audio:.2f}s) \u2014 drift > 1s"
+                    )
 
     return "; ".join(errors) if errors else None
 
