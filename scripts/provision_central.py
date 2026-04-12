@@ -57,15 +57,19 @@ def find_cheap_cpu_offer(max_price: float, min_disk: int) -> dict:
 
     # Search for cheap offers — we don't need GPU, but Vast.ai
     # primarily offers GPU machines.  Filter for cheapest available.
+    # vastai uses query-string syntax, not --flag syntax.
+    query = (
+        f"cpu_cores_effective >= 4 "
+        f"disk_space >= {min_disk} "
+        f"dph_total <= {max_price} "
+        f"rentable == true verified == true"
+    )
     result = _vast_cmd([
         "search", "offers",
         "--type", "on-demand",
-        "--min-cpu-cores", "4",
-        "--min-ram", "8",
-        "--min-disk", str(min_disk),
-        "--max-dph", str(max_price),
         "--order", "dph_total",
         "--raw",
+        query,
     ])
 
     offers = result if isinstance(result, list) else []
@@ -95,22 +99,22 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
     print(f"\nProvisioning VM from offer {offer_id}...")
 
     # Use a lightweight base image — central unit doesn't need CUDA
+    # SSH keys are managed via Vast.ai account settings, not CLI flags.
     create_args = [
         "create", "instance",
         str(offer_id),
         "--image", "ubuntu:22.04",
         "--disk", str(disk_gb),
-        "--onstart-cmd", "apt-get update && apt-get install -y git curl && "
-                         "(cd /workspace/economy-documentary && git pull origin main || "
-                         "git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary) && "
-                         "bash /workspace/economy-documentary/scripts/central_bootstrap.sh",
+        "--ssh",
+        "--direct",
+        "--env", "-p 3000:3000 -p 8000:8000 -p 80:80",
+        "--onstart-cmd",
+        "apt-get update && apt-get install -y git curl && "
+        "(cd /workspace/economy-documentary && git pull origin main || "
+        "git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary) && "
+        "bash /workspace/economy-documentary/scripts/central_bootstrap.sh",
         "--raw",
     ]
-
-    if ssh_key_path and os.path.exists(ssh_key_path):
-        with open(ssh_key_path) as f:
-            ssh_key = f.read().strip()
-        create_args.extend(["--ssh-key", ssh_key])
 
     result = _vast_cmd(create_args)
 
