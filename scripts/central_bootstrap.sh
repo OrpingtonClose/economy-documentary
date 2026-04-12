@@ -259,10 +259,12 @@ rm -f /etc/nginx/sites-enabled/default
 # Start services
 # ---------------------------------------------------------------------------
 echo "=== Starting services ==="
+# Vast.ai containers have no init system — start supervisord explicitly
+supervisord -c /etc/supervisor/supervisord.conf
 supervisorctl reread
 supervisorctl update
 supervisorctl start documentary:*
-nginx -t && systemctl restart nginx || echo "WARNING: nginx config test failed, skipping"
+nginx -t && nginx || echo "WARNING: nginx config test failed, skipping"
 
 # ---------------------------------------------------------------------------
 # Status report
