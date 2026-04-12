@@ -307,14 +307,18 @@ def timeline_guardian_callback(
             # Timeline may not exist yet during scenario phase
             logger.debug("No timeline yet -- skipping validation for scenario")
             return None
-        raise RuntimeError(
-            f"OTIO VIOLATION [{phase}]: timeline not found or unreadable"
-        )
+        error_msg = f"OTIO VIOLATION [{phase}]: timeline not found or unreadable"
+        state["otio_violation"] = error_msg
+        logger.error("Timeline Guardian FAIL [%s]: %s", phase, error_msg)
+        raise RuntimeError(error_msg)
 
     error = validator(timeline, state)
 
     if error:
-        raise RuntimeError(f"OTIO VIOLATION [{phase}]: {error}")
+        error_msg = f"OTIO VIOLATION [{phase}]: {error}"
+        state["otio_violation"] = error_msg
+        logger.error("Timeline Guardian FAIL [%s]: %s", phase, error)
+        raise RuntimeError(error_msg)
 
     # Validation passed -- clear any previous violation
     state["otio_violation"] = None
