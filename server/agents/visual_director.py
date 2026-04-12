@@ -263,7 +263,15 @@ def _visual_phase_setup(callback_context):
 
     If the visual_direction stage was already completed in B2, skip the
     entire LoopAgent by returning Content.
+
+    In quick-test mode, skip the full LLM-based visual planning loop
+    (content_analyst + visual_concepter + coherence_evaluator) and
+    generate simple visual concepts deterministically from scenes data.
+    This reduces the visual direction stage from ~7 minutes (multiple
+    LLM calls with deep reasoning) to <1 second.
     """
+    import json
+    import os
     from google.genai import types as genai_types
     state = callback_context.state
     state["pipeline_phase"] = "visual_direction"
@@ -277,6 +285,27 @@ def _visual_phase_setup(callback_context):
             parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
         )
 
+    # QUICK-TEST: bypass entire LoopAgent with deterministic visual concepts
+    quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true")
+    if quick_test:
+        logger.info("QUICK-TEST: bypassing visual director LoopAgent with deterministic concepts")
+        concepts = _generate_quick_test_concepts(state)
+        if concepts:
+            state["visual_concepts"] = json.dumps(concepts, ensure_ascii=False)
+            state["content_analysis"] = json.dumps(
+                {"mode": "quick-test", "scenes": len(concepts)},
+                ensure_ascii=False,
+            )
+            logger.info("QUICK-TEST: generated %d visual concepts deterministically", len(concepts))
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text=f"Visual direction complete (quick-test): {len(concepts)} concepts generated deterministically."
+                )],
+            )
+        else:
+            logger.warning("QUICK-TEST: no scenes found, falling through to LLM-based visual planning")
+
     # INFRA: notify stage start for timing watchdog (only if stage will actually run)
     from infra_agent import get_infra_agent, check_infra_pause
     _infra = get_infra_agent()
@@ -285,6 +314,77 @@ def _visual_phase_setup(callback_context):
     check_infra_pause()
 
     return None
+
+
+def _generate_quick_test_concepts(state) -> list:
+    """Generate simple visual concepts from scenes data without LLM calls.
+
+    For quick-test mode: one concept per scene using visual_notes from the
+    scenario, a default LoRA, and simple cinematography prompts. No deep
+    semantic analysis, no LoRA catalog queries, no coherence evaluation.
+    """
+    import json
+    from callbacks.deterministic_steps import extract_json_array
+
+    raw_scenes = state.get("scenes", "[]")
+    scenes = extract_json_array(str(raw_scenes))
+    if not scenes:
+        return []
+
+    # Extract visual style if available
+    raw_vs = str(state.get("visual_style", ""))
+    realism_anchors = "4K, raw footage, natural lighting"
+    avoid_list = "CGI, cartoon, anime, text overlay, split screen"
+    try:
+        vs = json.loads(raw_vs) if raw_vs.strip() else {}
+        if isinstance(vs, dict):
+            anchors = vs.get("realism_anchors", [])
+            if anchors:
+                realism_anchors = ", ".join(anchors)
+            avoid = vs.get("avoid", [])
+            if avoid:
+                avoid_list = ", ".join(avoid)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    concepts = []
+    for scene in scenes:
+        sn = scene.get("scene_num", 0)
+        title = scene.get("title", "scene")
+        visual_notes = scene.get("visual_notes", "")
+        duration = scene.get("duration_sec", 13.0)
+
+        # Build a simple cinematography prompt from visual_notes
+        if visual_notes:
+            base_desc = visual_notes
+        else:
+            base_desc = f"Documentary footage related to {title}"
+
+        prompt = (
+            f"{base_desc} "
+            f"The camera performs a slow dolly forward, capturing the scene "
+            f"with shallow depth of field. "
+            f"Lighting is soft and natural with warm highlights. "
+            f"Shot in {realism_anchors}. "
+            f"Over time, the light shifts subtly as the scene evolves."
+        )
+
+        concepts.append({
+            "scene_num": sn,
+            "phrase_idx": 0,
+            "start_time": 0.0,
+            "end_time": min(duration, 13.0),
+            "duration": min(duration, 10.0),
+            "prompt": prompt,
+            "negative_prompt": avoid_list,
+            "lora_id": "documentary-realism",
+            "lora_weight": 0.75,
+            "camera_movement": "slow dolly forward",
+            "environment": title,
+            "mood": "documentary",
+        })
+
+    return concepts
 
 
 # -- Visual Director (LoopAgent) -----------------------------------------------
