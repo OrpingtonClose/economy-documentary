@@ -1252,6 +1252,16 @@ def deterministic_production_callback(
     if _infra:
         _infra.notify_stage_complete("production")
 
+    # APPROVAL GATE: mark clips ready for human review.
+    # When before_agent_callback returns Content (which we always do for
+    # deterministic production), ADK skips _production_after_with_gate
+    # (pipeline.py:132-142) which is the only other place this is called.
+    # Without this, the assembly stage blocks on wait_for_approval("clips")
+    # for 2 hours before timing out.
+    from callbacks.approval_gate import mark_stage_ready
+    mark_stage_ready("clips")
+    logger.info("Production: marked clips stage ready for approval")
+
     return genai_types.Content(
         role="model",
         parts=[genai_types.Part(text="\n".join(summary_parts))],
