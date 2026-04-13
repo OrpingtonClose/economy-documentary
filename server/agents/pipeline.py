@@ -265,6 +265,9 @@ def _cleanup_pipeline_state(
     except Exception as exc:
         logger.warning("Worker provisioner cleanup error: %s", exc)
 
+    # Reset provisioning flag so re-runs in the same session re-provision
+    state["_workers_provisioned"] = False
+
     return None
 
 

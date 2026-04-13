@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import subprocess
 import threading
 import time
@@ -240,11 +241,11 @@ def provision_vm(spec: WorkerSpec) -> str:
         "git clone https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
         "(cd /workspace/economy-documentary && git pull origin main) && "
-        f"B2_KEY_ID={b2_key_id} B2_APPLICATION_KEY={b2_app_key} "
+        f"B2_KEY_ID={shlex.quote(b2_key_id)} B2_APPLICATION_KEY={shlex.quote(b2_app_key)} "
         "bash /workspace/economy-documentary/scripts/gpu_bootstrap.sh && "
-        f"DASHSCOPE_API_KEY={dashscope_key} "
+        f"DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} "
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
-        f"--mode {spec.worker_mode} --port {spec.remote_port}"
+        f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
 
     create_result = _vast_cmd([
