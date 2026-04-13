@@ -652,9 +652,9 @@ class WorkerProvisioner:
                 logger.error(
                     "Failed to provision %s worker: %s", spec.role, exc,
                 )
-                # Kill SSH tunnels from any previously-provisioned specs
-                # to avoid orphaned subprocess leaks.
+                # Clean up ALL provisioned resources to avoid billing leaks.
                 for prev_spec in specs_needed:
+                    # Kill SSH tunnels
                     if prev_spec.tunnel_proc and prev_spec.tunnel_proc.poll() is None:
                         logger.info(
                             "Cleaning up SSH tunnel for %s (pid=%d) after failure",
@@ -665,6 +665,19 @@ class WorkerProvisioner:
                             prev_spec.tunnel_proc.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             prev_spec.tunnel_proc.kill()
+                    # Terminate orphaned VMs to stop billing
+                    if prev_spec.vm_id:
+                        logger.info(
+                            "Terminating orphaned %s VM %s to stop billing",
+                            prev_spec.role, prev_spec.vm_id,
+                        )
+                        try:
+                            _vast_cmd(["destroy", "instance", prev_spec.vm_id])
+                        except Exception as destroy_exc:
+                            logger.warning(
+                                "Failed to destroy VM %s: %s",
+                                prev_spec.vm_id, destroy_exc,
+                            )
                 status["workers"].append({
                     "role": spec.role,
                     "url": url,
@@ -680,7 +693,7 @@ class WorkerProvisioner:
             self._specs = specs_needed
             self._provisioned = True
 
-        # Start InfraAgent for continuous monitoring
+        # Start InfraAgent for continuous monitoring (uses self._specs)
         self._start_infra_agent()
 
         status["status"] = "ready"
