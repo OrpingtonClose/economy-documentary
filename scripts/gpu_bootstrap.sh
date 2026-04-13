@@ -13,9 +13,9 @@
 #   text_encoder (transformers fmt): ~46.6 GB
 #   transformer  (diffusers fmt):    ~37.8 GB
 #   vae + audio_vae + vocoder:       ~ 2.7 GB
-#   connectors + latent_upsampler:   ~ 3.9 GB
+#   connectors + latent_upsampler:   ~ 7.3 GB
 #   Qwen3-TTS VoiceDesign:           ~ 4.3 GB
-#   Total models:                    ~95.3 GB
+#   Total models:                    ~98.7 GB
 #   OS + software + output:          ~30   GB
 #   Minimum disk required:           ~125  GB  (recommend 200+)
 
@@ -165,6 +165,32 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         fi
     done
 
+    # --- Validate connector / transformer compatibility ---
+    # The connector must project text encoder output (3840) to the transformer's
+    # cross_attention_dim (4096).  If the connector config is missing
+    # per_modality_projections or video_hidden_dim, the weights are from
+    # the older LTX-2 model and will cause a tensor dimension mismatch.
+    echo "--- Validating connector/transformer compatibility ---"
+    if ! python3 -c "
+import json, sys
+conn = json.load(open('$LTX_DIR/connectors/config.json'))
+tfm  = json.load(open('$LTX_DIR/transformer/config.json'))
+# Connector must have per_modality_projections for LTX-2.3
+assert conn.get('per_modality_projections') is True, \
+    f'connectors/config.json missing per_modality_projections=true (got {conn.get(\"per_modality_projections\")}). Likely stale LTX-2 weights.'
+# video_hidden_dim must match transformer cross_attention_dim
+vhd = conn.get('video_hidden_dim')
+cad = tfm.get('cross_attention_dim')
+assert vhd == cad, \
+    f'Dimension mismatch: connectors video_hidden_dim={vhd} != transformer cross_attention_dim={cad}'
+print(f'  OK: connectors video_hidden_dim={vhd} == transformer cross_attention_dim={cad}')
+" 2>&1; then
+        echo "  WARNING: Connector/transformer mismatch detected. Re-downloading connectors from HuggingFace..."
+        rm -rf "$LTX_DIR/connectors"
+        pip install --no-cache-dir huggingface_hub 2>/dev/null
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='connectors/*')"
+    fi
+
     echo ""
     echo "=== Download complete ==="
     du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null
@@ -213,7 +239,8 @@ for f in \
     /workspace/models/ltx2/text_encoder/config.json \
     /workspace/models/ltx2/text_encoder/model.safetensors.index.json \
     /workspace/models/ltx2/transformer/config.json \
-    /workspace/models/ltx2/vae/config.json; do
+    /workspace/models/ltx2/vae/config.json \
+    /workspace/models/ltx2/connectors/config.json; do
     if [ -f "$f" ]; then
         echo "  OK: $f"
     else
