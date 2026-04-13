@@ -322,12 +322,15 @@ def provision_vm(spec: WorkerSpec) -> str:
 
     # Search for offers — VRAM is a hard floor, never compromised.
     # Use query-string filter format for vastai CLI.
-    # The vastai CLI search filter and API both use gpu_ram in **MB**.
-    # Python-side post-filter also uses MB for double-checking.
-    vram_mb = spec.min_vram_gb * 1024
+    # IMPORTANT: The vastai CLI search filter treats gpu_ram in **GB**,
+    # but the API response returns gpu_ram in **MB**.  Empirically verified:
+    #   gpu_ram>=8   -> 64 offers (GTX 1070 Ti with gpu_ram=8192 in response)
+    #   gpu_ram>=8192 -> 0 offers
+    vram_gb = spec.min_vram_gb
+    vram_mb = spec.min_vram_gb * 1024  # for Python-side post-filter only
     query = (
         f"gpu_name={spec.gpu_type} "
-        f"gpu_ram>={vram_mb} "
+        f"gpu_ram>={vram_gb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
         f"disk_space>={spec.min_disk_gb}"
@@ -351,7 +354,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             spec.gpu_type, spec.min_vram_gb,
         )
         query = (
-            f"gpu_ram>={vram_mb} "
+            f"gpu_ram>={vram_gb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
             f"disk_space>={spec.min_disk_gb}"
