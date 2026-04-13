@@ -1649,8 +1649,8 @@ def deterministic_assembly_callback(
                     # (narr_dur - 10)s of expected deficit.
                     _LTX_CAP = 10.0
                     expected_deficit = 0.0
-                    for _nc in narration_clips:
-                        _nc_dur = _nc.get("duration", 0)
+                    for _nc in a_clips:
+                        _nc_dur = _nc.source_range.duration.to_seconds() if _nc.source_range else 0
                         if _nc_dur > _LTX_CAP:
                             expected_deficit += (_nc_dur - _LTX_CAP)
 
