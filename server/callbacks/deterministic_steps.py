@@ -454,7 +454,7 @@ def deterministic_audio_callback(
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
     from tools.otio_tools import add_narration_clip
-    from gatekeeper import check_narration_clip, has_rejects
+    from gatekeeper import check_narration_clip, has_rejects, format_audit_report
 
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -463,6 +463,9 @@ def deterministic_audio_callback(
     alignment_data = {}
     total_clips = 0
     errors = []
+    # Deferred gatekeeper: collect clip info for batch validation AFTER
+    # all artifacts are uploaded to B2 and written to OTIO (audit trail).
+    _deferred_gk_clips: list[dict] = []
 
     for scene in scenes:
         scene_num = scene.get("scene_num", 0)
@@ -530,21 +533,14 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
-                            # GATEKEEPER: validate narration clip before OTIO write
-                            gk_checks = check_narration_clip(
-                                wav_path=wav_path,
-                                scene_num=scene_num,
-                                voice=voice_suffix,
-                                duration=duration,
-                                stage="audio",
-                            )
-                            if has_rejects(gk_checks):
-                                rejects = [c for c in gk_checks if c.verdict.value == "reject"]
-                                reject_msgs = "; ".join(c.message for c in rejects)
-                                raise RuntimeError(
-                                    f"GATEKEEPER REJECT: narration clip scene {scene_num} "
-                                    f"{voice_suffix}: {reject_msgs}"
-                                )
+                            # B2 upload already happened inside generate_narration().
+                            # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                            _deferred_gk_clips.append({
+                                "wav_path": wav_path,
+                                "scene_num": scene_num,
+                                "voice": voice_suffix,
+                                "duration": duration,
+                            })
 
                             # AG-UI: update narration artifact
                             _feedback_store.register_artifact(ArtifactEvent(
@@ -606,21 +602,14 @@ def deterministic_audio_callback(
                     duration = result.get("duration", 0)
 
                     if wav_path and duration > 0:
-                        # GATEKEEPER: validate narration clip before OTIO write
-                        gk_checks = check_narration_clip(
-                            wav_path=wav_path,
-                            scene_num=scene_num,
-                            voice=voice,
-                            duration=duration,
-                            stage="audio",
-                        )
-                        if has_rejects(gk_checks):
-                            rejects = [c for c in gk_checks if c.verdict.value == "reject"]
-                            reject_msgs = "; ".join(c.message for c in rejects)
-                            raise RuntimeError(
-                                f"GATEKEEPER REJECT: narration clip scene {scene_num} "
-                                f"{voice}: {reject_msgs}"
-                            )
+                        # B2 upload already happened inside generate_narration().
+                        # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                        _deferred_gk_clips.append({
+                            "wav_path": wav_path,
+                            "scene_num": scene_num,
+                            "voice": voice,
+                            "duration": duration,
+                        })
 
                         clip_result_json = add_narration_clip(
                             scene_num=scene_num,
@@ -655,8 +644,8 @@ def deterministic_audio_callback(
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
 
-    # Upload audio stage completion to B2
-    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    # Upload audio stage completion to B2 — artifacts FIRST, then gatekeeper.
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
@@ -664,6 +653,34 @@ def deterministic_audio_callback(
     # Only mark stage complete if critical artifacts uploaded
     if _b2_ok:
         upload_stage_marker("audio")
+
+    # GATEKEEPER: batch validation AFTER all artifacts are in B2.
+    # Every narration clip is already uploaded (inside generate_narration)
+    # and written to OTIO.  Now validate and upload the audit report.
+    all_gk_checks = []
+    for clip_info in _deferred_gk_clips:
+        gk_checks = check_narration_clip(
+            wav_path=clip_info["wav_path"],
+            scene_num=clip_info["scene_num"],
+            voice=clip_info["voice"],
+            duration=clip_info["duration"],
+            stage="audio",
+        )
+        all_gk_checks.extend(gk_checks)
+
+    # Upload gatekeeper audit report to B2 (audit trail)
+    if all_gk_checks:
+        audit_report = format_audit_report(all_gk_checks, "audio")
+        upload_gatekeeper_report(audit_report, "audio")
+
+    # NOW evaluate rejects — everything is safely in B2
+    if has_rejects(all_gk_checks):
+        rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
+        reject_msgs = "; ".join(c.message for c in rejects)
+        raise RuntimeError(
+            f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+            f"audit report uploaded to B2): {reject_msgs}"
+        )
 
     summary_parts = [
         f"Audio generation complete: {total_clips} narration clips added to timeline.",
@@ -979,7 +996,7 @@ def deterministic_production_callback(
 
     from tools.video_tools import generate_video_clip, probe_clip
     from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
-    from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window
+    from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
     # GATEKEEPER: stage handoff check (visual_direction → production)
     handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
@@ -1005,6 +1022,9 @@ def deterministic_production_callback(
     total_clips = 0
     skipped_clips = 0
     errors = []
+    # Deferred gatekeeper: collect clip info for batch validation AFTER
+    # all artifacts are uploaded to B2 and written to OTIO (audit trail).
+    _deferred_gk_clips: list[dict] = []
 
     # Build default negative prompt from visual_style.avoid
     default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
@@ -1170,24 +1190,17 @@ def deterministic_production_callback(
             probe_result = json.loads(probe_result_json)
             actual_duration = probe_result.get("duration", duration * 1.15)
 
-            # GATEKEEPER: anti-cheat + cross-track validation before OTIO write
+            # B2 upload already happened inside generate_video_clip().
+            # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
             scene_phrases = narr_durations.get(scene_num, [])
             expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
-            gk_checks = check_video_clip(
-                mp4_path=output_path,
-                scene_num=scene_num,
-                phrase_idx=phrase_idx,
-                source_range=duration,
-                expected_duration=expected_dur,
-                stage="production",
-            )
-            if has_rejects(gk_checks):
-                rejects = [c for c in gk_checks if c.verdict.value == "reject"]
-                reject_msgs = "; ".join(c.message for c in rejects)
-                raise RuntimeError(
-                    f"GATEKEEPER REJECT: video clip scene {scene_num} "
-                    f"phrase {phrase_idx}: {reject_msgs}"
-                )
+            _deferred_gk_clips.append({
+                "mp4_path": output_path,
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+                "source_range": duration,
+                "expected_duration": expected_dur,
+            })
 
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
@@ -1213,8 +1226,8 @@ def deterministic_production_callback(
             logger.error(err_msg)
             errors.append(err_msg)
 
-    # Upload production stage completion to B2
-    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    # Upload production stage completion to B2 — artifacts FIRST, then gatekeeper.
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
@@ -1222,6 +1235,35 @@ def deterministic_production_callback(
     # Only mark stage complete if critical artifacts uploaded
     if _b2_ok:
         upload_stage_marker("production")
+
+    # GATEKEEPER: batch validation AFTER all artifacts are in B2.
+    # Every video clip is already uploaded (inside generate_video_clip)
+    # and written to OTIO.  Now validate and upload the audit report.
+    all_gk_checks = []
+    for clip_info in _deferred_gk_clips:
+        gk_checks = check_video_clip(
+            mp4_path=clip_info["mp4_path"],
+            scene_num=clip_info["scene_num"],
+            phrase_idx=clip_info["phrase_idx"],
+            source_range=clip_info["source_range"],
+            expected_duration=clip_info["expected_duration"],
+            stage="production",
+        )
+        all_gk_checks.extend(gk_checks)
+
+    # Upload gatekeeper audit report to B2 (audit trail)
+    if all_gk_checks:
+        audit_report = format_audit_report(all_gk_checks, "production")
+        upload_gatekeeper_report(audit_report, "production")
+
+    # NOW evaluate rejects — everything is safely in B2
+    if has_rejects(all_gk_checks):
+        rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
+        reject_msgs = "; ".join(c.message for c in rejects)
+        raise RuntimeError(
+            f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+            f"audit report uploaded to B2): {reject_msgs}"
+        )
 
     summary_parts = [
         f"Production complete: {total_clips} video clips generated and added to timeline.",

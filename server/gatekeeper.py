@@ -2,9 +2,20 @@
 OTIO Gatekeeper — universal validation layer for every pipeline mutation.
 
 ARCHITECTURE:
-    Every write to the OTIO timeline passes through a gatekeeper check.
-    Every stage handoff passes through a gatekeeper check.
-    Every generated artifact passes through a gatekeeper check.
+    The gatekeeper runs AFTER all artifacts have been uploaded to B2.
+    This guarantees a complete audit trail: every artifact — pass, warn,
+    or reject — is preserved in B2 before the gatekeeper renders a verdict.
+
+    Flow per stage:
+        1. Generate artifacts  (B2 upload happens inside each tool function)
+        2. Write artifacts to OTIO timeline
+        3. Upload OTIO timeline + pipeline state to B2
+        4. Run gatekeeper batch validation on ALL artifacts
+        5. Upload gatekeeper audit report to B2
+        6. If any REJECTs → raise RuntimeError (everything already in B2)
+
+    Stage handoff checks still run at stage boundaries (before the next
+    stage starts) because the previous stage's artifacts are already in B2.
 
     Checks are:
     1. Structural   — source_range > 0, file exists, no orphan clips
@@ -16,11 +27,13 @@ ARCHITECTURE:
     The user gets a configurable timeout to intervene before auto-proceeding.
 
 ENFORCEMENT POLICY:
-    - REJECT: gatekeeper returns an error string → the mutation is BLOCKED
-    - WARN:   gatekeeper emits a warning but allows the mutation (rare)
-    - PASS:   gatekeeper allows the mutation silently
+    - REJECT: gatekeeper emits a reject → after the audit report is uploaded
+              to B2, the pipeline raises RuntimeError and STOPS.
+    - WARN:   gatekeeper emits a warning but allows the pipeline to continue.
+    - PASS:   gatekeeper allows the pipeline to continue silently.
 
-    There is NO "advisory" mode. Rejects are hard stops.
+    Rejects are hard stops, but they happen AFTER the full audit trail
+    (artifacts + gatekeeper report) is safely in B2.
 """
 
 from __future__ import annotations
@@ -1050,3 +1063,24 @@ def check_stage_handoff(
 def has_rejects(checks: list[GatekeeperCheck]) -> bool:
     """Check if any gatekeeper checks resulted in REJECT."""
     return any(c.verdict == GatekeeperVerdict.REJECT for c in checks)
+
+
+def format_audit_report(checks: list[GatekeeperCheck], stage: str) -> dict:
+    """Build a structured audit report from gatekeeper checks.
+
+    This is uploaded to B2 AFTER all artifacts are already stored,
+    providing a complete audit trail of every validation decision.
+    """
+    rejects = [c for c in checks if c.verdict == GatekeeperVerdict.REJECT]
+    warns = [c for c in checks if c.verdict == GatekeeperVerdict.WARN]
+    passes = [c for c in checks if c.verdict == GatekeeperVerdict.PASS]
+    return {
+        "stage": stage,
+        "timestamp": time.time(),
+        "total_checks": len(checks),
+        "rejects": len(rejects),
+        "warns": len(warns),
+        "passes": len(passes),
+        "verdict": "REJECT" if rejects else ("WARN" if warns else "PASS"),
+        "checks": [c.to_dict() for c in checks],
+    }

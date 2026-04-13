@@ -256,14 +256,19 @@ def _gatekeeper_check_video_clip(
     phrase_idx: int,
     source_range: float,
 ) -> Optional[str]:
-    """OTIO Gatekeeper: validate a video clip BEFORE it is added to the timeline.
+    """OTIO Gatekeeper: cross-validate a video clip against narration timing.
+
+    AUDIT-ONLY: this check logs warnings but does NOT block the OTIO write.
+    The real gatekeeper validation runs as a batch AFTER all artifacts are
+    uploaded to B2 (see deterministic_production_callback).  This function
+    exists for early warning in the logs only.
 
     Checks:
     1. source_range > 0
     2. source_range <= available narration duration for this scene
     3. phrase_idx corresponds to a real narration phrase (not phantom)
 
-    Returns None if valid, or an error string if the clip must be rejected.
+    Returns None if valid, or a warning string describing the issue.
     """
     if source_range <= 0:
         return (
@@ -344,9 +349,10 @@ def add_video_clip(
 ) -> str:
     """Add a video clip to V1_Video track.
 
-    GATEKEEPER: Before adding, cross-validates the clip's source_range
-    against the narration track to ensure video-audio timing consistency.
-    Rejects clips that would create a duration mismatch.
+    GATEKEEPER (audit-only): Before adding, cross-validates the clip's
+    source_range against the narration track and logs warnings.  Does NOT
+    block the write — the batch gatekeeper in the production callback
+    validates after all artifacts are uploaded to B2 (audit trail).
 
     Idempotent: checks for existing clip with same scene_num + phrase_idx.
 
@@ -378,16 +384,18 @@ def add_video_clip(
         if video_track is None:
             return json.dumps({"error": "V1_Video track not found"})
 
-        # GATEKEEPER: cross-validate against narration before adding
-        gate_error = _gatekeeper_check_video_clip(
+        # GATEKEEPER (audit-only): cross-validate against narration.
+        # This does NOT block the write — the batch gatekeeper in
+        # deterministic_production_callback runs after B2 upload and
+        # handles rejects.  We log here for early visibility only.
+        gate_warning = _gatekeeper_check_video_clip(
             timeline, scene_num, phrase_idx, source_range,
         )
-        if gate_error:
-            logger.error(
-                "OTIO GATEKEEPER REJECT: video clip scene %d phrase %d: %s",
-                scene_num, phrase_idx, gate_error,
+        if gate_warning:
+            logger.warning(
+                "OTIO GATEKEEPER WARNING (audit-only): video clip scene %d phrase %d: %s",
+                scene_num, phrase_idx, gate_warning,
             )
-            return json.dumps({"error": f"OTIO GATEKEEPER: {gate_error}"})
 
         clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
 
@@ -452,7 +460,7 @@ def add_video_clip(
         otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info(
-        "Added video clip: %s (source_range=%.2fs, avail=%.2fs) [GATEKEEPER: PASS]",
+        "Added video clip: %s (source_range=%.2fs, avail=%.2fs)",
         clip_name, source_range, available_range,
     )
     return json.dumps(
