@@ -357,20 +357,6 @@ def clean_scenes_after_scenario(
                     len(backup_scenes),
                 )
 
-    if not scenes:
-        # Last resort: try accumulated generator text (streaming chunks joined)
-        accumulated = state.get("_generator_accumulated_text", "")
-        if accumulated:
-            from callbacks.after_model import _extract_scenes_array
-            accumulated_scenes = _extract_scenes_array(str(accumulated))
-            if accumulated_scenes:
-                scenes = accumulated_scenes
-                logger.warning(
-                    "Recovered %d scenes from accumulated generator text "
-                    "(all other sources failed)",
-                    len(accumulated_scenes),
-                )
-
     if scenes:
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
