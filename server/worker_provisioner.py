@@ -8,16 +8,20 @@ This module runs as a **pre-pipeline step** in ``_init_pipeline_state``
 (pipeline.py) and in the server lifespan.  It:
 
 1. Checks if required workers (TTS, video) are already healthy.
-2. If not, provisions Vast.ai GPU VMs via the API.
-3. Waits for VMs to reach "running" status.
-4. Sets up SSH tunnels from localhost ports to the remote workers.
-5. Waits for workers to pass health checks.
-6. Updates env vars so contracts and infra_agent see the live URLs.
-7. Starts the InfraAgent for continuous monitoring.
+2. Queries the Vast.ai account credit balance.
+3. Calculates a per-worker budget from available credits — NEVER
+   compromising on VRAM (no quantisation).
+4. Provisions Vast.ai GPU VMs using that budget.
+5. Waits for VMs to reach "running" status.
+6. Sets up SSH tunnels from localhost ports to the remote workers.
+7. Waits for workers to pass health checks.
+8. Updates env vars so contracts and infra_agent see the live URLs.
+9. Starts the InfraAgent for continuous monitoring.
 
 Architecture invariants preserved:
 - One model per VM — TTS and video on separate VMs.
 - Workers must be healthy before any stage that needs them.
+- VRAM requirements are **hard floors** — never lowered for cost.
 - Never silently degrade — if provisioning fails, raise loud.
 """
 
@@ -67,16 +71,19 @@ class WorkerSpec:
     tunnel_proc: Optional[subprocess.Popen] = field(default=None, repr=False)
 
 
-# Default worker specs — TTS and video on separate VMs
+# Default worker specs — TTS and video on separate VMs.
+# ``max_price`` is a *fallback* — ``ensure_workers_ready`` overrides it
+# with a credit-derived budget at runtime.  VRAM floors are hard minimums
+# that are NEVER lowered (no quantisation compromise).
 TTS_SPEC = WorkerSpec(
     role="tts",
     env_var="TTS_WORKER_URL",
     local_port=8880,
     remote_port=8880,
     capability="tts",
-    gpu_type="A100_SXM4",
-    min_vram_gb=24,
-    max_price=1.50,
+    gpu_type="RTX_3090",  # preferred, broadened automatically if unavailable
+    min_vram_gb=24,       # hard floor — full-precision Qwen3-TTS needs >=20GB
+    max_price=0.50,       # fallback; overridden by credit-aware budget
     worker_mode="tts",
 )
 
@@ -86,9 +93,9 @@ VIDEO_SPEC = WorkerSpec(
     local_port=8881,
     remote_port=8880,
     capability="ltx",
-    gpu_type="A100_SXM4",
-    min_vram_gb=48,
-    max_price=2.50,
+    gpu_type="RTX_4090",  # preferred, broadened automatically if unavailable
+    min_vram_gb=24,       # hard floor — full-precision LTX-2.3 needs >=22GB
+    max_price=0.50,       # fallback; overridden by credit-aware budget
     worker_mode="ltx",
 )
 
@@ -126,6 +133,69 @@ def check_worker_reachable(url: str, timeout: int = 5) -> bool:
         return True
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Vast.ai account & budget
+# ---------------------------------------------------------------------------
+
+# Minimum credit reserve — never spend the last few dollars so the account
+# doesn't hit zero mid-run.
+_CREDIT_RESERVE = 5.0
+
+# Estimated maximum pipeline duration in hours.  Used to convert credits
+# into a safe per-worker $/hr ceiling.
+_ESTIMATED_RUN_HOURS = 2.0
+
+# Absolute per-worker $/hr ceiling regardless of credits.
+_MAX_PRICE_CEILING = 10.0
+
+# Minimum disk space in GB for provisioned VMs.
+_MIN_DISK_GB = 50
+
+
+def get_account_credits() -> float:
+    """Query Vast.ai account and return available credit balance in USD."""
+    result = _vast_cmd(["show", "user", "--raw"])
+    if isinstance(result, dict):
+        credit = float(result.get("credit", 0.0))
+        balance = float(result.get("balance", 0.0))
+        total = credit + balance
+        logger.info(
+            "Vast.ai account: credit=$%.2f, balance=$%.2f, total=$%.2f",
+            credit, balance, total,
+        )
+        return total
+    raise RuntimeError(f"Could not read Vast.ai account info: {result}")
+
+
+def calculate_budget_per_worker(
+    num_workers: int,
+    estimated_hours: float = _ESTIMATED_RUN_HOURS,
+) -> float:
+    """Determine the maximum $/hr per worker from account credits.
+
+    Formula:
+        budget_per_worker = (credits - reserve) / num_workers / estimated_hours
+
+    VRAM requirements are never touched — this only adjusts the price ceiling.
+    """
+    credits = get_account_credits()
+    usable = credits - _CREDIT_RESERVE
+    if usable <= 0:
+        raise RuntimeError(
+            f"Insufficient Vast.ai credits: ${credits:.2f} "
+            f"(reserve=${_CREDIT_RESERVE:.2f}). "
+            f"Top up at https://cloud.vast.ai/billing/"
+        )
+    budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
+    capped = min(budget, _MAX_PRICE_CEILING)
+    logger.info(
+        "Budget: $%.2f usable / %d workers / %.1fh = $%.2f/hr per worker "
+        "(capped at $%.2f)",
+        usable, num_workers, estimated_hours, budget, capped,
+    )
+    return capped
 
 
 # ---------------------------------------------------------------------------
@@ -167,14 +237,15 @@ def provision_vm(spec: WorkerSpec) -> str:
         spec.role, spec.gpu_type, spec.min_vram_gb, spec.max_price,
     )
 
-    # Search for offers
-    # Use query-string filter format for vastai CLI
+    # Search for offers — VRAM is a hard floor, never compromised.
+    # Use query-string filter format for vastai CLI.
+    vram_mb = spec.min_vram_gb * 1024
     query = (
         f"gpu_name={spec.gpu_type} "
-        f"gpu_ram>={spec.min_vram_gb * 1024} "  # vast uses MB
+        f"gpu_ram>={vram_mb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
-        f"disk_space>=200"
+        f"disk_space>={_MIN_DISK_GB}"
     )
 
     search_result = _vast_cmd([
@@ -187,17 +258,18 @@ def provision_vm(spec: WorkerSpec) -> str:
 
     offers = search_result if isinstance(search_result, list) else []
 
-    # If no offers for exact GPU type, broaden search
+    # If no offers for exact GPU type, broaden to ANY GPU that meets the
+    # VRAM floor.  Never lower VRAM — that would force quantisation.
     if not offers:
         logger.warning(
             "No %s offers found, broadening search to any GPU with >=%dGB VRAM",
             spec.gpu_type, spec.min_vram_gb,
         )
         query = (
-            f"gpu_ram>={spec.min_vram_gb * 1024} "
+            f"gpu_ram>={vram_mb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
-            f"disk_space>=200"
+            f"disk_space>={_MIN_DISK_GB}"
         )
         search_result = _vast_cmd([
             "search", "offers",
@@ -211,8 +283,10 @@ def provision_vm(spec: WorkerSpec) -> str:
     if not offers:
         raise RuntimeError(
             f"No GPU offers found for {spec.role} worker "
-            f"(min {spec.min_vram_gb}GB VRAM, max ${spec.max_price}/hr). "
-            f"Try increasing max_price or lowering min_vram_gb."
+            f"(min {spec.min_vram_gb}GB VRAM, max ${spec.max_price:.2f}/hr, "
+            f"min disk {_MIN_DISK_GB}GB). "
+            f"VRAM floor is non-negotiable (no quantisation). "
+            f"Current account budget allows up to ${spec.max_price:.2f}/hr."
         )
 
     # Sort by price and pick cheapest
@@ -483,7 +557,7 @@ class WorkerProvisioner:
 
         status = {"workers": [], "provisioned": [], "already_healthy": []}
 
-        # Check which workers we need
+        # Build the list of required workers (VRAM floors from default specs)
         specs_needed: list[WorkerSpec] = []
         if require_tts:
             specs_needed.append(WorkerSpec(
@@ -493,8 +567,8 @@ class WorkerProvisioner:
                 remote_port=TTS_SPEC.remote_port,
                 capability="tts",
                 gpu_type=TTS_SPEC.gpu_type,
-                min_vram_gb=TTS_SPEC.min_vram_gb,
-                max_price=TTS_SPEC.max_price,
+                min_vram_gb=TTS_SPEC.min_vram_gb,  # hard floor
+                max_price=0.0,  # set dynamically below
                 worker_mode="tts",
             ))
         if require_video:
@@ -505,10 +579,31 @@ class WorkerProvisioner:
                 remote_port=VIDEO_SPEC.remote_port,
                 capability="ltx",
                 gpu_type=VIDEO_SPEC.gpu_type,
-                min_vram_gb=VIDEO_SPEC.min_vram_gb,
-                max_price=VIDEO_SPEC.max_price,
+                min_vram_gb=VIDEO_SPEC.min_vram_gb,  # hard floor
+                max_price=0.0,  # set dynamically below
                 worker_mode="ltx",
             ))
+
+        # --- Credit-aware budget calculation ---
+        # Count how many workers actually need provisioning (skip healthy ones)
+        need_provision = 0
+        for spec in specs_needed:
+            url = os.environ.get(spec.env_var, "")
+            if not url:
+                url = f"http://localhost:{spec.local_port}"
+            if not check_worker_health(url, spec.capability):
+                need_provision += 1
+
+        if need_provision > 0:
+            budget = calculate_budget_per_worker(need_provision)
+            for spec in specs_needed:
+                spec.max_price = budget
+            logger.info(
+                "Credit-aware budget: $%.2f/hr per worker for %d worker(s). "
+                "VRAM floors unchanged (TTS>=%dGB, video>=%dGB).",
+                budget, need_provision,
+                TTS_SPEC.min_vram_gb, VIDEO_SPEC.min_vram_gb,
+            )
 
         for spec in specs_needed:
             url = os.environ.get(spec.env_var, "")
