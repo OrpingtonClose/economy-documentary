@@ -11,11 +11,12 @@ Usage:
 
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
-    {models_dir}/ltx2/                   — LTX-2.3 diffusers-format components
-                                  (model_index.json, text_encoder/, transformer/,
-                                   vae/, audio_vae/, vocoder/, connectors/, etc.)
+    {models_dir}/ltx2/                   — LTX-2.3 components:
+                                  Official Lightricks checkpoint (ltx-2.3-22b-dev.safetensors)
+                                  + supporting components (text_encoder/, vae/, connectors/, etc.)
 
-The bootstrap script (gpu_bootstrap.sh) downloads these from B2.
+The bootstrap script (gpu_bootstrap.sh) downloads these from B2/HuggingFace.
+Uses from_single_file() for the official Lightricks transformer checkpoint.
 Requires diffusers >= 0.37.0 for LTX2Pipeline support.
 bf16 only — no FP8, no quantization.
 """
@@ -183,7 +184,11 @@ def _load_tts():
 
 
 def _load_ltx():
-    """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
+    """Load LTX-2.3 pipeline using official Lightricks single-file checkpoint.
+
+    Uses from_single_file() for the transformer (official Lightricks weights)
+    and from_pretrained() for all other components (VAE, text encoder,
+    connectors, scheduler, etc.) from the local dg845 folder structure.
 
     Two-stage pipeline: Stage 1 generates latents, then LTX2LatentUpsamplePipeline
     upsamples 2x in latent space before VAE decode.  This is the official
@@ -204,13 +209,11 @@ def _load_ltx():
         _unload_tts()
 
     from diffusers import LTX2Pipeline
+    from diffusers.models import LTX2VideoTransformer3DModel
     from diffusers.pipelines.ltx2 import LTX2LatentUpsamplePipeline
     from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
 
-    # Try official dg845/LTX-2.3-Diffusers first (ltx23), then fall back
-    # to ltx2 or models_dir itself.
-    # Requires diffusers >= 0.38.0.dev0 from git main (PR #13217) for
-    # native LTX-2.3 support (video_mod_param_num=9 scale_shift_table).
+    # Locate model directory (contains configs + non-transformer components)
     candidate_ltx23 = os.path.join(_models_dir, "ltx23")
     candidate_ltx2 = os.path.join(_models_dir, "ltx2")
     if os.path.isfile(os.path.join(candidate_ltx23, "model_index.json")):
@@ -224,17 +227,48 @@ def _load_ltx():
             f"model_index.json not found in {candidate_ltx23}, "
             f"{candidate_ltx2}, or {_models_dir}"
         )
-    logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
+
+    # Check for official Lightricks single-file checkpoint
+    single_file = os.path.join(model_path, "ltx-2.3-22b-dev.safetensors")
+    use_single_file = os.path.isfile(single_file)
+
     t0 = time.time()
 
-    pipe = LTX2Pipeline.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=False,
-    )
-    # Audio components kept loaded — official LTX-2.3 connectors handle
-    # cross-modal bridging correctly.  Narration audio uses separate
-    # Qwen3-TTS worker.
+    if use_single_file:
+        # Official Lightricks model: load transformer from single file,
+        # rest of components from the local folder structure.
+        logger.info(
+            "Loading LTX-2.3 transformer from official checkpoint: %s",
+            single_file,
+        )
+        transformer = LTX2VideoTransformer3DModel.from_single_file(
+            single_file,
+            config=model_path,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+        )
+        logger.info(
+            "Transformer loaded from single file in %.1fs. "
+            "Loading rest of pipeline from %s ...",
+            time.time() - t0, model_path,
+        )
+        pipe = LTX2Pipeline.from_pretrained(
+            model_path,
+            transformer=transformer,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=False,
+        )
+    else:
+        # Fallback: load everything from folder structure (dg845 layout)
+        logger.info(
+            "Loading LTX-2.3 via from_pretrained from %s ...", model_path
+        )
+        pipe = LTX2Pipeline.from_pretrained(
+            model_path,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=False,
+        )
+
     pipe = pipe.to("cuda")
     _ltx_pipe = pipe
 
@@ -263,7 +297,10 @@ def _load_ltx():
         )
 
     _active_model = "ltx"
-    logger.info("LTX-2 loaded in %.1fs", time.time() - t0)
+    logger.info(
+        "LTX-2.3 loaded in %.1fs (single_file=%s)",
+        time.time() - t0, use_single_file,
+    )
 
 
 # ---------------------------------------------------------------------------

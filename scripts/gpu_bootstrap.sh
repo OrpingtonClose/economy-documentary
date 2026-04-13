@@ -14,15 +14,16 @@
 # Models are pulled from Backblaze B2 (pre-cached) for speed.
 # Falls back to HuggingFace if B2 credentials are not set.
 #
-# Disk budget (selective download — skips duplicate text_encoder format):
-#   text_encoder (transformers fmt): ~46.6 GB
-#   transformer  (diffusers fmt):    ~37.8 GB
-#   vae + audio_vae + vocoder:       ~ 2.7 GB
-#   connectors + latent_upsampler:   ~ 7.3 GB
-#   Qwen3-TTS VoiceDesign:           ~ 4.3 GB
-#   Total models:                    ~98.7 GB
-#   OS + software + output:          ~30   GB
-#   Minimum disk required:           ~125  GB  (recommend 200+)
+# Disk budget (official Lightricks checkpoint + supporting components):
+#   Official checkpoint (safetensors): ~46.1 GB
+#   text_encoder (transformers fmt):   ~46.6 GB
+#   vae + audio_vae + vocoder:         ~ 2.7 GB
+#   connectors + latent_upsampler:     ~ 7.3 GB
+#   transformer config (no weights):   ~ 0.0 GB
+#   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
+#   Total models:                      ~107  GB
+#   OS + software + output:            ~30   GB
+#   Minimum disk required:             ~140  GB  (recommend 200+)
 
 set -euo pipefail
 
@@ -156,16 +157,32 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         esac
     done
 
-    # transformer: all files (diffusers format, ~37.8 GB)
-    # NOTE: B2 cache must match diffusers git main. If stale, re-download from HuggingFace.
-    echo "--- transformer (~37.8 GB) ---"
+    # Official Lightricks single-file checkpoint (~46.1 GB)
+    # Downloaded from HuggingFace. gpu_worker.py uses from_single_file() to load it.
+    echo "--- Official Lightricks checkpoint (~46.1 GB) ---"
+    CKPT_FILE="$LTX_DIR/ltx-2.3-22b-dev.safetensors"
+    if [ ! -f "$CKPT_FILE" ]; then
+        # Try B2 first (faster if cached), fall back to HuggingFace
+        if b2 ls "b2://${B2_BUCKET}/ltx2/ltx-2.3-22b-dev.safetensors" &>/dev/null 2>&1; then
+            echo "  Downloading from B2..."
+            b2 file download "b2://${B2_BUCKET}/ltx2/ltx-2.3-22b-dev.safetensors" "$CKPT_FILE"
+        else
+            echo "  Not in B2, downloading from HuggingFace..."
+            pip install --no-cache-dir huggingface_hub 2>/dev/null
+            python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download('Lightricks/LTX-2.3', 'ltx-2.3-22b-dev.safetensors', local_dir='$LTX_DIR')"
+        fi
+    else
+        echo "  Already present: $CKPT_FILE"
+    fi
+
+    # transformer config (needed by from_single_file for architecture info)
+    # Small download — just the config.json, not the full weights
+    echo "--- transformer config ---"
     mkdir -p "$LTX_DIR/transformer"
-    b2 sync --threads 8 "b2://${B2_BUCKET}/ltx2/transformer/" "$LTX_DIR/transformer/"
-    # Verify transformer config has required fields for diffusers >= 0.38.0.dev0
-    if ! python3 -c "import json; c=json.load(open('$LTX_DIR/transformer/config.json')); assert c.get('audio_cross_attn_mod') is not None" 2>/dev/null; then
-        echo "  WARNING: B2 transformer config stale, re-downloading from HuggingFace..."
-        rm -rf "$LTX_DIR/transformer"
-        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='transformer/*')"
+    if [ ! -f "$LTX_DIR/transformer/config.json" ]; then
+        # Download just the config from dg845 (has the diffusers-compatible config)
+        pip install --no-cache-dir huggingface_hub 2>/dev/null
+        python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download('dg845/LTX-2.3-Diffusers', 'transformer/config.json', local_dir='$LTX_DIR')"
     fi
 
     # Small components (< 3 GB each)
@@ -177,27 +194,17 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         fi
     done
 
-    # --- Validate connector / transformer compatibility ---
-    # The connector must project text encoder output (3840) to the transformer's
-    # cross_attention_dim (4096).  If the connector config is missing
-    # per_modality_projections or video_hidden_dim, the weights are from
-    # the older LTX-2 model and will cause a tensor dimension mismatch.
-    echo "--- Validating connector/transformer compatibility ---"
+    # --- Validate connector config ---
+    # The connector must have per_modality_projections for LTX-2.3
+    echo "--- Validating connector config ---"
     if ! python3 -c "
 import json, sys
 conn = json.load(open('$LTX_DIR/connectors/config.json'))
-tfm  = json.load(open('$LTX_DIR/transformer/config.json'))
-# Connector must have per_modality_projections for LTX-2.3
 assert conn.get('per_modality_projections') is True, \
     f'connectors/config.json missing per_modality_projections=true (got {conn.get(\"per_modality_projections\")}). Likely stale LTX-2 weights.'
-# video_hidden_dim must match transformer cross_attention_dim
-vhd = conn.get('video_hidden_dim')
-cad = tfm.get('cross_attention_dim')
-assert vhd == cad, \
-    f'Dimension mismatch: connectors video_hidden_dim={vhd} != transformer cross_attention_dim={cad}'
-print(f'  OK: connectors video_hidden_dim={vhd} == transformer cross_attention_dim={cad}')
+print(f'  OK: per_modality_projections={conn.get(\"per_modality_projections\")}')
 " 2>&1; then
-        echo "  WARNING: Connector/transformer mismatch detected. Re-downloading connectors from HuggingFace..."
+        echo "  WARNING: Connector config invalid. Re-downloading from HuggingFace..."
         rm -rf "$LTX_DIR/connectors"
         pip install --no-cache-dir huggingface_hub 2>/dev/null
         python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='connectors/*')"
@@ -223,10 +230,18 @@ if worker_mode != 'ltx' and not os.path.exists('/workspace/models/qwen3-tts-voic
     snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
                       local_dir='/workspace/models/qwen3-tts-voicedesign')
 
-if worker_mode != 'tts' and not os.path.exists('/workspace/models/ltx2/model_index.json'):
-    print('Downloading LTX-2.3 from HuggingFace...')
-    snapshot_download('dg845/LTX-2.3-Diffusers',
-                      local_dir='/workspace/models/ltx2')
+if worker_mode != 'tts':
+    import os
+    ltx_dir = '/workspace/models/ltx2'
+    ckpt = os.path.join(ltx_dir, 'ltx-2.3-22b-dev.safetensors')
+    if not os.path.exists(ckpt):
+        print('Downloading official Lightricks checkpoint from HuggingFace...')
+        from huggingface_hub import hf_hub_download
+        hf_hub_download('Lightricks/LTX-2.3', 'ltx-2.3-22b-dev.safetensors', local_dir=ltx_dir)
+    if not os.path.exists(os.path.join(ltx_dir, 'model_index.json')):
+        print('Downloading LTX-2.3 supporting components from HuggingFace...')
+        snapshot_download('dg845/LTX-2.3-Diffusers', local_dir=ltx_dir,
+                          ignore_patterns=['transformer/*.safetensors'])
 "
 fi
 
@@ -255,6 +270,7 @@ if [ "$WORKER_MODE" != "ltx" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
 fi
 if [ "$WORKER_MODE" != "tts" ]; then
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2.3-22b-dev.safetensors"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/model_index.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/config.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/model.safetensors.index.json"
