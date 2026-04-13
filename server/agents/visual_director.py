@@ -286,7 +286,7 @@ def _visual_phase_setup(callback_context):
         )
 
     # QUICK-TEST: bypass entire LoopAgent with deterministic visual concepts
-    quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true")
+    quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes")
     if quick_test:
         logger.info("QUICK-TEST: bypassing visual director LoopAgent with deterministic concepts")
         concepts = _generate_quick_test_concepts(state)
@@ -373,7 +373,7 @@ def _generate_quick_test_concepts(state) -> list:
             "scene_num": sn,
             "phrase_idx": 0,
             "start_time": 0.0,
-            "end_time": min(duration, 13.0),
+            "end_time": min(duration, 10.0),
             "duration": min(duration, 10.0),
             "prompt": prompt,
             "negative_prompt": avoid_list,

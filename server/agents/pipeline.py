@@ -193,7 +193,7 @@ def _init_pipeline_state(
 
     # Inject quick-test template variables from env if not already set.
     # run_pipeline.py sets these for the CLI path; this handles the AG-UI path.
-    if os.environ.get("DOCUMENTARY_QUICK_TEST", "").lower() in ("1", "true", "yes"):
+    if os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes"):
         if not state.get("quick_test_rules"):
             from agents.scenario_director import _QUICK_TEST_RULES
             state["quick_test"] = "true"
