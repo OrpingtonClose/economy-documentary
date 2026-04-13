@@ -99,13 +99,17 @@ def concat_clips(
     output_path: str,
     tool_context=None,
 ) -> str:
-    """Concatenate a list of video clips using ffmpeg concat filter.
+    """Concatenate a list of clips using ffmpeg concat demuxer.
 
-    Re-encodes to H.264 (libx264) + AAC to ensure universal player
-    compatibility.  Source clips may use different codecs (e.g. mpeg4
-    Part 2 from diffusers' export_to_video vs. libx264 from generated
-    black-video transitions), and concat demuxer with -c copy produces
-    broken output when codecs are mixed.
+    For video files: re-encodes to H.264 (libx264) + AAC to ensure
+    universal player compatibility.  Source clips may use different
+    codecs (e.g. mpeg4 Part 2 from diffusers vs. libx264 from black
+    transitions), and concat demuxer with -c copy produces broken
+    output when codecs are mixed.
+
+    For audio-only files (WAV): uses -c copy (stream copy) since WAV
+    containers don't support AAC and all narration clips are already
+    PCM WAV.
 
     Args:
         clip_paths: Comma-separated list of clip file paths.
@@ -132,24 +136,44 @@ def concat_clips(
             for path in paths:
                 concat_file.write(f"file '{path}'\n")
 
-        # Re-encode to H.264 + AAC for universal compatibility.
-        # -c copy would be faster but breaks when source codecs differ
-        # (e.g. mpeg4 Part 2 from LTX + libx264 from black transitions).
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_path,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "18",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            output_path,
-        ]
+        # Detect audio-only mode: if output is WAV (or all inputs are
+        # audio-only), use stream copy to avoid re-encoding to AAC
+        # which is incompatible with WAV containers.
+        _audio_only = output_path.lower().endswith(".wav") or all(
+            p.lower().endswith((".wav", ".flac", ".ogg", ".mp3"))
+            for p in paths
+        )
+
+        if _audio_only:
+            # Audio-only: stream copy (all narration clips are PCM WAV)
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_path,
+                "-c", "copy",
+                output_path,
+            ]
+        else:
+            # Video: re-encode to H.264 + AAC for universal compatibility.
+            # -c copy would be faster but breaks when source codecs differ
+            # (e.g. mpeg4 Part 2 from LTX + libx264 from black transitions).
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_path,
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                output_path,
+            ]
 
         result = subprocess.run(
             cmd,

@@ -586,14 +586,18 @@ def check_video_clip(
         phrase_idx=phrase_idx,
     ))
 
-    # 4. Structural: codec must be H.264
+    # 4. Structural: codec check
+    # WARN on non-H.264 instead of REJECT because the GPU worker may
+    # fall back to mpeg4 Part 2 when H.264 re-encoding fails.  The
+    # assembly stage re-encodes all clips to H.264 during mux/concat,
+    # so non-H.264 clips are handled downstream.
     codec = stats.get("codec", "unknown")
     if codec not in ("h264", "libx264"):
         checks.append(GatekeeperCheck(
             name="codec_h264",
             category="structural",
-            verdict=GatekeeperVerdict.REJECT,
-            message=f"Codec is '{codec}' — must be H.264. Re-encode before adding.",
+            verdict=GatekeeperVerdict.WARN,
+            message=f"Codec is '{codec}' — not H.264. Will be re-encoded during assembly.",
             stage=stage,
             scene_num=scene_num,
             phrase_idx=phrase_idx,
