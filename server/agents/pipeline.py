@@ -250,31 +250,43 @@ def _init_pipeline_state(
         logger.info("Pre-set _timeline_path=%s", state["_timeline_path"])
 
     # ── Parallel lazy worker provisioning ─────────────────────────────
-    # Start GPU worker provisioning in background threads.  Returns
-    # IMMEDIATELY so the scenario stage (no GPU needed) can run while
-    # VMs bootstrap.  Each stage waits for only the worker it needs:
+    # Start GPU worker provisioning in a SEPARATE THREAD.
+    # start_provisioning() does blocking I/O (health checks, Vast.ai API)
+    # before launching per-worker threads.  Running it directly here would
+    # block the uvicorn async event loop and freeze the entire server.
+    # Each stage waits for only the worker it needs:
     #   - Audio stage calls wait_for_worker("tts") in its before_callback
     #   - Production stage calls wait_for_worker("video") in its before_callback
     if not state.get("_workers_provisioned"):
+        import threading
         from worker_provisioner import get_provisioner
 
         provisioner = get_provisioner()
-        try:
-            provisioner.start_provisioning(
-                require_tts=True,
-                require_video=True,
-            )
-            state["_workers_provisioned"] = True
-            logger.info(
-                "Background worker provisioning started — "
-                "scenario stage will run while VMs bootstrap"
-            )
-        except Exception as exc:
-            logger.error("Worker provisioning failed to start: %s", exc)
-            state["_workers_provisioned"] = False
-            state["_worker_provision_error"] = str(exc)
-            # Don't block pipeline start — let stage before_callbacks
-            # handle the failure with a clear error message.
+
+        def _start_provisioning_bg():
+            try:
+                provisioner.start_provisioning(
+                    require_tts=True,
+                    require_video=True,
+                )
+                logger.info(
+                    "Background worker provisioning started — "
+                    "VMs bootstrapping while scenario runs"
+                )
+            except Exception as exc:
+                logger.error("Worker provisioning failed to start: %s", exc)
+
+        t = threading.Thread(
+            target=_start_provisioning_bg,
+            name="provision-launcher",
+            daemon=True,
+        )
+        t.start()
+        state["_workers_provisioned"] = True
+        logger.info(
+            "Provisioning launcher thread started — "
+            "scenario stage will run while VMs bootstrap"
+        )
 
     return None
 
