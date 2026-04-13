@@ -311,13 +311,21 @@ def _gatekeeper_check_video_clip(
             f"Video must have exactly one clip per narration phrase."
         )
 
-    # Check source_range matches corresponding narration duration (1s tolerance)
+    # Check source_range matches corresponding narration duration (1s tolerance).
+    # Account for LTX-2.3 10s cap: when narration exceeds 10s, video at 10s
+    # is the best the model can do — don't reject in that case.
+    _LTX_CAP = 10.0
     expected_dur = scene_narrations[phrase_idx][1]
-    if abs(source_range - expected_dur) > 1.0:
+    drift = abs(source_range - expected_dur)
+    cap_explained = (
+        expected_dur > _LTX_CAP
+        and source_range >= _LTX_CAP - 0.5
+    )
+    if drift > 1.0 and not cap_explained:
         return (
             f"scene {scene_num} phrase {phrase_idx}: video source_range "
             f"({source_range:.2f}s) does not match narration duration "
-            f"({expected_dur:.2f}s) — drift {abs(source_range - expected_dur):.2f}s > 1s. "
+            f"({expected_dur:.2f}s) — drift {drift:.2f}s > 1s. "
             f"Video clips must be sized to match narration."
         )
 

@@ -675,20 +675,55 @@ def check_video_clip(
         ))
 
     # 8. Cross-track: source_range ≈ expected_duration (narration match)
-    if expected_duration > 0 and abs(source_range - expected_duration) > 1.0:
-        checks.append(GatekeeperCheck(
-            name="narration_duration_match",
-            category="cross_track",
-            verdict=GatekeeperVerdict.REJECT,
-            message=(
-                f"source_range ({source_range:.2f}s) does not match narration "
-                f"duration ({expected_duration:.2f}s) — "
-                f"drift {abs(source_range - expected_duration):.2f}s > 1s"
-            ),
-            stage=stage,
-            scene_num=scene_num,
-            phrase_idx=phrase_idx,
-        ))
+    #
+    # LTX-2.3 caps video output at 10s.  When the narration phrase exceeds
+    # 10s, the best the model can do is source_range=10.0.  We must NOT
+    # reject clips in that case — only reject when the mismatch is
+    # unexplainable by the model cap.
+    _LTX_CAP = 10.0
+    if expected_duration > 0:
+        drift = abs(source_range - expected_duration)
+        cap_explained = (
+            expected_duration > _LTX_CAP
+            and source_range >= _LTX_CAP - 0.5  # model produced near-cap output
+        )
+        if drift > 1.0 and not cap_explained:
+            checks.append(GatekeeperCheck(
+                name="narration_duration_match",
+                category="cross_track",
+                verdict=GatekeeperVerdict.REJECT,
+                message=(
+                    f"source_range ({source_range:.2f}s) does not match narration "
+                    f"duration ({expected_duration:.2f}s) — "
+                    f"drift {drift:.2f}s > 1s"
+                ),
+                stage=stage,
+                scene_num=scene_num,
+                phrase_idx=phrase_idx,
+            ))
+        elif drift > 1.0 and cap_explained:
+            checks.append(GatekeeperCheck(
+                name="narration_duration_match",
+                category="cross_track",
+                verdict=GatekeeperVerdict.WARN,
+                message=(
+                    f"source_range ({source_range:.2f}s) < narration "
+                    f"({expected_duration:.2f}s) but narration exceeds LTX-2.3 "
+                    f"10s cap — deficit is expected"
+                ),
+                stage=stage,
+                scene_num=scene_num,
+                phrase_idx=phrase_idx,
+            ))
+        else:
+            checks.append(GatekeeperCheck(
+                name="narration_duration_match",
+                category="cross_track",
+                verdict=GatekeeperVerdict.PASS,
+                stage=stage,
+                scene_num=scene_num,
+                phrase_idx=phrase_idx,
+            ))
     else:
         checks.append(GatekeeperCheck(
             name="narration_duration_match",

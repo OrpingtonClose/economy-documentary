@@ -1636,18 +1636,49 @@ def deterministic_assembly_callback(
                     combined_video_for_mux = trimmed_path
 
                 elif duration_diff < -0.5:
-                    # GATEKEEPER HARD FAIL: video shorter than audio
-                    # This proves the OTIO source_range contract was
-                    # violated — a video clip did not cover its
-                    # corresponding narration phrase.  This is the
-                    # single most important enforcement in the pipeline.
-                    raise RuntimeError(
-                        f"GATEKEEPER REJECT: Scene {scene_num}{lang_suffix}: "
-                        f"video {video_dur:.2f}s < audio {total_audio_duration:.2f}s "
-                        f"(deficit {abs(duration_diff):.2f}s). "
-                        f"OTIO source_range contract violated — "
-                        f"video clips must cover narration duration."
-                    )
+                    # Video shorter than audio.  This can happen
+                    # legitimately when narration phrases exceed the
+                    # LTX-2.3 10s generation cap — the video model
+                    # physically cannot produce clips longer than 10s.
+                    # Hard-fail only when the deficit is NOT explainable
+                    # by the 10s cap (i.e. the video model could have
+                    # covered the narration but didn't).
+                    #
+                    # Heuristic: count how many narration clips in this
+                    # scene exceed 10s; each one contributes up to
+                    # (narr_dur - 10)s of expected deficit.
+                    _LTX_CAP = 10.0
+                    expected_deficit = 0.0
+                    for _nc in narration_clips:
+                        _nc_dur = _nc.get("duration", 0)
+                        if _nc_dur > _LTX_CAP:
+                            expected_deficit += (_nc_dur - _LTX_CAP)
+
+                    actual_deficit = abs(duration_diff)
+                    unexplained = actual_deficit - expected_deficit
+
+                    if unexplained > 0.5:
+                        # Deficit beyond what the 10s cap explains —
+                        # a genuine OTIO source_range contract violation.
+                        raise RuntimeError(
+                            f"GATEKEEPER REJECT: Scene {scene_num}{lang_suffix}: "
+                            f"video {video_dur:.2f}s < audio {total_audio_duration:.2f}s "
+                            f"(deficit {actual_deficit:.2f}s, cap-explained {expected_deficit:.2f}s, "
+                            f"unexplained {unexplained:.2f}s). "
+                            f"OTIO source_range contract violated — "
+                            f"video clips must cover narration duration."
+                        )
+                    else:
+                        # Deficit fully explained by LTX-2.3 10s cap.
+                        # Warn but proceed — the mux will still work
+                        # (audio extends slightly past video at scene end).
+                        logger.warning(
+                            "GATEKEEPER WARN: Scene %d%s: video %.2fs < audio %.2fs "
+                            "(deficit %.2fs, cap-explained %.2fs). "
+                            "Video capped at 10s per clip — mux will proceed.",
+                            scene_num, lang_suffix, video_dur,
+                            total_audio_duration, actual_deficit, expected_deficit,
+                        )
 
                 # Mux combined audio + video
                 muxed_path = os.path.join(

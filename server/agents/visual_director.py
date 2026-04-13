@@ -276,7 +276,18 @@ def _visual_phase_setup(callback_context):
     state = callback_context.state
     state["pipeline_phase"] = "visual_direction"
 
+    # B2 skip check FIRST — avoid blocking on gatekeeper/infra for a completed stage
+    stages_complete = state.get("_b2_stages_complete", [])
+    if "visual_direction" in stages_complete:
+        logger.info("B2: visual_direction stage already complete, skipping LoopAgent")
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
+        )
+
     # GATEKEEPER: stage handoff check (audio → visual_direction)
+    # Runs AFTER B2 skip so checkpoint resumes don't trigger unnecessary
+    # validation + intervention windows.
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
     handoff_checks = check_stage_handoff("audio", "visual_direction", state.to_dict() if hasattr(state, "to_dict") else dict(state))
     if has_rejects(handoff_checks):
@@ -287,15 +298,6 @@ def _visual_phase_setup(callback_context):
         )
     if not intervention_window("visual_direction_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at visual_direction start")
-
-    # B2 skip check FIRST — avoid blocking on infra pause for a completed stage
-    stages_complete = state.get("_b2_stages_complete", [])
-    if "visual_direction" in stages_complete:
-        logger.info("B2: visual_direction stage already complete, skipping LoopAgent")
-        return genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
-        )
 
     # QUICK-TEST: bypass entire LoopAgent with deterministic visual concepts
     quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes")
