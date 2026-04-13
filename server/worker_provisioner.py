@@ -970,12 +970,14 @@ class WorkerProvisioner:
         return status
 
     def _provision_and_connect(
-        self, spec: WorkerSpec, timeout: int = 900
+        self, spec: WorkerSpec, timeout: int = 2400
     ) -> None:
         """Provision a VM, set up tunnel, and wait for health.
 
         Full lifecycle for a single worker.  The wall-clock ``timeout``
-        is tracked across all steps so sub-steps never overshoot.
+        covers all steps end-to-end.  The health-wait step gets whatever
+        time remains after provisioning + VM boot + SSH setup, with a
+        minimum of 120s so the wait isn't uselessly short.
         """
         _start = time.time()
 
@@ -991,9 +993,9 @@ class WorkerProvisioner:
         setup_ssh_tunnel(spec)
 
         # Step 4: Wait for worker to be healthy
-        # Bootstrap + model download can take 15-25 min (50GB+ at ~75 MB/s)
+        # Bootstrap + model download can take 15-30 min (95GB at ~65 MB/s)
         elapsed = int(time.time() - _start)
-        remaining = max(timeout - elapsed, 900)  # at least 15 min for health wait
+        remaining = max(timeout - elapsed, 120)  # honour timeout; 120s floor avoids useless waits
         healthy = wait_for_worker_healthy(spec, timeout=remaining)
         if not healthy:
             raise RuntimeError(
