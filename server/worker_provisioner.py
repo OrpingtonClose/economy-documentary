@@ -568,7 +568,7 @@ class WorkerProvisioner:
                 capability="tts",
                 gpu_type=TTS_SPEC.gpu_type,
                 min_vram_gb=TTS_SPEC.min_vram_gb,  # hard floor
-                max_price=0.0,  # set dynamically below
+                max_price=TTS_SPEC.max_price,  # fallback; overridden by credit-aware budget
                 worker_mode="tts",
             ))
         if require_video:
@@ -580,7 +580,7 @@ class WorkerProvisioner:
                 capability="ltx",
                 gpu_type=VIDEO_SPEC.gpu_type,
                 min_vram_gb=VIDEO_SPEC.min_vram_gb,  # hard floor
-                max_price=0.0,  # set dynamically below
+                max_price=VIDEO_SPEC.max_price,  # fallback; overridden by credit-aware budget
                 worker_mode="ltx",
             ))
 
