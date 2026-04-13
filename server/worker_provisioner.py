@@ -551,6 +551,19 @@ class WorkerProvisioner:
                 logger.error(
                     "Failed to provision %s worker: %s", spec.role, exc,
                 )
+                # Kill SSH tunnels from any previously-provisioned specs
+                # to avoid orphaned subprocess leaks.
+                for prev_spec in specs_needed:
+                    if prev_spec.tunnel_proc and prev_spec.tunnel_proc.poll() is None:
+                        logger.info(
+                            "Cleaning up SSH tunnel for %s (pid=%d) after failure",
+                            prev_spec.role, prev_spec.tunnel_proc.pid,
+                        )
+                        prev_spec.tunnel_proc.terminate()
+                        try:
+                            prev_spec.tunnel_proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            prev_spec.tunnel_proc.kill()
                 status["workers"].append({
                     "role": spec.role,
                     "url": url,
@@ -582,20 +595,26 @@ class WorkerProvisioner:
     ) -> None:
         """Provision a VM, set up tunnel, and wait for health.
 
-        Full lifecycle for a single worker.
+        Full lifecycle for a single worker.  The wall-clock ``timeout``
+        is tracked across all steps so sub-steps never overshoot.
         """
+        _start = time.time()
+
         # Step 1: Provision VM
         provision_vm(spec)
 
         # Step 2: Wait for VM to be running
-        wait_for_vm_running(spec, timeout=min(timeout, 600))
+        elapsed = int(time.time() - _start)
+        vm_timeout = max(min(timeout - elapsed, 600), 60)
+        wait_for_vm_running(spec, timeout=vm_timeout)
 
         # Step 3: Set up SSH tunnel
         setup_ssh_tunnel(spec)
 
         # Step 4: Wait for worker to be healthy
         # Bootstrap + model download can take 10-15 min
-        remaining = max(timeout - 120, 300)  # at least 5 min for health wait
+        elapsed = int(time.time() - _start)
+        remaining = max(timeout - elapsed, 300)  # at least 5 min for health wait
         healthy = wait_for_worker_healthy(spec, timeout=remaining)
         if not healthy:
             raise RuntimeError(
