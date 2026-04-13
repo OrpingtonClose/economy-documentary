@@ -644,15 +644,14 @@ def deterministic_audio_callback(
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
 
-    # Upload audio stage completion to B2 — artifacts FIRST, then gatekeeper.
+    # Upload audio artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
-    # Only mark stage complete if critical artifacts uploaded
-    if _b2_ok:
-        upload_stage_marker("audio")
+    # NOTE: stage marker is uploaded AFTER gatekeeper validation below.
+    # Uploading it here would let a rejected stage be skipped on restart.
 
     # GATEKEEPER: batch validation AFTER all artifacts are in B2.
     # Every narration clip is already uploaded (inside generate_narration)
@@ -681,6 +680,11 @@ def deterministic_audio_callback(
             f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
             f"audit report uploaded to B2): {reject_msgs}"
         )
+
+    # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
+    # marked complete, otherwise they'd be skipped on pipeline restart.
+    if _b2_ok:
+        upload_stage_marker("audio")
 
     summary_parts = [
         f"Audio generation complete: {total_clips} narration clips added to timeline.",
@@ -1226,15 +1230,14 @@ def deterministic_production_callback(
             logger.error(err_msg)
             errors.append(err_msg)
 
-    # Upload production stage completion to B2 — artifacts FIRST, then gatekeeper.
+    # Upload production artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
-    # Only mark stage complete if critical artifacts uploaded
-    if _b2_ok:
-        upload_stage_marker("production")
+    # NOTE: stage marker is uploaded AFTER gatekeeper validation below.
+    # Uploading it here would let a rejected stage be skipped on restart.
 
     # GATEKEEPER: batch validation AFTER all artifacts are in B2.
     # Every video clip is already uploaded (inside generate_video_clip)
@@ -1264,6 +1267,11 @@ def deterministic_production_callback(
             f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
             f"audit report uploaded to B2): {reject_msgs}"
         )
+
+    # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
+    # marked complete, otherwise they'd be skipped on pipeline restart.
+    if _b2_ok:
+        upload_stage_marker("production")
 
     summary_parts = [
         f"Production complete: {total_clips} video clips generated and added to timeline.",
