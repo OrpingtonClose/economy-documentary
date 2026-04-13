@@ -817,7 +817,7 @@ class WorkerProvisioner:
         """
         spec.status = "provisioning"
         try:
-            self._provision_and_connect(spec, timeout=1800)
+            self._provision_and_connect(spec, timeout=2400)
             spec.status = "healthy"
 
             # Update env var so contracts see the new URL
@@ -845,7 +845,7 @@ class WorkerProvisioner:
     def wait_for_worker(
         self,
         role: str,
-        timeout: int = 2100,
+        timeout: int = 2700,
     ) -> bool:
         """Wait for a specific worker to be ready.
 
@@ -913,7 +913,7 @@ class WorkerProvisioner:
         self,
         require_tts: bool = True,
         require_video: bool = True,
-        provision_timeout: int = 2100,
+        provision_timeout: int = 2700,
     ) -> dict:
         """Ensure all required workers are healthy, provisioning if needed.
 
