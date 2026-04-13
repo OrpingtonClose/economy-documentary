@@ -762,7 +762,7 @@ class WorkerProvisioner:
             logger.warning("Failed to start InfraAgent: %s", exc)
 
     def cleanup(self) -> None:
-        """Clean up: kill SSH tunnels and optionally terminate VMs."""
+        """Clean up: kill SSH tunnels, destroy VMs, and stop InfraAgent."""
         with self._lock:
             specs = list(self._specs)
 
@@ -778,6 +778,24 @@ class WorkerProvisioner:
                     spec.tunnel_proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     spec.tunnel_proc.kill()
+
+            # Destroy provisioned VM to stop billing
+            if spec.vm_id:
+                logger.info(
+                    "Destroying %s VM %s to stop billing",
+                    spec.role, spec.vm_id,
+                )
+                try:
+                    _vast_cmd(["destroy", "instance", spec.vm_id])
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to destroy VM %s: %s", spec.vm_id, exc,
+                    )
+
+        # Clear specs so stale VM IDs aren't referenced again
+        with self._lock:
+            self._specs = []
+            self._provisioned = False
 
         # Shutdown InfraAgent
         try:
