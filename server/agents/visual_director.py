@@ -322,6 +322,8 @@ def _visual_phase_setup(callback_context):
             try:
                 write_visual_metadata_to_otio(callback_context)
                 logger.info("QUICK-TEST: write_visual_metadata_to_otio completed")
+            except RuntimeError:
+                raise  # OTIO violations are fatal — never swallow
             except Exception as e:
                 logger.warning("QUICK-TEST: write_visual_metadata_to_otio error: %s", e)
 
