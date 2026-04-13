@@ -327,9 +327,10 @@ def _visual_phase_setup(callback_context):
             except Exception as e:
                 logger.warning("QUICK-TEST: write_visual_metadata_to_otio error: %s", e)
 
-            from callbacks.approval_gate import mark_stage_ready
+            from callbacks.approval_gate import mark_stage_ready, approve_stage
             mark_stage_ready("prompts")
-            logger.info("QUICK-TEST: marked prompts stage ready")
+            approve_stage("prompts")
+            logger.info("QUICK-TEST: marked prompts stage ready + approved")
 
             return genai_types.Content(
                 role="model",

@@ -91,6 +91,26 @@ def mark_stage_ready(stage: str) -> None:
     logger.info("Stage '%s' marked ready for review", stage)
 
 
+def approve_stage(stage: str) -> None:
+    """Programmatically approve a stage (no human needed).
+
+    Used by quick-test and other automated paths that skip the normal
+    human-in-the-loop flow but still need downstream stages to proceed.
+    """
+    if _AUTO_APPROVE:
+        logger.info("Stage '%s' already auto-approved (test/auto-approve mode)", stage)
+        return
+    state = _read_approval_state()
+    if stage not in state:
+        state[stage] = {}
+    state[stage]["ready"] = True
+    state[stage]["approved"] = True
+    state[stage]["approved_at"] = time.time()
+    state[stage]["approved_by"] = "quick-test"
+    _write_approval_state(state)
+    logger.info("Stage '%s' programmatically approved (quick-test)", stage)
+
+
 def wait_for_approval(stage: str) -> bool:
     """Block until the human approves the given stage.
 
