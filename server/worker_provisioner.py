@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -430,6 +431,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
 
+    # NOTE: Do NOT use --raw here.  `vastai create instance --raw` returns
+    # an empty string.  Without --raw it returns text like:
+    #   Started. {'success': True, 'new_contract': 34856082, ...}
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
@@ -438,14 +442,23 @@ def provision_vm(spec: WorkerSpec) -> str:
         "--ssh",
         "--direct",
         "--onstart-cmd", onstart,
-        "--raw",
     ])
 
+    # Parse the response — could be dict (if CLI returns JSON) or a string
+    # containing a Python dict literal like "Started. {'new_contract': ...}"
     if isinstance(create_result, dict):
         instance_id = create_result.get("new_contract")
         if instance_id:
             spec.vm_id = str(instance_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
+            return spec.vm_id
+
+    # Try to extract new_contract from text response
+    if isinstance(create_result, str) and "new_contract" in create_result:
+        match = re.search(r"'new_contract'\s*:\s*(\d+)", create_result)
+        if match:
+            spec.vm_id = match.group(1)
+            logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
             return spec.vm_id
 
     raise RuntimeError(
