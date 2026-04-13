@@ -795,7 +795,7 @@ class WorkerProvisioner:
         """
         spec.status = "provisioning"
         try:
-            self._provision_and_connect(spec, timeout=900)
+            self._provision_and_connect(spec, timeout=1800)
             spec.status = "healthy"
 
             # Update env var so contracts see the new URL
@@ -969,9 +969,9 @@ class WorkerProvisioner:
         setup_ssh_tunnel(spec)
 
         # Step 4: Wait for worker to be healthy
-        # Bootstrap + model download can take 10-15 min
+        # Bootstrap + model download can take 15-25 min (50GB+ at ~75 MB/s)
         elapsed = int(time.time() - _start)
-        remaining = max(timeout - elapsed, 300)  # at least 5 min for health wait
+        remaining = max(timeout - elapsed, 900)  # at least 15 min for health wait
         healthy = wait_for_worker_healthy(spec, timeout=remaining)
         if not healthy:
             raise RuntimeError(
