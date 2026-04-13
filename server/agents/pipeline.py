@@ -83,7 +83,7 @@ def _scenario_after_with_gate(callback_context):
 
 
 def _audio_before_with_gate(callback_context):
-    """Before audio_agent: wait for scenario approval, then run original."""
+    """Before audio_agent: wait for scenario approval + TTS worker, then run original."""
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
         approved = wait_for_approval("scenario")
@@ -94,6 +94,23 @@ def _audio_before_with_gate(callback_context):
                     text="ERROR: Timed out waiting for scenario approval."
                 )],
             )
+
+    # Lazy worker binding: wait for TTS worker only when audio stage needs it.
+    # The worker was started provisioning in background during _init_pipeline_state.
+    try:
+        from worker_provisioner import get_provisioner
+        provisioner = get_provisioner()
+        provisioner.wait_for_worker("tts", timeout=900)
+        logger.info("TTS worker ready — audio stage proceeding")
+    except Exception as exc:
+        logger.error("TTS worker not available: %s", exc)
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"ERROR: TTS worker provisioning failed: {exc}"
+            )],
+        )
+
     if _orig_audio_before:
         return _orig_audio_before(callback_context)
     return None
@@ -113,7 +130,7 @@ def _visual_after_with_gate(callback_context):
 
 
 def _production_before_with_gate(callback_context):
-    """Before production_supervisor: wait for prompts approval, then run original."""
+    """Before production_supervisor: wait for prompts approval + video worker, then run original."""
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
         approved = wait_for_approval("prompts")
@@ -124,6 +141,23 @@ def _production_before_with_gate(callback_context):
                     text="ERROR: Timed out waiting for prompts approval."
                 )],
             )
+
+    # Lazy worker binding: wait for video worker only when production stage needs it.
+    # The worker was started provisioning in background during _init_pipeline_state.
+    try:
+        from worker_provisioner import get_provisioner
+        provisioner = get_provisioner()
+        provisioner.wait_for_worker("video", timeout=900)
+        logger.info("Video worker ready — production stage proceeding")
+    except Exception as exc:
+        logger.error("Video worker not available: %s", exc)
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"ERROR: Video worker provisioning failed: {exc}"
+            )],
+        )
+
     if _orig_production_before:
         return _orig_production_before(callback_context)
     return None
@@ -179,6 +213,11 @@ def _init_pipeline_state(
 
     AG-UI creates sessions without initial state, so the first time the
     pipeline runs we inject the keys that all agents read/write.
+
+    Also ensures GPU workers are provisioned and healthy before any stage
+    that needs them.  This solves the chicken-and-egg problem where
+    contract precondition checks run before the pipeline agent can
+    provision workers.
     """
     import os
 
@@ -210,6 +249,33 @@ def _init_pipeline_state(
         state["_timeline_path"] = _timeline_path(topic)
         logger.info("Pre-set _timeline_path=%s", state["_timeline_path"])
 
+    # ── Parallel lazy worker provisioning ─────────────────────────────
+    # Start GPU worker provisioning in background threads.  Returns
+    # IMMEDIATELY so the scenario stage (no GPU needed) can run while
+    # VMs bootstrap.  Each stage waits for only the worker it needs:
+    #   - Audio stage calls wait_for_worker("tts") in its before_callback
+    #   - Production stage calls wait_for_worker("video") in its before_callback
+    if not state.get("_workers_provisioned"):
+        from worker_provisioner import get_provisioner
+
+        provisioner = get_provisioner()
+        try:
+            provisioner.start_provisioning(
+                require_tts=True,
+                require_video=True,
+            )
+            state["_workers_provisioned"] = True
+            logger.info(
+                "Background worker provisioning started — "
+                "scenario stage will run while VMs bootstrap"
+            )
+        except Exception as exc:
+            logger.error("Worker provisioning failed to start: %s", exc)
+            state["_workers_provisioned"] = False
+            state["_worker_provision_error"] = str(exc)
+            # Don't block pipeline start — let stage before_callbacks
+            # handle the failure with a clear error message.
+
     return None
 
 
@@ -224,6 +290,18 @@ def _cleanup_pipeline_state(
         "Pipeline completed: pipeline_key=%s",
         state.get("_pipeline_key", "unknown"),
     )
+
+    # Cleanup worker provisioner (SSH tunnels, InfraAgent)
+    try:
+        from worker_provisioner import get_provisioner
+        provisioner = get_provisioner()
+        provisioner.cleanup()
+    except Exception as exc:
+        logger.warning("Worker provisioner cleanup error: %s", exc)
+
+    # Reset provisioning flag so re-runs in the same session re-provision
+    state["_workers_provisioned"] = False
+
     return None
 
 
