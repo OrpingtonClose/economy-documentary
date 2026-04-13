@@ -31,6 +31,11 @@ _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
 # Auto-approve all stages in test mode (no human needed)
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+# Separate flag: auto-approve gates without enabling test-mode fakes.
+# Useful for real GPU runs that still skip manual approval.
+_AUTO_APPROVE = _TEST_MODE or os.environ.get(
+    "DOCUMENTARY_AUTO_APPROVE", ""
+).strip().lower() in ("1", "true")
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
@@ -63,7 +68,7 @@ def is_stage_approved(stage: str) -> bool:
 
     In test mode, all stages are auto-approved.
     """
-    if _TEST_MODE:
+    if _AUTO_APPROVE:
         return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
@@ -74,7 +79,7 @@ def mark_stage_ready(stage: str) -> None:
 
     In test mode, stages are auto-approved — skip disk I/O entirely.
     """
-    if _TEST_MODE:
+    if _AUTO_APPROVE:
         logger.info("Stage '%s' auto-approved (test mode)", stage)
         return
     state = _read_approval_state()
@@ -92,7 +97,7 @@ def wait_for_approval(stage: str) -> bool:
     Returns True if approved, False if timed out.
     In test mode, returns immediately.
     """
-    if _TEST_MODE:
+    if _AUTO_APPROVE:
         logger.info("Stage '%s' auto-approved (test mode)", stage)
         return True
     start = time.time()
