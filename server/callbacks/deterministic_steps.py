@@ -454,6 +454,7 @@ def deterministic_audio_callback(
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
     from tools.otio_tools import add_narration_clip
+    from gatekeeper import check_narration_clip, has_rejects
 
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -529,6 +530,22 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # GATEKEEPER: validate narration clip before OTIO write
+                            gk_checks = check_narration_clip(
+                                wav_path=wav_path,
+                                scene_num=scene_num,
+                                voice=voice_suffix,
+                                duration=duration,
+                                stage="audio",
+                            )
+                            if has_rejects(gk_checks):
+                                rejects = [c for c in gk_checks if c.verdict.value == "reject"]
+                                reject_msgs = "; ".join(c.message for c in rejects)
+                                raise RuntimeError(
+                                    f"GATEKEEPER REJECT: narration clip scene {scene_num} "
+                                    f"{voice_suffix}: {reject_msgs}"
+                                )
+
                             # AG-UI: update narration artifact
                             _feedback_store.register_artifact(ArtifactEvent(
                                 id=narr_artifact_id,
@@ -589,6 +606,22 @@ def deterministic_audio_callback(
                     duration = result.get("duration", 0)
 
                     if wav_path and duration > 0:
+                        # GATEKEEPER: validate narration clip before OTIO write
+                        gk_checks = check_narration_clip(
+                            wav_path=wav_path,
+                            scene_num=scene_num,
+                            voice=voice,
+                            duration=duration,
+                            stage="audio",
+                        )
+                        if has_rejects(gk_checks):
+                            rejects = [c for c in gk_checks if c.verdict.value == "reject"]
+                            reject_msgs = "; ".join(c.message for c in rejects)
+                            raise RuntimeError(
+                                f"GATEKEEPER REJECT: narration clip scene {scene_num} "
+                                f"{voice}: {reject_msgs}"
+                            )
+
                         clip_result_json = add_narration_clip(
                             scene_num=scene_num,
                             voice=voice,
@@ -945,7 +978,24 @@ def deterministic_production_callback(
         )
 
     from tools.video_tools import generate_video_clip, probe_clip
-    from tools.otio_tools import add_video_clip
+    from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
+    from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window
+
+    # GATEKEEPER: stage handoff check (visual_direction → production)
+    handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
+    if has_rejects(handoff_checks):
+        rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
+        raise RuntimeError(
+            f"GATEKEEPER BLOCKED production start: "
+            + "; ".join(c.message for c in rejects)
+        )
+    if not intervention_window("production_start", handoff_checks):
+        raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
+
+    # Read narration durations for gatekeeper cross-validation
+    narr_durations = get_narration_durations_by_scene(
+        tool_context=_MockToolContext(state),
+    )
 
     # AG-UI: emit artifact events as clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -1120,6 +1170,25 @@ def deterministic_production_callback(
             probe_result = json.loads(probe_result_json)
             actual_duration = probe_result.get("duration", duration * 1.15)
 
+            # GATEKEEPER: anti-cheat + cross-track validation before OTIO write
+            scene_phrases = narr_durations.get(scene_num, [])
+            expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
+            gk_checks = check_video_clip(
+                mp4_path=output_path,
+                scene_num=scene_num,
+                phrase_idx=phrase_idx,
+                source_range=duration,
+                expected_duration=expected_dur,
+                stage="production",
+            )
+            if has_rejects(gk_checks):
+                rejects = [c for c in gk_checks if c.verdict.value == "reject"]
+                reject_msgs = "; ".join(c.message for c in rejects)
+                raise RuntimeError(
+                    f"GATEKEEPER REJECT: video clip scene {scene_num} "
+                    f"phrase {phrase_idx}: {reject_msgs}"
+                )
+
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
@@ -1164,6 +1233,19 @@ def deterministic_production_callback(
     summary_parts.append(f"Workers used: {num_workers}.")
 
     logger.info("Deterministic production: %d clips generated", total_clips)
+
+    # TIMELINE GUARDIAN: run explicitly after production.
+    # When before_agent_callback returns Content (which we always do for
+    # deterministic production), ADK skips the after_agent_callback.
+    # The timeline guardian MUST run after production — it's non-negotiable.
+    from callbacks.timeline_guardian import timeline_guardian_callback
+    try:
+        timeline_guardian_callback(callback_context)
+        logger.info("Timeline Guardian passed after production")
+    except RuntimeError as e:
+        # Guardian found violations — this is fatal
+        logger.error("Timeline Guardian FAILED after production: %s", e)
+        raise
 
     # INFRA: notify stage complete
     _infra = get_infra_agent()
@@ -1230,6 +1312,18 @@ def deterministic_assembly_callback(
     from tools.otio_tools import _otio_lock
     from tools.assembly_tools import trim_clip, mux_audio_video, concat_clips
     from tools.video_tools import probe_clip
+    from gatekeeper import check_stage_handoff, has_rejects, intervention_window
+
+    # GATEKEEPER: stage handoff check (production → assembly)
+    handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
+    if has_rejects(handoff_checks):
+        rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
+        raise RuntimeError(
+            f"GATEKEEPER BLOCKED assembly start: "
+            + "; ".join(c.message for c in rejects)
+        )
+    if not intervention_window("assembly_start", handoff_checks):
+        raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 
     assembly_dir = "/tmp/documentary-pipeline/assembly"
     output_dir = "/tmp/documentary-pipeline/output"
@@ -1542,17 +1636,17 @@ def deterministic_assembly_callback(
                     combined_video_for_mux = trimmed_path
 
                 elif duration_diff < -0.5:
-                    # Video still shorter than audio after interleaving
-                    # black-frame gaps — this shouldn't happen if the
-                    # interleaving matched the audio pauses.  Log a
-                    # warning but don't fail; the mux will still work
-                    # (audio may extend slightly past video at scene end).
-                    logger.warning(
-                        "Scene %d%s: video %.2fs still < audio %.2fs "
-                        "after interleaving (residual %.2fs) — "
-                        "possible clip count mismatch between audio and video",
-                        scene_num, lang_suffix, video_dur,
-                        total_audio_duration, abs(duration_diff),
+                    # GATEKEEPER HARD FAIL: video shorter than audio
+                    # This proves the OTIO source_range contract was
+                    # violated — a video clip did not cover its
+                    # corresponding narration phrase.  This is the
+                    # single most important enforcement in the pipeline.
+                    raise RuntimeError(
+                        f"GATEKEEPER REJECT: Scene {scene_num}{lang_suffix}: "
+                        f"video {video_dur:.2f}s < audio {total_audio_duration:.2f}s "
+                        f"(deficit {abs(duration_diff):.2f}s). "
+                        f"OTIO source_range contract violated — "
+                        f"video clips must cover narration duration."
                     )
 
                 # Mux combined audio + video

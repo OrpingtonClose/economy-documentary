@@ -959,6 +959,59 @@ async def get_qa_results():
     return JSONResponse({"results": results})
 
 
+# ---------------------------------------------------------------------------
+# Gatekeeper endpoints — real-time validation visibility + intervention
+# ---------------------------------------------------------------------------
+
+@router.get("/gatekeeper/checks")
+async def get_gatekeeper_checks(stage: str | None = None):
+    """Get all gatekeeper check results, optionally filtered by stage."""
+    from gatekeeper import get_gatekeeper_store
+    store = get_gatekeeper_store()
+    if stage:
+        return JSONResponse({"checks": store.get_checks_for_stage(stage)})
+    return JSONResponse({"checks": store.get_all_checks()})
+
+
+@router.get("/gatekeeper/rejects")
+async def get_gatekeeper_rejects():
+    """Get all gatekeeper REJECT verdicts — the pipeline-blocking failures."""
+    from gatekeeper import get_gatekeeper_store
+    return JSONResponse({"rejects": get_gatekeeper_store().get_rejects()})
+
+
+@router.post("/gatekeeper/halt")
+async def halt_gatekeeper(request: Request):
+    """User halts the pipeline during a gatekeeper intervention window.
+
+    Body:
+        stage: str — the gatekeeper stage to halt (e.g. "production_start")
+        comment: str — optional reason for halting
+    """
+    body = await request.json()
+    stage = body.get("stage", "")
+    if not stage:
+        return JSONResponse({"error": "Missing 'stage' field"}, status_code=400)
+
+    # Write halt signal to approval state file (gatekeeper reads this)
+    state = _read_approval_state()
+    state[f"gatekeeper_{stage}"] = {
+        "halted": True,
+        "comment": body.get("comment", ""),
+        "timestamp": time.time(),
+    }
+    _write_approval_state(state)
+
+    emit_agui_event("gatekeeper_halted", {
+        "stage": stage,
+        "comment": body.get("comment", ""),
+        "timestamp": time.time(),
+    })
+
+    logger.info("Gatekeeper HALTED by user: %s", stage)
+    return JSONResponse({"status": "halted", "stage": stage})
+
+
 @router.post("/regenerate")
 async def trigger_regeneration(body: dict):
     """Trigger regeneration at clip / scene / style level.
