@@ -179,6 +179,11 @@ def _init_pipeline_state(
 
     AG-UI creates sessions without initial state, so the first time the
     pipeline runs we inject the keys that all agents read/write.
+
+    Also ensures GPU workers are provisioned and healthy before any stage
+    that needs them.  This solves the chicken-and-egg problem where
+    contract precondition checks run before the pipeline agent can
+    provision workers.
     """
     import os
 
@@ -210,6 +215,33 @@ def _init_pipeline_state(
         state["_timeline_path"] = _timeline_path(topic)
         logger.info("Pre-set _timeline_path=%s", state["_timeline_path"])
 
+    # ── Worker provisioning ──────────────────────────────────────────
+    # Ensure GPU workers (TTS, video) are healthy before the pipeline
+    # starts.  If workers aren't reachable, provision new Vast.ai VMs,
+    # set up SSH tunnels, and wait for health checks to pass.
+    #
+    # This runs ONCE at pipeline init — before any stage callback can
+    # trigger a contract precondition check.  Solves the chicken-and-egg
+    # problem where contracts block before the agent can provision.
+    if not state.get("_workers_provisioned"):
+        from worker_provisioner import get_provisioner
+
+        provisioner = get_provisioner()
+        try:
+            result = provisioner.ensure_workers_ready(
+                require_tts=True,
+                require_video=True,
+            )
+            state["_workers_provisioned"] = True
+            state["_worker_provision_result"] = str(result)
+            logger.info("Worker provisioning complete: %s", result)
+        except Exception as exc:
+            logger.error("Worker provisioning failed: %s", exc)
+            state["_workers_provisioned"] = False
+            state["_worker_provision_error"] = str(exc)
+            # Don't block pipeline start — let contract checks handle
+            # the failure with a clear error message.
+
     return None
 
 
@@ -224,6 +256,15 @@ def _cleanup_pipeline_state(
         "Pipeline completed: pipeline_key=%s",
         state.get("_pipeline_key", "unknown"),
     )
+
+    # Cleanup worker provisioner (SSH tunnels, InfraAgent)
+    try:
+        from worker_provisioner import get_provisioner
+        provisioner = get_provisioner()
+        provisioner.cleanup()
+    except Exception as exc:
+        logger.warning("Worker provisioner cleanup error: %s", exc)
+
     return None
 
 
