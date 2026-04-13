@@ -751,7 +751,7 @@ def _generate_video(
     raw_path = os.path.join(
         _output_dir, f"clip_{uuid.uuid4().hex[:8]}_raw.mp4"
     )
-    output_path = raw_path.replace("_raw.mp4", ".mp4")
+    output_path = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
     os.makedirs(_output_dir, exist_ok=True)
 
     # Use diffusers encode_video for initial MP4 encoding (with audio)
@@ -817,7 +817,7 @@ def _generate_video(
     # Clean up both raw and H.264 files.  Use a set + the original
     # H.264 path so that even when output_path was reassigned to
     # raw_path on failure, the partially-created H.264 file is removed.
-    original_h264 = raw_path.replace("_raw.mp4", ".mp4")
+    original_h264 = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
     for p in {raw_path, output_path, original_h264}:
         try:
             os.unlink(p)
