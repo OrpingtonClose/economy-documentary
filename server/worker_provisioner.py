@@ -1,22 +1,37 @@
 """
 Worker provisioner — automatic GPU worker lifecycle management.
 
-Solves the chicken-and-egg problem where contract preconditions check
-worker health BEFORE the pipeline agent gets a chance to provision VMs.
+Architecture: **parallel lazy provisioning**
 
-This module runs as a **pre-pipeline step** in ``_init_pipeline_state``
-(pipeline.py) and in the server lifespan.  It:
+Instead of blocking the entire pipeline until all workers are ready,
+provisioning runs in background threads.  The pipeline starts immediately
+(scenario generation needs no GPU) and each stage waits only for the
+specific worker it needs:
 
-1. Checks if required workers (TTS, video) are already healthy.
-2. Queries the Vast.ai account credit balance.
-3. Calculates a per-worker budget from available credits — NEVER
-   compromising on VRAM (no quantisation).
-4. Provisions Vast.ai GPU VMs using that budget.
-5. Waits for VMs to reach "running" status.
-6. Sets up SSH tunnels from localhost ports to the remote workers.
-7. Waits for workers to pass health checks.
-8. Updates env vars so contracts and infra_agent see the live URLs.
-9. Starts the InfraAgent for continuous monitoring.
+    t=0   Start TTS + Video provisioning in background threads
+    t=0   Start scenario generation IMMEDIATELY (no GPU needed)
+    t=3m  Scenario done.  Audio stage calls wait_for_worker("tts")
+    t=5m  TTS ready -> audio proceeds.  Video still bootstrapping...
+    t=10m Audio done -> visual direction (LLM only, no GPU)
+    t=12m Visual direction done -> production calls wait_for_worker("video")
+    t=20m Video ready -> production proceeds
+
+This saves ~15-20 minutes vs the old sequential blocking approach.
+
+VRAM calculation (bf16, no quantisation):
+
+    TTS  (Qwen3-TTS-12Hz-1.7B):  1.7B x 2 bytes = 3.4 GB weights
+         + KV cache + activations ~ 5-8 GB runtime -> min_vram = 8 GB
+
+    Video (LTX-2.3 diffusers):   text_encoder ~46.6 GB
+                                  transformer  ~37.8 GB
+                                  vae + audio  ~ 6.6 GB
+                                  Total loaded ~ 71 GB bf16
+         + inference overhead   -> min_vram = 80 GB
+         (gpu_worker.py: "Requires 80GB+ VRAM")
+
+Budget: weighted split — video GPU costs ~20x more than TTS GPU,
+so equal-splitting the budget wastes money on TTS and starves video.
 
 Architecture invariants preserved:
 - One model per VM — TTS and video on separate VMs.
@@ -64,26 +79,51 @@ class WorkerSpec:
     gpu_type: str = "A100_SXM4"
     min_vram_gb: int = 48
     max_price: float = 2.00
+    min_disk_gb: int = 50  # per-worker disk search filter
+    disk_gb: int = 64  # --disk arg for vast create instance
     worker_mode: str = "tts"  # gpu_worker.py --mode argument
     vm_id: str = ""  # populated after provisioning
     ssh_host: str = ""
     ssh_port: int = 0
     tunnel_proc: Optional[subprocess.Popen] = field(default=None, repr=False)
+    # Parallel provisioning status — used by background threads
+    status: str = "pending"  # "pending", "provisioning", "healthy", "failed"
+    error: str = ""  # error message if status == "failed"
+    ready_event: threading.Event = field(default_factory=threading.Event)
 
 
-# Default worker specs — TTS and video on separate VMs.
-# ``max_price`` is a *fallback* — ``ensure_workers_ready`` overrides it
-# with a credit-derived budget at runtime.  VRAM floors are hard minimums
-# that are NEVER lowered (no quantisation compromise).
+# ---------------------------------------------------------------------------
+# Default worker specs — VRAM calculated from actual model sizes
+# ---------------------------------------------------------------------------
+#
+# TTS: Qwen3-TTS-12Hz-1.7B-VoiceDesign
+#   1.7B params x 2 bytes (bf16) = 3.4 GB model weights
+#   + KV cache + activations ~ 5-8 GB total
+#   -> min_vram_gb = 8 (safe floor with headroom)
+#   -> gpu_type = any cheap GPU with >= 12 GB (RTX 3060, 3070, etc.)
+#   -> disk: ~4.3 GB model + ~30 GB OS/software = ~50 GB
+#
+# Video: LTX-2.3 (dg845/LTX-2.3-Diffusers)
+#   text_encoder: ~46.6 GB (transformers format)
+#   transformer:  ~37.8 GB (diffusers format)
+#   vae + audio_vae + vocoder + connectors + latent_upsampler: ~6.6 GB
+#   Total loaded in VRAM: ~71 GB bf16
+#   + inference overhead (latent upsampler, two-pass pipeline): ~9 GB
+#   -> min_vram_gb = 80 (gpu_worker.py: "Requires 80GB+ VRAM")
+#   -> gpu_type = A100_SXM4 (80 GB) or H100/H200
+#   -> disk: ~95 GB models + ~30 GB OS + ~20 GB output = ~200 GB
+
 TTS_SPEC = WorkerSpec(
     role="tts",
     env_var="TTS_WORKER_URL",
     local_port=8880,
     remote_port=8880,
     capability="tts",
-    gpu_type="RTX_3090",  # preferred, broadened automatically if unavailable
-    min_vram_gb=24,       # hard floor — full-precision Qwen3-TTS needs >=20GB
-    max_price=0.50,       # fallback; overridden by credit-aware budget
+    gpu_type="RTX_4000",      # cheap GPU; broadened automatically if unavailable
+    min_vram_gb=8,             # 1.7B model at bf16 = 3.4 GB + overhead
+    max_price=1.00,            # fallback ceiling; overridden by weighted budget
+    min_disk_gb=50,            # ~4.3 GB model + OS
+    disk_gb=64,                # --disk arg (comfortable headroom)
     worker_mode="tts",
 )
 
@@ -93,9 +133,11 @@ VIDEO_SPEC = WorkerSpec(
     local_port=8881,
     remote_port=8880,
     capability="ltx",
-    gpu_type="RTX_4090",  # preferred, broadened automatically if unavailable
-    min_vram_gb=24,       # hard floor — full-precision LTX-2.3 needs >=22GB
-    max_price=0.50,       # fallback; overridden by credit-aware budget
+    gpu_type="A100_SXM4",     # 80 GB VRAM; broadened to H100/H200 if unavailable
+    min_vram_gb=80,            # ~71 GB bf16 model loaded fully on GPU
+    max_price=5.00,            # fallback ceiling; overridden by weighted budget
+    min_disk_gb=200,           # ~95 GB models + OS + output
+    disk_gb=224,               # --disk arg
     worker_mode="ltx",
 )
 
@@ -147,11 +189,16 @@ _CREDIT_RESERVE = 5.0
 # into a safe per-worker $/hr ceiling.
 _ESTIMATED_RUN_HOURS = 2.0
 
-# Absolute per-worker $/hr ceiling regardless of credits.
-_MAX_PRICE_CEILING = 10.0
+# Per-worker price ceilings by GPU tier.
+# TTS GPUs (8-24 GB) cost $0.05-0.30/hr on Vast.ai.
+# Video GPUs (80 GB+) cost $1.50-4.00/hr on Vast.ai.
+_TTS_PRICE_CEILING = 1.00
+_VIDEO_PRICE_CEILING = 10.00
 
-# Minimum disk space in GB for provisioned VMs.
-_MIN_DISK_GB = 50
+# Budget weight — video uses ~90% of the GPU budget because an 80GB+
+# GPU costs ~20x more than a cheap 12 GB TTS GPU.
+_TTS_BUDGET_WEIGHT = 0.10
+_VIDEO_BUDGET_WEIGHT = 0.90
 
 
 def get_account_credits() -> float:
@@ -169,16 +216,15 @@ def get_account_credits() -> float:
     raise RuntimeError(f"Could not read Vast.ai account info: {result}")
 
 
-def calculate_budget_per_worker(
-    num_workers: int,
+def calculate_weighted_budgets(
     estimated_hours: float = _ESTIMATED_RUN_HOURS,
-) -> float:
-    """Determine the maximum $/hr per worker from account credits.
+) -> tuple[float, float]:
+    """Calculate per-worker $/hr budgets weighted by GPU tier.
 
-    Formula:
-        budget_per_worker = (credits - reserve) / num_workers / estimated_hours
+    Video GPUs cost ~20x more than TTS GPUs, so equal-splitting the
+    budget wastes money on TTS and leaves too little for video.
 
-    VRAM requirements are never touched — this only adjusts the price ceiling.
+    Returns (tts_budget, video_budget) in $/hr.
     """
     credits = get_account_credits()
     usable = credits - _CREDIT_RESERVE
@@ -188,13 +234,46 @@ def calculate_budget_per_worker(
             f"(reserve=${_CREDIT_RESERVE:.2f}). "
             f"Top up at https://cloud.vast.ai/billing/"
         )
-    budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
-    capped = min(budget, _MAX_PRICE_CEILING)
+
+    total_hourly = usable / max(estimated_hours, 0.5)
+
+    tts_budget = min(total_hourly * _TTS_BUDGET_WEIGHT, _TTS_PRICE_CEILING)
+    video_budget = min(total_hourly * _VIDEO_BUDGET_WEIGHT, _VIDEO_PRICE_CEILING)
+
+    # Safety: if combined exceeds total, scale down proportionally
+    combined = tts_budget + video_budget
+    if combined > total_hourly:
+        scale = total_hourly / combined
+        tts_budget *= scale
+        video_budget *= scale
+
     logger.info(
-        "Budget: $%.2f usable / %d workers / %.1fh = $%.2f/hr per worker "
-        "(capped at $%.2f)",
-        usable, num_workers, estimated_hours, budget, capped,
+        "Weighted budget: $%.2f usable / %.1fh = $%.2f/hr total. "
+        "TTS: $%.2f/hr (weight %.0f%%, ceiling $%.2f). "
+        "Video: $%.2f/hr (weight %.0f%%, ceiling $%.2f).",
+        usable, estimated_hours, total_hourly,
+        tts_budget, _TTS_BUDGET_WEIGHT * 100, _TTS_PRICE_CEILING,
+        video_budget, _VIDEO_BUDGET_WEIGHT * 100, _VIDEO_PRICE_CEILING,
     )
+    return tts_budget, video_budget
+
+
+# Keep the old function for backward compatibility (infra_agent etc.)
+def calculate_budget_per_worker(
+    num_workers: int,
+    estimated_hours: float = _ESTIMATED_RUN_HOURS,
+) -> float:
+    """Legacy equal-split budget.  Prefer calculate_weighted_budgets()."""
+    credits = get_account_credits()
+    usable = credits - _CREDIT_RESERVE
+    if usable <= 0:
+        raise RuntimeError(
+            f"Insufficient Vast.ai credits: ${credits:.2f} "
+            f"(reserve=${_CREDIT_RESERVE:.2f}). "
+            f"Top up at https://cloud.vast.ai/billing/"
+        )
+    budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
+    capped = min(budget, _VIDEO_PRICE_CEILING)
     return capped
 
 
@@ -233,8 +312,10 @@ def provision_vm(spec: WorkerSpec) -> str:
     Returns the instance ID.
     """
     logger.info(
-        "Provisioning %s worker: gpu=%s, vram>=%dGB, max $%.2f/hr",
+        "Provisioning %s worker: gpu=%s, vram>=%dGB, max $%.2f/hr, "
+        "disk>=%dGB (--disk %d)",
         spec.role, spec.gpu_type, spec.min_vram_gb, spec.max_price,
+        spec.min_disk_gb, spec.disk_gb,
     )
 
     # Search for offers — VRAM is a hard floor, never compromised.
@@ -245,7 +326,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"gpu_ram>={vram_mb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
-        f"disk_space>={_MIN_DISK_GB}"
+        f"disk_space>={spec.min_disk_gb}"
     )
 
     search_result = _vast_cmd([
@@ -269,7 +350,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             f"gpu_ram>={vram_mb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
-            f"disk_space>={_MIN_DISK_GB}"
+            f"disk_space>={spec.min_disk_gb}"
         )
         search_result = _vast_cmd([
             "search", "offers",
@@ -280,11 +361,33 @@ def provision_vm(spec: WorkerSpec) -> str:
         ])
         offers = search_result if isinstance(search_result, list) else []
 
+    # Python-side filtering as safety net (CLI filters can be unreliable)
+    if offers:
+        filtered = []
+        for o in offers:
+            o_vram = float(o.get("gpu_ram", 0))
+            o_price = float(o.get("dph_total", 999))
+            o_disk = float(o.get("disk_space", 0))
+            if (
+                o_vram >= vram_mb
+                and o_price <= spec.max_price
+                and o_disk >= spec.min_disk_gb
+            ):
+                filtered.append(o)
+        if len(filtered) < len(offers):
+            logger.info(
+                "Python-side filter: %d/%d offers passed "
+                "(vram>=%dMB, price<=$%.2f, disk>=%dGB)",
+                len(filtered), len(offers),
+                vram_mb, spec.max_price, spec.min_disk_gb,
+            )
+        offers = filtered
+
     if not offers:
         raise RuntimeError(
             f"No GPU offers found for {spec.role} worker "
             f"(min {spec.min_vram_gb}GB VRAM, max ${spec.max_price:.2f}/hr, "
-            f"min disk {_MIN_DISK_GB}GB). "
+            f"min disk {spec.min_disk_gb}GB). "
             f"VRAM floor is non-negotiable (no quantisation). "
             f"Current account budget allows up to ${spec.max_price:.2f}/hr."
         )
@@ -297,12 +400,13 @@ def provision_vm(spec: WorkerSpec) -> str:
     offer_id = best.get("id")
 
     logger.info(
-        "Selected offer %s: %s %dx, %.1fGB VRAM, $%.3f/hr",
+        "Selected offer %s: %s %dx, %.1fGB VRAM, $%.3f/hr, %.0fGB disk",
         offer_id,
         best.get("gpu_name", "unknown"),
         best.get("num_gpus", 1),
         float(best.get("gpu_ram", 0)) / 1024,
         float(best.get("dph_total", 0)),
+        float(best.get("disk_space", 0)),
     )
 
     # Create instance with bootstrap onstart
@@ -326,7 +430,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         "create", "instance",
         str(offer_id),
         "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
-        "--disk", "224",
+        "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
         "--onstart-cmd", onstart,
@@ -520,44 +624,57 @@ def wait_for_worker_healthy(
 
 
 # ---------------------------------------------------------------------------
-# High-level orchestrator
+# High-level orchestrator — parallel lazy provisioning
 # ---------------------------------------------------------------------------
 
 
 class WorkerProvisioner:
     """Manages the full lifecycle of GPU workers for the pipeline.
 
-    Call ``ensure_workers_ready()`` before the pipeline starts.
-    Call ``cleanup()`` when the pipeline finishes.
+    Two-phase API for parallel lazy provisioning:
+
+    1. ``start_provisioning()`` — **non-blocking**.  Kicks off background
+       threads to provision each worker in parallel.  Call from
+       ``_init_pipeline_state`` so VMs start booting while the scenario
+       stage runs (no GPU needed).
+
+    2. ``wait_for_worker(role)`` — **blocking per-worker**.  Called by
+       each stage's before_callback to wait for only the worker it needs.
+       Audio waits for TTS; production waits for video.
+
+    3. ``cleanup()`` — kill tunnels, destroy VMs, stop InfraAgent.
     """
 
     def __init__(self) -> None:
         self._specs: list[WorkerSpec] = []
         self._lock = threading.Lock()
         self._provisioned = False
+        self._threads: dict[str, threading.Thread] = {}
 
-    def ensure_workers_ready(
+    # ------------------------------------------------------------------
+    # Phase 1: Non-blocking — kick off background provisioning
+    # ------------------------------------------------------------------
+
+    def start_provisioning(
         self,
         require_tts: bool = True,
         require_video: bool = True,
-        provision_timeout: int = 900,
-    ) -> dict:
-        """Ensure all required workers are healthy, provisioning if needed.
+    ) -> None:
+        """Start provisioning workers in parallel background threads.
 
-        This is the main entry point called by the pipeline before stages
-        that need GPU workers.
+        Returns immediately.  Each worker's status is tracked in its
+        WorkerSpec.status and signalled via WorkerSpec.ready_event.
 
-        Returns a status dict with worker details.
+        Call ``wait_for_worker(role)`` later to block until a specific
+        worker is ready.
         """
         if _TEST_MODE:
             logger.info(
                 "WorkerProvisioner: TEST MODE — skipping worker provisioning"
             )
-            return {"status": "test_mode", "workers": []}
+            return
 
-        status = {"workers": [], "provisioned": [], "already_healthy": []}
-
-        # Build the list of required workers (VRAM floors from default specs)
+        # Build specs from defaults
         specs_needed: list[WorkerSpec] = []
         if require_tts:
             specs_needed.append(WorkerSpec(
@@ -567,8 +684,10 @@ class WorkerProvisioner:
                 remote_port=TTS_SPEC.remote_port,
                 capability="tts",
                 gpu_type=TTS_SPEC.gpu_type,
-                min_vram_gb=TTS_SPEC.min_vram_gb,  # hard floor
-                max_price=TTS_SPEC.max_price,  # fallback; overridden by credit-aware budget
+                min_vram_gb=TTS_SPEC.min_vram_gb,
+                max_price=TTS_SPEC.max_price,
+                min_disk_gb=TTS_SPEC.min_disk_gb,
+                disk_gb=TTS_SPEC.disk_gb,
                 worker_mode="tts",
             ))
         if require_video:
@@ -579,122 +698,229 @@ class WorkerProvisioner:
                 remote_port=VIDEO_SPEC.remote_port,
                 capability="ltx",
                 gpu_type=VIDEO_SPEC.gpu_type,
-                min_vram_gb=VIDEO_SPEC.min_vram_gb,  # hard floor
-                max_price=VIDEO_SPEC.max_price,  # fallback; overridden by credit-aware budget
+                min_vram_gb=VIDEO_SPEC.min_vram_gb,
+                max_price=VIDEO_SPEC.max_price,
+                min_disk_gb=VIDEO_SPEC.min_disk_gb,
+                disk_gb=VIDEO_SPEC.disk_gb,
                 worker_mode="ltx",
             ))
 
-        # --- Credit-aware budget calculation ---
-        # Count how many workers actually need provisioning (skip healthy ones)
-        need_provision = 0
+        with self._lock:
+            self._specs = specs_needed
+
+        # --- Credit-aware weighted budget ---
+        # Check which workers actually need provisioning
+        need_tts = False
+        need_video = False
         for spec in specs_needed:
             url = os.environ.get(spec.env_var, "")
             if not url:
                 url = f"http://localhost:{spec.local_port}"
-            if not check_worker_health(url, spec.capability):
-                need_provision += 1
-
-        if need_provision > 0:
-            budget = calculate_budget_per_worker(need_provision)
-            for spec in specs_needed:
-                spec.max_price = budget
-            logger.info(
-                "Credit-aware budget: $%.2f/hr per worker for %d worker(s). "
-                "VRAM floors unchanged (TTS>=%dGB, video>=%dGB).",
-                budget, need_provision,
-                TTS_SPEC.min_vram_gb, VIDEO_SPEC.min_vram_gb,
-            )
-
-        for spec in specs_needed:
-            url = os.environ.get(spec.env_var, "")
-            if not url:
-                url = f"http://localhost:{spec.local_port}"
-
-            # Check if already healthy
             if check_worker_health(url, spec.capability):
                 logger.info(
-                    "%s worker at %s is already healthy — no provisioning needed",
+                    "%s worker at %s already healthy — marking ready",
                     spec.role, url,
                 )
-                status["already_healthy"].append(spec.role)
-                status["workers"].append({
-                    "role": spec.role,
-                    "url": url,
-                    "status": "healthy",
-                    "provisioned": False,
-                })
-                continue
+                spec.status = "healthy"
+                spec.ready_event.set()
+                os.environ[spec.env_var] = url
+            else:
+                spec.status = "pending"
+                if spec.role == "tts":
+                    need_tts = True
+                else:
+                    need_video = True
 
-            # Need to provision
-            logger.info(
-                "%s worker at %s is NOT healthy — provisioning new VM...",
-                spec.role, url,
-            )
+        if need_tts or need_video:
             try:
-                self._provision_and_connect(spec, provision_timeout)
-                status["provisioned"].append(spec.role)
+                tts_budget, video_budget = calculate_weighted_budgets()
+                for spec in specs_needed:
+                    if spec.status != "healthy":
+                        if spec.role == "tts":
+                            spec.max_price = tts_budget
+                        else:
+                            spec.max_price = video_budget
+                logger.info(
+                    "Weighted budgets applied: TTS=$%.2f/hr, Video=$%.2f/hr. "
+                    "VRAM floors: TTS>=%dGB, Video>=%dGB.",
+                    tts_budget, video_budget,
+                    TTS_SPEC.min_vram_gb, VIDEO_SPEC.min_vram_gb,
+                )
+            except Exception as exc:
+                logger.error("Budget calculation failed: %s", exc)
+                for spec in specs_needed:
+                    if spec.status != "healthy":
+                        spec.status = "failed"
+                        spec.error = str(exc)
+                        spec.ready_event.set()
+                return
+
+        # Launch background threads for workers that need provisioning
+        for spec in specs_needed:
+            if spec.status == "pending":
+                t = threading.Thread(
+                    target=self._provision_worker_thread,
+                    args=(spec,),
+                    name=f"provision-{spec.role}",
+                    daemon=True,
+                )
+                self._threads[spec.role] = t
+                t.start()
+                logger.info(
+                    "Background provisioning started for %s worker",
+                    spec.role,
+                )
+
+    def _provision_worker_thread(self, spec: WorkerSpec) -> None:
+        """Background thread: provision a single worker end-to-end.
+
+        Updates spec.status and signals spec.ready_event when done.
+        """
+        spec.status = "provisioning"
+        try:
+            self._provision_and_connect(spec, timeout=900)
+            spec.status = "healthy"
+
+            # Update env var so contracts see the new URL
+            new_url = f"http://localhost:{spec.local_port}"
+            os.environ[spec.env_var] = new_url
+            logger.info(
+                "Background provisioning COMPLETE for %s: %s=%s (VM %s)",
+                spec.role, spec.env_var, new_url, spec.vm_id,
+            )
+        except Exception as exc:
+            spec.status = "failed"
+            spec.error = str(exc)
+            logger.error(
+                "Background provisioning FAILED for %s: %s", spec.role, exc,
+            )
+            # Clean up this worker's resources to stop billing
+            self._cleanup_single_worker(spec)
+        finally:
+            spec.ready_event.set()
+
+    # ------------------------------------------------------------------
+    # Phase 2: Blocking per-worker — called by stage before_callbacks
+    # ------------------------------------------------------------------
+
+    def wait_for_worker(
+        self,
+        role: str,
+        timeout: int = 900,
+    ) -> bool:
+        """Wait for a specific worker to be ready.
+
+        Called by stage before_callbacks:
+        - Audio stage calls wait_for_worker("tts")
+        - Production stage calls wait_for_worker("video")
+
+        Returns True if the worker is healthy.
+        Raises RuntimeError if provisioning failed or timed out.
+        """
+        if _TEST_MODE:
+            return True
+
+        spec = self._get_spec(role)
+        if spec is None:
+            raise RuntimeError(
+                f"No {role} worker spec found — "
+                f"was start_provisioning() called?"
+            )
+
+        if spec.status == "healthy":
+            return True
+
+        logger.info(
+            "Stage waiting for %s worker (status=%s, timeout=%ds)...",
+            role, spec.status, timeout,
+        )
+
+        # Wait for background thread to finish
+        ready = spec.ready_event.wait(timeout=timeout)
+        if not ready:
+            raise RuntimeError(
+                f"{role} worker provisioning timed out after {timeout}s"
+            )
+
+        if spec.status == "failed":
+            raise RuntimeError(
+                f"Cannot proceed: {role} worker provisioning failed: "
+                f"{spec.error}"
+            )
+
+        if spec.status == "healthy":
+            logger.info("%s worker is ready — stage may proceed", role)
+            # Start InfraAgent once all workers are ready
+            self._start_infra_agent_if_ready()
+            return True
+
+        raise RuntimeError(
+            f"{role} worker in unexpected state: {spec.status}"
+        )
+
+    def _get_spec(self, role: str) -> Optional[WorkerSpec]:
+        """Get the WorkerSpec for a given role."""
+        with self._lock:
+            for spec in self._specs:
+                if spec.role == role:
+                    return spec
+        return None
+
+    # ------------------------------------------------------------------
+    # Legacy blocking API (backward compat)
+    # ------------------------------------------------------------------
+
+    def ensure_workers_ready(
+        self,
+        require_tts: bool = True,
+        require_video: bool = True,
+        provision_timeout: int = 900,
+    ) -> dict:
+        """Ensure all required workers are healthy, provisioning if needed.
+
+        Legacy blocking API — provisions all workers and blocks until all
+        are healthy.  New code should use start_provisioning() +
+        wait_for_worker() for parallelism.
+
+        Returns a status dict with worker details.
+        """
+        # Use the new parallel infrastructure but block until all are done
+        self.start_provisioning(
+            require_tts=require_tts,
+            require_video=require_video,
+        )
+
+        if _TEST_MODE:
+            return {"status": "test_mode", "workers": []}
+
+        status = {"workers": [], "provisioned": [], "already_healthy": []}
+
+        for spec in self._specs:
+            try:
+                self.wait_for_worker(spec.role, timeout=provision_timeout)
+                if spec.vm_id:
+                    status["provisioned"].append(spec.role)
+                else:
+                    status["already_healthy"].append(spec.role)
                 status["workers"].append({
                     "role": spec.role,
                     "url": f"http://localhost:{spec.local_port}",
                     "status": "healthy",
-                    "provisioned": True,
+                    "provisioned": bool(spec.vm_id),
                     "vm_id": spec.vm_id,
                 })
-
-                # Update env var so contracts see the new URL
-                new_url = f"http://localhost:{spec.local_port}"
-                os.environ[spec.env_var] = new_url
-                logger.info(
-                    "Updated %s=%s", spec.env_var, new_url,
-                )
-
             except Exception as exc:
-                logger.error(
-                    "Failed to provision %s worker: %s", spec.role, exc,
-                )
-                # Clean up ALL provisioned resources to avoid billing leaks.
-                for prev_spec in specs_needed:
-                    # Kill SSH tunnels
-                    if prev_spec.tunnel_proc and prev_spec.tunnel_proc.poll() is None:
-                        logger.info(
-                            "Cleaning up SSH tunnel for %s (pid=%d) after failure",
-                            prev_spec.role, prev_spec.tunnel_proc.pid,
-                        )
-                        prev_spec.tunnel_proc.terminate()
-                        try:
-                            prev_spec.tunnel_proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            prev_spec.tunnel_proc.kill()
-                    # Terminate orphaned VMs to stop billing
-                    if prev_spec.vm_id:
-                        logger.info(
-                            "Terminating orphaned %s VM %s to stop billing",
-                            prev_spec.role, prev_spec.vm_id,
-                        )
-                        try:
-                            _vast_cmd(["destroy", "instance", prev_spec.vm_id])
-                        except Exception as destroy_exc:
-                            logger.warning(
-                                "Failed to destroy VM %s: %s",
-                                prev_spec.vm_id, destroy_exc,
-                            )
                 status["workers"].append({
                     "role": spec.role,
-                    "url": url,
                     "status": "failed",
                     "error": str(exc),
                 })
-                raise RuntimeError(
-                    f"Cannot start pipeline: {spec.role} worker provisioning "
-                    f"failed: {exc}"
-                ) from exc
+                # Clean up ALL workers on any failure
+                self._cleanup_all_on_failure()
+                raise
 
         with self._lock:
-            self._specs = specs_needed
             self._provisioned = True
-
-        # Start InfraAgent for continuous monitoring (uses self._specs)
-        self._start_infra_agent()
 
         status["status"] = "ready"
         logger.info(
@@ -736,6 +962,38 @@ class WorkerProvisioner:
                 f"healthy within {remaining}s after provisioning"
             )
 
+    def _cleanup_single_worker(self, spec: WorkerSpec) -> None:
+        """Clean up a single worker's resources (tunnel + VM)."""
+        if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
+            logger.info(
+                "Cleaning up SSH tunnel for %s (pid=%d)",
+                spec.role, spec.tunnel_proc.pid,
+            )
+            spec.tunnel_proc.terminate()
+            try:
+                spec.tunnel_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                spec.tunnel_proc.kill()
+
+        if spec.vm_id:
+            logger.info(
+                "Destroying %s VM %s to stop billing",
+                spec.role, spec.vm_id,
+            )
+            try:
+                _vast_cmd(["destroy", "instance", spec.vm_id])
+            except Exception as exc:
+                logger.warning(
+                    "Failed to destroy VM %s: %s", spec.vm_id, exc,
+                )
+
+    def _cleanup_all_on_failure(self) -> None:
+        """Clean up all provisioned resources after a failure."""
+        with self._lock:
+            specs = list(self._specs)
+        for spec in specs:
+            self._cleanup_single_worker(spec)
+
     def _start_infra_agent(self) -> None:
         """Start the InfraAgent and register provisioned workers."""
         try:
@@ -750,52 +1008,52 @@ class WorkerProvisioner:
             # even if it was started before env vars were set.
             for spec in self._specs:
                 if spec.vm_id:  # only register actually-provisioned workers
-                    role = WorkerRole.TTS if spec.role == "tts" else WorkerRole.VIDEO
+                    role = (
+                        WorkerRole.TTS if spec.role == "tts"
+                        else WorkerRole.VIDEO
+                    )
                     url = f"http://localhost:{spec.local_port}"
                     infra.add_worker(url, role)
                     logger.info(
-                        "Registered %s worker at %s with InfraAgent", spec.role, url,
+                        "Registered %s worker at %s with InfraAgent",
+                        spec.role, url,
                     )
 
             logger.info("InfraAgent started for continuous monitoring")
         except Exception as exc:
             logger.warning("Failed to start InfraAgent: %s", exc)
 
+    def _start_infra_agent_if_ready(self) -> None:
+        """Start InfraAgent once all workers are ready."""
+        with self._lock:
+            all_ready = all(s.status == "healthy" for s in self._specs)
+            already_started = self._provisioned
+        if all_ready and not already_started:
+            with self._lock:
+                self._provisioned = True
+            self._start_infra_agent()
+
     def cleanup(self) -> None:
         """Clean up: kill SSH tunnels, destroy VMs, and stop InfraAgent."""
+        # Wait for any in-flight provisioning threads to finish
+        for role, thread in self._threads.items():
+            if thread.is_alive():
+                logger.info(
+                    "Waiting for %s provisioning thread to finish...", role,
+                )
+                thread.join(timeout=30)
+
         with self._lock:
             specs = list(self._specs)
 
         for spec in specs:
-            # Kill SSH tunnel
-            if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
-                logger.info(
-                    "Killing SSH tunnel for %s worker (pid=%d)",
-                    spec.role, spec.tunnel_proc.pid,
-                )
-                spec.tunnel_proc.terminate()
-                try:
-                    spec.tunnel_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    spec.tunnel_proc.kill()
-
-            # Destroy provisioned VM to stop billing
-            if spec.vm_id:
-                logger.info(
-                    "Destroying %s VM %s to stop billing",
-                    spec.role, spec.vm_id,
-                )
-                try:
-                    _vast_cmd(["destroy", "instance", spec.vm_id])
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to destroy VM %s: %s", spec.vm_id, exc,
-                    )
+            self._cleanup_single_worker(spec)
 
         # Clear specs so stale VM IDs aren't referenced again
         with self._lock:
             self._specs = []
             self._provisioned = False
+            self._threads = {}
 
         # Shutdown InfraAgent
         try:
