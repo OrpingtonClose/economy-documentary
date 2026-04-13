@@ -724,14 +724,26 @@ class WorkerProvisioner:
             )
 
     def _start_infra_agent(self) -> None:
-        """Start the InfraAgent for continuous worker monitoring."""
+        """Start the InfraAgent and register provisioned workers."""
         try:
-            from infra_agent import start_infra_agent
+            from infra_agent import WorkerRole, start_infra_agent
 
             infra = start_infra_agent(
                 poll_interval=30.0, max_consecutive_failures=3
             )
             infra.start()
+
+            # Register each provisioned worker so the InfraAgent monitors it
+            # even if it was started before env vars were set.
+            for spec in self._specs:
+                if spec.vm_id:  # only register actually-provisioned workers
+                    role = WorkerRole.TTS if spec.role == "tts" else WorkerRole.VIDEO
+                    url = f"http://localhost:{spec.local_port}"
+                    infra.add_worker(url, role)
+                    logger.info(
+                        "Registered %s worker at %s with InfraAgent", spec.role, url,
+                    )
+
             logger.info("InfraAgent started for continuous monitoring")
         except Exception as exc:
             logger.warning("Failed to start InfraAgent: %s", exc)
