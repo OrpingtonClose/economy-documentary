@@ -426,6 +426,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         "/workspace/economy-documentary 2>/dev/null || "
         "(cd /workspace/economy-documentary && git pull origin main) && "
         f"B2_KEY_ID={shlex.quote(b2_key_id)} B2_APPLICATION_KEY={shlex.quote(b2_app_key)} "
+        f"WORKER_MODE={shlex.quote(spec.worker_mode)} "
         "bash /workspace/economy-documentary/scripts/gpu_bootstrap.sh && "
         f"DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} "
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "

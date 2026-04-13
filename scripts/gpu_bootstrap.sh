@@ -4,7 +4,12 @@
 # the documentary pipeline's video + TTS generation environment.
 #
 # Usage:
-#   B2_KEY_ID=... B2_APPLICATION_KEY=... bash gpu_bootstrap.sh
+#   B2_KEY_ID=... B2_APPLICATION_KEY=... WORKER_MODE=tts|ltx|both bash gpu_bootstrap.sh
+#
+# WORKER_MODE controls which models are downloaded:
+#   tts  — only Qwen3-TTS (~4.3 GB, ~2 min on slow connections)
+#   ltx  — only LTX-2.3 video models (~94 GB)
+#   both — everything (default if not set)
 #
 # Models are pulled from Backblaze B2 (pre-cached) for speed.
 # Falls back to HuggingFace if B2 credentials are not set.
@@ -21,7 +26,9 @@
 
 set -euo pipefail
 
-echo "=== GPU Bootstrap: Documentary Pipeline ==="
+# Default to 'both' if not set
+WORKER_MODE="${WORKER_MODE:-both}"
+echo "=== GPU Bootstrap: Documentary Pipeline (mode=$WORKER_MODE) ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 df -h /
 
@@ -87,8 +94,10 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     export B2_APPLICATION_KEY_ID="$B2_KEY_ID"
     b2 account authorize "$B2_KEY_ID" "$B2_APPLICATION_KEY"
 
-    # --- Qwen3-TTS VoiceDesign (~4.3 GB) ---
-    if [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
+    # --- Qwen3-TTS VoiceDesign (~4.3 GB) — needed for tts and both modes ---
+    if [ "$WORKER_MODE" = "ltx" ]; then
+        echo "--- Skipping Qwen3-TTS (ltx-only mode) ---"
+    elif [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
         echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
         mkdir -p /workspace/models/qwen3-tts-voicedesign
         pip install --no-cache-dir huggingface_hub 2>/dev/null
@@ -104,7 +113,10 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         echo "Qwen3-TTS VoiceDesign already present."
     fi
 
-    # --- LTX-2.3 diffusers components ---
+    # --- LTX-2.3 diffusers components — needed for ltx and both modes ---
+    if [ "$WORKER_MODE" = "tts" ]; then
+        echo "--- Skipping LTX-2.3 models (tts-only mode, saves ~94 GB download) ---"
+    else
     LTX_DIR=/workspace/models/ltx2
     mkdir -p "$LTX_DIR"
 
@@ -190,6 +202,7 @@ print(f'  OK: connectors video_hidden_dim={vhd} == transformer cross_attention_d
         pip install --no-cache-dir huggingface_hub 2>/dev/null
         python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='connectors/*')"
     fi
+    fi  # end WORKER_MODE != tts
 
     echo ""
     echo "=== Download complete ==="
@@ -203,12 +216,14 @@ else
 from huggingface_hub import snapshot_download
 import os
 
-if not os.path.exists('/workspace/models/qwen3-tts-voicedesign/model.safetensors'):
+worker_mode = os.environ.get('WORKER_MODE', 'both')
+
+if worker_mode != 'ltx' and not os.path.exists('/workspace/models/qwen3-tts-voicedesign/model.safetensors'):
     print('Downloading Qwen3-TTS VoiceDesign from HuggingFace...')
     snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
                       local_dir='/workspace/models/qwen3-tts-voicedesign')
 
-if not os.path.exists('/workspace/models/ltx2/model_index.json'):
+if worker_mode != 'tts' and not os.path.exists('/workspace/models/ltx2/model_index.json'):
     print('Downloading LTX-2.3 from HuggingFace...')
     snapshot_download('dg845/LTX-2.3-Diffusers',
                       local_dir='/workspace/models/ltx2')
@@ -233,14 +248,22 @@ if torch.cuda.is_available():
 echo ""
 echo "=== Model verification ==="
 OK=true
-for f in \
-    /workspace/models/qwen3-tts-voicedesign/model.safetensors \
-    /workspace/models/ltx2/model_index.json \
-    /workspace/models/ltx2/text_encoder/config.json \
-    /workspace/models/ltx2/text_encoder/model.safetensors.index.json \
-    /workspace/models/ltx2/transformer/config.json \
-    /workspace/models/ltx2/vae/config.json \
-    /workspace/models/ltx2/connectors/config.json; do
+
+# Build verification list based on WORKER_MODE
+VERIFY_FILES=""
+if [ "$WORKER_MODE" != "ltx" ]; then
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
+fi
+if [ "$WORKER_MODE" != "tts" ]; then
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/model_index.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/model.safetensors.index.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/transformer/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/vae/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/connectors/config.json"
+fi
+
+for f in $VERIFY_FILES; do
     if [ -f "$f" ]; then
         echo "  OK: $f"
     else
