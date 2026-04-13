@@ -357,6 +357,11 @@ def setup_ssh_tunnel(spec: WorkerSpec) -> subprocess.Popen:
             f"SSH tunnel for {spec.role} failed immediately: {stderr}"
         )
 
+    # Close stderr pipe to prevent buffer-fill blocking the SSH process.
+    # We only needed it for the immediate-failure diagnostic above.
+    if proc.stderr:
+        proc.stderr.close()
+
     spec.tunnel_proc = proc
     logger.info(
         "SSH tunnel established: localhost:%d -> %s VM %s",
