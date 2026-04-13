@@ -80,14 +80,24 @@ def after_model_callback(
     # often empty → output_key silently discards the scenes.  We capture them
     # from every LLM response and persist to disk + state so downstream agents
     # always have them.
+    #
+    # STREAMING FIX: after_model fires per-chunk during streaming.  Individual
+    # chunks rarely contain complete JSON.  We accumulate the full generator
+    # text in state["_generator_accumulated_text"] so that downstream callbacks
+    # (_save_generator_scenes, clean_scenes_after_scenario) can parse the
+    # complete text even when no single chunk contained the full scenes array.
     agent_name = getattr(callback_context, "agent_name", "unknown")
     if agent_name == "scenario_generator" and response_text:
+        # Accumulate full generator output across streaming chunks
+        prev = state.get("_generator_accumulated_text", "") or ""
+        accumulated = prev + response_text
+        state["_generator_accumulated_text"] = accumulated
+
         from callbacks.deterministic_steps import extract_json_array, extract_json_object
 
         # --- Capture visual_style (JSON object) --------------------------------
-        # The scenario director outputs visual_style as a JSON object.
-        # We look for it in the response text and persist to state + disk.
-        vs_obj = extract_json_object(response_text)
+        # Try on accumulated text (more likely to contain complete JSON)
+        vs_obj = extract_json_object(accumulated)
         if vs_obj and "style" in vs_obj and "avoid" in vs_obj:
             vs_json = json.dumps(vs_obj, ensure_ascii=False)
             state["visual_style"] = vs_json
@@ -100,10 +110,9 @@ def after_model_callback(
             )
 
         # --- Capture scenes (JSON array of objects with scene_num) ---------------
-        # The response may contain multiple JSON arrays (e.g. realism_anchors,
-        # avoid list inside visual_style).  We need the SCENES array specifically
-        # — an array of objects where each has a "scene_num" key.
-        scenes = _extract_scenes_array(response_text)
+        # Try on accumulated text — complete JSON is only available after enough
+        # streaming chunks have been collected.
+        scenes = _extract_scenes_array(accumulated)
         if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
             scenes_json = json.dumps(scenes, ensure_ascii=False)
             # Persist to state immediately (survives within LoopAgent scope)

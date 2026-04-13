@@ -748,12 +748,13 @@ def _generate_video(
                 elapsed, best_seed, best_qa.get("quality", "unknown"))
 
     # Export to MP4
-    output_path = os.path.join(
-        _output_dir, f"clip_{uuid.uuid4().hex[:8]}.mp4"
+    raw_path = os.path.join(
+        _output_dir, f"clip_{uuid.uuid4().hex[:8]}_raw.mp4"
     )
+    output_path = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
     os.makedirs(_output_dir, exist_ok=True)
 
-    # Use diffusers encode_video for proper MP4 encoding (with audio)
+    # Use diffusers encode_video for initial MP4 encoding (with audio)
     try:
         from diffusers.pipelines.ltx2.export_utils import encode_video as ltx_encode_video
         # encode_video requires audio and audio_sample_rate
@@ -764,13 +765,13 @@ def _generate_video(
                 audio=video_audio,
                 audio_sample_rate=audio_sr,
                 fps=fps,
-                output_path=output_path,
+                output_path=raw_path,
             )
         else:
             ltx_encode_video(
                 video_frames,
                 fps=fps,
-                output_path=output_path,
+                output_path=raw_path,
             )
     except (ImportError, Exception) as exc:
         logger.warning("encode_video failed (%s), falling back to export_to_video", exc)
@@ -781,17 +782,47 @@ def _generate_video(
                 Image.fromarray((np.clip(f, 0, 1) * 255).astype(np.uint8))
                 for f in video_frames
             ]
-            export_to_video(pil_frames, output_path, fps=fps)
+            export_to_video(pil_frames, raw_path, fps=fps)
         else:
-            export_to_video(video_frames, output_path, fps=fps)
+            export_to_video(video_frames, raw_path, fps=fps)
+
+    # Re-encode to H.264.  diffusers' export_to_video / encode_video
+    # outputs mpeg4 Part 2 which most players cannot render.
+    try:
+        _reencode = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", raw_path,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart",
+                output_path,
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+        if _reencode.returncode == 0 and os.path.exists(output_path):
+            logger.info("Re-encoded to H.264: %s", output_path)
+        else:
+            logger.warning("H.264 re-encode failed (rc=%d), using raw: %s",
+                           _reencode.returncode, _reencode.stderr[:300])
+            output_path = raw_path  # fall back to raw mpeg4
+    except Exception as exc:
+        logger.warning("H.264 re-encode error: %s, using raw", exc)
+        output_path = raw_path
 
     with open(output_path, "rb") as f:
         data = f.read()
 
-    try:
-        os.unlink(output_path)
-    except OSError:
-        pass
+    # Clean up both raw and H.264 files.  Use a set + the original
+    # H.264 path so that even when output_path was reassigned to
+    # raw_path on failure, the partially-created H.264 file is removed.
+    original_h264 = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
+    for p in {raw_path, output_path, original_h264}:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass
 
     # Bearnaise-style per-clip QA status
     qa_status = {

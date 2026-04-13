@@ -118,24 +118,58 @@ def _save_generator_scenes(callback_context):
     - the evaluator's output_key overwrites state['scenes'],
     - the LoopAgent re-runs the generator with empty/malformed output,
     - the evaluator calls exit_loop() and ADK skips output_key.
+
+    STREAMING FIX: If state['scenes'] is empty/unparseable, fall back to
+    the accumulated generator text (_generator_accumulated_text) which
+    collects all streaming chunks across after_model calls.
     """
     state = callback_context.state
     raw = state.get("scenes", "")
-    if raw:
-        scenes = extract_json_array(str(raw))
-        if scenes:
-            # Only save if the evaluator hasn't already saved an approved backup.
-            # Otherwise, the generator's unapproved output would overwrite the
-            # evaluator-approved scenes when the LoopAgent re-runs.
-            if not state.get("_approved_scenes_backup"):
-                state["_approved_scenes_backup"] = json.dumps(scenes)
-                logger.info(
-                    "Saved generator scenes backup: %d scenes", len(scenes)
+    scenes = extract_json_array(str(raw)) if raw else None
+
+    # Fallback: try accumulated generator text (streaming chunks joined)
+    if not scenes:
+        accumulated = state.get("_generator_accumulated_text", "")
+        if accumulated:
+            from callbacks.after_model import _extract_scenes_array
+            scenes = _extract_scenes_array(str(accumulated))
+            if scenes:
+                # Also persist to state and disk so downstream code finds them
+                scenes_json = json.dumps(scenes, ensure_ascii=False)
+                state["scenes"] = scenes_json
+                import os
+                timeline_dir = os.environ.get(
+                    "TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"
                 )
-            else:
+                backup_path = os.path.join(timeline_dir, "_scenes_backup.json")
+                os.makedirs(os.path.dirname(backup_path) or ".", exist_ok=True)
+                with open(backup_path, "w") as f:
+                    f.write(scenes_json)
                 logger.info(
-                    "Skipping generator backup: evaluator-approved backup already exists"
+                    "Recovered %d scenes from accumulated generator text → state + %s",
+                    len(scenes), backup_path,
                 )
+
+    if scenes:
+        # Only save if the evaluator hasn't already saved an approved backup.
+        # Otherwise, the generator's unapproved output would overwrite the
+        # evaluator-approved scenes when the LoopAgent re-runs.
+        if not state.get("_approved_scenes_backup"):
+            state["_approved_scenes_backup"] = json.dumps(scenes)
+            logger.info(
+                "Saved generator scenes backup: %d scenes", len(scenes)
+            )
+        else:
+            logger.info(
+                "Skipping generator backup: evaluator-approved backup already exists"
+            )
+    else:
+        logger.warning(
+            "No scenes found in state or accumulated text after generator completed"
+        )
+
+    # Reset accumulated text for next loop iteration
+    state["_generator_accumulated_text"] = ""
     return None
 
 

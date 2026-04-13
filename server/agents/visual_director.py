@@ -263,12 +263,20 @@ def _visual_phase_setup(callback_context):
 
     If the visual_direction stage was already completed in B2, skip the
     entire LoopAgent by returning Content.
+
+    In quick-test mode, skip the full LLM-based visual planning loop
+    (content_analyst + visual_concepter + coherence_evaluator) and
+    generate simple visual concepts deterministically from scenes data.
+    This reduces the visual direction stage from ~7 minutes (multiple
+    LLM calls with deep reasoning) to <1 second.
     """
+    import json
+    import os
     from google.genai import types as genai_types
     state = callback_context.state
     state["pipeline_phase"] = "visual_direction"
 
-    # B2 skip check FIRST — avoid blocking on infra pause for a completed stage
+    # B2 skip check FIRST — avoid blocking on gatekeeper/infra for a completed stage
     stages_complete = state.get("_b2_stages_complete", [])
     if "visual_direction" in stages_complete:
         logger.info("B2: visual_direction stage already complete, skipping LoopAgent")
@@ -276,6 +284,62 @@ def _visual_phase_setup(callback_context):
             role="model",
             parts=[genai_types.Part(text="Visual direction restored from B2 checkpoint \u2014 skipped.")],
         )
+
+    # GATEKEEPER: stage handoff check (audio → visual_direction)
+    # Runs AFTER B2 skip so checkpoint resumes don't trigger unnecessary
+    # validation + intervention windows.
+    from gatekeeper import check_stage_handoff, has_rejects, intervention_window
+    handoff_checks = check_stage_handoff("audio", "visual_direction", state.to_dict() if hasattr(state, "to_dict") else dict(state))
+    if has_rejects(handoff_checks):
+        rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
+        raise RuntimeError(
+            "GATEKEEPER BLOCKED visual_direction start: "
+            + "; ".join(c.message for c in rejects)
+        )
+    if not intervention_window("visual_direction_start", handoff_checks):
+        raise RuntimeError("GATEKEEPER: user halted pipeline at visual_direction start")
+
+    # QUICK-TEST: bypass entire LoopAgent with deterministic visual concepts
+    quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes")
+    if quick_test:
+        logger.info("QUICK-TEST: bypassing visual director LoopAgent with deterministic concepts")
+        concepts = _generate_quick_test_concepts(state)
+        if concepts:
+            state["visual_concepts"] = json.dumps(concepts, ensure_ascii=False)
+            state["content_analysis"] = json.dumps(
+                {"mode": "quick-test", "scenes": len(concepts)},
+                ensure_ascii=False,
+            )
+            logger.info("QUICK-TEST: generated %d visual concepts deterministically", len(concepts))
+
+            # CRITICAL: When before_agent_callback returns Content, ADK
+            # skips the after_agent_callback entirely.  We must explicitly
+            # run the post-processing that _visual_after_with_gate would
+            # have done: write_visual_metadata_to_otio (B2 upload, infra
+            # notification, timeline guardian) + mark_stage_ready("prompts")
+            # to unblock the production stage's approval gate.
+            from callbacks.deterministic_steps import write_visual_metadata_to_otio
+            try:
+                write_visual_metadata_to_otio(callback_context)
+                logger.info("QUICK-TEST: write_visual_metadata_to_otio completed")
+            except RuntimeError:
+                raise  # OTIO violations are fatal — never swallow
+            except Exception as e:
+                logger.warning("QUICK-TEST: write_visual_metadata_to_otio error: %s", e)
+
+            from callbacks.approval_gate import mark_stage_ready, approve_stage
+            mark_stage_ready("prompts")
+            approve_stage("prompts")
+            logger.info("QUICK-TEST: marked prompts stage ready + approved")
+
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text=f"Visual direction complete (quick-test): {len(concepts)} concepts generated deterministically."
+                )],
+            )
+        else:
+            logger.warning("QUICK-TEST: no scenes found, falling through to LLM-based visual planning")
 
     # INFRA: notify stage start for timing watchdog (only if stage will actually run)
     from infra_agent import get_infra_agent, check_infra_pause
@@ -285,6 +349,155 @@ def _visual_phase_setup(callback_context):
     check_infra_pause()
 
     return None
+
+
+def _generate_quick_test_concepts(state) -> list:
+    """Generate visual concepts from scenes data without LLM calls.
+
+    ARCHITECTURE RULE: One video concept per narration phrase per scene.
+    The concept's duration MUST match the corresponding narration clip's
+    source_range from the OTIO timeline.  This is the fundamental contract
+    that ensures video and audio stay in sync during assembly.
+
+    The OTIO timeline (populated by the audio stage) is the AUTHORITATIVE
+    source for durations.  We never use the scenario's ``duration_sec``
+    estimate for video sizing — it doesn't account for actual TTS output.
+
+    Quick-test mode: simple cinematography prompts, default LoRA, no deep
+    semantic analysis, no LoRA catalog queries, no coherence evaluation.
+    """
+    import json
+    from callbacks.deterministic_steps import extract_json_array
+    from tools.otio_tools import get_narration_durations_by_scene
+
+    raw_scenes = state.get("scenes", "[]")
+    scenes = extract_json_array(str(raw_scenes))
+    if not scenes:
+        return []
+
+    # Read actual narration durations from OTIO timeline (authoritative)
+    from callbacks.deterministic_steps import _MockToolContext
+    narr_durations = get_narration_durations_by_scene(
+        tool_context=_MockToolContext(state),
+    )
+    if not narr_durations:
+        logger.warning(
+            "QUICK-TEST: no narration durations found in OTIO — "
+            "audio stage may not have run. Falling back to scenario estimates."
+        )
+
+    # Extract visual style if available
+    raw_vs = str(state.get("visual_style", ""))
+    realism_anchors = "4K, raw footage, natural lighting"
+    avoid_list = "CGI, cartoon, anime, text overlay, split screen"
+    try:
+        vs = json.loads(raw_vs) if raw_vs.strip() else {}
+        if isinstance(vs, dict):
+            anchors = vs.get("realism_anchors", [])
+            if anchors:
+                realism_anchors = ", ".join(anchors)
+            avoid = vs.get("avoid", [])
+            if avoid:
+                avoid_list = ", ".join(avoid)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Camera movements to vary between phrases
+    _CAMERA_MOVES = [
+        "slow dolly forward",
+        "gentle pan right",
+        "slow crane up",
+        "handheld with controlled micro-shake",
+        "slow orbit around the subject",
+        "truck left at eye level",
+    ]
+
+    concepts = []
+    for scene in scenes:
+        sn = scene.get("scene_num", 0)
+        title = scene.get("title", "scene")
+        visual_notes = scene.get("visual_notes", "")
+
+        # Build a simple cinematography prompt from visual_notes
+        if visual_notes:
+            base_desc = visual_notes
+        else:
+            base_desc = f"Documentary footage related to {title}"
+
+        # Get narration phrases for this scene from OTIO
+        scene_phrases = narr_durations.get(sn, [])
+
+        if scene_phrases:
+            # OTIO-DRIVEN: one concept per narration phrase
+            cumulative_time = 0.0
+            for pidx, (voice, phrase_dur) in enumerate(scene_phrases):
+                camera = _CAMERA_MOVES[pidx % len(_CAMERA_MOVES)]
+                prompt = (
+                    f"{base_desc} "
+                    f"The camera performs a {camera}, capturing the scene "
+                    f"with shallow depth of field. "
+                    f"Lighting is soft and natural with warm highlights. "
+                    f"Shot in {realism_anchors}. "
+                    f"Over time, the light shifts subtly as the scene evolves."
+                )
+
+                # Cap individual concept duration at 10s (LTX-2.3 limit)
+                concept_dur = min(phrase_dur, 10.0)
+
+                concepts.append({
+                    "scene_num": sn,
+                    "phrase_idx": pidx,
+                    "start_time": cumulative_time,
+                    "end_time": cumulative_time + concept_dur,
+                    "duration": concept_dur,
+                    "prompt": prompt,
+                    "negative_prompt": avoid_list,
+                    "lora_id": "documentary-realism",
+                    "lora_weight": 0.75,
+                    "camera_movement": camera,
+                    "environment": title,
+                    "mood": "documentary",
+                })
+                cumulative_time += concept_dur
+
+            logger.info(
+                "Scene %d: %d concepts from OTIO narration (%s)",
+                sn, len(scene_phrases),
+                ", ".join(f"{v}={d:.1f}s" for v, d in scene_phrases),
+            )
+        else:
+            # FALLBACK: no OTIO data — use scenario estimate (single concept)
+            # This path should only trigger if audio stage didn't run.
+            duration = scene.get("duration_sec", 13.0)
+            prompt = (
+                f"{base_desc} "
+                f"The camera performs a slow dolly forward, capturing the scene "
+                f"with shallow depth of field. "
+                f"Lighting is soft and natural with warm highlights. "
+                f"Shot in {realism_anchors}. "
+                f"Over time, the light shifts subtly as the scene evolves."
+            )
+            concepts.append({
+                "scene_num": sn,
+                "phrase_idx": 0,
+                "start_time": 0.0,
+                "end_time": min(duration, 10.0),
+                "duration": min(duration, 10.0),
+                "prompt": prompt,
+                "negative_prompt": avoid_list,
+                "lora_id": "documentary-realism",
+                "lora_weight": 0.75,
+                "camera_movement": "slow dolly forward",
+                "environment": title,
+                "mood": "documentary",
+            })
+            logger.warning(
+                "Scene %d: no OTIO narration data, using single concept "
+                "with scenario estimate (%.1fs)",
+                sn, min(duration, 10.0),
+            )
+
+    return concepts
 
 
 # -- Visual Director (LoopAgent) -----------------------------------------------

@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-output")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
+# Auto-approve all stages in test mode (no human needed)
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
+# Separate flag: auto-approve gates without enabling test-mode fakes.
+# Useful for real GPU runs that still skip manual approval.
+_AUTO_APPROVE = _TEST_MODE or os.environ.get(
+    "DOCUMENTARY_AUTO_APPROVE", ""
+).strip().lower() in ("1", "true", "yes")
+
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
 
@@ -56,13 +64,24 @@ def _write_approval_state(state: dict) -> None:
 
 
 def is_stage_approved(stage: str) -> bool:
-    """Check if a stage has been approved by the human."""
+    """Check if a stage has been approved by the human.
+
+    In test mode, all stages are auto-approved.
+    """
+    if _AUTO_APPROVE:
+        return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
 
 
 def mark_stage_ready(stage: str) -> None:
-    """Mark a stage as ready for human review (but not yet approved)."""
+    """Mark a stage as ready for human review (but not yet approved).
+
+    In test mode, stages are auto-approved — skip disk I/O entirely.
+    """
+    if _AUTO_APPROVE:
+        logger.info("Stage '%s' auto-approved (test mode)", stage)
+        return
     state = _read_approval_state()
     if stage not in state:
         state[stage] = {}
@@ -72,11 +91,35 @@ def mark_stage_ready(stage: str) -> None:
     logger.info("Stage '%s' marked ready for review", stage)
 
 
+def approve_stage(stage: str) -> None:
+    """Programmatically approve a stage (no human needed).
+
+    Used by quick-test and other automated paths that skip the normal
+    human-in-the-loop flow but still need downstream stages to proceed.
+    """
+    if _AUTO_APPROVE:
+        logger.info("Stage '%s' already auto-approved (test/auto-approve mode)", stage)
+        return
+    state = _read_approval_state()
+    if stage not in state:
+        state[stage] = {}
+    state[stage]["ready"] = True
+    state[stage]["approved"] = True
+    state[stage]["approved_at"] = time.time()
+    state[stage]["approved_by"] = "quick-test"
+    _write_approval_state(state)
+    logger.info("Stage '%s' programmatically approved (quick-test)", stage)
+
+
 def wait_for_approval(stage: str) -> bool:
     """Block until the human approves the given stage.
 
     Returns True if approved, False if timed out.
+    In test mode, returns immediately.
     """
+    if _AUTO_APPROVE:
+        logger.info("Stage '%s' auto-approved (test mode)", stage)
+        return True
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)
 

@@ -454,6 +454,7 @@ def deterministic_audio_callback(
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
     from tools.otio_tools import add_narration_clip
+    from gatekeeper import check_narration_clip, has_rejects, format_audit_report
 
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -462,6 +463,9 @@ def deterministic_audio_callback(
     alignment_data = {}
     total_clips = 0
     errors = []
+    # Deferred gatekeeper: collect clip info for batch validation AFTER
+    # all artifacts are uploaded to B2 and written to OTIO (audit trail).
+    _deferred_gk_clips: list[dict] = []
 
     for scene in scenes:
         scene_num = scene.get("scene_num", 0)
@@ -529,6 +533,15 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # B2 upload already happened inside generate_narration().
+                            # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                            _deferred_gk_clips.append({
+                                "wav_path": wav_path,
+                                "scene_num": scene_num,
+                                "voice": voice_suffix,
+                                "duration": duration,
+                            })
+
                             # AG-UI: update narration artifact
                             _feedback_store.register_artifact(ArtifactEvent(
                                 id=narr_artifact_id,
@@ -589,6 +602,15 @@ def deterministic_audio_callback(
                     duration = result.get("duration", 0)
 
                     if wav_path and duration > 0:
+                        # B2 upload already happened inside generate_narration().
+                        # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                        _deferred_gk_clips.append({
+                            "wav_path": wav_path,
+                            "scene_num": scene_num,
+                            "voice": voice,
+                            "duration": duration,
+                        })
+
                         clip_result_json = add_narration_clip(
                             scene_num=scene_num,
                             voice=voice,
@@ -622,13 +644,45 @@ def deterministic_audio_callback(
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
 
-    # Upload audio stage completion to B2
-    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    # Upload audio artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
-    # Only mark stage complete if critical artifacts uploaded
+    # NOTE: stage marker is uploaded AFTER gatekeeper validation below.
+    # Uploading it here would let a rejected stage be skipped on restart.
+
+    # GATEKEEPER: batch validation AFTER all artifacts are in B2.
+    # Every narration clip is already uploaded (inside generate_narration)
+    # and written to OTIO.  Now validate and upload the audit report.
+    all_gk_checks = []
+    for clip_info in _deferred_gk_clips:
+        gk_checks = check_narration_clip(
+            wav_path=clip_info["wav_path"],
+            scene_num=clip_info["scene_num"],
+            voice=clip_info["voice"],
+            duration=clip_info["duration"],
+            stage="audio",
+        )
+        all_gk_checks.extend(gk_checks)
+
+    # Upload gatekeeper audit report to B2 (audit trail)
+    if all_gk_checks:
+        audit_report = format_audit_report(all_gk_checks, "audio")
+        upload_gatekeeper_report(audit_report, "audio")
+
+    # NOW evaluate rejects — everything is safely in B2
+    if has_rejects(all_gk_checks):
+        rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
+        reject_msgs = "; ".join(c.message for c in rejects)
+        raise RuntimeError(
+            f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+            f"audit report uploaded to B2): {reject_msgs}"
+        )
+
+    # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
+    # marked complete, otherwise they'd be skipped on pipeline restart.
     if _b2_ok:
         upload_stage_marker("audio")
 
@@ -945,7 +999,24 @@ def deterministic_production_callback(
         )
 
     from tools.video_tools import generate_video_clip, probe_clip
-    from tools.otio_tools import add_video_clip
+    from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
+    from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
+
+    # GATEKEEPER: stage handoff check (visual_direction → production)
+    handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
+    if has_rejects(handoff_checks):
+        rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
+        raise RuntimeError(
+            f"GATEKEEPER BLOCKED production start: "
+            + "; ".join(c.message for c in rejects)
+        )
+    if not intervention_window("production_start", handoff_checks):
+        raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
+
+    # Read narration durations for gatekeeper cross-validation
+    narr_durations = get_narration_durations_by_scene(
+        tool_context=_MockToolContext(state),
+    )
 
     # AG-UI: emit artifact events as clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -955,6 +1026,9 @@ def deterministic_production_callback(
     total_clips = 0
     skipped_clips = 0
     errors = []
+    # Deferred gatekeeper: collect clip info for batch validation AFTER
+    # all artifacts are uploaded to B2 and written to OTIO (audit trail).
+    _deferred_gk_clips: list[dict] = []
 
     # Build default negative prompt from visual_style.avoid
     default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
@@ -1120,6 +1194,18 @@ def deterministic_production_callback(
             probe_result = json.loads(probe_result_json)
             actual_duration = probe_result.get("duration", duration * 1.15)
 
+            # B2 upload already happened inside generate_video_clip().
+            # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+            scene_phrases = narr_durations.get(scene_num, [])
+            expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
+            _deferred_gk_clips.append({
+                "mp4_path": output_path,
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+                "source_range": duration,
+                "expected_duration": expected_dur,
+            })
+
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
@@ -1144,13 +1230,46 @@ def deterministic_production_callback(
             logger.error(err_msg)
             errors.append(err_msg)
 
-    # Upload production stage completion to B2
-    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline
+    # Upload production artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
+    from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
     _b2_ok = upload_pipeline_state(state.to_dict())
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
-    # Only mark stage complete if critical artifacts uploaded
+    # NOTE: stage marker is uploaded AFTER gatekeeper validation below.
+    # Uploading it here would let a rejected stage be skipped on restart.
+
+    # GATEKEEPER: batch validation AFTER all artifacts are in B2.
+    # Every video clip is already uploaded (inside generate_video_clip)
+    # and written to OTIO.  Now validate and upload the audit report.
+    all_gk_checks = []
+    for clip_info in _deferred_gk_clips:
+        gk_checks = check_video_clip(
+            mp4_path=clip_info["mp4_path"],
+            scene_num=clip_info["scene_num"],
+            phrase_idx=clip_info["phrase_idx"],
+            source_range=clip_info["source_range"],
+            expected_duration=clip_info["expected_duration"],
+            stage="production",
+        )
+        all_gk_checks.extend(gk_checks)
+
+    # Upload gatekeeper audit report to B2 (audit trail)
+    if all_gk_checks:
+        audit_report = format_audit_report(all_gk_checks, "production")
+        upload_gatekeeper_report(audit_report, "production")
+
+    # NOW evaluate rejects — everything is safely in B2
+    if has_rejects(all_gk_checks):
+        rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
+        reject_msgs = "; ".join(c.message for c in rejects)
+        raise RuntimeError(
+            f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+            f"audit report uploaded to B2): {reject_msgs}"
+        )
+
+    # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
+    # marked complete, otherwise they'd be skipped on pipeline restart.
     if _b2_ok:
         upload_stage_marker("production")
 
@@ -1165,10 +1284,33 @@ def deterministic_production_callback(
 
     logger.info("Deterministic production: %d clips generated", total_clips)
 
+    # TIMELINE GUARDIAN: run explicitly after production.
+    # When before_agent_callback returns Content (which we always do for
+    # deterministic production), ADK skips the after_agent_callback.
+    # The timeline guardian MUST run after production — it's non-negotiable.
+    from callbacks.timeline_guardian import timeline_guardian_callback
+    try:
+        timeline_guardian_callback(callback_context)
+        logger.info("Timeline Guardian passed after production")
+    except RuntimeError as e:
+        # Guardian found violations — this is fatal
+        logger.error("Timeline Guardian FAILED after production: %s", e)
+        raise
+
     # INFRA: notify stage complete
     _infra = get_infra_agent()
     if _infra:
         _infra.notify_stage_complete("production")
+
+    # APPROVAL GATE: mark clips ready for human review.
+    # When before_agent_callback returns Content (which we always do for
+    # deterministic production), ADK skips _production_after_with_gate
+    # (pipeline.py:132-142) which is the only other place this is called.
+    # Without this, the assembly stage blocks on wait_for_approval("clips")
+    # for 2 hours before timing out.
+    from callbacks.approval_gate import mark_stage_ready
+    mark_stage_ready("clips")
+    logger.info("Production: marked clips stage ready for approval")
 
     return genai_types.Content(
         role="model",
@@ -1230,6 +1372,18 @@ def deterministic_assembly_callback(
     from tools.otio_tools import _otio_lock
     from tools.assembly_tools import trim_clip, mux_audio_video, concat_clips
     from tools.video_tools import probe_clip
+    from gatekeeper import check_stage_handoff, has_rejects, intervention_window
+
+    # GATEKEEPER: stage handoff check (production → assembly)
+    handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
+    if has_rejects(handoff_checks):
+        rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
+        raise RuntimeError(
+            f"GATEKEEPER BLOCKED assembly start: "
+            + "; ".join(c.message for c in rejects)
+        )
+    if not intervention_window("assembly_start", handoff_checks):
+        raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 
     assembly_dir = "/tmp/documentary-pipeline/assembly"
     output_dir = "/tmp/documentary-pipeline/output"
@@ -1542,18 +1696,49 @@ def deterministic_assembly_callback(
                     combined_video_for_mux = trimmed_path
 
                 elif duration_diff < -0.5:
-                    # Video still shorter than audio after interleaving
-                    # black-frame gaps — this shouldn't happen if the
-                    # interleaving matched the audio pauses.  Log a
-                    # warning but don't fail; the mux will still work
-                    # (audio may extend slightly past video at scene end).
-                    logger.warning(
-                        "Scene %d%s: video %.2fs still < audio %.2fs "
-                        "after interleaving (residual %.2fs) — "
-                        "possible clip count mismatch between audio and video",
-                        scene_num, lang_suffix, video_dur,
-                        total_audio_duration, abs(duration_diff),
-                    )
+                    # Video shorter than audio.  This can happen
+                    # legitimately when narration phrases exceed the
+                    # LTX-2.3 10s generation cap — the video model
+                    # physically cannot produce clips longer than 10s.
+                    # Hard-fail only when the deficit is NOT explainable
+                    # by the 10s cap (i.e. the video model could have
+                    # covered the narration but didn't).
+                    #
+                    # Heuristic: count how many narration clips in this
+                    # scene exceed 10s; each one contributes up to
+                    # (narr_dur - 10)s of expected deficit.
+                    _LTX_CAP = 10.0
+                    expected_deficit = 0.0
+                    for _nc in a_clips:
+                        _nc_dur = _nc.source_range.duration.to_seconds() if _nc.source_range else 0
+                        if _nc_dur > _LTX_CAP:
+                            expected_deficit += (_nc_dur - _LTX_CAP)
+
+                    actual_deficit = abs(duration_diff)
+                    unexplained = actual_deficit - expected_deficit
+
+                    if unexplained > 0.5:
+                        # Deficit beyond what the 10s cap explains —
+                        # a genuine OTIO source_range contract violation.
+                        raise RuntimeError(
+                            f"GATEKEEPER REJECT: Scene {scene_num}{lang_suffix}: "
+                            f"video {video_dur:.2f}s < audio {total_audio_duration:.2f}s "
+                            f"(deficit {actual_deficit:.2f}s, cap-explained {expected_deficit:.2f}s, "
+                            f"unexplained {unexplained:.2f}s). "
+                            f"OTIO source_range contract violated — "
+                            f"video clips must cover narration duration."
+                        )
+                    else:
+                        # Deficit fully explained by LTX-2.3 10s cap.
+                        # Warn but proceed — the mux will still work
+                        # (audio extends slightly past video at scene end).
+                        logger.warning(
+                            "GATEKEEPER WARN: Scene %d%s: video %.2fs < audio %.2fs "
+                            "(deficit %.2fs, cap-explained %.2fs). "
+                            "Video capped at 10s per clip — mux will proceed.",
+                            scene_num, lang_suffix, video_dur,
+                            total_audio_duration, actual_deficit, expected_deficit,
+                        )
 
                 # Mux combined audio + video
                 muxed_path = os.path.join(

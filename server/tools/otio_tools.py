@@ -210,6 +210,133 @@ def add_narration_clip(
     )
 
 
+def get_narration_durations_by_scene(tool_context=None) -> dict:
+    """Read the OTIO timeline and return narration durations per scene.
+
+    Returns a dict mapping scene_num -> list of (voice, duration_sec) tuples,
+    ordered as they appear on the A1_Narration track.
+
+    This is the AUTHORITATIVE source for how long video clips must be.
+    Video concepts MUST be sized to match these durations.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return {}
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+
+    narration_track = None
+    for track in timeline.tracks:
+        if track.name == TRACK_A1:
+            narration_track = track
+            break
+
+    if narration_track is None:
+        return {}
+
+    result: dict[int, list[tuple[str, float]]] = {}
+    for item in narration_track:
+        if isinstance(item, otio.schema.Clip) and item.source_range:
+            meta = item.metadata.get("documentary", {})
+            sn = meta.get("scene_num", 0)
+            voice = meta.get("voice", "")
+            dur = item.source_range.duration.to_seconds()
+            # Skip alternate language clips (e.g. V1_EN in dual mode)
+            if sn > 0 and dur > 0 and not voice.endswith("_EN"):
+                result.setdefault(sn, []).append((voice, dur))
+
+    return result
+
+
+def _gatekeeper_check_video_clip(
+    timeline,
+    scene_num: int,
+    phrase_idx: int,
+    source_range: float,
+) -> Optional[str]:
+    """OTIO Gatekeeper: cross-validate a video clip against narration timing.
+
+    AUDIT-ONLY: this check logs warnings but does NOT block the OTIO write.
+    The real gatekeeper validation runs as a batch AFTER all artifacts are
+    uploaded to B2 (see deterministic_production_callback).  This function
+    exists for early warning in the logs only.
+
+    Checks:
+    1. source_range > 0
+    2. source_range <= available narration duration for this scene
+    3. phrase_idx corresponds to a real narration phrase (not phantom)
+
+    Returns None if valid, or a warning string describing the issue.
+    """
+    if source_range <= 0:
+        return (
+            f"source_range={source_range:.3f}s for scene {scene_num} "
+            f"phrase {phrase_idx} — must be > 0"
+        )
+
+    # Cross-check against narration track
+    narration_track = None
+    for track in timeline.tracks:
+        if track.name == TRACK_A1:
+            narration_track = track
+            break
+
+    if narration_track is None:
+        # No narration yet — cannot cross-validate.  This is acceptable
+        # only if audio stage hasn't run (production should not run before
+        # audio, but we don't block here — the contract validator handles
+        # stage ordering).
+        return None
+
+    # Collect narration clips for this scene (exclude alternate language
+    # suffixes — match primary language only for video sizing).
+    scene_narrations: list[tuple[str, float]] = []
+    for item in narration_track:
+        if isinstance(item, otio.schema.Clip) and item.source_range:
+            meta = item.metadata.get("documentary", {})
+            sn = meta.get("scene_num", 0)
+            voice = meta.get("voice", "")
+            # Skip alternate language clips (e.g. V1_EN in dual mode)
+            if sn == scene_num and not voice.endswith("_EN"):
+                dur = item.source_range.duration.to_seconds()
+                scene_narrations.append((voice, dur))
+
+    if not scene_narrations:
+        # No narration for this scene — unusual but not gatekeeper's job
+        # to enforce stage ordering.
+        return None
+
+    # Check phrase_idx is within bounds
+    if phrase_idx >= len(scene_narrations):
+        return (
+            f"phrase_idx={phrase_idx} for scene {scene_num} exceeds "
+            f"narration phrase count ({len(scene_narrations)}). "
+            f"Video must have exactly one clip per narration phrase."
+        )
+
+    # Check source_range matches corresponding narration duration (1s tolerance).
+    # Account for LTX-2.3 10s cap: when narration exceeds 10s, video at 10s
+    # is the best the model can do — don't reject in that case.
+    _LTX_CAP = 10.0
+    expected_dur = scene_narrations[phrase_idx][1]
+    drift = abs(source_range - expected_dur)
+    cap_explained = (
+        expected_dur > _LTX_CAP
+        and source_range >= _LTX_CAP - 0.5
+    )
+    if drift > 1.0 and not cap_explained:
+        return (
+            f"scene {scene_num} phrase {phrase_idx}: video source_range "
+            f"({source_range:.2f}s) does not match narration duration "
+            f"({expected_dur:.2f}s) — drift {drift:.2f}s > 1s. "
+            f"Video clips must be sized to match narration."
+        )
+
+    return None
+
+
 def add_video_clip(
     scene_num: int,
     phrase_idx: int,
@@ -221,6 +348,11 @@ def add_video_clip(
     tool_context=None,
 ) -> str:
     """Add a video clip to V1_Video track.
+
+    GATEKEEPER (audit-only): Before adding, cross-validates the clip's
+    source_range against the narration track and logs warnings.  Does NOT
+    block the write — the batch gatekeeper in the production callback
+    validates after all artifacts are uploaded to B2 (audit trail).
 
     Idempotent: checks for existing clip with same scene_num + phrase_idx.
 
@@ -251,6 +383,19 @@ def add_video_clip(
 
         if video_track is None:
             return json.dumps({"error": "V1_Video track not found"})
+
+        # GATEKEEPER (audit-only): cross-validate against narration.
+        # This does NOT block the write — the batch gatekeeper in
+        # deterministic_production_callback runs after B2 upload and
+        # handles rejects.  We log here for early visibility only.
+        gate_warning = _gatekeeper_check_video_clip(
+            timeline, scene_num, phrase_idx, source_range,
+        )
+        if gate_warning:
+            logger.warning(
+                "OTIO GATEKEEPER WARNING (audit-only): video clip scene %d phrase %d: %s",
+                scene_num, phrase_idx, gate_warning,
+            )
 
         clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
 
@@ -314,7 +459,10 @@ def add_video_clip(
 
         otio.adapters.write_to_file(timeline, timeline_path)
 
-    logger.info("Added video clip: %s (%.2fs)", clip_name, duration)
+    logger.info(
+        "Added video clip: %s (source_range=%.2fs, avail=%.2fs)",
+        clip_name, source_range, available_range,
+    )
     return json.dumps(
         {
             "status": "added",

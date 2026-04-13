@@ -256,6 +256,30 @@ def upload_assembly_file(local_path: str) -> None:
     upload_file(local_path, f"assembly/{basename}")
 
 
+def upload_gatekeeper_report(report: dict, stage: str) -> bool:
+    """Upload a gatekeeper audit report to B2.
+
+    Called AFTER all artifacts for the stage are already in B2,
+    so the audit trail is: artifacts first, then validation verdict.
+
+    Args:
+        report: Structured audit report from gatekeeper.format_audit_report().
+        stage: Pipeline stage name (audio, production, etc.).
+
+    Returns:
+        True on success.
+    """
+    ok = upload_json(report, f"gatekeeper/{stage}_audit.json")
+    verdict = report.get("verdict", "UNKNOWN")
+    rejects = report.get("rejects", 0)
+    total = report.get("total_checks", 0)
+    logger.info(
+        "B2: gatekeeper audit uploaded for %s (verdict=%s, %d/%d checks, %d rejects)",
+        stage, verdict, total, total, rejects,
+    )
+    return ok
+
+
 def upload_final_output(local_path: str) -> bool:
     """Upload final documentary MP4.
 
