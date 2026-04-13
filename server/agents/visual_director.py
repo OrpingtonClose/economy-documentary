@@ -311,6 +311,24 @@ def _visual_phase_setup(callback_context):
                 ensure_ascii=False,
             )
             logger.info("QUICK-TEST: generated %d visual concepts deterministically", len(concepts))
+
+            # CRITICAL: When before_agent_callback returns Content, ADK
+            # skips the after_agent_callback entirely.  We must explicitly
+            # run the post-processing that _visual_after_with_gate would
+            # have done: write_visual_metadata_to_otio (B2 upload, infra
+            # notification, timeline guardian) + mark_stage_ready("prompts")
+            # to unblock the production stage's approval gate.
+            from callbacks.deterministic_steps import write_visual_metadata_to_otio
+            try:
+                write_visual_metadata_to_otio(callback_context)
+                logger.info("QUICK-TEST: write_visual_metadata_to_otio completed")
+            except Exception as e:
+                logger.warning("QUICK-TEST: write_visual_metadata_to_otio error: %s", e)
+
+            from callbacks.approval_gate import mark_stage_ready
+            mark_stage_ready("prompts")
+            logger.info("QUICK-TEST: marked prompts stage ready")
+
             return genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(
