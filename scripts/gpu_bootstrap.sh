@@ -206,7 +206,7 @@ print(f'  OK: connectors video_hidden_dim={vhd} == transformer cross_attention_d
 
     echo ""
     echo "=== Download complete ==="
-    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null
+    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null || true
     df -h /
 else
     echo "WARNING: B2 credentials not set. Downloading from HuggingFace instead."

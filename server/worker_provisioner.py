@@ -102,8 +102,8 @@ class WorkerSpec:
 #   + KV cache + activations ~ 5-8 GB total
 #   -> min_vram_gb = 8 (safe floor with headroom)
 #   -> gpu_type = any cheap GPU with >= 12 GB (RTX 3060, 3070, etc.)
-#   -> disk: onstart.sh downloads ALL models (~95 GB) regardless of role
-#     so TTS VM needs the same disk as video: ~95 GB + ~30 GB OS = ~200 GB
+#   -> disk: WORKER_MODE=tts skips LTX models, only downloads ~4.3 GB TTS model
+#     so TTS VM needs ~50 GB (4.3 GB model + ~30 GB OS/software + headroom)
 #
 # Video: LTX-2.3 (dg845/LTX-2.3-Diffusers)
 #   text_encoder: ~46.6 GB (transformers format)
@@ -124,8 +124,8 @@ TTS_SPEC = WorkerSpec(
     gpu_type="RTX_4000",      # cheap GPU; broadened automatically if unavailable
     min_vram_gb=8,             # 1.7B model at bf16 = 3.4 GB + overhead
     max_price=1.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=200,           # onstart.sh downloads ALL models (~95 GB) + OS
-    disk_gb=224,               # --disk arg (same as video to avoid disk-full)
+    min_disk_gb=50,            # ~4.3 GB TTS model + ~30 GB OS/software (WORKER_MODE=tts skips LTX)
+    disk_gb=64,                # --disk arg (comfortable headroom for TTS-only)
     worker_mode="tts",
 )
 
