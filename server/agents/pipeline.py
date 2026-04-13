@@ -100,7 +100,7 @@ def _audio_before_with_gate(callback_context):
     try:
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
-        provisioner.wait_for_worker("tts", timeout=900)
+        provisioner.wait_for_worker("tts", timeout=2100)
         logger.info("TTS worker ready — audio stage proceeding")
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
@@ -147,7 +147,7 @@ def _production_before_with_gate(callback_context):
     try:
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
-        provisioner.wait_for_worker("video", timeout=900)
+        provisioner.wait_for_worker("video", timeout=2100)
         logger.info("Video worker ready — production stage proceeding")
     except Exception as exc:
         logger.error("Video worker not available: %s", exc)

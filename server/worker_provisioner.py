@@ -508,8 +508,14 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def setup_ssh_tunnel(spec: WorkerSpec) -> subprocess.Popen:
+def setup_ssh_tunnel(
+    spec: WorkerSpec, max_retries: int = 6, retry_delay: int = 10,
+) -> subprocess.Popen:
     """Set up an SSH tunnel from localhost:local_port to the GPU VM.
+
+    Retries up to *max_retries* times with *retry_delay* seconds between
+    attempts because the VM's SSH daemon may not be ready immediately
+    after Vast.ai reports status=running.
 
     Returns the tunnel subprocess.
     """
@@ -531,38 +537,53 @@ def setup_ssh_tunnel(spec: WorkerSpec) -> subprocess.Popen:
         f"root@{spec.ssh_host}",
     ]
 
-    logger.info(
-        "Setting up SSH tunnel: localhost:%d -> %s:%d (via %s:%d)",
-        spec.local_port, spec.ssh_host, spec.remote_port,
-        spec.ssh_host, spec.ssh_port,
-    )
-
-    proc = subprocess.Popen(
-        tunnel_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    # Give the tunnel a moment to establish
-    time.sleep(3)
-
-    if proc.poll() is not None:
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        raise RuntimeError(
-            f"SSH tunnel for {spec.role} failed immediately: {stderr}"
+    last_err = ""
+    for attempt in range(1, max_retries + 1):
+        logger.info(
+            "Setting up SSH tunnel (attempt %d/%d): localhost:%d -> %s:%d (via %s:%d)",
+            attempt, max_retries,
+            spec.local_port, spec.ssh_host, spec.remote_port,
+            spec.ssh_host, spec.ssh_port,
         )
 
-    # Close stderr pipe to prevent buffer-fill blocking the SSH process.
-    # We only needed it for the immediate-failure diagnostic above.
-    if proc.stderr:
-        proc.stderr.close()
+        proc = subprocess.Popen(
+            tunnel_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
 
-    spec.tunnel_proc = proc
-    logger.info(
-        "SSH tunnel established: localhost:%d -> %s VM %s",
-        spec.local_port, spec.role, spec.vm_id,
+        # Give the tunnel a moment to establish
+        time.sleep(3)
+
+        if proc.poll() is not None:
+            last_err = proc.stderr.read().decode() if proc.stderr else ""
+            logger.warning(
+                "SSH tunnel attempt %d/%d for %s failed: %s",
+                attempt, max_retries, spec.role, last_err.strip(),
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+                continue
+            raise RuntimeError(
+                f"SSH tunnel for {spec.role} failed after {max_retries} attempts: {last_err}"
+            )
+
+        # Close stderr pipe to prevent buffer-fill blocking the SSH process.
+        # We only needed it for the immediate-failure diagnostic above.
+        if proc.stderr:
+            proc.stderr.close()
+
+        spec.tunnel_proc = proc
+        logger.info(
+            "SSH tunnel established: localhost:%d -> %s VM %s",
+            spec.local_port, spec.role, spec.vm_id,
+        )
+        return proc
+
+    # Should not reach here, but just in case
+    raise RuntimeError(
+        f"SSH tunnel for {spec.role} failed after {max_retries} attempts: {last_err}"
     )
-    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -823,7 +844,7 @@ class WorkerProvisioner:
     def wait_for_worker(
         self,
         role: str,
-        timeout: int = 900,
+        timeout: int = 2100,
     ) -> bool:
         """Wait for a specific worker to be ready.
 
@@ -891,7 +912,7 @@ class WorkerProvisioner:
         self,
         require_tts: bool = True,
         require_video: bool = True,
-        provision_timeout: int = 900,
+        provision_timeout: int = 2100,
     ) -> dict:
         """Ensure all required workers are healthy, provisioning if needed.
 
