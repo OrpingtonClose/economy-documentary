@@ -281,7 +281,6 @@ def _visual_phase_setup(callback_context):
     handoff_checks = check_stage_handoff("audio", "visual_direction", state.to_dict() if hasattr(state, "to_dict") else dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-        from google.genai import types as _gt
         raise RuntimeError(
             "GATEKEEPER BLOCKED visual_direction start: "
             + "; ".join(c.message for c in rejects)

@@ -243,7 +243,8 @@ def get_narration_durations_by_scene(tool_context=None) -> dict:
             sn = meta.get("scene_num", 0)
             voice = meta.get("voice", "")
             dur = item.source_range.duration.to_seconds()
-            if sn > 0 and dur > 0:
+            # Skip alternate language clips (e.g. V1_EN in dual mode)
+            if sn > 0 and dur > 0 and not voice.endswith("_EN"):
                 result.setdefault(sn, []).append((voice, dur))
 
     return result

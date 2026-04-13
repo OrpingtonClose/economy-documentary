@@ -814,7 +814,11 @@ def _generate_video(
     with open(output_path, "rb") as f:
         data = f.read()
 
-    for p in (raw_path, output_path):
+    # Clean up both raw and H.264 files.  Use a set + the original
+    # H.264 path so that even when output_path was reassigned to
+    # raw_path on failure, the partially-created H.264 file is removed.
+    original_h264 = raw_path.replace("_raw.mp4", ".mp4")
+    for p in {raw_path, output_path, original_h264}:
         try:
             os.unlink(p)
         except OSError:
