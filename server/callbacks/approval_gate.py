@@ -30,12 +30,12 @@ _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-outp
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
 # Auto-approve all stages in test mode (no human needed)
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
 # Separate flag: auto-approve gates without enabling test-mode fakes.
 # Useful for real GPU runs that still skip manual approval.
 _AUTO_APPROVE = _TEST_MODE or os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
-).strip().lower() in ("1", "true")
+).strip().lower() in ("1", "true", "yes")
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
