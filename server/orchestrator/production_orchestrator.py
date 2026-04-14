@@ -1040,11 +1040,16 @@ def orchestrated_production_callback(
             parts=[genai_types.Part(text=str(e))],
         )
 
+    except RuntimeError:
+        # Fatal errors (OTIO violations, gatekeeper rejections, contract
+        # failures, timeline guardian) — NEVER swallow.  Invariant #10.
+        raise
+
     except Exception as e:
         logger.error(
             "ProductionOrchestrator failed, falling back to deterministic: %s", e,
             exc_info=True,
         )
-        # Fallback to deterministic callback on any orchestrator error
+        # Fallback to deterministic callback on non-fatal orchestrator errors
         from callbacks.deterministic_steps import deterministic_production_callback
         return deterministic_production_callback(callback_context)
