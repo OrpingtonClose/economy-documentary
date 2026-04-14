@@ -22,6 +22,8 @@
 #   GPU_WORKER_URL        — Pre-configured GPU worker URL (if already running)
 #   TTS_WORKER_URL        — Pre-configured TTS worker URL (if already running)
 #   VIDEO_WORKER_URLS     — Comma-separated GPU worker URLs for parallel gen
+#   PRODUCTION_ORCHESTRATOR — Set to "1" to enable LLM-driven planning orchestrator
+#                             for video production (default: deterministic callback)
 #
 # Ports exposed:
 #   3000 — Next.js dashboard (user-facing)
