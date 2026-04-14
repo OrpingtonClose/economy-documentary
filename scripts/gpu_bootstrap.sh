@@ -93,10 +93,12 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # skips the cu130 install.  We MUST uninstall the conda version first so
 # pip actually installs the correct CUDA wheels (which bundle nvidia-cuda-runtime
 # providing libcudart.so.13 and have _maybe_view_chunk_cat).
-# NOTE: pip uninstall alone CANNOT remove conda-installed packages!
-# Must use conda remove --force first, then pip uninstall as fallback.
-echo "Removing pre-installed conda torch (conda remove + pip uninstall)..."
-conda remove --force -y torch torchvision torchaudio 2>/dev/null || true
+# NOTE: Neither pip uninstall nor conda remove reliably removes conda torch.
+# Force-delete the site-packages directories, then pip uninstall as fallback.
+echo "Removing pre-installed conda torch (rm -rf + pip uninstall)..."
+rm -rf /opt/conda/lib/python*/site-packages/torch* \
+       /opt/conda/lib/python*/site-packages/torchvision* \
+       /opt/conda/lib/python*/site-packages/torchaudio* 2>/dev/null || true
 pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
 
 pip install --no-cache-dir \
