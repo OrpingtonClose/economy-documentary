@@ -45,7 +45,8 @@ from pydantic import BaseModel
 # Monkey-patch: fix meta-tensor dispatch bug in diffusers 0.38 + accelerate 1.12
 # diffusers' from_single_file() creates models on meta device then calls
 # accelerate.dispatch_model() which fails with "Cannot copy out of meta
-# tensor".  We wrap dispatch_model to materialise empty tensors first.
+# tensor".  We patch BOTH the accelerate module AND the diffusers module
+# that imports it, since diffusers holds its own local reference.
 # ---------------------------------------------------------------------------
 try:
     import accelerate.big_modeling as _abm
@@ -64,6 +65,13 @@ try:
             return _orig_dispatch_model(model, device_map=device_map, **kw)
 
     _abm.dispatch_model = _safe_dispatch_model
+    # Also patch the local reference inside diffusers' single_file_model
+    # which was imported before our patch above.
+    try:
+        import diffusers.loaders.single_file_model as _sfm
+        _sfm.dispatch_model = _safe_dispatch_model
+    except Exception:
+        pass
 except Exception:
     pass  # accelerate not installed (TTS-only mode)
 
