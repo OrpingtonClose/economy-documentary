@@ -696,6 +696,11 @@ class WorkerProvisioner:
         self._lock = threading.Lock()
         self._provisioned = False
         self._threads: dict[str, threading.Thread] = {}
+        self._provision_start_error: str = ""
+        # Event signalled after start_provisioning() populates _specs
+        # (or fails).  wait_for_worker() waits on this before checking
+        # _specs so it doesn't race against the background launcher.
+        self._specs_ready = threading.Event()
 
     # ------------------------------------------------------------------
     # Phase 1: Non-blocking — kick off background provisioning
@@ -714,10 +719,16 @@ class WorkerProvisioner:
         Call ``wait_for_worker(role)`` later to block until a specific
         worker is ready.
         """
+        # Clear any stale error from a previous run so re-runs aren't
+        # poisoned by old failures on this singleton.
+        self._provision_start_error = ""
+        self._specs_ready.clear()
+
         if _TEST_MODE:
             logger.info(
                 "WorkerProvisioner: TEST MODE — skipping worker provisioning"
             )
+            self._specs_ready.set()
             return
 
         # Build specs from defaults
@@ -753,6 +764,8 @@ class WorkerProvisioner:
 
         with self._lock:
             self._specs = specs_needed
+        # Signal that _specs is populated so wait_for_worker() can proceed.
+        self._specs_ready.set()
 
         # --- Credit-aware weighted budget ---
         # Check which workers actually need provisioning
@@ -866,9 +879,19 @@ class WorkerProvisioner:
         if _TEST_MODE:
             return True
 
+        # Wait for start_provisioning() to populate _specs.  When
+        # provisioning runs in a background thread there's a window
+        # where _specs is still empty.  Use a generous 120s ceiling
+        # (start_provisioning spec-building is <30s in practice).
+        if not self._specs_ready.wait(timeout=120):
+            raise RuntimeError(
+                "Timed out waiting for start_provisioning() to "
+                "populate worker specs (120s)"
+            )
+
         # If start_provisioning() itself failed in the background thread,
         # surface that error clearly instead of the confusing "No spec found".
-        if hasattr(self, "_provision_start_error") and self._provision_start_error:
+        if self._provision_start_error:
             raise RuntimeError(
                 f"Worker provisioning failed to start: "
                 f"{self._provision_start_error}"
@@ -1110,6 +1133,8 @@ class WorkerProvisioner:
             self._specs = []
             self._provisioned = False
             self._threads = {}
+        # Clear stale error so re-runs aren't poisoned
+        self._provision_start_error = ""
 
         # Shutdown InfraAgent
         try:
