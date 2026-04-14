@@ -739,15 +739,29 @@ def setup_ssh_tunnel(
     # Collect all available SSH identity files.  Vast.ai proxy hosts can be
     # inconsistent about which key they accept, so we try every available key
     # on each attempt (round-robin) rather than locking to a single one.
+    _ssh_dir = os.path.expanduser("~/.ssh")
     _ssh_keys: list[str] = []
-    for _name in ("id_rsa", "id_ed25519"):
-        _path = os.path.expanduser(f"~/.ssh/{_name}")
-        if os.path.exists(_path):
-            _ssh_keys.append(_path)
+    for _fname in sorted(os.listdir(_ssh_dir)):
+        _fpath = os.path.join(_ssh_dir, _fname)
+        # Skip public keys, known_hosts, config, authorized_keys, dirs
+        if (
+            _fname.endswith(".pub")
+            or _fname in ("known_hosts", "known_hosts.old", "config", "authorized_keys")
+            or not os.path.isfile(_fpath)
+        ):
+            continue
+        # Only include files that look like SSH private keys (start with -----)
+        try:
+            with open(_fpath, "r") as f:
+                first_line = f.readline()
+            if first_line.startswith("-----"):
+                _ssh_keys.append(_fpath)
+        except (OSError, UnicodeDecodeError):
+            continue
     if not _ssh_keys:
         raise RuntimeError(
             f"Cannot set up SSH tunnel for {spec.role}: "
-            f"no SSH identity file found at ~/.ssh/id_rsa or ~/.ssh/id_ed25519"
+            f"no SSH identity files found in {_ssh_dir}"
         )
 
     def _build_tunnel_cmd(key_path: str) -> list[str]:
