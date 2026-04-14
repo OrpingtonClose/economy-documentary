@@ -1246,7 +1246,7 @@ def _ltx_generate_once(
     if torch.cuda.is_available():
         _alloc = torch.cuda.memory_allocated() / 1e9
         _resv = torch.cuda.memory_reserved() / 1e9
-        _total = torch.cuda.get_device_properties(0).total_mem / 1e9
+        _total = torch.cuda.get_device_properties(0).total_memory / 1e9
         logger.info(
             "VRAM before pipeline call: allocated=%.2fGB reserved=%.2fGB "
             "total=%.2fGB free=%.2fGB expandable_segments=%s",
