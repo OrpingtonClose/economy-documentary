@@ -1152,8 +1152,9 @@ class WorkerProvisioner:
             self._specs = []
             self._provisioned = False
             self._threads = {}
-        # Clear stale error so re-runs aren't poisoned
+        # Clear stale error and specs_ready so re-runs aren't poisoned
         self._provision_start_error = ""
+        self._specs_ready.clear()
 
         # Shutdown InfraAgent
         try:
