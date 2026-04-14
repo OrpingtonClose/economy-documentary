@@ -425,15 +425,32 @@ def provision_vm(spec: WorkerSpec) -> str:
     # Inline VAR=val only applies to the immediate next command,
     # but Vast.ai's onstart runner may wrap the whole string in sh -c
     # which loses inline vars for later commands in the chain.
+
+    # Auto-detect the current git branch so VMs clone the same branch
+    # (the bootstrap script may have fixes not yet merged to main).
+    try:
+        _branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True,
+        ).strip()
+        if not _branch or _branch == "HEAD":
+            _branch = "main"
+    except Exception:
+        _branch = "main"
+    logger.info("VMs will clone branch: %s", _branch)
+
     onstart = (
         f"export B2_KEY_ID={shlex.quote(b2_key_id)} && "
         f"export B2_APPLICATION_KEY={shlex.quote(b2_app_key)} && "
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         "apt-get update && apt-get install -y git curl && "
-        "git clone https://github.com/OrpingtonClose/economy-documentary.git "
+        f"git clone -b {shlex.quote(_branch)} --single-branch "
+        "https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
-        "(cd /workspace/economy-documentary && git pull origin main) && "
+        f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
+        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
         "bash /workspace/economy-documentary/scripts/gpu_bootstrap.sh && "
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
