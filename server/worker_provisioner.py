@@ -866,6 +866,14 @@ class WorkerProvisioner:
         if _TEST_MODE:
             return True
 
+        # If start_provisioning() itself failed in the background thread,
+        # surface that error clearly instead of the confusing "No spec found".
+        if hasattr(self, "_provision_start_error") and self._provision_start_error:
+            raise RuntimeError(
+                f"Worker provisioning failed to start: "
+                f"{self._provision_start_error}"
+            )
+
         spec = self._get_spec(role)
         if spec is None:
             raise RuntimeError(

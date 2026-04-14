@@ -275,6 +275,9 @@ def _init_pipeline_state(
                 )
             except Exception as exc:
                 logger.error("Worker provisioning failed to start: %s", exc)
+                # Store the error on the provisioner so wait_for_worker()
+                # can surface a clear message instead of "No worker spec".
+                provisioner._provision_start_error = str(exc)
 
         t = threading.Thread(
             target=_start_provisioning_bg,
@@ -282,6 +285,10 @@ def _init_pipeline_state(
             daemon=True,
         )
         t.start()
+        # Mark as "attempted" — the flag means provisioning was kicked off,
+        # not that it succeeded.  If it fails, the error is stored on the
+        # provisioner singleton and wait_for_worker() will surface it.
+        # _cleanup_pipeline_state resets this flag so re-runs re-provision.
         state["_workers_provisioned"] = True
         logger.info(
             "Provisioning launcher thread started — "
