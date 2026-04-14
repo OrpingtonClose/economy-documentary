@@ -598,6 +598,10 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # pip install --upgrade scenarios.
         f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
         f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
+        # Prevent CUDA OOM from memory fragmentation — the 19B LTX model
+        # leaves <3GB free on 80GB GPUs; expandable_segments lets PyTorch
+        # reuse reserved-but-unallocated memory instead of failing.
+        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "

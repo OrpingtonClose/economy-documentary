@@ -1334,6 +1334,11 @@ def _generate_video(
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
 
+        # Reclaim fragmented VRAM before each attempt — the 19B model
+        # leaves <3GB free on 80GB GPUs, so even small fragments matter.
+        gc.collect()
+        torch.cuda.empty_cache()
+
         candidate_frames = _ltx_generate_once(
             prompt=prompt,
             negative_prompt=negative_prompt,
