@@ -460,6 +460,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
+        # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
+        # index as this onstart command (prevents cu124 overwriting cu130).
+        "export TORCH_INDEX=https://download.pytorch.org/whl/cu130 && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
@@ -953,8 +956,19 @@ class WorkerProvisioner:
             logger.error(
                 "Background provisioning FAILED for %s: %s", spec.role, exc,
             )
-            # Clean up this worker's resources to stop billing
-            self._cleanup_single_worker(spec)
+            # Only clean up the SSH tunnel — do NOT destroy the VM.
+            # The user explicitly forbade auto-destroying VMs on failure.
+            # The VM stays running so it can be debugged or retried.
+            if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
+                logger.info(
+                    "Cleaning up SSH tunnel for %s (pid=%d)",
+                    spec.role, spec.tunnel_proc.pid,
+                )
+                spec.tunnel_proc.terminate()
+                try:
+                    spec.tunnel_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    spec.tunnel_proc.kill()
         finally:
             spec.ready_event.set()
 

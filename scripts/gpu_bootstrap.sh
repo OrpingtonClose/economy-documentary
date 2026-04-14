@@ -49,37 +49,39 @@ mkdir -p /workspace/{models,output}
 cd /workspace
 
 # ---------------------------------------------------------------------------
-# CUDA compatibility — detect system CUDA and match PyTorch index
+# CUDA compatibility — use TORCH_INDEX from provisioner or detect system CUDA
 # ---------------------------------------------------------------------------
-# Vast.ai VMs may have CUDA 11.x, 12.1, 12.4, etc.  We detect the
-# system CUDA version and pick a matching PyTorch wheel index.
-SYSTEM_CUDA=""
-if command -v nvcc &>/dev/null; then
-    SYSTEM_CUDA=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')
-    echo "System CUDA: $SYSTEM_CUDA"
-elif [ -f /usr/local/cuda/version.txt ]; then
-    SYSTEM_CUDA=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
-    echo "System CUDA (from version.txt): $SYSTEM_CUDA"
+# The provisioner's onstart command sets TORCH_INDEX to ensure consistency
+# between the initial pip install and the bootstrap.  If not set (standalone
+# usage), fall back to system CUDA detection.
+if [ -n "${TORCH_INDEX:-}" ]; then
+    echo "Using TORCH_INDEX from environment: $TORCH_INDEX"
 else
-    # Try nvidia-smi
-    SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')
-    echo "System CUDA (from nvidia-smi): $SYSTEM_CUDA"
-fi
+    SYSTEM_CUDA=""
+    if command -v nvcc &>/dev/null; then
+        SYSTEM_CUDA=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')
+        echo "System CUDA: $SYSTEM_CUDA"
+    elif [ -f /usr/local/cuda/version.txt ]; then
+        SYSTEM_CUDA=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
+        echo "System CUDA (from version.txt): $SYSTEM_CUDA"
+    else
+        SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')
+        echo "System CUDA (from nvidia-smi): $SYSTEM_CUDA"
+    fi
 
-# Map system CUDA to PyTorch wheel index
-CUDA_MAJOR=$(echo "$SYSTEM_CUDA" | cut -d. -f1)
-CUDA_MINOR=$(echo "$SYSTEM_CUDA" | cut -d. -f2)
-if [ "$CUDA_MAJOR" = "13" ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu130"
-elif [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu124"
-elif [ "$CUDA_MAJOR" = "12" ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
-elif [ "$CUDA_MAJOR" = "11" ]; then
-    TORCH_INDEX="https://download.pytorch.org/whl/cu118"
-else
-    # Default to cu130 — ltx-core 1.0 requires CUDA 13.0 runtime
-    TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    CUDA_MAJOR=$(echo "$SYSTEM_CUDA" | cut -d. -f1)
+    CUDA_MINOR=$(echo "$SYSTEM_CUDA" | cut -d. -f2)
+    if [ "$CUDA_MAJOR" = "13" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    elif [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+    elif [ "$CUDA_MAJOR" = "12" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+    elif [ "$CUDA_MAJOR" = "11" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu118"
+    else
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    fi
 fi
 echo "Using PyTorch wheel index: $TORCH_INDEX"
 
