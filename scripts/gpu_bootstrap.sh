@@ -88,7 +88,14 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# torch 2.6+ required for ltx-pipelines
+# IMPORTANT: The Docker image (pytorch/pytorch:2.6.0-cuda12.4) has conda
+# torch 2.6.0 pre-installed.  pip sees it as satisfying 'torch>=2.6.0' and
+# skips the cu130 install.  We MUST uninstall the conda version first so
+# pip actually installs the cu130 wheels (which bundle nvidia-cuda-runtime
+# providing libcudart.so.13 and have _maybe_view_chunk_cat).
+echo "Removing pre-installed conda torch to force cu130 install..."
+pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
+
 pip install --no-cache-dir \
     'torch>=2.6.0' \
     'torchvision>=0.21.0' \

@@ -472,6 +472,10 @@ def provision_vm(spec: WorkerSpec) -> str:
         # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
         # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
         # but we need enough to start the health endpoint immediately.
+        # IMPORTANT: The Docker image has conda torch 2.6.0 which satisfies
+        # 'torch>=2.6.0', so pip would skip the cu130 install.  We must force-
+        # uninstall the conda version first so pip actually installs cu130 wheels.
+        "pip uninstall -y torch torchvision torchaudio 2>/dev/null; "
         "pip install --no-cache-dir "
         "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
         "--index-url https://download.pytorch.org/whl/cu130 && "
