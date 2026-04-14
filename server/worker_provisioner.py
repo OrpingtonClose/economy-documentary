@@ -463,9 +463,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
         # index as this onstart command (prevents cu124 overwriting cu130).
         # TTS workers run on older/cheaper GPUs (e.g. GTX 1070 Ti, Pascal sm_61)
-        # which lack cu130 kernel images.  cu124 supports Pascal+ and TTS
-        # doesn't need libcudart.so.13 (only ltx-pipelines does).
-        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu124' if spec.worker_mode == 'tts' else 'cu130'} && "
+        # which lack cu130 kernel images.  cu126 supports Pascal+ AND has
+        # torch >=2.7 (cu124 only goes up to 2.6.0 which lacks _maybe_view_chunk_cat).
+        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
@@ -486,7 +486,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         "/opt/conda/pkgs/*torch* 2>/dev/null; "
         "pip install --force-reinstall --no-cache-dir "
         "torch torchvision torchaudio "
-        f"--index-url https://download.pytorch.org/whl/{'cu124' if spec.worker_mode == 'tts' else 'cu130'} && "
+        f"--index-url https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
         # Verify correct torch was installed (catch conda remnants early)
         "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
         "pip install --no-cache-dir "
