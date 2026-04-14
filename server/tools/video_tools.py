@@ -243,7 +243,7 @@ def generate_video_clip(
                     reason = _b64.b64decode(qa_reason_raw).decode("utf-8")
                 except Exception:
                     reason = qa_reason_raw
-                if os.environ.get("DOCUMENTARY_QUICK_TEST", "").lower() in ("1", "true"):
+                if os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes"):
                     logger.warning(
                         "QA REJECTED clip (quick-test mode — accepting anyway): %s",
                         reason[:200],
