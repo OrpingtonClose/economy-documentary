@@ -41,6 +41,32 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+# ---------------------------------------------------------------------------
+# Monkey-patch: fix meta-tensor dispatch bug in diffusers 0.38 + accelerate 1.12
+# diffusers' from_single_file() creates models on meta device then calls
+# accelerate.dispatch_model() which fails with "Cannot copy out of meta
+# tensor".  We wrap dispatch_model to materialise empty tensors first.
+# ---------------------------------------------------------------------------
+try:
+    import accelerate.big_modeling as _abm
+    _orig_dispatch_model = _abm.dispatch_model
+
+    def _safe_dispatch_model(model, device_map=None, **kw):
+        try:
+            return _orig_dispatch_model(model, device_map=device_map, **kw)
+        except NotImplementedError:
+            # Meta tensors present — materialise on target device first
+            if isinstance(device_map, dict):
+                target = list(device_map.values())[0]
+            else:
+                target = "cpu"
+            model = model.to_empty(device=target)
+            return _orig_dispatch_model(model, device_map=device_map, **kw)
+
+    _abm.dispatch_model = _safe_dispatch_model
+except Exception:
+    pass  # accelerate not installed (TTS-only mode)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -242,51 +268,18 @@ def _load_ltx():
     if use_single_file:
         # Official Lightricks model: load transformer from single file,
         # rest of components from the local folder structure.
-        #
-        # NOTE: from_single_file() hits a meta-tensor dispatch bug in
-        # diffusers 0.38.0.dev0 + accelerate 1.12.  Work around it by
-        # loading the config, instantiating the model on CPU with
-        # to_empty(), and then loading the state dict manually.
+        # The monkey-patch above fixes the meta-tensor dispatch bug in
+        # diffusers 0.38 + accelerate 1.12.
         logger.info(
             "Loading LTX-2.3 transformer from official checkpoint: %s",
             single_file,
         )
-        try:
-            transformer = LTX2VideoTransformer3DModel.from_single_file(
-                single_file,
-                config=model_path,
-                subfolder="transformer",
-                torch_dtype=torch.bfloat16,
-                device_map=None,
-            )
-        except NotImplementedError:
-            # Meta-tensor workaround: load config → empty model → load weights
-            logger.warning(
-                "from_single_file() hit meta-tensor bug — using manual load"
-            )
-            from safetensors.torch import load_file as safetensors_load
-            from diffusers.loaders.single_file_utils import (
-                convert_single_file_checkpoint,
-            )
-
-            config_path = os.path.join(model_path, "transformer", "config.json")
-            transformer = LTX2VideoTransformer3DModel.from_config(
-                config_path, torch_dtype=torch.bfloat16
-            )
-            # Load single-file checkpoint and convert to diffusers format
-            raw_sd = safetensors_load(single_file, device="cpu")
-            try:
-                converted_sd = convert_single_file_checkpoint(
-                    raw_sd, transformer, original_format="lightricks"
-                )
-            except Exception:
-                # If conversion not available, weights are already in
-                # diffusers format (some single-file checkpoints are).
-                converted_sd = raw_sd
-            transformer.load_state_dict(converted_sd, strict=False)
-            transformer = transformer.to(torch.bfloat16)
-            del raw_sd, converted_sd
-
+        transformer = LTX2VideoTransformer3DModel.from_single_file(
+            single_file,
+            config=model_path,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+        )
         logger.info(
             "Transformer loaded from single file in %.1fs. "
             "Loading rest of pipeline from %s ...",
