@@ -97,16 +97,19 @@ def generate_one_clip(
 
     # AG-UI: emit "generating" artifact event
     artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}"
-    feedback_store.register_artifact(ArtifactEvent(
-        id=artifact_id,
-        artifact_type=ArtifactType.VIDEO_CLIP,
-        status=ArtifactStatus.GENERATING,
-        scene_num=scene_num,
-        phrase_idx=phrase_idx,
-        duration_sec=duration,
-        metadata={"prompt": prompt, "lora_id": lora_id},
-        timestamp=time.time(),
-    ))
+    if feedback_store is None:
+        logger.debug("feedback_store is None — skipping AG-UI events for %s", artifact_id)
+    else:
+        feedback_store.register_artifact(ArtifactEvent(
+            id=artifact_id,
+            artifact_type=ArtifactType.VIDEO_CLIP,
+            status=ArtifactStatus.GENERATING,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+            duration_sec=duration,
+            metadata={"prompt": prompt, "lora_id": lora_id},
+            timestamp=time.time(),
+        ))
 
     gen_result_json = generate_video_clip(
         prompt=prompt,
@@ -125,22 +128,23 @@ def generate_one_clip(
     gen_result["_output_path"] = output_path
 
     # AG-UI: update artifact with result
-    qa_scores: dict = {}
-    if gen_result.get("qa_quality"):
-        qa_scores["quality"] = gen_result["qa_quality"]
-        qa_scores["reason"] = gen_result.get("qa_reason", "")
-    feedback_store.register_artifact(ArtifactEvent(
-        id=artifact_id,
-        artifact_type=ArtifactType.VIDEO_CLIP,
-        status=ArtifactStatus.PENDING_REVIEW,
-        scene_num=scene_num,
-        phrase_idx=phrase_idx,
-        duration_sec=gen_result.get("actual_duration", duration),
-        preview_url=output_path,
-        qa_scores=qa_scores,
-        metadata={"prompt": prompt, "lora_id": lora_id},
-        timestamp=time.time(),
-    ))
+    if feedback_store is not None:
+        qa_scores: dict = {}
+        if gen_result.get("qa_quality"):
+            qa_scores["quality"] = gen_result["qa_quality"]
+            qa_scores["reason"] = gen_result.get("qa_reason", "")
+        feedback_store.register_artifact(ArtifactEvent(
+            id=artifact_id,
+            artifact_type=ArtifactType.VIDEO_CLIP,
+            status=ArtifactStatus.PENDING_REVIEW,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+            duration_sec=gen_result.get("actual_duration", duration),
+            preview_url=output_path,
+            qa_scores=qa_scores,
+            metadata={"prompt": prompt, "lora_id": lora_id},
+            timestamp=time.time(),
+        ))
 
     return gen_result
 

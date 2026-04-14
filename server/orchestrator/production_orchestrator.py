@@ -65,7 +65,6 @@ from orchestrator.prompts import (
     PLAN_GENERATION_USER_TEMPLATE,
     PLAN_OPTIMIZER_INSTRUCTION,
     REPLAN_PROMPT_TEMPLATE,
-    SYNTHESIS_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
@@ -530,6 +529,8 @@ class ProductionOrchestrator:
                         "replan_count": replan_count,
                         "new_batch_count": len(updated_plan.batches),
                     })
+                except RuntimeError:
+                    raise  # Fatal errors — never swallow.  Invariant #10.
                 except Exception as e:
                     logger.warning("Replan failed, continuing with original plan: %s", e)
 
@@ -607,6 +608,10 @@ class ProductionOrchestrator:
             })
 
         # Generate active clips in parallel
+        # TODO: task.assigned_worker is planned by the LLM but not yet routed
+        # to specific workers here — generate_video_clip() uses its own
+        # round-robin from VIDEO_WORKER_URLS.  Wire up per-clip routing
+        # once the orchestrator is validated end-to-end.
         if len(task_concepts) > 1 and self.num_workers > 1:
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                 future_to_concept = {
@@ -812,7 +817,7 @@ class ProductionOrchestrator:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.3,
-                max_tokens=4096,
+                max_tokens=16384,
                 response_format={"type": "json_object"},
             )
             return response.choices[0].message.content or ""
@@ -828,7 +833,11 @@ class ProductionOrchestrator:
             data = self._extract_json(response_text)
             if not data:
                 return self._create_fallback_plan()
-            return ProductionPlan.model_validate(data)
+            plan = ProductionPlan.model_validate(data)
+            if not plan.batches:
+                logger.warning("Parsed plan has zero batches — using fallback")
+                return self._create_fallback_plan()
+            return plan
         except Exception as e:
             logger.warning("Failed to parse plan from LLM response: %s", e)
             return self._create_fallback_plan()
