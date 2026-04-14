@@ -900,15 +900,19 @@ def _generate_video(
         capture_output=True, timeout=120,
     )
     if _ffmpeg_write.returncode != 0:
-        logger.warning(
+        stderr_msg = (_ffmpeg_write.stderr or b"")[:500]
+        logger.error(
             "ffmpeg encode failed (rc=%d): %s",
             _ffmpeg_write.returncode,
-            _ffmpeg_write.stderr[:500],
+            stderr_msg,
         )
-        # Fallback: write frames as raw video file
-        output_path = raw_path
-        with open(raw_path, "wb") as f:
-            f.write(video_frames.tobytes())
+        # Architecture invariant: never silently degrade.  Raise so the
+        # recovery middleware can retry or escalate instead of passing
+        # invalid bytes through the pipeline.
+        raise RuntimeError(
+            f"ffmpeg video encoding failed (rc={_ffmpeg_write.returncode}): "
+            f"{stderr_msg}"
+        )
 
     with open(output_path, "rb") as f:
         data = f.read()
