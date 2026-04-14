@@ -487,12 +487,12 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
-        # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
-        # index as this onstart command (prevents cu124 overwriting cu130).
-        # TTS workers run on older/cheaper GPUs (e.g. GTX 1070 Ti, Pascal sm_61)
-        # which lack cu130 kernel images.  cu126 supports Pascal+ AND has
-        # torch >=2.7 (cu124 only goes up to 2.6.0 which lacks _maybe_view_chunk_cat).
-        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
+        # The Docker image (pytorch/pytorch:2.10.0-cuda12.6) ships with
+        # PyTorch 2.10.0 pre-installed — no need for conda cleanup or pip
+        # force-reinstall.  TORCH_INDEX is still passed to gpu_bootstrap.sh
+        # for any pip install --upgrade scenarios, but the base image is
+        # already correct.
+        f"export TORCH_INDEX=https://download.pytorch.org/whl/cu126 && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
@@ -500,28 +500,14 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
         f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
         # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
-        # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
-        # but we need enough to start the health endpoint immediately.
-        # IMPORTANT: The Docker image has conda torch 2.6.0 which satisfies
-        # 'torch>=2.6.0', so pip would skip the install.  Aggressively clean
-        # conda torch + nvidia dirs + conda pkg cache, then force-reinstall.
-        "conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null; "
-        "rm -rf /opt/conda/lib/python*/site-packages/torch* "
-        "/opt/conda/lib/python*/site-packages/torchvision* "
-        "/opt/conda/lib/python*/site-packages/torchaudio* "
-        "/opt/conda/lib/python*/site-packages/nvidia* "
-        "/opt/conda/pkgs/*torch* 2>/dev/null; "
-        "pip install --force-reinstall --no-cache-dir "
-        "torch torchvision torchaudio "
-        f"--index-url https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
-        # Verify correct torch was installed (catch conda remnants early)
+        # The Docker image (2.10.0-cuda12.6) already has torch 2.10.0 installed,
+        # so we only need FastAPI + other non-torch deps for the health endpoint.
         "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
         "pip install --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
-        # Register NVIDIA pip package libs with ldconfig so libcudart.so.13
-        # is discoverable system-wide by any process (including ltx-core).
-        # PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
+        # Register NVIDIA pip package libs with ldconfig so CUDA shared
+        # libraries are discoverable system-wide by any process.
         "python3 -c \""
         "import os,site,pathlib;"
         "nv_dirs=[str(p) for sp in site.getsitepackages() "
@@ -546,7 +532,7 @@ def provision_vm(spec: WorkerSpec) -> str:
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
-        "--image", "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
+        "--image", "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",

@@ -88,23 +88,21 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# IMPORTANT: The Docker image (pytorch/pytorch:2.6.0-cuda12.4) has conda
-# torch 2.6.0 pre-installed.  pip sees it as satisfying 'torch>=2.6.0' and
-# skips the cu130 install.  We MUST aggressively clean conda torch first.
-# The combination of conda remove + rm -rf + --force-reinstall is the
-# community-tested bulletproof fix for this Docker image.
-echo "=== Cleaning conda PyTorch (cu12.4) ==="
-conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null || true
-rm -rf /opt/conda/lib/python*/site-packages/torch* \
-       /opt/conda/lib/python*/site-packages/torchvision* \
-       /opt/conda/lib/python*/site-packages/torchaudio* \
-       /opt/conda/lib/python*/site-packages/nvidia* \
-       /opt/conda/pkgs/*torch* 2>/dev/null || true
+# The Docker image (pytorch/pytorch:2.10.0-cuda12.6) ships with
+# PyTorch 2.10.0 pre-installed.  Verify it's present and correct.
+echo "=== Verifying pre-installed PyTorch ==="
+python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')"
 
-echo "=== Installing PyTorch wheels (brings libcudart.so.13 + Torch >=2.7) ==="
-pip install --force-reinstall --no-cache-dir \
-    torch torchvision torchaudio \
-    --index-url "$TORCH_INDEX"
+# If torch is somehow missing or too old, reinstall from the wheel index.
+TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,7) else 'no')" 2>/dev/null || echo "no")
+if [ "$TORCH_OK" != "yes" ]; then
+    echo "WARNING: torch too old or missing, reinstalling from $TORCH_INDEX"
+    pip install --force-reinstall --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url "$TORCH_INDEX"
+else
+    echo "PyTorch version OK, skipping reinstall"
+fi
 
 # Register NVIDIA pip package lib dirs (libcudart.so.13 etc.) with ldconfig.
 # PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/

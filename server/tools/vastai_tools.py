@@ -219,7 +219,7 @@ def provision_gpu_vm(
     )
 
     # Create instance from best offer.
-    # Use pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel for modern CUDA support.
+    # Use pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel for PyTorch 2.10+ support.
     # Request SSH access and port mappings for the GPU worker HTTP API.
     # NOTE: Do NOT pass --raw — vastai CLI returns empty stdout with --raw
     # for create commands.  Without --raw it returns Python repr that we
@@ -228,7 +228,7 @@ def provision_gpu_vm(
         [
             "create", "instance",
             str(offer_id),
-            "--image", "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel",
+            "--image", "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
             "--disk", "224",
             "--ssh",
             "--direct",
