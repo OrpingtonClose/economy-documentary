@@ -792,9 +792,16 @@ def _load_ltx():
 
     The pipeline uses a block-based lifecycle: each component (text encoder,
     transformer, VAE decoder) is built on demand and freed after use.
-    The block-based lifecycle loads/unloads each component sequentially
-    (text encoder → transformer → VAE decoder), so peak VRAM is dominated
-    by the ~46GB transformer alone, not the sum of all components.
+    Each builder's sd_ops filter tensors at the safetensors level (only
+    loading keys matching the component's prefix), so the full 46GB file
+    is never loaded wholesale.  Peak VRAM is dominated by the ~44GB
+    transformer alone, not the sum of all components.
+
+    We use StateDictRegistry (instead of the default DummyRegistry) so
+    that state dicts are loaded to **CPU** first and then moved to GPU
+    per-component.  This prevents transient GPU spikes from the loader
+    and enables cross-builder caching when the same checkpoint is read
+    for different components.
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
@@ -809,6 +816,8 @@ def _load_ltx():
         _unload_tts()
 
     from ltx_pipelines.ti2vid_one_stage import TI2VidOneStagePipeline
+    from ltx_core.loader.registry import StateDictRegistry
+    from ltx_pipelines.utils.model_ledger import ModelLedger
 
     # Locate model directory
     candidate_ltx23 = os.path.join(_models_dir, "ltx23")
@@ -846,7 +855,24 @@ def _load_ltx():
         gemma_root=gemma_root,
         loras=[],
     )
-    logger.info("One-stage pipeline created.")
+
+    # Replace the default DummyRegistry with StateDictRegistry so that
+    # checkpoint tensors are loaded to CPU first, then moved to GPU
+    # per-component.  This avoids loading the full 46GB state dict
+    # directly onto GPU (which with DummyRegistry causes transient
+    # spikes that combine with autograd graphs to OOM).
+    registry = StateDictRegistry()
+    pipe.model_ledger = ModelLedger(
+        dtype=pipe.dtype,
+        device=pipe.device,
+        checkpoint_path=ckpt_path,
+        gemma_root_path=gemma_root,
+        loras=[],
+        registry=registry,
+    )
+    logger.info(
+        "One-stage pipeline created (StateDictRegistry → CPU-side caching)."
+    )
 
     _ltx_pipe = pipe
     _active_model = "ltx"
@@ -1206,6 +1232,7 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
 # Video generation (LTX-2.3 via official Lightricks ltx-pipelines)
 # ---------------------------------------------------------------------------
 
+@torch.inference_mode()
 def _ltx_generate_once(
     prompt: str,
     negative_prompt: str,
@@ -1228,16 +1255,25 @@ def _ltx_generate_once(
     into a single numpy array for QA evaluation.
 
     Memory strategy:
-        The 22B transformer weighs ~46GB at bf16.  The pipeline uses a
+        The 22B transformer weighs ~44GB at bf16.  The pipeline uses a
         block-based lifecycle that loads/unloads components sequentially
-        (text encoder → transformer → VAE), so peak VRAM is dominated by
-        the transformer alone (~46GB + activations), fitting on 80GB GPUs.
+        (text encoder → transformer → VAE decoder), so peak VRAM is
+        dominated by the transformer alone (~44GB + activations).
+
+        CRITICAL: @torch.inference_mode() is required.  Without it,
+        PyTorch retains autograd computation graphs for every intermediate
+        tensor across all transformer layers and all diffusion steps.
+        This inflates VRAM from ~47GB (weights + activations) to ~140GB
+        (weights + autograd graphs), causing OOM on 141GB H200 GPUs.
+        The ltx-pipelines library's own main() uses this decorator;
+        our worker must too.
 
         Additional VRAM hygiene:
         1. gc.collect() — release Python references to GPU tensors
         2. torch.cuda.empty_cache() — return cached blocks to the allocator
-        3. Log VRAM so we can diagnose OOM remotely
-        4. expandable_segments=True — prevent allocator fragmentation
+        3. try/finally — ensure cleanup even if pipeline.__call__ raises
+        4. Log VRAM so we can diagnose OOM remotely
+        5. expandable_segments=True — prevent allocator fragmentation
     """
     from ltx_core.components.guiders import MultiModalGuiderParams
 
@@ -1275,26 +1311,51 @@ def _ltx_generate_once(
         stg_blocks=stg_blocks,
     )
 
-    video_iter, _audio = _ltx_pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        seed=seed,
-        height=height,
-        width=width,
-        num_frames=num_frames,
-        frame_rate=fps,
-        num_inference_steps=num_inference_steps,
-        video_guider_params=video_guider,
-        audio_guider_params=audio_guider,
-        images=[],  # text-to-video, no image conditioning
-    )
+    try:
+        video_iter, _audio = _ltx_pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            frame_rate=fps,
+            num_inference_steps=num_inference_steps,
+            video_guider_params=video_guider,
+            audio_guider_params=audio_guider,
+            images=[],  # text-to-video, no image conditioning
+        )
 
-    # Collect video chunks from iterator into numpy array
-    chunks = []
-    for chunk in video_iter:
-        # chunk is torch.Tensor (T, H, W, C) uint8 on CPU
-        chunks.append(chunk.cpu().numpy())
-    candidate_frames = np.concatenate(chunks, axis=0)  # (T, H, W, C) uint8
+        # Collect video chunks from iterator into numpy array
+        chunks = []
+        for chunk in video_iter:
+            # chunk is torch.Tensor (T, H, W, C) uint8 on CPU
+            chunks.append(chunk.cpu().numpy())
+        candidate_frames = np.concatenate(chunks, axis=0)  # (T, H, W, C) uint8
+    except Exception:
+        # On OOM or any pipeline error, force-free everything before
+        # re-raising so that the next retry starts with a clean slate
+        # instead of accumulating leaked transformers.
+        logger.warning(
+            "Pipeline call failed — running emergency VRAM cleanup"
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
+        raise
+    finally:
+        # Always reclaim VRAM after generation, whether it succeeded
+        # or failed.  This pairs with the pre-generation cleanup above
+        # to bound peak memory across retry attempts.
+        gc.collect()
+        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            _alloc = torch.cuda.memory_allocated() / 1e9
+            _resv = torch.cuda.memory_reserved() / 1e9
+            logger.info(
+                "VRAM after pipeline call: allocated=%.2fGB "
+                "reserved=%.2fGB",
+                _alloc, _resv,
+            )
 
     return candidate_frames
 

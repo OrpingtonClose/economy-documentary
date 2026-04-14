@@ -1394,8 +1394,17 @@ class WorkerProvisioner:
                 f"healthy within {remaining}s after provisioning"
             )
 
-    def _cleanup_single_worker(self, spec: WorkerSpec) -> None:
-        """Clean up a single worker's resources (tunnel + VM)."""
+    def _cleanup_single_worker(
+        self, spec: WorkerSpec, *, force_destroy: bool = False,
+    ) -> None:
+        """Clean up a single worker's resources (tunnel + VM).
+
+        Args:
+            force_destroy: If True, destroy the VM to stop billing.
+                Used by _cleanup_all_on_failure for orphaned VMs.
+                Normal cleanup (user-initiated) leaves VMs running
+                so the user can inspect them.
+        """
         if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
             logger.info(
                 "Cleaning up SSH tunnel for %s (pid=%d)",
@@ -1408,18 +1417,36 @@ class WorkerProvisioner:
                 spec.tunnel_proc.kill()
 
         if spec.vm_id:
-            logger.info(
-                "VM %s (%s) left running — destroy manually via "
-                "'vastai destroy instance %s' when done",
-                spec.vm_id, spec.role, spec.vm_id,
-            )
+            if force_destroy:
+                logger.info(
+                    "Destroying %s VM %s to stop billing (failure cleanup)",
+                    spec.role, spec.vm_id,
+                )
+                try:
+                    _vast_cmd(["destroy", "instance", spec.vm_id])
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to destroy VM %s: %s — destroy manually "
+                        "via 'vastai destroy instance %s'",
+                        spec.vm_id, exc, spec.vm_id,
+                    )
+            else:
+                logger.info(
+                    "VM %s (%s) left running — destroy manually via "
+                    "'vastai destroy instance %s' when done",
+                    spec.vm_id, spec.role, spec.vm_id,
+                )
 
     def _cleanup_all_on_failure(self) -> None:
-        """Clean up all provisioned resources after a failure."""
+        """Clean up all provisioned resources after a failure.
+
+        Unlike normal cleanup(), this destroys VMs to prevent billing
+        for orphaned instances that will never be used.
+        """
         with self._lock:
             specs = list(self._specs)
         for spec in specs:
-            self._cleanup_single_worker(spec)
+            self._cleanup_single_worker(spec, force_destroy=True)
 
     def _start_infra_agent(self) -> None:
         """Start the InfraAgent and register provisioned workers."""
