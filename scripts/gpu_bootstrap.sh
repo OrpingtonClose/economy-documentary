@@ -49,6 +49,38 @@ mkdir -p /workspace/{models,output}
 cd /workspace
 
 # ---------------------------------------------------------------------------
+# CUDA compatibility — detect system CUDA and match PyTorch index
+# ---------------------------------------------------------------------------
+# Vast.ai VMs may have CUDA 11.x, 12.1, 12.4, etc.  We detect the
+# system CUDA version and pick a matching PyTorch wheel index.
+SYSTEM_CUDA=""
+if command -v nvcc &>/dev/null; then
+    SYSTEM_CUDA=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')
+    echo "System CUDA: $SYSTEM_CUDA"
+elif [ -f /usr/local/cuda/version.txt ]; then
+    SYSTEM_CUDA=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
+    echo "System CUDA (from version.txt): $SYSTEM_CUDA"
+else
+    # Try nvidia-smi
+    SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')
+    echo "System CUDA (from nvidia-smi): $SYSTEM_CUDA"
+fi
+
+# Map system CUDA to PyTorch wheel index
+CUDA_MAJOR=$(echo "$SYSTEM_CUDA" | cut -d. -f1)
+CUDA_MINOR=$(echo "$SYSTEM_CUDA" | cut -d. -f2)
+if [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+elif [ "$CUDA_MAJOR" = "12" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+elif [ "$CUDA_MAJOR" = "11" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu118"
+else
+    TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+fi
+echo "Using PyTorch wheel index: $TORCH_INDEX"
+
+# ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
 # torch 2.6+ required for ltx-pipelines
@@ -56,7 +88,17 @@ pip install --no-cache-dir \
     'torch>=2.6.0' \
     'torchvision>=0.21.0' \
     'torchaudio>=2.6.0' \
-    --index-url https://download.pytorch.org/whl/cu124
+    --index-url "$TORCH_INDEX"
+
+# Ensure CUDA runtime libs are on LD_LIBRARY_PATH
+# PyTorch ships its own libcudart — add its location to the search path
+TORCH_LIB=$(python3 -c "import torch, os; print(os.path.dirname(torch.__file__) + '/lib')" 2>/dev/null || true)
+if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
+    export LD_LIBRARY_PATH="${TORCH_LIB}:${LD_LIBRARY_PATH:-}"
+    echo "Added $TORCH_LIB to LD_LIBRARY_PATH"
+    # Also persist for the gpu_worker process
+    echo "export LD_LIBRARY_PATH=\"${TORCH_LIB}:\${LD_LIBRARY_PATH:-}\"" >> /etc/profile.d/torch_cuda.sh
+fi
 
 # ltx-pipelines: official Lightricks inference code for LTX-2.3
 # No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.

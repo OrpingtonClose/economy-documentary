@@ -46,6 +46,32 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+# Ensure PyTorch's bundled CUDA runtime libs are discoverable by ltx-core
+# compiled extensions (fixes "libcudart.so.13: cannot open shared object file").
+# Setting LD_LIBRARY_PATH alone doesn't work because the process is already
+# running.  Instead we preload libcudart from torch's lib/ using ctypes so
+# the symbols are available when ltx-core extensions do dlopen().
+import ctypes as _ctypes
+import glob as _glob
+try:
+    import torch as _torch_probe
+    _torch_lib = os.path.join(os.path.dirname(_torch_probe.__file__), "lib")
+    if os.path.isdir(_torch_lib):
+        # Also set env var for any subprocess / future dlopen
+        _ld = os.environ.get("LD_LIBRARY_PATH", "")
+        if _torch_lib not in _ld:
+            os.environ["LD_LIBRARY_PATH"] = f"{_torch_lib}:{_ld}" if _ld else _torch_lib
+        # Preload libcudart so ltx-core compiled extensions can find it
+        for _cudart in sorted(_glob.glob(os.path.join(_torch_lib, "libcudart*.so*"))):
+            try:
+                _ctypes.CDLL(_cudart, mode=_ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+    del _torch_probe, _torch_lib, _ld
+except Exception:
+    pass
+del _ctypes, _glob
+
 import numpy as np
 import soundfile as sf
 import torch
