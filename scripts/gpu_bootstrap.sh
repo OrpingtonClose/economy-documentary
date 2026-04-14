@@ -105,7 +105,7 @@ print('yes' if v >= req else 'no')
 " 2>/dev/null || echo "no")
 if [ "$TORCH_OK" != "yes" ]; then
     echo "WARNING: torch too old or missing, reinstalling from $TORCH_INDEX"
-    pip install --force-reinstall --no-cache-dir \
+    pip install --break-system-packages --force-reinstall --no-cache-dir \
         torch torchvision torchaudio \
         --index-url "$TORCH_INDEX"
 else
@@ -130,7 +130,7 @@ echo "ldconfig updated — libcudart.so.13 should now be discoverable"
 
 # ltx-pipelines: official Lightricks inference code for LTX-2.3
 # No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.
-pip install --no-cache-dir \
+pip install --break-system-packages --no-cache-dir \
     'ltx-pipelines>=1.0.0' \
     'ltx-core>=1.0.0' \
     'accelerate>=0.33.0' \
@@ -152,7 +152,7 @@ apt-get install -y sox libsox-dev
 # Model downloads — ltx-pipelines uses single-file checkpoint + gemma
 # ---------------------------------------------------------------------------
 B2_BUCKET="ltx2-models-orpington"
-pip install --no-cache-dir huggingface_hub 2>/dev/null
+pip install --break-system-packages --no-cache-dir huggingface_hub 2>/dev/null
 
 if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     echo "=== Downloading models (B2 primary, HuggingFace fallback) ==="
