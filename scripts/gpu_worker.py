@@ -83,8 +83,13 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 40  # full model: 40 steps (pipeline default)
-    guidance_scale: float = 4.0  # full model: CFG=4.0 (pipeline default)
+    # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
+    num_inference_steps: int = 30  # LTX-2.3 dev: 30 steps
+    guidance_scale: float = 3.0  # LTX-2.3 dev: CFG=3.0
+    stg_scale: float = 1.0  # spatio-temporal guidance scale
+    modality_scale: float = 3.0  # modality (video vs audio) guidance
+    guidance_rescale: float = 0.7  # guidance rescale factor
+    stg_blocks: list[int] = [28]  # spatio-temporal guidance block indices
 
 
 class HealthResponse(BaseModel):
@@ -422,9 +427,16 @@ _DASHSCOPE_API_KEY: str = os.environ.get("DASHSCOPE_API_KEY", "")
 _OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 # Which backend to use: DashScope (preferred) or OpenRouter (fallback)
 _QA_BACKEND: str = "dashscope" if _DASHSCOPE_API_KEY else ("openrouter" if _OPENROUTER_API_KEY else "")
-# Model for video QA — Qwen VL model with vision capabilities
-_QA_MODEL_DASHSCOPE: str = "qwen-vl-max"  # Qwen-VL-Max on DashScope
-_QA_MODEL_OPENROUTER: str = "qwen/qwen3.5-plus-02-15"  # fallback on OpenRouter
+# Two-pass QA model ensemble:
+#   Pass 1 (structural integrity): fast check for corruption, grid artifacts,
+#           body horror, overt AI wonk.  Uses a strong vision model.
+#   Pass 2 (semantic quality): prompt adherence, style conformance, artistic merit.
+#           Uses the main VL model.
+# If Pass 1 returns REJECTED, Pass 2 is skipped entirely.
+_QA_MODEL_DASHSCOPE_STRUCTURAL: str = "qwen-vl-max"  # structural integrity pass
+_QA_MODEL_DASHSCOPE_SEMANTIC: str = "qwen-vl-max"    # semantic quality pass
+_QA_MODEL_OPENROUTER_STRUCTURAL: str = "google/gemini-2.5-flash-preview"  # structural (OpenRouter)
+_QA_MODEL_OPENROUTER_SEMANTIC: str = "google/gemini-2.5-flash-preview"    # semantic (OpenRouter)
 
 
 def _frames_to_base64(frames, indices: list[int]) -> list[str]:
@@ -451,20 +463,69 @@ def _frames_to_base64(frames, indices: list[int]) -> list[str]:
     return result
 
 
-def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
-    """Send frames to Qwen-Omni via OpenRouter for visual quality assessment.
+def _call_vision_model(content_parts: list[dict], model: str, api_url: str, api_key: str) -> dict:
+    """Call a vision model and return parsed JSON response.
 
-    Returns dict with keys: quality ("poor"/"good"/"excellent"), qa_reason (str).
-    Following bearnaise pattern: per-clip LLM-based visual QA.
+    Returns dict with at minimum {quality, qa_reason} keys.
+    Raises on network/parse failure.
+    """
+    import httpx
+
+    resp = httpx.post(
+        api_url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": 400,
+            "temperature": 0.1,
+        },
+        timeout=90.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = data["choices"][0]["message"]["content"].strip()
+
+    # Parse JSON — handle markdown fencing
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    return json.loads(text)
+
+
+def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
+    """Two-pass visual QA ensemble for AI-generated video clips.
+
+    Pass 1 — STRUCTURAL INTEGRITY (fast, strict):
+        Detects fundamentally broken output: grid artifacts, corrupted data,
+        body horror, overt AI wonk.  Returns REJECTED immediately if found.
+
+    Pass 2 — SEMANTIC QUALITY (only if Pass 1 clears):
+        Evaluates prompt adherence, visual style conformance, artistic merit.
+        Returns rejected/poor/good/excellent.
+
+    Returns dict with keys: quality ("rejected"/"poor"/"good"/"excellent"),
+    qa_reason (str), qa_pass ("structural"/"semantic").
+
+    Quality levels:
+        rejected  — fundamentally broken: grid artifacts, digital noise,
+                    corrupted data, body horror, overt AI wonk.  NOT usable.
+        poor      — passed sanity checks but barely: wrong medium, bad
+                    prompt adherence, significant but non-horrific artifacts.
+        good      — acceptable quality with minor imperfections.
+        excellent — high quality, matches prompt and style closely.
 
     Args:
         prompt: The generation prompt for this clip.
         frames_b64: Base64-encoded JPEG frames (start, middle, end).
-        visual_style: Movie-level visual style description. When provided,
-            QA checks that the clip conforms to the film's declared aesthetic.
+        visual_style: Movie-level visual style description.
     """
-    import httpx
-
     if not _QA_BACKEND:
         raise RuntimeError(
             "OTIO VIOLATION: visual QA unavailable — neither DASHSCOPE_API_KEY "
@@ -472,15 +533,71 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
             "cannot accept clips without quality verification."
         )
 
-    # Build multimodal content: frames as images + evaluation prompt
-    content_parts = []
-    for i, b64 in enumerate(frames_b64):
-        content_parts.append({
+    # Select backend URLs and models
+    if _QA_BACKEND == "dashscope":
+        api_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        api_key = _DASHSCOPE_API_KEY
+        structural_model = _QA_MODEL_DASHSCOPE_STRUCTURAL
+        semantic_model = _QA_MODEL_DASHSCOPE_SEMANTIC
+    else:
+        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        api_key = _OPENROUTER_API_KEY
+        structural_model = _QA_MODEL_OPENROUTER_STRUCTURAL
+        semantic_model = _QA_MODEL_OPENROUTER_SEMANTIC
+
+    # Build image content parts (shared between both passes)
+    image_parts = []
+    for b64 in frames_b64:
+        image_parts.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
         })
 
-    # Build the style enforcement section
+    # ── Pass 1: Structural Integrity ──────────────────────────────────────
+    structural_parts = list(image_parts)
+    structural_parts.append({
+        "type": "text",
+        "text": (
+            "You are a video output integrity checker. Your ONLY job is to \n"
+            "detect fundamentally broken AI-generated video output.\n\n"
+            f"These {len(frames_b64)} frames are sampled from an AI-generated video clip.\n\n"
+            "Check for ANY of these defects:\n\n"
+            "1. CORRUPTED OUTPUT: grid patterns, repeating tile artifacts, \n"
+            "   digital noise, static, solid color frames, no discernible content.\n\n"
+            "2. OVERT AI WONK: uncanny valley distortion, impossible physics \n"
+            "   (objects phasing through each other, gravity violations), \n"
+            "   melting/morphing shapes, flickering geometry, surreal \n"
+            "   nonsensical compositions that no real camera could capture.\n\n"
+            "3. BODY HORROR: deformed human faces or limbs, extra/missing \n"
+            "   fingers, fused body parts, distorted eyes/teeth, inhuman \n"
+            "   proportions that are clearly unintentional and disturbing.\n\n"
+            "If ANY of the above defects are present, the output is REJECTED.\n"
+            "If the frames show actual coherent imagery (even if low quality), \n"
+            "it PASSES.\n\n"
+            "Respond in EXACTLY this JSON format (no markdown):\n"
+            '{"verdict": "rejected|pass", "defects": "description of defects found, or none"}'
+        ),
+    })
+
+    try:
+        logger.info("QA Pass 1 (structural) using %s (model=%s)", _QA_BACKEND, structural_model)
+        p1 = _call_vision_model(structural_parts, structural_model, api_url, api_key)
+        p1_verdict = p1.get("verdict", "pass").lower()
+        p1_defects = p1.get("defects", "none")
+        logger.info("QA Pass 1 result: verdict=%s, defects=%.120s", p1_verdict, p1_defects)
+
+        if p1_verdict == "rejected":
+            return {
+                "quality": "rejected",
+                "qa_reason": f"STRUCTURAL INTEGRITY FAILURE: {p1_defects}",
+                "qa_pass": "structural",
+            }
+    except Exception as e:
+        logger.error("QA Pass 1 (structural) failed: %s", e, exc_info=True)
+        # If structural check itself fails, proceed to semantic pass
+        # (don't block on QA infrastructure failures)
+
+    # ── Pass 2: Semantic Quality ──────────────────────────────────────────
     style_section = ""
     if visual_style:
         style_section = (
@@ -492,78 +609,50 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
             f"other qualities.\n"
         )
 
-    content_parts.append({
+    semantic_parts = list(image_parts)
+    semantic_parts.append({
         "type": "text",
         "text": (
             f"You are a video quality assessor for AI-generated footage.\n\n"
             f"The video was generated from this prompt:\n"
             f'"{prompt}"\n'
             f"{style_section}\n"
-            f"These {len(frames_b64)} frames are sampled from the start, middle, and end of the clip.\n\n"
-            f"Evaluate the video quality:\n"
-            f"1. Does the visual content match what the prompt describes?\n"
-            f"2. Does the clip match the movie's visual style? (most important)\n"
-            f"3. Are there blatant AI artifacts: distorted shapes, impossible \n"
-            f"   geometry, morphing, grid patterns, or incoherent motion?\n"
-            f"4. Is the output clearly the WRONG medium (e.g. cartoon when the \n"
-            f"   movie style requires photorealism)?\n\n"
+            f"These {len(frames_b64)} frames are sampled from the start, middle, "
+            f"and end of the clip.\n\n"
+            f"The frames have already passed structural integrity checks (no \n"
+            f"corruption or grid artifacts). Now evaluate QUALITY:\n\n"
+            f"REJECTED — Overt AI wonk or body horror that passed the structural \n"
+            f"  check: uncanny valley faces, deformed limbs, impossible anatomy, \n"
+            f"  melting objects, reality-breaking physics. These are errors, not \n"
+            f"  style choices.\n\n"
+            f"POOR — Shows actual imagery but barely acceptable:\n"
+            f"  - Wrong medium (cartoon when photorealism required)\n"
+            f"  - Noticeable but non-horrific AI artifacts\n"
+            f"  - Complete prompt mismatch\n\n"
+            f"GOOD — Acceptable quality with minor imperfections.\n\n"
+            f"EXCELLENT — High quality, matches prompt and style closely.\n\n"
             f"Be LENIENT on minor imperfections (slight blur, small lighting \n"
-            f"differences). Only rate POOR for blatant failures: wrong medium, \n"
-            f"AI wonkiness, or complete prompt mismatch.\n\n"
+            f"differences).\n\n"
             f"Respond in EXACTLY this JSON format (no markdown, no extra text):\n"
-            f'{{"quality": "poor|good|excellent", "qa_reason": "brief description of what the video shows and why you rated it this way"}}'
+            f'{{"quality": "rejected|poor|good|excellent", "qa_reason": "brief '
+            f'description of what the video shows and why you rated it this way"}}'
         ),
     })
 
     try:
-        # Select backend: DashScope (preferred) or OpenRouter (fallback)
-        if _QA_BACKEND == "dashscope":
-            api_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-            api_key = _DASHSCOPE_API_KEY
-            model = _QA_MODEL_DASHSCOPE
-        else:
-            api_url = "https://openrouter.ai/api/v1/chat/completions"
-            api_key = _OPENROUTER_API_KEY
-            model = _QA_MODEL_OPENROUTER
+        logger.info("QA Pass 2 (semantic) using %s (model=%s)", _QA_BACKEND, semantic_model)
+        p2 = _call_vision_model(semantic_parts, semantic_model, api_url, api_key)
+        quality = p2.get("quality", "unknown").lower()
+        qa_reason = p2.get("qa_reason", "No reason provided")
 
-        logger.info("Visual QA using %s (model=%s)", _QA_BACKEND, model)
-        resp = httpx.post(
-            api_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": content_parts}],
-                "max_tokens": 300,
-                "temperature": 0.1,
-            },
-            timeout=60.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"].strip()
-
-        # Parse JSON from response — handle markdown fencing
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
-        quality = result.get("quality", "unknown").lower()
-        qa_reason = result.get("qa_reason", "No reason provided")
-
-        if quality not in ("poor", "good", "excellent"):
+        if quality not in ("rejected", "poor", "good", "excellent"):
             quality = "unknown"
 
-        return {"quality": quality, "qa_reason": qa_reason}
+        return {"quality": quality, "qa_reason": qa_reason, "qa_pass": "semantic"}
 
     except Exception as e:
-        logger.error("Visual QA failed: %s", e, exc_info=True)
-        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}"}
+        logger.error("QA Pass 2 (semantic) failed: %s", e, exc_info=True)
+        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}", "qa_pass": "error"}
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +670,10 @@ def _generate_video(
     guidance_scale: float,
     negative_prompt: str = "",
     visual_style: str = "",
+    stg_scale: float = 1.0,
+    modality_scale: float = 3.0,
+    guidance_rescale: float = 0.7,
+    stg_blocks: list[int] | None = None,
 ) -> tuple[bytes, dict]:
     """Generate video clip using LTX-2.3 dev (full) model via diffusers.
 
@@ -592,6 +685,10 @@ def _generate_video(
         negative_prompt: Per-clip negative prompt from visual_style.avoid.
             Merged with baseline negatives.
         visual_style: Movie-level visual style description passed to QA.
+        stg_scale: Spatio-temporal guidance scale (LTX-2.3 specific).
+        modality_scale: Modality guidance scale (video vs audio balance).
+        guidance_rescale: CFG rescale factor to reduce oversaturation.
+        stg_blocks: Which transformer blocks to apply STG to.
     """
     # Fail fast if no QA backend — don't waste GPU time generating frames
     # that will be rejected anyway.  _QA_BACKEND is a module-level constant.
@@ -658,6 +755,9 @@ def _generate_video(
         #   Stage 1: generate latents at target resolution
         #   Stage 2: latent upsample 2x → VAE decode at 2x resolution
         # This eliminates grid-pattern artifacts from single-stage decode.
+        # LTX-2.3 spatio-temporal guidance block indices
+        _stg_blocks = stg_blocks if stg_blocks is not None else [28]
+
         if _ltx_upsample_pipe is not None:
             # Stage 1: generate raw latents (no VAE decode yet)
             video_latent, audio_latent = _ltx_pipe(
@@ -669,6 +769,10 @@ def _generate_video(
                 frame_rate=fps,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
+                stg_scale=stg_scale,
+                modality_scale=modality_scale,
+                guidance_rescale=guidance_rescale,
+                spatio_temporal_guidance_blocks=_stg_blocks,
                 generator=gen,
                 output_type="latent",
                 return_dict=False,
@@ -693,6 +797,10 @@ def _generate_video(
                 frame_rate=fps,
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
+                stg_scale=stg_scale,
+                modality_scale=modality_scale,
+                guidance_rescale=guidance_rescale,
+                spatio_temporal_guidance_blocks=_stg_blocks,
                 generator=gen,
                 output_type="np",
                 return_dict=False,
@@ -745,6 +853,21 @@ def _generate_video(
             attempt, max_attempts, qa_result["quality"],
             qa_result.get("qa_reason", ""),
         )
+
+        if qa_result["quality"] == "rejected":
+            # REJECTED = fundamentally broken (grid artifacts, corrupted data).
+            # This is an error, not a quality issue. Don't waste more attempts
+            # — the model/config is likely wrong.  Return immediately with
+            # the rejection so the pipeline can escalate.
+            logger.error(
+                "QA REJECTED output (attempt %d/%d): %s",
+                attempt, max_attempts, qa_result.get("qa_reason", ""),
+            )
+            best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
+            best_passing_seed = current_seed
+            best_passing_qa = qa_result
+            break
 
         if qa_result["quality"] in ("good", "excellent"):
             best_passing_frames = candidate_frames
@@ -973,6 +1096,10 @@ def video_endpoint(req: VideoRequest):
                 guidance_scale=req.guidance_scale,
                 negative_prompt=req.negative_prompt,
                 visual_style=req.visual_style,
+                stg_scale=req.stg_scale,
+                modality_scale=req.modality_scale,
+                guidance_rescale=req.guidance_rescale,
+                stg_blocks=req.stg_blocks,
             )
         except HTTPException:
             raise
