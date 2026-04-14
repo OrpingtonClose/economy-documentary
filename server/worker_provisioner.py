@@ -479,6 +479,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         # 'torch>=2.6.0', so pip would skip the install.  We must force-
         # uninstall the conda version first so pip actually installs the
         # correct CUDA wheels (cu130 for video, cu124 for TTS).
+        # NOTE: pip uninstall alone cannot remove conda-installed packages!
+        # Must use conda remove --force first, then pip uninstall as fallback.
+        "conda remove --force -y torch torchvision torchaudio 2>/dev/null; "
         "pip uninstall -y torch torchvision torchaudio 2>/dev/null; "
         "pip install --no-cache-dir "
         "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
