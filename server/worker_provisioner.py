@@ -127,6 +127,8 @@ _MODEL_MANIFEST = _FULL_MANIFEST.get("models", {})
 
 def _parse_version(v: str) -> tuple:
     """Parse a version string like '2.10.0' into a comparable tuple (2, 10, 0)."""
+    # Strip build metadata (e.g. '2.7.0+cu126' -> '2.7.0') per PEP 440
+    v = v.split("+")[0]
     parts = []
     for p in v.split("."):
         try:
