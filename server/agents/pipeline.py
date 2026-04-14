@@ -257,6 +257,12 @@ def _init_pipeline_state(
     # Each stage waits for only the worker it needs:
     #   - Audio stage calls wait_for_worker("tts") in its before_callback
     #   - Production stage calls wait_for_worker("video") in its before_callback
+    #
+    # IMPORTANT: Always reset _workers_provisioned at pipeline start.
+    # B2 state restore can carry over the True flag from a previous failed
+    # run (where _cleanup_pipeline_state never executed), causing this block
+    # to be skipped entirely — leaving the pipeline with no workers.
+    state["_workers_provisioned"] = False
     if not state.get("_workers_provisioned"):
         import threading
         from worker_provisioner import get_provisioner
