@@ -46,28 +46,45 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-# Ensure PyTorch's bundled CUDA runtime libs are discoverable by ltx-core
-# compiled extensions (fixes "libcudart.so.13: cannot open shared object file").
-# Setting LD_LIBRARY_PATH alone doesn't work because the process is already
-# running.  Instead we preload libcudart from torch's lib/ using ctypes so
-# the symbols are available when ltx-core extensions do dlopen().
+# Ensure NVIDIA CUDA runtime libs (libcudart.so.13) are preloaded.
+# PyTorch cu130 doesn't bundle libcudart — it's in the nvidia-cuda-runtime
+# pip package at nvidia/cu13/lib/.  We preload it via ctypes RTLD_GLOBAL
+# so ltx-core compiled extensions can find it.
 import ctypes as _ctypes
 import glob as _glob
 try:
-    import torch as _torch_probe
-    _torch_lib = os.path.join(os.path.dirname(_torch_probe.__file__), "lib")
-    if os.path.isdir(_torch_lib):
-        # Also set env var for any subprocess / future dlopen
+    import site as _site
+    _search_dirs = []
+    for _sp in _site.getsitepackages():
+        _nv = os.path.join(_sp, "nvidia")
+        if os.path.isdir(_nv):
+            for _sub in os.listdir(_nv):
+                _lib = os.path.join(_nv, _sub, "lib")
+                if os.path.isdir(_lib):
+                    _search_dirs.append(_lib)
+    # Also check user site-packages
+    _usp = _site.getusersitepackages()
+    if isinstance(_usp, str):
+        _nv = os.path.join(_usp, "nvidia")
+        if os.path.isdir(_nv):
+            for _sub in os.listdir(_nv):
+                _lib = os.path.join(_nv, _sub, "lib")
+                if os.path.isdir(_lib):
+                    _search_dirs.append(_lib)
+    # Set LD_LIBRARY_PATH for subprocesses
+    if _search_dirs:
         _ld = os.environ.get("LD_LIBRARY_PATH", "")
-        if _torch_lib not in _ld:
-            os.environ["LD_LIBRARY_PATH"] = f"{_torch_lib}:{_ld}" if _ld else _torch_lib
-        # Preload libcudart so ltx-core compiled extensions can find it
-        for _cudart in sorted(_glob.glob(os.path.join(_torch_lib, "libcudart*.so*"))):
+        _new_paths = ":".join(d for d in _search_dirs if d not in _ld)
+        if _new_paths:
+            os.environ["LD_LIBRARY_PATH"] = f"{_new_paths}:{_ld}" if _ld else _new_paths
+    # Preload libcudart via ctypes so it's available for dlopen()
+    for _d in _search_dirs:
+        for _so in sorted(_glob.glob(os.path.join(_d, "libcudart*.so*"))):
             try:
-                _ctypes.CDLL(_cudart, mode=_ctypes.RTLD_GLOBAL)
+                _ctypes.CDLL(_so, mode=_ctypes.RTLD_GLOBAL)
             except OSError:
                 pass
-    del _torch_probe, _torch_lib, _ld
+    del _search_dirs, _site
 except Exception:
     pass
 del _ctypes, _glob

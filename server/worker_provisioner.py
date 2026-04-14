@@ -475,6 +475,14 @@ def provision_vm(spec: WorkerSpec) -> str:
         "pip install --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
+        # Set LD_LIBRARY_PATH so libcudart.so.13 from nvidia-cuda-runtime
+        # pip package is discoverable by ltx-core compiled extensions.
+        "export LD_LIBRARY_PATH=$(python3 -c \"import os,site; "
+        "dirs=[os.path.join(sp,'nvidia',d,'lib') "
+        "for sp in site.getsitepackages() "
+        "for d in (os.listdir(os.path.join(sp,'nvidia')) if os.path.isdir(os.path.join(sp,'nvidia')) else []) "
+        "if os.path.isdir(os.path.join(sp,'nvidia',d,'lib'))]; "
+        "print(':'.join(dirs))\" 2>/dev/null):${LD_LIBRARY_PATH:-} && "
         # Start the worker — it handles bootstrap internally and reports
         # structured status via /health endpoint.
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
