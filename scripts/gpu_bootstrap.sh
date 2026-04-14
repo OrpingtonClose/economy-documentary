@@ -65,7 +65,7 @@ else
         SYSTEM_CUDA=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
         echo "System CUDA (from version.txt): $SYSTEM_CUDA"
     else
-        SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')
+        SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || true)
         echo "System CUDA (from nvidia-smi): $SYSTEM_CUDA"
     fi
 

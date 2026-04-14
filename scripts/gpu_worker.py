@@ -355,7 +355,7 @@ class VMAgent:
         self.bootstrap.phase = "loading"
         self.bootstrap.detail = "Loading models into VRAM"
 
-        if self.worker_mode == "tts":
+        if self.worker_mode in ("tts", "both"):
             try:
                 with _model_lock:
                     _load_tts()
