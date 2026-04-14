@@ -462,7 +462,10 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
         # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
         # index as this onstart command (prevents cu124 overwriting cu130).
-        "export TORCH_INDEX=https://download.pytorch.org/whl/cu130 && "
+        # TTS workers run on older/cheaper GPUs (e.g. GTX 1070 Ti, Pascal sm_61)
+        # which lack cu130 kernel images.  cu124 supports Pascal+ and TTS
+        # doesn't need libcudart.so.13 (only ltx-pipelines does).
+        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu124' if spec.worker_mode == 'tts' else 'cu130'} && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
@@ -473,12 +476,13 @@ def provision_vm(spec: WorkerSpec) -> str:
         # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
         # but we need enough to start the health endpoint immediately.
         # IMPORTANT: The Docker image has conda torch 2.6.0 which satisfies
-        # 'torch>=2.6.0', so pip would skip the cu130 install.  We must force-
-        # uninstall the conda version first so pip actually installs cu130 wheels.
+        # 'torch>=2.6.0', so pip would skip the install.  We must force-
+        # uninstall the conda version first so pip actually installs the
+        # correct CUDA wheels (cu130 for video, cu124 for TTS).
         "pip uninstall -y torch torchvision torchaudio 2>/dev/null; "
         "pip install --no-cache-dir "
         "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
-        "--index-url https://download.pytorch.org/whl/cu130 && "
+        f"--index-url https://download.pytorch.org/whl/{'cu124' if spec.worker_mode == 'tts' else 'cu130'} && "
         "pip install --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
