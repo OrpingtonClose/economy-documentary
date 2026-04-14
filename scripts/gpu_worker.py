@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import os
+import subprocess
 import threading
 import time
 import uuid
@@ -313,10 +314,25 @@ def _load_ltx():
     pipe = pipe.to("cuda")
     _ltx_pipe = pipe
 
+    # Enable VAE tiling on the main pipeline — this prevents grid-pattern
+    # artifacts during single-stage decode and reduces peak VRAM usage.
+    pipe.vae.enable_tiling()
+
     # Load latent upsampler for two-stage generation (2x spatial upsample).
-    # This is the key to eliminating grid-pattern artifacts.
+    # Only load if there is enough VRAM headroom (need ~10 GB free after
+    # the main pipeline). On 80 GB GPUs the model already fills ~78 GB,
+    # leaving too little for the upsampler to run without NaN from
+    # numerical instability under extreme memory pressure.
     upsampler_path = os.path.join(model_path, "latent_upsampler")
-    if os.path.isdir(upsampler_path):
+    vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    vram_used = torch.cuda.memory_allocated() / (1024**3)
+    vram_free = vram_total - vram_used
+    logger.info(
+        "VRAM after pipeline load: %.1f GB used / %.1f GB total (%.1f GB free)",
+        vram_used, vram_total, vram_free,
+    )
+    _min_upsampler_headroom = 10.0  # GB
+    if os.path.isdir(upsampler_path) and vram_free >= _min_upsampler_headroom:
         logger.info("Loading LTX2 latent upsampler from %s ...", upsampler_path)
         latent_upsampler = LTX2LatentUpsamplerModel.from_pretrained(
             model_path,
@@ -327,10 +343,15 @@ def _load_ltx():
             vae=pipe.vae, latent_upsampler=latent_upsampler
         )
         upsample_pipe = upsample_pipe.to("cuda")
-        # Enable VAE tiling for upsample decode — output is 2x resolution
         upsample_pipe.vae.enable_tiling()
         _ltx_upsample_pipe = upsample_pipe
         logger.info("Latent upsampler loaded.")
+    elif os.path.isdir(upsampler_path):
+        logger.warning(
+            "Latent upsampler available but only %.1f GB free (need %.1f GB) "
+            "— using single-stage with VAE tiling to avoid NaN",
+            vram_free, _min_upsampler_headroom,
+        )
     else:
         logger.warning(
             "latent_upsampler not found at %s — falling back to single-stage",
@@ -813,17 +834,47 @@ def _generate_video(
                 output_type="latent",
                 return_dict=False,
             )
-            logger.info("Stage 1 latents generated, upsampling 2x...")
-            # Stage 2: upsample latents 2x in latent space → decode to numpy
-            upsample_out = _ltx_upsample_pipe(
-                latents=video_latent,
-                output_type="np",
-                return_dict=False,
-            )
-            candidate_frames = upsample_out[0][0]  # (frames,) → numpy (T, H, W, C)
-            candidate_audio = None  # We use Qwen3-TTS, not LTX audio
+            # Check for NaN in latents — if present, fall back to single-stage
+            if torch.isnan(video_latent).any():
+                nan_pct = float(torch.isnan(video_latent).float().mean()) * 100
+                logger.warning(
+                    "NaN in Stage 1 latents (%.1f%%, attempt %d/%d, seed=%d) — "
+                    "falling back to single-stage decode",
+                    nan_pct, attempt, max_attempts, current_seed,
+                )
+                # Re-generate with single-stage decode (VAE tiling is enabled)
+                gen2 = torch.Generator("cuda").manual_seed(current_seed)
+                video_out, audio_out = _ltx_pipe(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    num_frames=num_frames,
+                    frame_rate=fps,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    stg_scale=stg_scale,
+                    modality_scale=modality_scale,
+                    guidance_rescale=guidance_rescale,
+                    spatio_temporal_guidance_blocks=_stg_blocks,
+                    generator=gen2,
+                    output_type="np",
+                    return_dict=False,
+                )
+                candidate_frames = video_out[0]
+                candidate_audio = audio_out[0] if audio_out is not None else None
+            else:
+                logger.info("Stage 1 latents generated, upsampling 2x...")
+                # Stage 2: upsample latents 2x in latent space → decode to numpy
+                upsample_out = _ltx_upsample_pipe(
+                    latents=video_latent,
+                    output_type="np",
+                    return_dict=False,
+                )
+                candidate_frames = upsample_out[0][0]  # (frames,) → numpy (T, H, W, C)
+                candidate_audio = None  # We use Qwen3-TTS, not LTX audio
         else:
-            # Fallback: single-stage (no upsampler available)
+            # Single-stage: generate and decode in one pass (VAE tiling enabled)
             video_out, audio_out = _ltx_pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -843,6 +894,21 @@ def _generate_video(
             )
             candidate_frames = video_out[0]  # numpy array (T, H, W, C)
             candidate_audio = audio_out[0] if audio_out is not None else None
+
+        # Sanitise NaN/Inf from VAE decode (bfloat16 numerical instability)
+        if isinstance(candidate_frames, np.ndarray) and (
+            np.isnan(candidate_frames).any() or np.isinf(candidate_frames).any()
+        ):
+            nan_frac = float(np.isnan(candidate_frames).mean())
+            logger.warning(
+                "NaN/Inf in decoded frames (%.1f%% NaN, attempt %d/%d, seed=%d) — "
+                "clamping to [0,1]",
+                nan_frac * 100, attempt, max_attempts, current_seed,
+            )
+            candidate_frames = np.nan_to_num(
+                candidate_frames, nan=0.0, posinf=1.0, neginf=0.0
+            )
+            candidate_frames = np.clip(candidate_frames, 0.0, 1.0)
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)
