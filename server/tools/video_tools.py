@@ -235,16 +235,25 @@ def generate_video_clip(
             # REJECTED = fundamentally broken output (grid artifacts, corrupted
             # data, body horror, overt AI wonk).  Raise INSIDE the recovery
             # context so non_retryable_patterns can route to human escalation.
+            # In quick-test mode, demote to warning and accept the clip so
+            # the pipeline can complete end-to-end.
             if qa_quality == "rejected":
                 import base64 as _b64
                 try:
                     reason = _b64.b64decode(qa_reason_raw).decode("utf-8")
                 except Exception:
                     reason = qa_reason_raw
-                raise RuntimeError(
-                    f"QA REJECTED: clip is fundamentally broken and cannot be used. "
-                    f"Reason: {reason}"
-                )
+                if os.environ.get("DOCUMENTARY_QUICK_TEST", "").lower() in ("1", "true"):
+                    logger.warning(
+                        "QA REJECTED clip (quick-test mode — accepting anyway): %s",
+                        reason[:200],
+                    )
+                    qa_quality = "rejected_accepted"
+                else:
+                    raise RuntimeError(
+                        f"QA REJECTED: clip is fundamentally broken and cannot be used. "
+                        f"Reason: {reason}"
+                    )
 
             result_meta = {
                 "mp4_bytes": result_bytes,
