@@ -93,15 +93,21 @@ pip install --no-cache-dir \
     'torchaudio>=2.6.0' \
     --index-url "$TORCH_INDEX"
 
-# Ensure CUDA runtime libs are on LD_LIBRARY_PATH
-# PyTorch ships its own libcudart — add its location to the search path
-TORCH_LIB=$(python3 -c "import torch, os; print(os.path.dirname(torch.__file__) + '/lib')" 2>/dev/null || true)
-if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
-    export LD_LIBRARY_PATH="${TORCH_LIB}:${LD_LIBRARY_PATH:-}"
-    echo "Added $TORCH_LIB to LD_LIBRARY_PATH"
-    # Also persist for the gpu_worker process
-    echo "export LD_LIBRARY_PATH=\"${TORCH_LIB}:\${LD_LIBRARY_PATH:-}\"" >> /etc/profile.d/torch_cuda.sh
-fi
+# Register NVIDIA pip package lib dirs (libcudart.so.13 etc.) with ldconfig.
+# PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
+# but the dynamic linker doesn't search there by default.
+python3 -c "
+import site, pathlib
+nv_dirs = [str(p) for sp in site.getsitepackages()
+           for p in pathlib.Path(sp, 'nvidia').glob('*/lib') if p.is_dir()]
+if nv_dirs:
+    pathlib.Path('/etc/ld.so.conf.d/nvidia-pip.conf').write_text('\n'.join(nv_dirs) + '\n')
+    print(f'Registered {len(nv_dirs)} nvidia lib dirs with ldconfig')
+else:
+    print('No nvidia pip lib dirs found')
+"
+ldconfig
+echo "ldconfig updated — libcudart.so.13 should now be discoverable"
 
 # ltx-pipelines: official Lightricks inference code for LTX-2.3
 # No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.
