@@ -106,8 +106,8 @@ class WorkerSpec:
 def _load_model_manifest() -> dict:
     """Load config/model_manifest.json if available.
 
-    Returns a dict keyed by model role (e.g. "tts", "ltx_video") with
-    resource specs.  Falls back to empty dict if file is missing.
+    Returns the full manifest dict with 'models' and 'docker_images' sections.
+    Falls back to empty dict if file is missing.
     """
     manifest_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -115,14 +115,87 @@ def _load_model_manifest() -> dict:
     )
     try:
         with open(manifest_path) as f:
-            data = json.load(f)
-        return data.get("models", {})
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("Could not load model manifest from %s: %s", manifest_path, e)
         return {}
 
 
-_MODEL_MANIFEST = _load_model_manifest()
+_FULL_MANIFEST = _load_model_manifest()
+_MODEL_MANIFEST = _FULL_MANIFEST.get("models", {})
+
+
+def _parse_version(v: str) -> tuple:
+    """Parse a version string like '2.10.0' into a comparable tuple (2, 10, 0)."""
+    parts = []
+    for p in v.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
+def resolve_docker_image(worker_mode: str) -> tuple[str, str]:
+    """Pick the best Docker image for a worker mode from the model manifest.
+
+    Reads the model's min_torch / min_cuda requirements and the docker_images
+    registry from model_manifest.json.  Returns the first image whose torch
+    and CUDA versions satisfy the model constraints.
+
+    Returns:
+        (docker_image_tag, torch_wheel_index_url)
+    """
+    # Find the model entry that matches this worker_mode
+    model_spec = None
+    for _key, spec in _MODEL_MANIFEST.items():
+        if spec.get("worker_mode") == worker_mode:
+            model_spec = spec
+            break
+
+    # Defaults if manifest is missing or incomplete
+    default_image = "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel"
+    default_index = "https://download.pytorch.org/whl/cu126"
+
+    if not model_spec:
+        logger.warning(
+            "No model manifest entry for worker_mode=%s, using default image %s",
+            worker_mode, default_image,
+        )
+        return default_image, default_index
+
+    min_torch = _parse_version(model_spec.get("min_torch", "2.6.0"))
+    min_cuda = _parse_version(model_spec.get("min_cuda", "12.4"))
+    wheel_suffix = model_spec.get("torch_wheel_suffix", "cu126")
+    torch_index = f"https://download.pytorch.org/whl/{wheel_suffix}"
+
+    # Search the image registry for the first image that satisfies constraints
+    images = _FULL_MANIFEST.get("docker_images", {}).get("images", [])
+    for img in images:
+        img_torch = _parse_version(img.get("torch_version", "0.0.0"))
+        img_cuda = _parse_version(img.get("cuda_version", "0.0"))
+        if img_torch >= min_torch and img_cuda >= min_cuda:
+            tag = img["tag"]
+            logger.info(
+                "Resolved Docker image for %s: %s (torch %s >= %s, cuda %s >= %s)",
+                worker_mode, tag,
+                img.get("torch_version"), model_spec.get("min_torch"),
+                img.get("cuda_version"), model_spec.get("min_cuda"),
+            )
+            return tag, torch_index
+
+    # No image in registry satisfies constraints — use the first one and warn
+    if images:
+        fallback = images[0]["tag"]
+        logger.warning(
+            "No image satisfies min_torch=%s min_cuda=%s for %s, falling back to %s",
+            model_spec.get("min_torch"), model_spec.get("min_cuda"),
+            worker_mode, fallback,
+        )
+        return fallback, torch_index
+
+    logger.warning("No docker_images in manifest, using default %s", default_image)
+    return default_image, default_index
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +547,10 @@ def provision_vm(spec: WorkerSpec) -> str:
         _branch = "main"
     logger.info("VMs will clone branch: %s", _branch)
 
+    # Resolve Docker image + torch wheel index from model manifest
+    _docker_image, _torch_index = resolve_docker_image(spec.worker_mode)
+    logger.info("Docker image for %s worker: %s", spec.role, _docker_image)
+
     # Architecture: the worker starts FIRST (FastAPI immediately reachable),
     # then runs bootstrap + model loading in a background thread.  The /health
     # endpoint reports structured bootstrap status so the provisioner can see
@@ -487,20 +564,18 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
-        # The Docker image (pytorch/pytorch:2.10.0-cuda12.6) ships with
-        # PyTorch 2.10.0 pre-installed — no need for conda cleanup or pip
-        # force-reinstall.  TORCH_INDEX is still passed to gpu_bootstrap.sh
-        # for any pip install --upgrade scenarios, but the base image is
-        # already correct.
-        f"export TORCH_INDEX=https://download.pytorch.org/whl/cu126 && "
+        # Resolve Docker image + torch wheel index from the model manifest.
+        # TORCH_INDEX is passed to gpu_bootstrap.sh as a fallback for
+        # pip install --upgrade scenarios.
+        f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
         f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
-        # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
-        # The Docker image (2.10.0-cuda12.6) already has torch 2.10.0 installed,
+        # Install Python deps needed for gpu_worker.py to start (FastAPI + deps).
+        # The Docker image already has torch pre-installed (resolved from manifest),
         # so we only need FastAPI + other non-torch deps for the health endpoint.
         "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
         "pip install --no-cache-dir "
@@ -532,7 +607,7 @@ def provision_vm(spec: WorkerSpec) -> str:
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
-        "--image", "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
+        "--image", _docker_image,
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",

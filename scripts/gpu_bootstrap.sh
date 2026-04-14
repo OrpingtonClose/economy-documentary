@@ -88,8 +88,8 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# The Docker image (pytorch/pytorch:2.10.0-cuda12.6) ships with
-# PyTorch 2.10.0 pre-installed.  Verify it's present and correct.
+# The Docker image is resolved from config/model_manifest.json and ships
+# with a compatible PyTorch pre-installed.  Verify it's present and correct.
 echo "=== Verifying pre-installed PyTorch ==="
 python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')" || echo 'WARNING: torch not importable — will attempt reinstall below'
 

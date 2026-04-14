@@ -1,5 +1,25 @@
 {
-  "_comment": "GAP 1.2: Machine-readable model manifest. Worker provisioner reads this instead of hardcoding VRAM/disk requirements.",
+  "_comment": "Machine-readable model manifest. Worker provisioner reads this instead of hardcoding VRAM/disk/runtime requirements.",
+  "docker_images": {
+    "_comment": "Registry of available PyTorch Docker images. The provisioner picks the cheapest image that satisfies the model's min_torch and min_cuda constraints. Ordered by preference (newest first).",
+    "images": [
+      {
+        "tag": "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
+        "torch_version": "2.10.0",
+        "cuda_version": "12.6"
+      },
+      {
+        "tag": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-devel",
+        "torch_version": "2.7.0",
+        "cuda_version": "12.6"
+      },
+      {
+        "tag": "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
+        "torch_version": "2.6.0",
+        "cuda_version": "12.4"
+      }
+    ]
+  },
   "models": {
     "tts": {
       "name": "Qwen3-TTS-12Hz-1.7B",
@@ -9,6 +29,9 @@
       "weights_gb": 3.4,
       "runtime_vram_gb": 8,
       "disk_gb": 50,
+      "min_torch": "2.7.0",
+      "min_cuda": "12.4",
+      "torch_wheel_suffix": "cu126",
       "checkpoint_files": [
         "model.safetensors",
         "config.json",
@@ -24,6 +47,9 @@
       "weights_gb": 71,
       "runtime_vram_gb": 80,
       "disk_gb": 200,
+      "min_torch": "2.6.0",
+      "min_cuda": "12.4",
+      "torch_wheel_suffix": "cu126",
       "checkpoint_files": [
         "ltx-2-19b-dev.safetensors",
         "config.json"
