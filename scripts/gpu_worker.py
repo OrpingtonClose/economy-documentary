@@ -359,8 +359,8 @@ def _load_ltx():
 
     _active_model = "ltx"
     logger.info(
-        "LTX-2.3 loaded in %.1fs (single_file=%s)",
-        time.time() - t0, use_single_file,
+        "LTX-2.3 loaded in %.1fs (sharded_transformer=%s)",
+        time.time() - t0, has_sharded_transformer,
     )
 
 

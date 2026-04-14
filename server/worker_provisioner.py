@@ -536,7 +536,7 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
 
 
 def setup_ssh_tunnel(
-    spec: WorkerSpec, max_retries: int = 6, retry_delay: int = 10,
+    spec: WorkerSpec, max_retries: int = 12, retry_delay: int = 15,
 ) -> subprocess.Popen:
     """Set up an SSH tunnel from localhost:local_port to the GPU VM.
 
