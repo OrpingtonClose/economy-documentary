@@ -18,8 +18,26 @@ logger = logging.getLogger(__name__)
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
 
 
-def _vast_cmd(args: list[str]) -> dict:
-    """Run a vastai CLI command and return parsed output."""
+import ast as _ast
+import re as _re
+
+
+def _vast_cmd(args: list[str]) -> dict | list:
+    """Run a vastai CLI command and return parsed output.
+
+    The vastai CLI v1.0 has inconsistent output formats:
+    - ``search offers --raw`` returns JSON arrays
+    - ``show instance --raw`` returns JSON objects
+    - ``create instance`` returns Python-repr text like
+      ``Started. {'success': True, 'new_contract': 12345, ...}``
+      (NOT valid JSON — uses single quotes and Python booleans)
+    - ``create instance --raw`` returns **empty** output
+    - ``destroy instance`` returns plain text like
+      ``destroying instance 12345.``
+
+    We try JSON first, then fall back to Python ``ast.literal_eval``
+    to handle the repr-style create output.
+    """
     api_key = os.environ.get("VAST_API_KEY", "")
     if not api_key:
         return {"error": "VAST_API_KEY not set"}
@@ -37,10 +55,23 @@ def _vast_cmd(args: list[str]) -> dict:
                 "error": f"vastai command failed (rc={result.returncode})",
                 "stderr": result.stderr[:500],
             }
+        stdout = result.stdout.strip()
+        if not stdout:
+            return {"output": ""}
+        # Try JSON first (search/show commands with --raw)
         try:
-            return json.loads(result.stdout)
+            return json.loads(stdout)
         except json.JSONDecodeError:
-            return {"output": result.stdout.strip()}
+            pass
+        # Try Python repr (create instance without --raw returns e.g.
+        # "Started. {'success': True, 'new_contract': 12345, ...}")
+        match = _re.search(r"(\{.*\})", stdout, _re.DOTALL)
+        if match:
+            try:
+                return _ast.literal_eval(match.group(1))
+            except (ValueError, SyntaxError):
+                pass
+        return {"output": stdout}
     except FileNotFoundError:
         return {"error": "vastai CLI not installed"}
     except subprocess.TimeoutExpired:
@@ -59,7 +90,8 @@ def provision_gpu_vm(
     (Gemma3 text encoder alone is ~46GB bf16).
 
     Args:
-        gpu_type: GPU type to request (e.g., "A100_SXM4", "L40S").
+        gpu_type: GPU type to request (e.g., "A100_SXM4", "L40S",
+            "RTX_5090", "H200").  Use "any" to skip GPU name filter.
         min_vram_gb: Minimum VRAM in GB (must be >= 48 for LTX-2.3).
         max_price: Maximum price per hour in USD.
 
@@ -78,26 +110,62 @@ def provision_gpu_vm(
             }
         )
 
-    # Search for available instances
+    # Fetch ALL on-demand offers from Vast.ai, then filter in Python.
+    # The vastai CLI v1.0's query-string filtering is unreliable when
+    # called via subprocess (silently returns empty results), so we
+    # always fetch the full list and apply filters ourselves.
     search_result = _vast_cmd(
-        [
-            "search", "offers",
-            "--type", "on-demand",
-            "--gpu-name", gpu_type,
-            "--min-gpu-ram", str(min_vram_gb),
-            "--max-dph", str(max_price),
-            "--raw",
-        ]
+        ["search", "offers", "--type", "on-demand", "--raw"]
     )
 
-    if "error" in search_result:
+    if isinstance(search_result, dict) and "error" in search_result:
         return json.dumps(search_result)
 
-    # Parse offers and select best match (lowest price with sufficient VRAM)
-    offers = search_result if isinstance(search_result, list) else []
+    all_offers = search_result if isinstance(search_result, list) else []
+    if not all_offers:
+        return json.dumps(
+            {"status": "no_offers", "error": "Vast.ai returned no offers at all"}
+        )
+
+    # Filter offers in Python — reliable regardless of CLI version.
+    # VRAM is in MB in the API (e.g. 81920 = 80GB).
+    min_vram_mb = min_vram_gb * 1024
+    gpu_display = gpu_type.replace("_", " ").lower() if gpu_type else ""
+
+    offers = []
+    for o in all_offers:
+        vram = float(o.get("gpu_ram", 0))
+        price = float(o.get("dph_total", 999))
+        rentable = o.get("rentable", False)
+        verified = o.get("verification") not in ("unverified",)
+        gpu_name = (o.get("gpu_name", "") or "").lower()
+
+        if vram < min_vram_mb:
+            continue
+        if price > max_price:
+            continue
+        if not rentable:
+            continue
+        if not verified:
+            continue
+        # GPU type filter (skip if "any")
+        if gpu_display and gpu_display != "any" and gpu_display not in gpu_name:
+            continue
+        offers.append(o)
+
+    logger.info(
+        "Vast.ai: %d/%d offers match (gpu_type=%s, min_vram=%dGB, max_price=$%.2f/hr)",
+        len(offers), len(all_offers), gpu_type, min_vram_gb, max_price,
+    )
+
     if not offers:
         return json.dumps(
-            {"status": "no_offers", "error": "No matching GPU offers found"}
+            {
+                "status": "no_offers",
+                "error": f"No matching GPU offers found (gpu_type={gpu_type}, "
+                         f"min_vram_gb={min_vram_gb}, max_price=${max_price}/hr)",
+                "total_offers_checked": len(all_offers),
+            }
         )
 
     # Sort by dph_total (price per hour) ascending
@@ -121,15 +189,21 @@ def provision_gpu_vm(
         float(best.get("dph_total", 0)),
     )
 
-    # Create instance from best offer
-    # Use pytorch template for CUDA + PyTorch pre-installed
+    # Create instance from best offer.
+    # Use pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel for modern CUDA support.
+    # Request SSH access and port mappings for the GPU worker HTTP API.
+    # NOTE: Do NOT pass --raw — vastai CLI returns empty stdout with --raw
+    # for create commands.  Without --raw it returns Python repr that we
+    # parse via ast.literal_eval in _vast_cmd.
     create_result = _vast_cmd(
         [
             "create", "instance",
             str(offer_id),
-            "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
+            "--image", "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel",
             "--disk", "224",
-            "--raw",
+            "--ssh",
+            "--direct",
+            "--env", "-p 8880:8880",
         ]
     )
 

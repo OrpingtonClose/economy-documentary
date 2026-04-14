@@ -26,7 +26,18 @@ import time
 
 
 def _vast_cmd(args: list[str]) -> dict | list | str:
-    """Run a vastai CLI command and return parsed output."""
+    """Run a vastai CLI command and return parsed output.
+
+    The vastai CLI v1.0 has inconsistent output formats:
+    - ``search offers --raw`` returns JSON arrays
+    - ``show instance --raw`` returns JSON objects
+    - ``create instance`` (without --raw) returns Python-repr like
+      ``Started. {'success': True, 'new_contract': 12345, ...}``
+    - ``create instance --raw`` returns **empty** output
+    - ``destroy instance`` returns plain text
+
+    We try JSON first, then fall back to ``ast.literal_eval``.
+    """
     api_key = os.environ.get("VAST_API_KEY", "")
     if not api_key:
         print("ERROR: VAST_API_KEY not set", file=sys.stderr)
@@ -37,10 +48,24 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
     if result.returncode != 0:
         print(f"ERROR: vastai command failed: {result.stderr[:500]}", file=sys.stderr)
         sys.exit(1)
+    stdout = result.stdout.strip()
+    if not stdout:
+        return {"output": ""}
     try:
-        return json.loads(result.stdout)
+        return json.loads(stdout)
     except json.JSONDecodeError:
-        return result.stdout.strip()
+        pass
+    # Try Python repr (create instance returns e.g.
+    # "Started. {'success': True, 'new_contract': 12345, ...}")
+    import ast
+    import re
+    match = re.search(r"(\{.*\})", stdout, re.DOTALL)
+    if match:
+        try:
+            return ast.literal_eval(match.group(1))
+        except (ValueError, SyntaxError):
+            pass
+    return stdout
 
 
 def find_cheap_cpu_offer(max_price: float, min_disk: int) -> dict:
@@ -55,24 +80,39 @@ def find_cheap_cpu_offer(max_price: float, min_disk: int) -> dict:
     """
     print(f"Searching for offers: max ${max_price}/hr, {min_disk}GB disk...")
 
-    # Search for cheap offers — we don't need GPU, but Vast.ai
-    # primarily offers GPU machines.  Filter for cheapest available.
-    # vastai uses query-string syntax, not --flag syntax.
-    query = (
-        f"cpu_cores_effective >= 4 "
-        f"disk_space >= {min_disk} "
-        f"dph_total <= {max_price} "
-        f"rentable == true verified == true"
-    )
+    # Fetch ALL on-demand offers, then filter in Python.
+    # The vastai CLI v1.0's query-string filtering is unreliable when
+    # called via subprocess (silently returns empty results for complex
+    # queries), so we always fetch the full list and filter ourselves.
     result = _vast_cmd([
         "search", "offers",
         "--type", "on-demand",
-        "--order", "dph_total",
         "--raw",
-        query,
     ])
 
-    offers = result if isinstance(result, list) else []
+    all_offers = result if isinstance(result, list) else []
+    if not all_offers:
+        print("Vast.ai returned no offers at all.", file=sys.stderr)
+        sys.exit(1)
+
+    # Filter in Python — reliable regardless of CLI version
+    offers = []
+    for o in all_offers:
+        cpu_cores = float(o.get("cpu_cores_effective", 0))
+        disk = float(o.get("disk_space", 0))
+        price = float(o.get("dph_total", 999))
+        rentable = o.get("rentable", False)
+        if cpu_cores < 4:
+            continue
+        if disk < min_disk:
+            continue
+        if price > max_price:
+            continue
+        if not rentable:
+            continue
+        offers.append(o)
+
+    print(f"  {len(offers)}/{len(all_offers)} offers match criteria")
     if not offers:
         print("No offers found matching criteria.", file=sys.stderr)
         print(f"Try increasing --max-price (currently ${max_price}/hr)", file=sys.stderr)
@@ -100,6 +140,9 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
 
     # Use a lightweight base image — central unit doesn't need CUDA
     # SSH keys are managed via Vast.ai account settings, not CLI flags.
+    # NOTE: Do NOT pass --raw — vastai CLI returns empty stdout with --raw
+    # for create commands.  Without --raw it returns Python repr that we
+    # can parse with ast.literal_eval.
     create_args = [
         "create", "instance",
         str(offer_id),
@@ -113,7 +156,6 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
         "(cd /workspace/economy-documentary && git pull origin main || "
         "git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary) && "
         "bash /workspace/economy-documentary/scripts/central_bootstrap.sh",
-        "--raw",
     ]
 
     result = _vast_cmd(create_args)
