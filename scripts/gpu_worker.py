@@ -869,8 +869,8 @@ def _generate_video(
                 "QA REJECTED output (attempt %d/%d): %s",
                 attempt, max_attempts, qa_result.get("qa_reason", ""),
             )
-            if best_passing_frames is None:
-                # No prior usable result — store rejected so caller knows
+            if best_passing_qa.get("quality") not in ("poor", "good", "excellent"):
+                # No prior usable QA result — store rejected so caller knows
                 best_passing_frames = candidate_frames
                 best_passing_audio = candidate_audio
                 best_passing_seed = current_seed
