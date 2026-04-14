@@ -33,8 +33,9 @@ from __future__ import annotations
 import os
 
 # ---- CUDA memory allocator config (MUST be set before importing torch) ----
-# The 22B LTX-2.3 transformer weighs ~46GB at bf16.  With layer streaming
-# it stays on CPU, but without it the model + activations can exceed VRAM.  PyTorch's default allocator fragments reserved
+# The 22B LTX-2.3 transformer weighs ~46GB at bf16.  The pipeline uses a
+# block-based lifecycle (text encoder → transformer → VAE) so only one
+# major component is in VRAM at a time.  PyTorch's default allocator fragments reserved
 # memory into small non-contiguous blocks that can't satisfy even 32MB
 # allocations.  ``expandable_segments`` lets the allocator grow and reuse
 # reserved memory efficiently, reclaiming the ~874MB of reserved-but-
@@ -667,10 +668,10 @@ class VideoRequest(BaseModel):
     negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
     visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
-    # With layer streaming (streaming_prefetch_count) the ~46GB transformer
-    # stays on CPU and only a few layers reside on GPU at a time.  This lets
-    # 512x320 generate comfortably on 80GB GPUs.  Without streaming the
-    # transformer + text encoder + activations can exceed VRAM.
+    # The pipeline uses a block-based lifecycle: text encoder → transformer
+    # → VAE decoder, loading/unloading each sequentially.  The ~46GB
+    # transformer fits on 80GB GPUs with headroom for activations.
+    # 512x320 generates comfortably on A100-80GB.
     width: int = 512
     height: int = 320
     num_frames: int | None = None  # auto-calculated from duration if None
@@ -791,9 +792,9 @@ def _load_ltx():
 
     The pipeline uses a block-based lifecycle: each component (text encoder,
     transformer, VAE decoder) is built on demand and freed after use.
-    Combined with ``streaming_prefetch_count`` at inference time, the ~46GB
-    transformer stays on CPU and only a few layers stream to GPU per step.
-    This keeps peak VRAM at ~15-20GB instead of ~46GB.
+    The block-based lifecycle loads/unloads each component sequentially
+    (text encoder → transformer → VAE decoder), so peak VRAM is dominated
+    by the ~46GB transformer alone, not the sum of all components.
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
@@ -1227,12 +1228,10 @@ def _ltx_generate_once(
     into a single numpy array for QA evaluation.
 
     Memory strategy:
-        The 22B transformer weighs ~46GB at bf16.  Combined with the text
-        encoder + VAE + activations this can exceed 80GB VRAM.  We use
-        ``streaming_prefetch_count`` to keep the transformer weights on
-        CPU and stream only a few layers to GPU at a time.  This trades
-        ~2-3× slower inference for dramatically lower peak VRAM (~10-15GB
-        instead of ~46GB for the transformer alone).
+        The 22B transformer weighs ~46GB at bf16.  The pipeline uses a
+        block-based lifecycle that loads/unloads components sequentially
+        (text encoder → transformer → VAE), so peak VRAM is dominated by
+        the transformer alone (~46GB + activations), fitting on 80GB GPUs.
 
         Additional VRAM hygiene:
         1. gc.collect() — release Python references to GPU tensors
@@ -1276,11 +1275,6 @@ def _ltx_generate_once(
         stg_blocks=stg_blocks,
     )
 
-    # Layer streaming: keep transformer on CPU, stream 2 layers at a time
-    # to GPU.  Without this the ~46GB transformer combined with text
-    # encoder + VAE + activations can exceed 80GB A100 capacity.
-    _STREAM_PREFETCH = int(os.environ.get("LTX_STREAM_PREFETCH", "2"))
-
     video_iter, _audio = _ltx_pipe(
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -1293,7 +1287,6 @@ def _ltx_generate_once(
         video_guider_params=video_guider,
         audio_guider_params=audio_guider,
         images=[],  # text-to-video, no image conditioning
-        streaming_prefetch_count=_STREAM_PREFETCH,
     )
 
     # Collect video chunks from iterator into numpy array

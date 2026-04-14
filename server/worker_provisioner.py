@@ -213,15 +213,14 @@ def resolve_docker_image(worker_mode: str) -> tuple[str, str]:
 #   -> disk: WORKER_MODE=tts skips LTX models, only downloads ~4.3 GB TTS model
 #     so TTS VM needs ~50 GB (4.3 GB model + ~30 GB OS/software + headroom)
 #
-# Video: LTX-2.3 (dg845/LTX-2.3-Diffusers)
-#   text_encoder: ~46.6 GB (transformers format)
-#   transformer:  ~37.8 GB (diffusers format)
-#   vae + audio_vae + vocoder + connectors + latent_upsampler: ~6.6 GB
-#   Total loaded in VRAM: ~71 GB bf16
-#   + inference overhead (latent upsampler, two-pass pipeline): ~9 GB
-#   -> min_vram_gb = 80 (gpu_worker.py: "Requires 80GB+ VRAM")
-#   -> gpu_type = A100_SXM4 (80 GB) or H100/H200
-#   -> disk: ~95 GB models + ~30 GB OS + ~20 GB output = ~200 GB
+# Video: LTX-2.3 (Lightricks/LTX-2.3, ltx-2.3-22b-dev.safetensors)
+#   The pipeline uses a block-based lifecycle — only one major component
+#   in VRAM at a time (text encoder → transformer → VAE decoder).
+#   Peak VRAM = transformer alone: 22B params × 2 bytes (bf16) ≈ 46 GB
+#   + activations/KV cache ≈ 10-15 GB overhead
+#   -> min_vram_gb = 48 (safe floor: 46 GB model + ~10 GB activations)
+#   -> gpu_type = A6000 (48 GB), A100 (80 GB), H100, etc.
+#   -> disk: ~46 GB checkpoint + ~4 GB Gemma + ~30 GB OS + ~20 GB output ≈ 200 GB
 
 TTS_SPEC = WorkerSpec(
     role="tts",
@@ -243,10 +242,10 @@ VIDEO_SPEC = WorkerSpec(
     local_port=8881,
     remote_port=8880,
     capability="ltx",
-    gpu_type="A100_SXM4",     # 80 GB VRAM; broadened to H100/H200 if unavailable
-    min_vram_gb=80,            # ~71 GB bf16 model loaded fully on GPU
+    gpu_type="A6000",          # 48 GB VRAM; broadened to A100/H100 if unavailable
+    min_vram_gb=48,            # ~46 GB bf16 transformer (block-based, one component at a time)
     max_price=5.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=200,           # ~95 GB models + OS + output
+    min_disk_gb=200,           # ~46 GB checkpoint + Gemma + OS + output
     disk_gb=224,               # --disk arg
     worker_mode="ltx",
 )
@@ -598,8 +597,8 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # pip install --upgrade scenarios.
         f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
         f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
-        # Prevent CUDA OOM from memory fragmentation — the 19B LTX model
-        # leaves <3GB free on 80GB GPUs; expandable_segments lets PyTorch
+        # Prevent CUDA OOM from memory fragmentation — the 22B LTX model
+        # needs ~46GB for the transformer; expandable_segments lets PyTorch
         # reuse reserved-but-unallocated memory instead of failing.
         "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
