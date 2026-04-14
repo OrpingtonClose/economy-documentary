@@ -859,13 +859,21 @@ def _generate_video(
             # This is an error, not a quality issue. Don't waste more attempts
             # — the model/config is likely wrong.  Return immediately with
             # the rejection so the pipeline can escalate.
+            #
+            # BUT: if a previous attempt already produced a usable result
+            # (e.g. "poor"), preserve that instead of overwriting with the
+            # rejected output.  The earlier result proves the model CAN
+            # produce usable output; "rejected" on this attempt is just
+            # seed-dependent bad luck.
             logger.error(
                 "QA REJECTED output (attempt %d/%d): %s",
                 attempt, max_attempts, qa_result.get("qa_reason", ""),
             )
-            best_passing_frames = candidate_frames
-            best_passing_audio = candidate_audio
-            best_passing_seed = current_seed
+            if best_passing_frames is None:
+                # No prior usable result — store rejected so caller knows
+                best_passing_frames = candidate_frames
+                best_passing_audio = candidate_audio
+                best_passing_seed = current_seed
             best_passing_qa = qa_result
             break
 
