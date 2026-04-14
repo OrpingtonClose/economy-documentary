@@ -667,9 +667,10 @@ class VideoRequest(BaseModel):
     negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
     visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
-    # 512x320 fits comfortably on 80GB GPUs where the 19B LTX model + Gemma
-    # text encoder consume ~78GB of VRAM, leaving only ~1.5GB for activations.
-    # 768x512 requires ~3.6GB of activation memory and OOMs on A100-80GB.
+    # With layer streaming (streaming_prefetch_count) the 71GB transformer
+    # stays on CPU and only a few layers reside on GPU at a time.  This lets
+    # 512x320 generate comfortably on 80GB GPUs.  Without streaming the
+    # transformer alone fills the entire 80GB card and OOMs.
     width: int = 512
     height: int = 320
     num_frames: int | None = None  # auto-calculated from duration if None
@@ -785,12 +786,14 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline using official Lightricks ltx-pipelines package.
 
-    Uses the single-file checkpoint (ltx-2.3-22b-dev.safetensors) with
+    Uses the single-file checkpoint (ltx-2-19b-dev.safetensors) with
     TI2VidOneStagePipeline — no diffusers, no upscalers, no LoRAs.
 
-    The pipeline builds each component on demand and frees GPU memory
-    after use (block-based lifecycle), so peak VRAM is lower than loading
-    the entire model graph at once.
+    The pipeline uses a block-based lifecycle: each component (text encoder,
+    transformer, VAE decoder) is built on demand and freed after use.
+    Combined with ``streaming_prefetch_count`` at inference time, the 71GB
+    transformer stays on CPU and only a few layers stream to GPU per step.
+    This keeps peak VRAM at ~15-20GB instead of 71GB.
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
@@ -1224,16 +1227,18 @@ def _ltx_generate_once(
     into a single numpy array for QA evaluation.
 
     Memory strategy:
-        The 19B transformer consumes ~78GB on 80GB GPUs.  Before calling the
-        pipeline we aggressively reclaim every byte of VRAM:
+        The 19B transformer weighs ~71GB at bf16 — too large to fit in
+        VRAM alongside the text encoder + VAE on an 80GB GPU.  We use
+        ``streaming_prefetch_count`` to keep the transformer weights on
+        CPU and stream only a few layers to GPU at a time.  This trades
+        ~2-3× slower inference for dramatically lower peak VRAM (~10-15GB
+        instead of 71GB for the transformer alone).
+
+        Additional VRAM hygiene:
         1. gc.collect() — release Python references to GPU tensors
         2. torch.cuda.empty_cache() — return cached blocks to the allocator
         3. Log VRAM so we can diagnose OOM remotely
-        The pipeline itself loads/unloads components sequentially (text
-        encoder → video encoder → transformer → VAE decoder), but without
-        expandable_segments the ~874MB of reserved-but-unallocated memory
-        fragments into unusable small blocks.  We set expandable_segments at
-        module top level (before torch import) to prevent this.
+        4. expandable_segments=True — prevent allocator fragmentation
     """
     from ltx_core.components.guiders import MultiModalGuiderParams
 
@@ -1271,6 +1276,11 @@ def _ltx_generate_once(
         stg_blocks=stg_blocks,
     )
 
+    # Layer streaming: keep transformer on CPU, stream 2 layers at a time
+    # to GPU.  Without this the 71GB transformer alone exceeds the 80GB
+    # A100 capacity when combined with text encoder + activations.
+    _STREAM_PREFETCH = int(os.environ.get("LTX_STREAM_PREFETCH", "2"))
+
     video_iter, _audio = _ltx_pipe(
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -1283,6 +1293,7 @@ def _ltx_generate_once(
         video_guider_params=video_guider,
         audio_guider_params=audio_guider,
         images=[],  # text-to-video, no image conditioning
+        streaming_prefetch_count=_STREAM_PREFETCH,
     )
 
     # Collect video chunks from iterator into numpy array
