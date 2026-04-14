@@ -705,8 +705,15 @@ def setup_ssh_tunnel(
             f"no SSH connection details (host={spec.ssh_host}, port={spec.ssh_port})"
         )
 
+    # Determine SSH identity file — prefer RSA key (registered with Vast.ai)
+    _ssh_key = os.path.expanduser("~/.ssh/id_rsa")
+    if not os.path.exists(_ssh_key):
+        _ssh_key = os.path.expanduser("~/.ssh/id_ed25519")
+
     tunnel_cmd = [
         "ssh",
+        "-i", _ssh_key,
+        "-o", "IdentitiesOnly=yes",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
         "-o", "ServerAliveInterval=30",
