@@ -1345,12 +1345,14 @@ class WorkerProvisioner:
                     # Destroy the slow VM to stop billing
                     try:
                         _vast_cmd(["destroy", "instance", spec.vm_id])
+                        spec.vm_id = ""
                     except Exception as exc:
                         logger.warning(
-                            "Failed to destroy slow VM %s: %s",
+                            "Failed to destroy slow VM %s: %s — "
+                            "VM may continue billing as orphan!",
                             spec.vm_id, exc,
                         )
-                    spec.vm_id = ""
+                        # Keep spec.vm_id so cleanup() can retry destruction
                     spec.ssh_host = ""
                     spec.ssh_port = 0
                     continue
