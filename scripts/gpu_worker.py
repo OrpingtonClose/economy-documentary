@@ -874,7 +874,9 @@ def _generate_video(
                 best_passing_frames = candidate_frames
                 best_passing_audio = candidate_audio
                 best_passing_seed = current_seed
-            best_passing_qa = qa_result
+                best_passing_qa = qa_result
+            # else: keep prior usable QA metadata (e.g. "poor") that matches
+            # the preserved frames — don't overwrite with "rejected"
             break
 
         if qa_result["quality"] in ("good", "excellent"):
