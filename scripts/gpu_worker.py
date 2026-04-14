@@ -792,9 +792,9 @@ def _load_ltx():
 
     The pipeline uses a block-based lifecycle: each component (text encoder,
     transformer, VAE decoder) is built on demand and freed after use.
-    The block-based lifecycle loads/unloads each component sequentially
-    (text encoder → transformer → VAE decoder), so peak VRAM is dominated
-    by the ~46GB transformer alone, not the sum of all components.
+    We use FP8 quantization (QuantizationPolicy.fp8_cast()) to halve the
+    transformer from ~44GB (bf16) to ~22GB (fp8), leaving ample headroom
+    for activations and other components on the H200 (141GB).
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
@@ -841,10 +841,13 @@ def _load_ltx():
     logger.info(
         "Loading LTX-2.3 one-stage pipeline from %s ...", model_path
     )
+    from ltx_core.quantization import QuantizationPolicy
+
     pipe = TI2VidOneStagePipeline(
         checkpoint_path=ckpt_path,
         gemma_root=gemma_root,
         loras=[],
+        quantization=QuantizationPolicy.fp8_cast(),
     )
     logger.info("One-stage pipeline created.")
 
