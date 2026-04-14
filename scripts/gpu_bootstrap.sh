@@ -69,14 +69,17 @@ fi
 # Map system CUDA to PyTorch wheel index
 CUDA_MAJOR=$(echo "$SYSTEM_CUDA" | cut -d. -f1)
 CUDA_MINOR=$(echo "$SYSTEM_CUDA" | cut -d. -f2)
-if [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
+if [ "$CUDA_MAJOR" = "13" ]; then
+    TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+elif [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
     TORCH_INDEX="https://download.pytorch.org/whl/cu124"
 elif [ "$CUDA_MAJOR" = "12" ]; then
     TORCH_INDEX="https://download.pytorch.org/whl/cu121"
 elif [ "$CUDA_MAJOR" = "11" ]; then
     TORCH_INDEX="https://download.pytorch.org/whl/cu118"
 else
-    TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+    # Default to cu130 — ltx-core 1.0 requires CUDA 13.0 runtime
+    TORCH_INDEX="https://download.pytorch.org/whl/cu130"
 fi
 echo "Using PyTorch wheel index: $TORCH_INDEX"
 

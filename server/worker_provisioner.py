@@ -471,7 +471,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         # but we need enough to start the health endpoint immediately.
         "pip install --no-cache-dir "
         "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
-        "--index-url https://download.pytorch.org/whl/cu124 && "
+        "--index-url https://download.pytorch.org/whl/cu130 && "
         "pip install --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
@@ -487,7 +487,7 @@ def provision_vm(spec: WorkerSpec) -> str:
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
-        "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
+        "--image", "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
