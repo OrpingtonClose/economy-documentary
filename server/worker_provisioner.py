@@ -1319,9 +1319,13 @@ class WorkerProvisioner:
             )
 
             # Step 2: Wait for VM to be running — use a shorter timeout
-            # for image pull so we can retry on a faster host.
+            # for image pull so we can retry on a faster host.  On the
+            # final attempt give the full remaining budget (up to 600s)
+            # since there are no more retries to benefit from the cap.
+            is_final = (attempt >= _MAX_LOADING_RETRIES)
+            cap = 600 if is_final else _LOADING_TIMEOUT
             elapsed = int(time.time() - _start)
-            vm_timeout = max(min(timeout - elapsed, _LOADING_TIMEOUT), 60)
+            vm_timeout = max(min(timeout - elapsed, cap), 60)
             try:
                 wait_for_vm_running(spec, timeout=vm_timeout)
                 break  # VM is running — proceed to SSH + health
