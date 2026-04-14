@@ -416,10 +416,12 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
         raise RuntimeError("vastai command timed out")
 
 
-def provision_vm(spec: WorkerSpec) -> str:
+def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -> int:
     """Provision a Vast.ai GPU VM for the given worker spec.
 
-    Returns the instance ID.
+    Returns the selected **offer** ID so callers can track it for retries
+    (distinct from the instance ID stored in ``spec.vm_id``).
+    *excluded_offer_ids* — offer IDs to skip (e.g. previously-tried slow hosts).
     """
     logger.info(
         "Provisioning %s worker: gpu=%s, vram>=%dGB, max $%.2f/hr, "
@@ -502,6 +504,16 @@ def provision_vm(spec: WorkerSpec) -> str:
             )
         offers = filtered
 
+    # Exclude previously-tried offers (e.g. slow hosts during retry)
+    if excluded_offer_ids and offers:
+        before = len(offers)
+        offers = [o for o in offers if int(o.get("id", 0)) not in excluded_offer_ids]
+        if len(offers) < before:
+            logger.info(
+                "Excluded %d previously-tried offer(s); %d remain",
+                before - len(offers), len(offers),
+            )
+
     if not offers:
         raise RuntimeError(
             f"No GPU offers found for {spec.role} worker "
@@ -511,12 +523,15 @@ def provision_vm(spec: WorkerSpec) -> str:
             f"Current account budget allows up to ${spec.max_price:.2f}/hr."
         )
 
-    # Sort by price and pick cheapest
+    # Sort by download speed (fastest first) with price as tiebreaker.
+    # This preserves the --order inet_down- intent from the CLI search
+    # instead of overriding it with a pure price sort.
     sorted_offers = sorted(
-        offers, key=lambda o: float(o.get("dph_total", 999))
+        offers,
+        key=lambda o: (-float(o.get("inet_down", 0)), float(o.get("dph_total", 999))),
     )
     best = sorted_offers[0]
-    offer_id = best.get("id")
+    offer_id = int(best.get("id", 0))
 
     logger.info(
         "Selected offer %s: %s %dx, %.1fGB VRAM, $%.3f/hr, %.0fGB disk",
@@ -641,7 +656,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
-            return spec.vm_id
+            return offer_id
 
     # Try to extract new_contract from text response
     if isinstance(create_result, str) and "new_contract" in create_result:
@@ -652,7 +667,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
-            return spec.vm_id
+            return offer_id
 
     raise RuntimeError(
         f"Failed to provision {spec.role} VM: unexpected response: {create_result}"
@@ -1280,10 +1295,13 @@ class WorkerProvisioner:
         _MAX_LOADING_RETRIES = 2
         _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
         _start = time.time()
+        _excluded_offers: set[int] = set()  # offer IDs of slow hosts
 
         for attempt in range(1 + _MAX_LOADING_RETRIES):
-            # Step 1: Provision VM
-            provision_vm(spec)
+            # Step 1: Provision VM (skip previously-tried slow offers)
+            selected_offer_id = provision_vm(
+                spec, excluded_offer_ids=_excluded_offers or None,
+            )
 
             # Step 2: Wait for VM to be running — use a shorter timeout
             # for image pull so we can retry on a faster host.
@@ -1294,11 +1312,16 @@ class WorkerProvisioner:
                 break  # VM is running — proceed to SSH + health
             except RuntimeError:
                 if attempt < _MAX_LOADING_RETRIES:
+                    # Track this offer so we don't pick it again
+                    if selected_offer_id:
+                        _excluded_offers.add(selected_offer_id)
                     logger.warning(
-                        "%s VM %s stuck loading after %ds — destroying "
-                        "and retrying on a different host (attempt %d/%d)",
-                        spec.role, spec.vm_id, vm_timeout,
-                        attempt + 2, 1 + _MAX_LOADING_RETRIES,
+                        "%s VM %s (offer %s) stuck loading after %ds "
+                        "— destroying and retrying on a different host "
+                        "(attempt %d/%d, excluded offers: %s)",
+                        spec.role, spec.vm_id, selected_offer_id,
+                        vm_timeout, attempt + 2, 1 + _MAX_LOADING_RETRIES,
+                        _excluded_offers,
                     )
                     # Destroy the slow VM to stop billing
                     try:
