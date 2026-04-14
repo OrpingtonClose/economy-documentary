@@ -1927,7 +1927,7 @@ def _generate_silence(duration_sec: float, output_path: str) -> str:
     return ""
 
 
-def _generate_black_video(duration_sec: float, output_path: str, width: int = 768, height: int = 512) -> str:
+def _generate_black_video(duration_sec: float, output_path: str, width: int = 512, height: int = 320) -> str:
     """Generate a black video of the given duration for inter-scene transitions.
 
     Returns the output path on success, empty string on failure.

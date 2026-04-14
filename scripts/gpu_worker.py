@@ -655,8 +655,11 @@ class VideoRequest(BaseModel):
     negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
     visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
-    width: int = 768
-    height: int = 512
+    # 512x320 fits comfortably on 80GB GPUs where the 19B LTX model + Gemma
+    # text encoder consume ~78GB of VRAM, leaving only ~1.5GB for activations.
+    # 768x512 requires ~3.6GB of activation memory and OOMs on A100-80GB.
+    width: int = 512
+    height: int = 320
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
     # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
