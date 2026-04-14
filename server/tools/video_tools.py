@@ -299,6 +299,25 @@ def generate_video_clip(
     qa_attempts = gpu_result["qa_attempts"]
     qa_seed = gpu_result["qa_seed"]
 
+    # GAP 3.1: Client-side QA rejection gate — never accept poor-quality clips
+    if qa_quality == "poor":
+        raise RuntimeError(
+            f"Video clip REJECTED by QA (quality='poor'): {qa_reason}. "
+            f"Clip: {output_path}. The pipeline MUST NOT accept poor-quality "
+            f"clips — they waste all downstream assembly time."
+        )
+    if qa_quality == "unknown":
+        logger.warning(
+            "Video clip QA returned 'unknown' for %s — "
+            "this means QA failed to evaluate. Treating as degraded.",
+            output_path,
+        )
+        if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
+            raise RuntimeError(
+                f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
+                f"STRICT_QA mode requires all clips to pass QA."
+            )
+
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "wb") as f:

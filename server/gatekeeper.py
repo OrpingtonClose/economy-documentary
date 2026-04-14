@@ -476,6 +476,45 @@ def _check_looping(mp4_path: str, stats: dict) -> Optional[str]:
     return None
 
 
+def _check_qa_status(mp4_path: str) -> Optional[str]:
+    """GAP 3.3: Check the per-clip _status.json for QA quality.
+
+    Returns an error message if quality is 'poor' (REJECT) or a warning
+    string if quality is 'unknown'.  Returns None if quality is acceptable.
+    """
+    clip_dir = os.path.dirname(mp4_path) or "."
+    clip_name = os.path.splitext(os.path.basename(mp4_path))[0]
+    status_path = os.path.join(clip_dir, f"{clip_name}_status.json")
+
+    if not os.path.exists(status_path):
+        logger.warning("No _status.json found for %s — QA status unknown", mp4_path)
+        return None  # No status file — can't check
+
+    try:
+        with open(status_path) as f:
+            status = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read QA status for %s: %s", mp4_path, e)
+        return None
+
+    quality = status.get("quality", "unknown")
+    qa_reason = status.get("qa_reason", "")
+
+    if quality == "poor":
+        return (
+            f"QA REJECTED: clip quality='poor' — {qa_reason}. "
+            f"Poor-quality clips must not enter the timeline."
+        )
+
+    if quality == "unknown":
+        logger.warning(
+            "QA status 'unknown' for %s — QA could not evaluate: %s",
+            mp4_path, qa_reason,
+        )
+
+    return None
+
+
 def _check_stretching(stats: dict, expected_duration: float) -> Optional[str]:
     """Detect stretching: if the frame rate is abnormally low compared to
     what the model should output, the clip was likely temporally stretched."""
@@ -663,6 +702,28 @@ def check_video_clip(
         checks.append(GatekeeperCheck(
             name="anti_cheat_looping",
             category="anti_cheat",
+            verdict=GatekeeperVerdict.PASS,
+            stage=stage,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+        ))
+
+    # 7a. GAP 3.3: Semantic QA status check
+    qa_err = _check_qa_status(mp4_path)
+    if qa_err:
+        checks.append(GatekeeperCheck(
+            name="qa_status",
+            category="semantic",
+            verdict=GatekeeperVerdict.REJECT,
+            message=qa_err,
+            stage=stage,
+            scene_num=scene_num,
+            phrase_idx=phrase_idx,
+        ))
+    else:
+        checks.append(GatekeeperCheck(
+            name="qa_status",
+            category="semantic",
             verdict=GatekeeperVerdict.PASS,
             stage=stage,
             scene_num=scene_num,

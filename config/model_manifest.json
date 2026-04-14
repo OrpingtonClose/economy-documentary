@@ -1,0 +1,34 @@
+{
+  "_comment": "GAP 1.2: Machine-readable model manifest. Worker provisioner reads this instead of hardcoding VRAM/disk requirements.",
+  "models": {
+    "tts": {
+      "name": "Qwen3-TTS-12Hz-1.7B",
+      "source": "Qwen/Qwen3-TTS",
+      "params_billions": 1.7,
+      "dtype": "bf16",
+      "weights_gb": 3.4,
+      "runtime_vram_gb": 8,
+      "disk_gb": 50,
+      "checkpoint_files": [
+        "model.safetensors",
+        "config.json",
+        "tokenizer.json"
+      ],
+      "worker_mode": "tts"
+    },
+    "ltx_video": {
+      "name": "LTX-Video-2.3",
+      "source": "Lightricks/LTX-Video",
+      "params_billions": 7.0,
+      "dtype": "bf16",
+      "weights_gb": 71,
+      "runtime_vram_gb": 80,
+      "disk_gb": 200,
+      "checkpoint_files": [
+        "ltx-video-2b-v0.9.5.safetensors",
+        "config.json"
+      ],
+      "worker_mode": "ltx"
+    }
+  }
+}

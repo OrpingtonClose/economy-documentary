@@ -200,6 +200,17 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
                     f"Each model MUST run on its own dedicated VM."
                 )
                 continue
+            # GAP 5.1: Verify worker_mode matches expected capability
+            worker_mode = data.get("worker_mode", "")
+            if worker_mode and svc.capability not in ("tts", "ltx"):
+                pass  # unknown capability — skip mode check
+            elif worker_mode and worker_mode not in (svc.capability, "both"):
+                last_error = (
+                    f"{svc.name} at {u}: worker_mode='{worker_mode}' but "
+                    f"expected '{svc.capability}'. Each model MUST run on "
+                    f"its own dedicated VM — never swap or share."
+                )
+                continue
             healthy += 1
         except (URLError, OSError, json.JSONDecodeError, TimeoutError) as exc:
             last_error = f"{svc.name} at {u}: unreachable ({exc})"
