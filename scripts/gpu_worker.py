@@ -251,6 +251,7 @@ def _load_ltx():
             config=model_path,
             subfolder="transformer",
             torch_dtype=torch.bfloat16,
+            device_map=None,        # avoid meta-tensor dispatch bug
         )
         logger.info(
             "Transformer loaded from single file in %.1fs. "
