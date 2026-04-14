@@ -157,35 +157,17 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
         esac
     done
 
-    # Official Lightricks single-file checkpoint (~46.1 GB)
-    # Downloaded from HuggingFace. gpu_worker.py uses from_single_file() to load it.
-    echo "--- Official Lightricks checkpoint (~46.1 GB) ---"
-    CKPT_FILE="$LTX_DIR/ltx-2.3-22b-dev.safetensors"
-    if [ ! -f "$CKPT_FILE" ]; then
-        # Try B2 first (faster if cached), fall back to HuggingFace.
-        # b2 ls returns exit 0 even when no files match, so we must
-        # count matching lines instead of relying on the exit code.
-        b2_ckpt_count=$(b2 ls "b2://${B2_BUCKET}/ltx2/" 2>/dev/null | grep -c 'ltx-2.3-22b-dev.safetensors' || true)
-        if [ "${b2_ckpt_count}" -gt 0 ]; then
-            echo "  Downloading from B2..."
-            b2 file download "b2://${B2_BUCKET}/ltx2/ltx-2.3-22b-dev.safetensors" "$CKPT_FILE"
-        else
-            echo "  Not in B2, downloading from HuggingFace..."
-            pip install --no-cache-dir huggingface_hub 2>/dev/null
-            python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download('Lightricks/LTX-2.3', 'ltx-2.3-22b-dev.safetensors', local_dir='$LTX_DIR')"
-        fi
-    else
-        echo "  Already present: $CKPT_FILE"
-    fi
-
-    # transformer config (needed by from_single_file for architecture info)
-    # Small download — just the config.json, not the full weights
-    echo "--- transformer config ---"
+    # Transformer (sharded safetensors from dg845/LTX-2.3-Diffusers ~38 GB)
+    # from_single_file() in diffusers 0.38.0.dev0 maps LTX-2.3 22B weights
+    # incorrectly, producing 100% NaN latents. We MUST use the sharded
+    # diffusers-format weights from dg845/LTX-2.3-Diffusers instead.
+    echo "--- transformer (sharded diffusers weights ~38 GB) ---"
     mkdir -p "$LTX_DIR/transformer"
-    if [ ! -f "$LTX_DIR/transformer/config.json" ]; then
-        # Download just the config from dg845 (has the diffusers-compatible config)
+    if [ ! -f "$LTX_DIR/transformer/diffusion_pytorch_model.safetensors.index.json" ]; then
         pip install --no-cache-dir huggingface_hub 2>/dev/null
-        python3 -c "from huggingface_hub import hf_hub_download; hf_hub_download('dg845/LTX-2.3-Diffusers', 'transformer/config.json', local_dir='$LTX_DIR')"
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns=['transformer/*'])"
+    else
+        echo "  Transformer shards already present."
     fi
 
     # Small components (< 3 GB each)
@@ -236,15 +218,9 @@ if worker_mode != 'ltx' and not os.path.exists('/workspace/models/qwen3-tts-voic
 if worker_mode != 'tts':
     import os
     ltx_dir = '/workspace/models/ltx2'
-    ckpt = os.path.join(ltx_dir, 'ltx-2.3-22b-dev.safetensors')
-    if not os.path.exists(ckpt):
-        print('Downloading official Lightricks checkpoint from HuggingFace...')
-        from huggingface_hub import hf_hub_download
-        hf_hub_download('Lightricks/LTX-2.3', 'ltx-2.3-22b-dev.safetensors', local_dir=ltx_dir)
     if not os.path.exists(os.path.join(ltx_dir, 'model_index.json')):
-        print('Downloading LTX-2.3 supporting components from HuggingFace...')
-        snapshot_download('dg845/LTX-2.3-Diffusers', local_dir=ltx_dir,
-                          ignore_patterns=['transformer/*.safetensors'])
+        print('Downloading LTX-2.3 diffusers components from HuggingFace...')
+        snapshot_download('dg845/LTX-2.3-Diffusers', local_dir=ltx_dir)
 "
 fi
 
@@ -273,7 +249,7 @@ if [ "$WORKER_MODE" != "ltx" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
 fi
 if [ "$WORKER_MODE" != "tts" ]; then
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2.3-22b-dev.safetensors"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/transformer/diffusion_pytorch_model.safetensors.index.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/model_index.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/config.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/model.safetensors.index.json"

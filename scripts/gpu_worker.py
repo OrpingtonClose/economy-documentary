@@ -268,48 +268,47 @@ def _load_ltx():
             f"{candidate_ltx2}, or {_models_dir}"
         )
 
-    # Check for official Lightricks single-file checkpoint
-    single_file = os.path.join(model_path, "ltx-2.3-22b-dev.safetensors")
-    use_single_file = os.path.isfile(single_file)
+    # Check whether we have sharded transformer weights (from_pretrained)
+    # or only the raw single-file checkpoint (from_single_file).
+    # from_single_file() in diffusers 0.38.0.dev0 maps weights incorrectly
+    # for LTX-2.3 22B, producing 100% NaN latents.  Always prefer the
+    # sharded diffusers-format weights from dg845/LTX-2.3-Diffusers.
+    transformer_index = os.path.join(
+        model_path, "transformer", "diffusion_pytorch_model.safetensors.index.json"
+    )
+    has_sharded_transformer = os.path.isfile(transformer_index)
 
     t0 = time.time()
 
-    if use_single_file:
-        # Official Lightricks model: load transformer from single file,
-        # rest of components from the local folder structure.
-        # The monkey-patch above fixes the meta-tensor dispatch bug in
-        # diffusers 0.38 + accelerate 1.12.
+    if not has_sharded_transformer:
+        # Sharded weights missing — download from HuggingFace on first run.
+        # This happens when the bootstrap only cached the single-file ckpt.
         logger.info(
-            "Loading LTX-2.3 transformer from official checkpoint: %s",
-            single_file,
+            "Sharded transformer weights not found. "
+            "Downloading from dg845/LTX-2.3-Diffusers ..."
         )
-        transformer = LTX2VideoTransformer3DModel.from_single_file(
-            single_file,
-            config=model_path,
-            subfolder="transformer",
-            torch_dtype=torch.bfloat16,
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            "dg845/LTX-2.3-Diffusers",
+            local_dir=model_path,
+            allow_patterns=["transformer/*"],
         )
         logger.info(
-            "Transformer loaded from single file in %.1fs. "
-            "Loading rest of pipeline from %s ...",
-            time.time() - t0, model_path,
+            "Transformer shards downloaded in %.1fs.",
+            time.time() - t0,
         )
-        pipe = LTX2Pipeline.from_pretrained(
-            model_path,
-            transformer=transformer,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=False,
-        )
-    else:
-        # Fallback: load everything from folder structure (dg845 layout)
-        logger.info(
-            "Loading LTX-2.3 via from_pretrained from %s ...", model_path
-        )
-        pipe = LTX2Pipeline.from_pretrained(
-            model_path,
-            torch_dtype=torch.bfloat16,
-            low_cpu_mem_usage=False,
-        )
+
+    # Load entire pipeline via from_pretrained (sharded transformer weights).
+    # This is the reliable path — from_single_file() produces NaN latents
+    # with the LTX-2.3 22B checkpoint in diffusers 0.38.0.dev0.
+    logger.info(
+        "Loading LTX-2.3 via from_pretrained from %s ...", model_path
+    )
+    pipe = LTX2Pipeline.from_pretrained(
+        model_path,
+        torch_dtype=torch.bfloat16,
+        low_cpu_mem_usage=False,
+    )
 
     pipe = pipe.to("cuda")
     _ltx_pipe = pipe
