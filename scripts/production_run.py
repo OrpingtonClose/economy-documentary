@@ -68,81 +68,41 @@ def vastai_cmd(args: list[str], timeout: int = 60) -> dict:
         return {"output": result.stdout.strip()}
 
 
-def provision_vm(gpu_type: str = "A100_SXM4", max_price: float = 1.50, min_vram_gb: int = 48) -> dict:
-    """Provision a Vast.ai GPU VM and wait for it to be ready.
+def provision_workers() -> dict:
+    """Provision GPU workers using WorkerProvisioner (GAP 1.1).
 
-    LTX-2.3 with enable_model_cpu_offload() requires 48GB+ VRAM
-    (Gemma3 text encoder alone is ~46GB bf16).
+    Delegates to the canonical WorkerProvisioner which enforces:
+    - Correct VRAM floors (80 GB for LTX, not 48)
+    - VM ownership registration (GAP 2.1)
+    - Model manifest specs (GAP 1.2)
+    - Credit-aware budgeting
+
+    Returns dict with worker URLs and VM info.
     """
-    logger.info("Searching for %s offers (min %dGB VRAM, max $%.2f/hr)...", gpu_type, min_vram_gb, max_price)
+    sys.path.insert(0, os.path.join(REPO_DIR, "server"))
+    from worker_provisioner import WorkerProvisioner
 
-    # Search for offers
-    offers = vastai_cmd([
-        "search", "offers",
-        "--type", "on-demand",
-        "--gpu-name", gpu_type,
-        "--min-gpu-ram", str(min_vram_gb),
-        "--max-dph", str(max_price),
-        "--raw",
-    ])
+    provisioner = WorkerProvisioner()
+    provisioner.ensure_workers_ready()
 
-    if not isinstance(offers, list) or not offers:
-        raise RuntimeError(f"No {gpu_type} offers found under ${max_price}/hr")
+    # Collect worker info for downstream use
+    result = {
+        "vm_ids": provisioner.get_vm_ids(),
+        "provisioner": provisioner,
+    }
 
-    # Sort by price
-    offers.sort(key=lambda o: float(o.get("dph_total", 999)))
-    best = offers[0]
-    offer_id = best["id"]
+    # Extract worker URLs from specs
+    for role in ("video", "tts"):
+        spec = provisioner._get_spec(role)
+        if spec and spec.vm_id:
+            key_prefix = spec.capability  # "ltx" or "tts"
+            result[f"{key_prefix}_url"] = f"http://localhost:{spec.local_port}"
+            result[f"{key_prefix}_vm_id"] = spec.vm_id
+            result[f"{key_prefix}_ssh_host"] = spec.ssh_host
+            result[f"{key_prefix}_ssh_port"] = str(spec.ssh_port)
 
-    logger.info(
-        "Best offer: #%s %s %.1fGB $%.3f/hr",
-        offer_id, best.get("gpu_name"), float(best.get("gpu_ram", 0)) / 1024,
-        float(best.get("dph_total", 0)),
-    )
-
-    # Create instance
-    result = vastai_cmd([
-        "create", "instance", str(offer_id),
-        "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
-        "--disk", "224",
-        "--raw",
-    ])
-
-    instance_id = result.get("new_contract")
-    if not instance_id:
-        raise RuntimeError(f"Failed to create instance: {result}")
-
-    logger.info("Instance created: %s. Waiting for ready...", instance_id)
-
-    # Wait for instance to be running (up to 5 min)
-    # If this fails, terminate the instance to avoid resource leaks
-    try:
-        for i in range(60):
-            time.sleep(5)
-            status = vastai_cmd(["show", "instance", str(instance_id), "--raw"])
-            actual_status = status.get("actual_status", "")
-            if actual_status == "running":
-                ssh_host = status.get("ssh_host", "")
-                ssh_port = status.get("ssh_port", "")
-                logger.info("VM ready: ssh -p %s root@%s", ssh_port, ssh_host)
-                return {
-                    "instance_id": str(instance_id),
-                    "ssh_host": ssh_host,
-                    "ssh_port": str(ssh_port),
-                    "gpu_name": best.get("gpu_name", ""),
-                    "price": float(best.get("dph_total", 0)),
-                }
-            if i % 6 == 0:
-                logger.info("  Waiting... status=%s (%ds)", actual_status, i * 5)
-    except Exception:
-        logger.error("Error while waiting for VM %s, terminating to avoid leak", instance_id)
-        terminate_vm(str(instance_id))
-        raise
-
-    # Timed out — terminate the instance before raising
-    logger.error("VM %s did not become ready in 5 minutes, terminating", instance_id)
-    terminate_vm(str(instance_id))
-    raise RuntimeError(f"VM {instance_id} did not become ready in 5 minutes")
+    logger.info("Workers provisioned: %s", list(result.keys()))
+    return result
 
 
 def bootstrap_vm(vm: dict) -> None:
@@ -312,13 +272,29 @@ def upload_to_b2(
 
 
 def terminate_vm(instance_id: str) -> None:
-    """Terminate a Vast.ai VM."""
-    logger.info("Terminating VM %s...", instance_id)
+    """Terminate a Vast.ai VM — ONLY if this pipeline created it (GAP 2.2)."""
+    # GAP 2.2: Use the ownership-guarded terminate from vastai_tools
+    sys.path.insert(0, os.path.join(REPO_DIR, "server"))
     try:
-        vastai_cmd(["destroy", "instance", instance_id])
-        logger.info("VM terminated.")
-    except Exception as e:
-        logger.error("Failed to terminate VM: %s", e)
+        from tools.vastai_tools import terminate_vm as _guarded_terminate
+        result_json = _guarded_terminate(instance_id)
+        import json as _json
+        result = _json.loads(result_json)
+        if result.get("status") == "refused":
+            logger.error("VM termination REFUSED: %s", result.get("error", ""))
+        else:
+            logger.info("VM %s terminated.", instance_id)
+    except ImportError:
+        # Fallback if server package not importable — still log warning
+        logger.warning(
+            "Could not import ownership guard. Terminating VM %s directly "
+            "(ownership check skipped).", instance_id,
+        )
+        try:
+            vastai_cmd(["destroy", "instance", instance_id])
+            logger.info("VM terminated.")
+        except Exception as e:
+            logger.error("Failed to terminate VM: %s", e)
 
 
 def main():
@@ -348,19 +324,21 @@ def main():
     gpu_worker_url = args.gpu_worker_url
 
     try:
-        # Step 1: Provision VM (unless skipped)
+        # Step 1: Provision workers via WorkerProvisioner (GAP 1.1)
+        # This handles VM creation, bootstrap, SSH tunnels, health checks,
+        # and VM ownership registration — all in one canonical code path.
+        provisioner = None
         if not args.skip_provision and not gpu_worker_url:
-            vm = provision_vm(args.gpu_type, args.max_price)
-
-            # Step 2: Bootstrap VM
-            bootstrap_vm(vm)
-
-            # Step 3: Start GPU worker
-            start_gpu_worker(vm)
-
-            # Step 4: Set up SSH tunnel
-            tunnel = setup_ssh_tunnel(vm)
-            gpu_worker_url = "http://localhost:8880"
+            workers = provision_workers()
+            provisioner = workers.get("provisioner")
+            # Use the LTX worker URL as the primary GPU worker
+            gpu_worker_url = workers.get("ltx_url", "http://localhost:8881")
+            # Set TTS worker URL in env for the pipeline
+            tts_url = workers.get("tts_url", "")
+            if tts_url:
+                os.environ["TTS_WORKER_URL"] = tts_url
+            # Set video worker URL
+            os.environ["VIDEO_WORKER_URLS"] = gpu_worker_url
         elif args.vm_host and args.vm_port:
             vm = {
                 "instance_id": "manual",
@@ -418,6 +396,13 @@ def main():
 
         if vm and not args.skip_terminate and vm.get("instance_id") != "manual":
             terminate_vm(vm["instance_id"])
+
+        # GAP 1.1: Clean up provisioner (kills SSH tunnels, destroys VMs)
+        if provisioner is not None and not args.skip_terminate:
+            try:
+                provisioner.cleanup()
+            except Exception as e:
+                logger.error("Provisioner cleanup failed: %s", e)
 
 
 if __name__ == "__main__":

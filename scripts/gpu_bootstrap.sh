@@ -292,9 +292,19 @@ if [ "$WORKER_MODE" != "tts" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"
 fi
 
+# GAP 7.1: Verify file existence AND minimum size (basic integrity check).
+# Full sha256 checksums would take too long on 40 GB files over NFS, so we
+# verify that each file is non-empty and meets a minimum expected size.
 for f in $VERIFY_FILES; do
     if [ -f "$f" ]; then
-        echo "  OK: $f"
+        SIZE=$(stat -c%s "$f" 2>/dev/null || echo 0)
+        if [ "$SIZE" -lt 1000 ]; then
+            echo "  CORRUPT (too small): $f — ${SIZE} bytes"
+            OK=false
+        else
+            SIZE_MB=$((SIZE / 1048576))
+            echo "  OK: $f (${SIZE_MB} MB)"
+        fi
     else
         echo "  MISSING: $f"
         OK=false
@@ -302,7 +312,7 @@ for f in $VERIFY_FILES; do
 done
 
 if [ "$OK" = false ]; then
-    echo "ERROR: Some model files are missing!"
+    echo "ERROR: Some model files are missing or corrupt!"
     exit 1
 fi
 

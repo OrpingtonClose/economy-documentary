@@ -69,6 +69,8 @@ class DashboardReporter:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+        # GAP 4.2: Track consecutive failures for escalation
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         self._running = True
@@ -107,9 +109,95 @@ class DashboardReporter:
                     with urlopen(req, timeout=5) as resp:
                         resp.read()
                 except Exception as exc:
-                    logger.debug("DashboardReporter POST failed: %s", exc)
+                    # GAP 4.2: Escalation on consecutive failures
+                    self._consecutive_failures += 1
+                    if self._consecutive_failures == 10:
+                        logger.error(
+                            "DashboardReporter: 10 consecutive POST failures. "
+                            "Dashboard may be down. Last error: %s", exc,
+                        )
+                    elif self._consecutive_failures % 30 == 0:
+                        logger.warning(
+                            "DashboardReporter: %d consecutive failures. "
+                            "Dashboard still unreachable: %s",
+                            self._consecutive_failures, exc,
+                        )
+                    else:
+                        logger.debug("DashboardReporter POST failed: %s", exc)
+                else:
+                    # Reset on success
+                    if self._consecutive_failures > 0:
+                        logger.info(
+                            "DashboardReporter: recovered after %d failures",
+                            self._consecutive_failures,
+                        )
+                    self._consecutive_failures = 0
 
             time.sleep(1.0)
+
+
+class ProgressHeartbeat:
+    """GAP 6.1: Periodic heartbeat to prevent silent pipeline stalls.
+
+    Emits a log message every ``interval`` seconds with current phase,
+    detail, and clip progress.  Ensures the pipeline never goes silent
+    for more than a few minutes — any monitoring system watching logs
+    will see regular proof-of-life signals.
+    """
+
+    def __init__(self, interval: int = 300):
+        self.interval = interval  # seconds (default 5 min)
+        self.phase: str = "init"
+        self.detail: str = ""
+        self.clips_done: int = 0
+        self.clips_total: int = 0
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        self._running = True
+        self._thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._thread.start()
+        logger.info("ProgressHeartbeat started (interval=%ds)", self.interval)
+
+    def stop(self) -> None:
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=10)
+
+    def update(self, phase: str = "", detail: str = "",
+               clips_done: int = -1, clips_total: int = -1) -> None:
+        with self._lock:
+            if phase:
+                self.phase = phase
+            if detail:
+                self.detail = detail
+            if clips_done >= 0:
+                self.clips_done = clips_done
+            if clips_total >= 0:
+                self.clips_total = clips_total
+
+    def _heartbeat_loop(self) -> None:
+        while self._running:
+            time.sleep(self.interval)
+            if not self._running:
+                break
+            with self._lock:
+                logger.info(
+                    "HEARTBEAT: phase=%s, detail=%s, clips=%d/%d",
+                    self.phase, self.detail,
+                    self.clips_done, self.clips_total,
+                )
+
+
+# Module-level heartbeat instance for use by callbacks
+_heartbeat: ProgressHeartbeat | None = None
+
+
+def get_heartbeat() -> ProgressHeartbeat | None:
+    """Return the active heartbeat instance (if any)."""
+    return _heartbeat
 
 
 async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
@@ -123,6 +211,13 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     Returns:
         Final session state dict.
     """
+    # GAP 6.1: Start progress heartbeat
+    global _heartbeat
+    heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))
+    _heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
+    _heartbeat.start()
+    _heartbeat.update(phase="init", detail=f"topic={topic}")
+
     # Import pipeline agent (triggers model_config resolution)
     from agents.pipeline import pipeline_agent
     from callbacks.state_manager import build_pipeline_state
@@ -278,6 +373,10 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         reporter.send("phase_end", phase=_last_phase, status="completed")
         reporter.send("finalize", status="completed")
         reporter.stop()
+        # GAP 6.1: Stop heartbeat
+        if _heartbeat:
+            _heartbeat.update(phase="complete")
+            _heartbeat.stop()
         # Shutdown infra agent regardless of how the pipeline exits
         infra.shutdown()
         logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
@@ -339,6 +438,7 @@ def main():
     # synthetic/placeholder media — that wastes hours of GPU time on
     # downstream stages that depend on real upstream artifacts.
     if not args.test_mode:
+        _preflight_check_dashboard()  # GAP 4.1
         _preflight_check_workers()
 
     result = asyncio.run(run_pipeline(
@@ -388,6 +488,42 @@ def main():
         print(f"\nFailed to save state: {e}")
 
     print("=" * 60)
+
+
+def _preflight_check_dashboard() -> None:
+    """GAP 4.1: Verify the dashboard is reachable before pipeline start.
+
+    If DASHBOARD_URL is set, checks the /health endpoint. Exits with error
+    if unreachable (unless SKIP_DASHBOARD_CHECK=1).
+    """
+    dashboard_url = os.environ.get("DASHBOARD_URL", "")
+    if not dashboard_url:
+        logger.info("DASHBOARD_URL not set — skipping dashboard pre-flight check")
+        return
+
+    if os.environ.get("SKIP_DASHBOARD_CHECK", "").lower() in ("1", "true"):
+        logger.warning("SKIP_DASHBOARD_CHECK is set — skipping dashboard pre-flight check")
+        return
+
+    health_url = f"{dashboard_url.rstrip('/')}/health"
+    try:
+        req = Request(health_url)
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+        if data.get("status") != "ok":
+            logger.error(
+                "PRE-FLIGHT FAILED: Dashboard at %s reports unhealthy: %s",
+                dashboard_url, data,
+            )
+            sys.exit(1)
+        logger.info("PRE-FLIGHT OK: Dashboard at %s is healthy", dashboard_url)
+    except Exception as exc:
+        logger.error(
+            "PRE-FLIGHT FAILED: Dashboard at %s is unreachable: %s. "
+            "Set SKIP_DASHBOARD_CHECK=1 to bypass this check.",
+            dashboard_url, exc,
+        )
+        sys.exit(1)
 
 
 class PreflightError(RuntimeError):

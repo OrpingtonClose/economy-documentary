@@ -108,12 +108,24 @@ def _video_amend_seed(kwargs: dict) -> dict:
     return kwargs
 
 
+_MIN_INFERENCE_STEPS = 25  # GAP 5.2: Never go below this floor
+
+
 def _video_amend_steps(kwargs: dict) -> dict:
-    """Creative amendment: reduce inference steps (faster, different result)."""
+    """Creative amendment: reduce inference steps (faster, different result).
+
+    GAP 5.2: Enforces a minimum floor of _MIN_INFERENCE_STEPS to prevent
+    quality degradation below usable levels.
+    """
     kwargs = dict(kwargs)
     steps = kwargs.get("num_inference_steps", 40)
-    kwargs["num_inference_steps"] = max(steps - 10, 10)
-    logger.info("Recovery L2: reduced inference steps to %s", kwargs["num_inference_steps"])
+    new_steps = max(steps - 10, _MIN_INFERENCE_STEPS)
+    if new_steps == steps:
+        # Would hit floor — return unchanged to signal no more step reductions
+        logger.info("Recovery L2: inference steps already at floor (%d), skipping reduction", steps)
+        return kwargs
+    kwargs["num_inference_steps"] = new_steps
+    logger.info("Recovery L2: reduced inference steps to %s (floor=%d)", new_steps, _MIN_INFERENCE_STEPS)
     return kwargs
 
 

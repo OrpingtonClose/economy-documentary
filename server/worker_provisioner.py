@@ -100,7 +100,34 @@ class WorkerSpec:
 
 
 # ---------------------------------------------------------------------------
+# GAP 1.2: Model manifest — machine-readable model resource requirements
+# ---------------------------------------------------------------------------
+
+def _load_model_manifest() -> dict:
+    """Load config/model_manifest.json if available.
+
+    Returns a dict keyed by model role (e.g. "tts", "ltx_video") with
+    resource specs.  Falls back to empty dict if file is missing.
+    """
+    manifest_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "config", "model_manifest.json",
+    )
+    try:
+        with open(manifest_path) as f:
+            data = json.load(f)
+        return data.get("models", {})
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning("Could not load model manifest from %s: %s", manifest_path, e)
+        return {}
+
+
+_MODEL_MANIFEST = _load_model_manifest()
+
+
+# ---------------------------------------------------------------------------
 # Default worker specs — VRAM calculated from actual model sizes
+# (GAP 1.2: values cross-checked against config/model_manifest.json)
 # ---------------------------------------------------------------------------
 #
 # TTS: Qwen3-TTS-12Hz-1.7B-VoiceDesign
@@ -508,6 +535,11 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
 
+    # GAP 2.3: Generate a descriptive label for the VM
+    import uuid as _uuid
+    _run_id = os.environ.get("DOCUMENTARY_RUN_ID", _uuid.uuid4().hex[:8])
+    _label = f"documentary-{spec.role}-{_run_id}"
+
     # NOTE: Do NOT use --raw here.  `vastai create instance --raw` returns
     # an empty string.  Without --raw it returns text like:
     #   Started. {'success': True, 'new_contract': 34856082, ...}
@@ -518,8 +550,10 @@ def provision_vm(spec: WorkerSpec) -> str:
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
+        "--label", _label,  # GAP 2.3: VM labeling for identification
         "--onstart-cmd", onstart,
     ])
+    logger.info("VM label: %s", _label)
 
     # Parse the response — could be dict (if CLI returns JSON) or a string
     # containing a Python dict literal like "Started. {'new_contract': ...}"
@@ -527,6 +561,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         instance_id = create_result.get("new_contract")
         if instance_id:
             spec.vm_id = str(instance_id)
+            # GAP 2.1: Register as owned so terminate_vm() accepts it
+            from tools.vastai_tools import register_owned_vm
+            register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
             return spec.vm_id
 
@@ -535,6 +572,9 @@ def provision_vm(spec: WorkerSpec) -> str:
         match = re.search(r"'new_contract'\s*:\s*(\d+)", create_result)
         if match:
             spec.vm_id = match.group(1)
+            # GAP 2.1: Register as owned so terminate_vm() accepts it
+            from tools.vastai_tools import register_owned_vm
+            register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
             return spec.vm_id
 

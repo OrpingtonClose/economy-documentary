@@ -614,6 +614,10 @@ class VMAgent:
                 "started_at": self.bootstrap.started_at,
                 "completed_at": self.bootstrap.completed_at,
             },
+            # GAP 5.1: Model identity
+            "tts_model_name": "Qwen3-TTS" if _tts_model is not None else "",
+            "ltx_model_path": str(_models_dir) + "/ltx2" if _ltx_pipe is not None else "",
+            "worker_mode": _worker_mode,
         }
 
 
@@ -672,6 +676,11 @@ class HealthResponse(BaseModel):
     vram_used_gb: float
     vram_total_gb: float
     bootstrap: BootstrapStatus | None = None
+    # GAP 5.1: Model identity fields — report WHICH models are loaded,
+    # not just boolean loaded/not-loaded.
+    tts_model_name: str = ""
+    ltx_model_path: str = ""
+    worker_mode: str = ""  # "tts", "ltx", or "both"
 
 
 # ---------------------------------------------------------------------------
@@ -1168,8 +1177,10 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
         return {"quality": quality, "qa_reason": qa_reason, "qa_pass": "semantic"}
 
     except Exception as e:
+        # GAP 3.2: Fail-closed — QA infrastructure failure means "poor",
+        # not "unknown".  Unknown clips silently pass; poor clips get rejected.
         logger.error("QA Pass 2 (semantic) failed: %s", e, exc_info=True)
-        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}", "qa_pass": "error"}
+        return {"quality": "poor", "qa_reason": f"QA request failed (fail-closed): {e}", "qa_pass": "error"}
 
 
 # ---------------------------------------------------------------------------
@@ -1427,6 +1438,19 @@ def _generate_video(
                 qa_result["quality"], max_attempts,
             )
 
+    # GAP 3.2: Fail-closed — if best QA is still "unknown" after all
+    # attempts, treat as "poor" so the client rejects it.
+    if best_passing_qa.get("quality") == "unknown":
+        logger.error(
+            "QA still 'unknown' after %d attempts — fail-closed to 'poor'",
+            max_attempts,
+        )
+        best_passing_qa["quality"] = "poor"
+        best_passing_qa["qa_reason"] = (
+            f"Fail-closed: QA could not evaluate after {max_attempts} attempts. "
+            + best_passing_qa.get("qa_reason", "")
+        )
+
     # Prefer any brightness-passing frame over a brightness-failing one
     if best_passing_frames is not None:
         video_frames = best_passing_frames
@@ -1435,7 +1459,7 @@ def _generate_video(
     else:
         video_frames = best_failing_frames
         best_seed = best_failing_seed
-        best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
+        best_qa = {"quality": "poor", "qa_reason": "All attempts failed brightness check (fail-closed)"}
 
     elapsed = time.time() - t0
     logger.info("Video generated in %.1fs (seed=%d, qa=%s)",
@@ -1539,6 +1563,10 @@ async def health():
         vram_used_gb=round(vram_used, 2),
         vram_total_gb=round(vram_total, 2),
         bootstrap=_bootstrap_status,
+        # GAP 5.1: Model identity
+        tts_model_name="Qwen3-TTS" if _tts_model is not None else "",
+        ltx_model_path=str(_models_dir) + "/ltx2" if _ltx_pipe is not None else "",
+        worker_mode=_worker_mode,
     )
 
 
@@ -1705,6 +1733,54 @@ def video_endpoint(req: VideoRequest):
             "X-QA-Seed": str(qa_status.get("seed", req.seed)),
         },
     )
+
+
+@app.get("/verify")
+async def verify_endpoint():
+    """GAP 7.1: Return model identity info for bootstrap verification.
+
+    Reports which models are loaded, their paths, and basic file sizes
+    so the provisioner can verify the correct models were downloaded.
+    """
+    import glob as globmod
+
+    model_files: dict[str, dict] = {}
+
+    # TTS model
+    tts_dir = os.path.join(_models_dir, "qwen3-tts-voicedesign")
+    tts_weights = os.path.join(tts_dir, "model.safetensors")
+    if os.path.exists(tts_weights):
+        model_files["tts"] = {
+            "path": tts_weights,
+            "size_mb": round(os.path.getsize(tts_weights) / 1048576, 1),
+            "loaded": _tts_model is not None,
+        }
+
+    # LTX model
+    ltx_dir = os.path.join(_models_dir, "ltx2")
+    ltx_ckpt = os.path.join(ltx_dir, "ltx-2-19b-dev.safetensors")
+    if os.path.exists(ltx_ckpt):
+        model_files["ltx"] = {
+            "path": ltx_ckpt,
+            "size_mb": round(os.path.getsize(ltx_ckpt) / 1048576, 1),
+            "loaded": _ltx_pipe is not None,
+        }
+
+    # Gemma text encoder
+    gemma_config = os.path.join(ltx_dir, "gemma", "config.json")
+    if os.path.exists(gemma_config):
+        gemma_files = globmod.glob(os.path.join(ltx_dir, "gemma", "*"))
+        model_files["gemma_text_encoder"] = {
+            "path": os.path.join(ltx_dir, "gemma"),
+            "file_count": len(gemma_files),
+        }
+
+    return {
+        "worker_mode": _worker_mode,
+        "models_dir": _models_dir,
+        "models": model_files,
+        "bootstrap_phase": _bootstrap_status.phase,
+    }
 
 
 @app.post("/load-models")

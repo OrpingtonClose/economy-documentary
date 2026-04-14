@@ -13,6 +13,35 @@ import subprocess
 
 from google.adk.tools import FunctionTool
 
+# ---------------------------------------------------------------------------
+# VM ownership registry (GAP 2.1)
+# ---------------------------------------------------------------------------
+_OWNED_VMS_FILE = "/tmp/documentary-pipeline/_owned_instances.json"
+
+
+def _load_owned_vms() -> set[str]:
+    """Load the set of VM IDs created by this pipeline run."""
+    try:
+        with open(_OWNED_VMS_FILE) as f:
+            return set(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def _save_owned_vms(vms: set[str]) -> None:
+    """Persist the owned-VM set to disk."""
+    os.makedirs(os.path.dirname(_OWNED_VMS_FILE), exist_ok=True)
+    with open(_OWNED_VMS_FILE, "w") as f:
+        json.dump(sorted(vms), f)
+
+
+def register_owned_vm(vm_id: str) -> None:
+    """Register a VM as owned by this pipeline run."""
+    vms = _load_owned_vms()
+    vms.add(str(vm_id))
+    _save_owned_vms(vms)
+    logger.info("Registered owned VM: %s (total owned: %d)", vm_id, len(vms))
+
 logger = logging.getLogger(__name__)
 
 _TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
@@ -215,6 +244,10 @@ def provision_gpu_vm(
         return json.dumps(
             {"status": "error", "error": "No instance ID in create response", "response": create_result}
         )
+
+    # GAP 2.1: Register as owned so terminate_vm() accepts it
+    register_owned_vm(str(instance_id))
+
     return json.dumps(
         {
             "status": "provisioned",
@@ -251,13 +284,13 @@ def check_vm_status(vm_id: str, tool_context=None) -> str:
 
 
 def terminate_vm(vm_id: str, tool_context=None) -> str:
-    """Stop and destroy a Vast.ai VM.
+    """Stop and destroy a Vast.ai VM — ONLY if this pipeline created it.
 
     Args:
         vm_id: The VM instance ID to terminate.
 
     Returns:
-        JSON string with termination result.
+        JSON string with termination result or refusal.
     """
     if _TEST_MODE:
         return json.dumps(
@@ -268,7 +301,23 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
             }
         )
 
+    # GAP 2.1: Ownership guard — refuse to destroy VMs we didn't create
+    owned = _load_owned_vms()
+    if str(vm_id) not in owned:
+        error_msg = (
+            f"REFUSED: VM {vm_id} was NOT created by this pipeline run. "
+            f"Owned VMs: {sorted(owned)}. "
+            f"NEVER destroy VMs you didn't create — they may belong to "
+            f"other processes on the shared Vast.ai account."
+        )
+        logger.error(error_msg)
+        return json.dumps({"error": error_msg, "status": "refused"})
+
     result = _vast_cmd(["destroy", "instance", vm_id])
+    # Remove from registry only after confirmed destruction
+    if isinstance(result, dict) and "error" not in result:
+        owned.discard(str(vm_id))
+        _save_owned_vms(owned)
     return json.dumps(result)
 
 
