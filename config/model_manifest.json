@@ -41,17 +41,17 @@
     },
     "ltx_video": {
       "name": "LTX-Video-2.3",
-      "source": "Lightricks/LTX-Video",
-      "params_billions": 19.0,
+      "source": "Lightricks/LTX-2.3",
+      "params_billions": 22.0,
       "dtype": "bf16",
-      "weights_gb": 71,
+      "weights_gb": 46,
       "runtime_vram_gb": 24,
       "disk_gb": 200,
       "min_torch": "2.6.0",
       "min_cuda": "12.4",
       "torch_wheel_suffix": "cu126",
       "checkpoint_files": [
-        "ltx-2-19b-dev.safetensors",
+        "ltx-2.3-22b-dev.safetensors",
         "config.json"
       ],
       "worker_mode": "ltx"

@@ -21,7 +21,7 @@ Usage:
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
     {models_dir}/ltx2/                   — LTX-2.3 directory:
-        ltx-2-19b-dev.safetensors       — Official Lightricks single-file checkpoint
+        ltx-2.3-22b-dev.safetensors      — Official Lightricks LTX-2.3 single-file checkpoint
         gemma/                          — Gemma-3 1B text encoder weights
 
 The bootstrap script (gpu_bootstrap.sh) downloads these from B2/HuggingFace.
@@ -264,7 +264,7 @@ class VMAgent:
             if not os.path.isfile(marker):
                 bootstrap_needed = True
         if self.worker_mode in ("ltx", "both"):
-            marker = os.path.join(self.models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
+            marker = os.path.join(self.models_dir, "ltx2", "ltx-2.3-22b-dev.safetensors")
             if not os.path.isfile(marker):
                 bootstrap_needed = True
 
@@ -786,7 +786,7 @@ def _load_tts():
 def _load_ltx():
     """Load LTX-2.3 pipeline using official Lightricks ltx-pipelines package.
 
-    Uses the single-file checkpoint (ltx-2-19b-dev.safetensors) with
+    Uses the single-file checkpoint (ltx-2.3-22b-dev.safetensors) with
     TI2VidOneStagePipeline — no diffusers, no upscalers, no LoRAs.
 
     The pipeline uses a block-based lifecycle: each component (text encoder,
@@ -819,11 +819,11 @@ def _load_ltx():
     else:
         model_path = _models_dir
 
-    # Find the single-file checkpoint (LTX-2 19B dev)
-    ckpt_path = os.path.join(model_path, "ltx-2-19b-dev.safetensors")
+    # Find the single-file checkpoint (LTX-2.3 22B dev)
+    ckpt_path = os.path.join(model_path, "ltx-2.3-22b-dev.safetensors")
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"LTX-2 checkpoint not found at {ckpt_path}. "
+            f"LTX-2.3 checkpoint not found at {ckpt_path}. "
             "Run gpu_bootstrap.sh to download model files."
         )
 
@@ -1818,7 +1818,7 @@ async def verify_endpoint():
 
     # LTX model
     ltx_dir = os.path.join(_models_dir, "ltx2")
-    ltx_ckpt = os.path.join(ltx_dir, "ltx-2-19b-dev.safetensors")
+    ltx_ckpt = os.path.join(ltx_dir, "ltx-2.3-22b-dev.safetensors")
     if os.path.exists(ltx_ckpt):
         model_files["ltx"] = {
             "path": ltx_ckpt,
