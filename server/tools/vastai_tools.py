@@ -310,9 +310,10 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
         return json.dumps({"error": error_msg, "status": "refused"})
 
     result = _vast_cmd(["destroy", "instance", vm_id])
-    # Remove from registry after successful destruction
-    owned.discard(str(vm_id))
-    _save_owned_vms(owned)
+    # Remove from registry only after confirmed destruction
+    if isinstance(result, dict) and "error" not in result:
+        owned.discard(str(vm_id))
+        _save_owned_vms(owned)
     return json.dumps(result)
 
 

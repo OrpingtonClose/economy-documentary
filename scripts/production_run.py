@@ -83,7 +83,6 @@ def provision_workers() -> dict:
     from worker_provisioner import WorkerProvisioner
 
     provisioner = WorkerProvisioner()
-    provisioner.start_provisioning()
     provisioner.ensure_workers_ready()
 
     # Collect worker info for downstream use
@@ -93,13 +92,14 @@ def provision_workers() -> dict:
     }
 
     # Extract worker URLs from specs
-    for role in ("ltx", "tts"):
+    for role in ("video", "tts"):
         spec = provisioner._get_spec(role)
         if spec and spec.vm_id:
-            result[f"{role}_url"] = f"http://localhost:{spec.local_port}"
-            result[f"{role}_vm_id"] = spec.vm_id
-            result[f"{role}_ssh_host"] = spec.ssh_host
-            result[f"{role}_ssh_port"] = str(spec.ssh_port)
+            key_prefix = spec.capability  # "ltx" or "tts"
+            result[f"{key_prefix}_url"] = f"http://localhost:{spec.local_port}"
+            result[f"{key_prefix}_vm_id"] = spec.vm_id
+            result[f"{key_prefix}_ssh_host"] = spec.ssh_host
+            result[f"{key_prefix}_ssh_port"] = str(spec.ssh_port)
 
     logger.info("Workers provisioned: %s", list(result.keys()))
     return result
@@ -396,6 +396,13 @@ def main():
 
         if vm and not args.skip_terminate and vm.get("instance_id") != "manual":
             terminate_vm(vm["instance_id"])
+
+        # GAP 1.1: Clean up provisioner (kills SSH tunnels, destroys VMs)
+        if provisioner is not None and not args.skip_terminate:
+            try:
+                provisioner.cleanup()
+            except Exception as e:
+                logger.error("Provisioner cleanup failed: %s", e)
 
 
 if __name__ == "__main__":

@@ -616,7 +616,7 @@ class VMAgent:
             },
             # GAP 5.1: Model identity
             "tts_model_name": "Qwen3-TTS" if _tts_model is not None else "",
-            "ltx_model_path": str(_models_dir) + "/ltx-video" if _ltx_pipe is not None else "",
+            "ltx_model_path": str(_models_dir) + "/ltx2" if _ltx_pipe is not None else "",
             "worker_mode": _worker_mode,
         }
 
@@ -1565,7 +1565,7 @@ async def health():
         bootstrap=_bootstrap_status,
         # GAP 5.1: Model identity
         tts_model_name="Qwen3-TTS" if _tts_model is not None else "",
-        ltx_model_path=str(_models_dir) + "/ltx-video" if _ltx_pipe is not None else "",
+        ltx_model_path=str(_models_dir) + "/ltx2" if _ltx_pipe is not None else "",
         worker_mode=_worker_mode,
     )
 
