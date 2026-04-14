@@ -8,22 +8,19 @@
 #
 # WORKER_MODE controls which models are downloaded:
 #   tts  — only Qwen3-TTS (~4.3 GB, ~2 min on slow connections)
-#   ltx  — only LTX-2.3 video models (~94 GB)
+#   ltx  — only LTX-2.3 video models (~48 GB)
 #   both — everything (default if not set)
 #
 # Models are pulled from Backblaze B2 (pre-cached) for speed.
 # Falls back to HuggingFace if B2 credentials are not set.
 #
-# Disk budget (official Lightricks checkpoint + supporting components):
-#   Official checkpoint (safetensors): ~46.1 GB
-#   text_encoder (transformers fmt):   ~46.6 GB
-#   vae + audio_vae + vocoder:         ~ 2.7 GB
-#   connectors + latent_upsampler:     ~ 7.3 GB
-#   transformer config (no weights):   ~ 0.0 GB
+# Disk budget (ltx-pipelines: single-file checkpoint + gemma):
+#   ltx-2.3-22b-dev.safetensors:      ~46.1 GB
+#   Gemma-3 1B text encoder:          ~ 2.0 GB
 #   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
-#   Total models:                      ~107  GB
+#   Total models:                      ~52   GB
 #   OS + software + output:            ~30   GB
-#   Minimum disk required:             ~140  GB  (recommend 200+)
+#   Minimum disk required:             ~85   GB  (recommend 120+)
 
 set -euo pipefail
 
@@ -53,16 +50,18 @@ cd /workspace
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# torch 2.6+ required for diffusers 0.37 attention_dispatch compat
-# Driver supports CUDA 13.0, cu124 wheels work fine
+# torch 2.6+ required for ltx-pipelines
 pip install --no-cache-dir \
     'torch>=2.6.0' \
     'torchvision>=0.21.0' \
     'torchaudio>=2.6.0' \
     --index-url https://download.pytorch.org/whl/cu124
 
-# diffusers >= 0.37.0 required for LTX2Pipeline
+# ltx-pipelines: official Lightricks inference code for LTX-2.3
+# No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.
 pip install --no-cache-dir \
+    'ltx-pipelines>=1.0.0' \
+    'ltx-core>=1.0.0' \
     'accelerate>=0.33.0' \
     'safetensors>=0.4.0' \
     'sentencepiece>=0.2.0' \
@@ -78,151 +77,116 @@ pip install --no-cache-dir \
 # Install sox for qwen-tts audio processing
 apt-get install -y sox libsox-dev
 
-# diffusers from git — the HuggingFace model dg845/LTX-2.3-Diffusers requires
-# LTX2VocoderWithBWE and updated transformer config fields (audio_cross_attn_mod,
-# gated_attn, perturbed_attn) that only exist in the dev branch (>= 0.38.0.dev0).
-# Stable 0.37.0 does NOT work. See huggingface/diffusers#13217.
-pip install --no-cache-dir \
-    git+https://github.com/huggingface/diffusers.git
-
 # ---------------------------------------------------------------------------
-# B2 model download — selective (skip duplicate formats to save ~50 GB)
+# Model downloads — ltx-pipelines uses single-file checkpoint + gemma
 # ---------------------------------------------------------------------------
 B2_BUCKET="ltx2-models-orpington"
+pip install --no-cache-dir huggingface_hub 2>/dev/null
 
 if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
-    echo "=== Downloading models from B2 (selective) ==="
+    echo "=== Downloading models (B2 primary, HuggingFace fallback) ==="
     export B2_APPLICATION_KEY_ID="$B2_KEY_ID"
     b2 account authorize "$B2_KEY_ID" "$B2_APPLICATION_KEY"
+fi
 
-    # --- Qwen3-TTS VoiceDesign (~4.3 GB) — needed for tts and both modes ---
-    if [ "$WORKER_MODE" = "ltx" ]; then
-        echo "--- Skipping Qwen3-TTS (ltx-only mode) ---"
-    elif [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
-        echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
-        mkdir -p /workspace/models/qwen3-tts-voicedesign
-        pip install --no-cache-dir huggingface_hub 2>/dev/null
-        # Try B2 first, fall back to HuggingFace
+# --- Qwen3-TTS VoiceDesign (~4.3 GB) — needed for tts and both modes ---
+if [ "$WORKER_MODE" = "ltx" ]; then
+    echo "--- Skipping Qwen3-TTS (ltx-only mode) ---"
+elif [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
+    echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
+    mkdir -p /workspace/models/qwen3-tts-voicedesign
+    if [ -n "${B2_KEY_ID:-}" ]; then
         b2_tts_count=$(b2 ls "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" 2>/dev/null | grep -c model.safetensors || true)
         if [ "${b2_tts_count}" -gt 0 ]; then
             b2 sync --threads 8 "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" /workspace/models/qwen3-tts-voicedesign/
         else
-            echo "  Not in B2 (or empty), downloading from HuggingFace..."
             python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
         fi
     else
-        echo "Qwen3-TTS VoiceDesign already present."
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
     fi
+else
+    echo "Qwen3-TTS VoiceDesign already present."
+fi
 
-    # --- LTX-2.3 diffusers components — needed for ltx and both modes ---
-    if [ "$WORKER_MODE" = "tts" ]; then
-        echo "--- Skipping LTX-2.3 models (tts-only mode, saves ~94 GB download) ---"
-    else
+# --- LTX-2.3 models (ltx-pipelines format) — needed for ltx and both modes ---
+if [ "$WORKER_MODE" = "tts" ]; then
+    echo "--- Skipping LTX-2.3 models (tts-only mode) ---"
+else
     LTX_DIR=/workspace/models/ltx2
     mkdir -p "$LTX_DIR"
 
-    # Root config
-    echo "--- LTX-2.3 config ---"
-    b2 file download "b2://${B2_BUCKET}/ltx2/model_index.json" \
-        "$LTX_DIR/model_index.json" 2>/dev/null || true
-
-    # text_encoder: ONLY transformers format (model-*.safetensors)
-    # The diffusion_pytorch_model-*.safetensors are a duplicate set (~50 GB) — skip them
-    echo "--- text_encoder (~46.6 GB, transformers format only) ---"
-    mkdir -p "$LTX_DIR/text_encoder"
-    for f in config.json generation_config.json model.safetensors.index.json; do
-        if [ ! -f "$LTX_DIR/text_encoder/$f" ]; then
-            b2 file download "b2://${B2_BUCKET}/ltx2/text_encoder/$f" \
-                "$LTX_DIR/text_encoder/$f" 2>/dev/null || true
-        fi
-    done
-    # Download model shards selectively (transformers format only)
-    # b2 ls returns full paths like "ltx2/text_encoder/model-00001-of-00011.safetensors"
-    # so we extract just the basename for matching
-    (b2 ls "b2://${B2_BUCKET}/ltx2/text_encoder/" 2>/dev/null || true) | while read -r fullpath; do
-        filename=$(basename "$fullpath")
-        case "$filename" in
-            model-*.safetensors)
-                if [ ! -f "$LTX_DIR/text_encoder/$filename" ]; then
-                    echo "  downloading: $filename"
-                    b2 file download "b2://${B2_BUCKET}/ltx2/text_encoder/$filename" \
-                        "$LTX_DIR/text_encoder/$filename"
-                else
-                    echo "  already have: $filename"
-                fi
-                ;;
-            diffusion_pytorch_model*)
-                echo "  skipping duplicate format: $filename"
-                ;;
-        esac
-    done
-
-    # Transformer (sharded safetensors from dg845/LTX-2.3-Diffusers ~38 GB)
-    # from_single_file() in diffusers 0.38.0.dev0 maps LTX-2.3 22B weights
-    # incorrectly, producing 100% NaN latents. We MUST use the sharded
-    # diffusers-format weights from dg845/LTX-2.3-Diffusers instead.
-    echo "--- transformer (sharded diffusers weights ~38 GB) ---"
-    mkdir -p "$LTX_DIR/transformer"
-    if [ ! -f "$LTX_DIR/transformer/diffusion_pytorch_model.safetensors.index.json" ]; then
-        pip install --no-cache-dir huggingface_hub 2>/dev/null
-        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns=['transformer/*'])"
-    else
-        echo "  Transformer shards already present."
-    fi
-
-    # Small components (< 3 GB each)
-    for subdir in scheduler tokenizer vae audio_vae vocoder connectors latent_upsampler; do
-        if b2 ls "b2://${B2_BUCKET}/ltx2/${subdir}/" &>/dev/null; then
-            echo "--- ${subdir} ---"
-            mkdir -p "$LTX_DIR/${subdir}"
-            b2 sync --threads 8 "b2://${B2_BUCKET}/ltx2/${subdir}/" "$LTX_DIR/${subdir}/"
-        fi
-    done
-
-    # --- Validate connector config ---
-    # The connector must have per_modality_projections for LTX-2.3
-    echo "--- Validating connector config ---"
-    if ! python3 -c "
-import json, sys
-conn = json.load(open('$LTX_DIR/connectors/config.json'))
-assert conn.get('per_modality_projections') is True, \
-    f'connectors/config.json missing per_modality_projections=true (got {conn.get(\"per_modality_projections\")}). Likely stale LTX-2 weights.'
-print(f'  OK: per_modality_projections={conn.get(\"per_modality_projections\")}')
-" 2>&1; then
-        echo "  WARNING: Connector config invalid. Re-downloading from HuggingFace..."
-        rm -rf "$LTX_DIR/connectors"
-        pip install --no-cache-dir huggingface_hub 2>/dev/null
-        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='connectors/*')"
-    fi
-    fi  # end WORKER_MODE != tts
-
-    echo ""
-    echo "=== Download complete ==="
-    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null || true
-    df -h /
-else
-    echo "WARNING: B2 credentials not set. Downloading from HuggingFace instead."
-    pip install --no-cache-dir huggingface_hub
-
-    python3 -c "
-from huggingface_hub import snapshot_download
-import os
-
-worker_mode = os.environ.get('WORKER_MODE', 'both')
-
-if worker_mode != 'ltx' and not os.path.exists('/workspace/models/qwen3-tts-voicedesign/model.safetensors'):
-    print('Downloading Qwen3-TTS VoiceDesign from HuggingFace...')
-    snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-                      local_dir='/workspace/models/qwen3-tts-voicedesign')
-
-if worker_mode != 'tts':
-    import os
-    ltx_dir = '/workspace/models/ltx2'
-    if not os.path.exists(os.path.join(ltx_dir, 'model_index.json')):
-        print('Downloading LTX-2.3 diffusers components from HuggingFace...')
-        snapshot_download('dg845/LTX-2.3-Diffusers', local_dir=ltx_dir)
+    # 1. Single-file checkpoint (~46 GB) — the core model weights
+    if [ ! -f "$LTX_DIR/ltx-2.3-22b-dev.safetensors" ]; then
+        echo "--- LTX-2.3 checkpoint (~46 GB) ---"
+        python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    'Lightricks/LTX-2',
+    filename='ltx-2.3-22b-dev.safetensors',
+    local_dir='$LTX_DIR',
+)
+print('Checkpoint downloaded.')
 "
-fi
+    else
+        echo "LTX-2.3 checkpoint already present."
+    fi
+
+    # 2. Gemma-3 1B text encoder — required by ltx-pipelines
+    #    We need BOTH:
+    #      - Model weights from google/gemma-3-1b-pt (model.safetensors, config.json)
+    #      - Tokenizer/processor files from Lightricks/LTX-2 tokenizer/ dir
+    #        (preprocessor_config.json is missing from google/gemma-3-1b-pt but
+    #         ltx-core's module_ops_from_gemma_root() requires it)
+    if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/preprocessor_config.json" ]; then
+        echo "--- Gemma-3 1B text encoder (weights + tokenizer) ---"
+        mkdir -p "$LTX_DIR/gemma"
+        python3 -c "
+from huggingface_hub import snapshot_download, hf_hub_download
+
+# 1. Download model weights + basic tokenizer from google/gemma-3-1b-pt
+snapshot_download(
+    'google/gemma-3-1b-pt',
+    local_dir='$LTX_DIR/gemma',
+)
+print('Gemma weights downloaded.')
+
+# 2. Overlay Lightricks tokenizer files (adds preprocessor_config.json etc.)
+for fname in ['preprocessor_config.json', 'processor_config.json', 'chat_template.jinja']:
+    try:
+        hf_hub_download(
+            'Lightricks/LTX-2',
+            filename=f'tokenizer/{fname}',
+            local_dir='$LTX_DIR/gemma',
+            local_dir_use_symlinks=False,
+        )
+        print(f'Downloaded tokenizer/{fname}')
+    except Exception as e:
+        print(f'Warning: could not download tokenizer/{fname}: {e}')
+
+# Move files from tokenizer/ subdirectory to gemma root if needed
+import os, shutil
+tok_subdir = os.path.join('$LTX_DIR/gemma', 'tokenizer')
+if os.path.isdir(tok_subdir):
+    for f in os.listdir(tok_subdir):
+        src = os.path.join(tok_subdir, f)
+        dst = os.path.join('$LTX_DIR/gemma', f)
+        if not os.path.exists(dst):
+            shutil.copy2(src, dst)
+            print(f'Copied {f} to gemma root')
+    shutil.rmtree(tok_subdir, ignore_errors=True)
+
+print('Gemma text encoder ready.')
+"
+    else
+        echo "Gemma text encoder already present."
+    fi
+fi  # end WORKER_MODE != tts
+
+echo ""
+echo "=== Download complete ==="
+du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null || true
+df -h /
 
 # ---------------------------------------------------------------------------
 # Verify GPU
@@ -249,13 +213,10 @@ if [ "$WORKER_MODE" != "ltx" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
 fi
 if [ "$WORKER_MODE" != "tts" ]; then
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/transformer/diffusion_pytorch_model.safetensors.index.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/model_index.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/config.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/text_encoder/model.safetensors.index.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/transformer/config.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/vae/config.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/connectors/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2.3-22b-dev.safetensors"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/preprocessor_config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"
 fi
 
 for f in $VERIFY_FILES; do
