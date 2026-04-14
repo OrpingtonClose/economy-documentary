@@ -608,7 +608,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # The Docker image already has torch pre-installed (resolved from manifest),
         # so we only need FastAPI + other non-torch deps for the health endpoint.
         "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
-        "pip install --no-cache-dir "
+        "pip install --break-system-packages --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
         # Register NVIDIA pip package libs with ldconfig so CUDA shared
