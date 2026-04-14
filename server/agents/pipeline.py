@@ -278,6 +278,9 @@ def _init_pipeline_state(
                 # Store the error on the provisioner so wait_for_worker()
                 # can surface a clear message instead of "No worker spec".
                 provisioner._provision_start_error = str(exc)
+                # Signal _specs_ready so wait_for_worker() unblocks immediately
+                # and checks _provision_start_error instead of waiting 120s.
+                provisioner._specs_ready.set()
 
         t = threading.Thread(
             target=_start_provisioning_bg,
