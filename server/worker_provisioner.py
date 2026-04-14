@@ -733,35 +733,46 @@ def setup_ssh_tunnel(
             f"no SSH connection details (host={spec.ssh_host}, port={spec.ssh_port})"
         )
 
-    # Determine SSH identity file — prefer RSA key (registered with Vast.ai)
-    _ssh_key = os.path.expanduser("~/.ssh/id_rsa")
-    if not os.path.exists(_ssh_key):
-        _ssh_key = os.path.expanduser("~/.ssh/id_ed25519")
-    if not os.path.exists(_ssh_key):
+    # Collect all available SSH identity files.  Vast.ai proxy hosts can be
+    # inconsistent about which key they accept, so we try every available key
+    # on each attempt (round-robin) rather than locking to a single one.
+    _ssh_keys: list[str] = []
+    for _name in ("id_rsa", "id_ed25519"):
+        _path = os.path.expanduser(f"~/.ssh/{_name}")
+        if os.path.exists(_path):
+            _ssh_keys.append(_path)
+    if not _ssh_keys:
         raise RuntimeError(
             f"Cannot set up SSH tunnel for {spec.role}: "
             f"no SSH identity file found at ~/.ssh/id_rsa or ~/.ssh/id_ed25519"
         )
 
-    tunnel_cmd = [
-        "ssh",
-        "-i", _ssh_key,
-        "-o", "IdentitiesOnly=yes",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "ServerAliveInterval=30",
-        "-o", "ServerAliveCountMax=3",
-        "-N",  # no remote command
-        "-L", f"{spec.local_port}:localhost:{spec.remote_port}",
-        "-p", str(spec.ssh_port),
-        f"root@{spec.ssh_host}",
-    ]
+    def _build_tunnel_cmd(key_path: str) -> list[str]:
+        return [
+            "ssh",
+            "-i", key_path,
+            "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-N",  # no remote command
+            "-L", f"{spec.local_port}:localhost:{spec.remote_port}",
+            "-p", str(spec.ssh_port),
+            f"root@{spec.ssh_host}",
+        ]
 
     last_err = ""
     for attempt in range(1, max_retries + 1):
+        # Rotate through available keys so we don't fail all attempts
+        # on a host that only accepts one of them.
+        _ssh_key = _ssh_keys[(attempt - 1) % len(_ssh_keys)]
+        tunnel_cmd = _build_tunnel_cmd(_ssh_key)
+
         logger.info(
-            "Setting up SSH tunnel (attempt %d/%d): localhost:%d -> %s:%d (via %s:%d)",
-            attempt, max_retries,
+            "Setting up SSH tunnel (attempt %d/%d, key=%s): "
+            "localhost:%d -> %s:%d (via %s:%d)",
+            attempt, max_retries, os.path.basename(_ssh_key),
             spec.local_port, spec.ssh_host, spec.remote_port,
             spec.ssh_host, spec.ssh_port,
         )
