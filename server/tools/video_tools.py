@@ -229,11 +229,28 @@ def generate_video_clip(
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         with urlopen(req_inner, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
             result_bytes = resp.read()
+            qa_quality = resp.headers.get("X-QA-Quality", "unknown")
+            qa_reason_raw = resp.headers.get("X-QA-Reason", "")
+
+            # REJECTED = fundamentally broken output (grid artifacts, corrupted
+            # data, body horror, overt AI wonk).  Raise INSIDE the recovery
+            # context so non_retryable_patterns can route to human escalation.
+            if qa_quality == "rejected":
+                import base64 as _b64
+                try:
+                    reason = _b64.b64decode(qa_reason_raw).decode("utf-8")
+                except Exception:
+                    reason = qa_reason_raw
+                raise RuntimeError(
+                    f"QA REJECTED: clip is fundamentally broken and cannot be used. "
+                    f"Reason: {reason}"
+                )
+
             result_meta = {
                 "mp4_bytes": result_bytes,
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
-                "qa_quality": resp.headers.get("X-QA-Quality", "unknown"),
-                "qa_reason_raw": resp.headers.get("X-QA-Reason", ""),
+                "qa_quality": qa_quality,
+                "qa_reason_raw": qa_reason_raw,
                 "qa_attempts": int(resp.headers.get("X-QA-Attempts", "1")),
                 "qa_seed": int(resp.headers.get("X-QA-Seed", str(seed))),
             }
@@ -281,19 +298,6 @@ def generate_video_clip(
         qa_reason = _raw_reason  # fallback: use raw value
     qa_attempts = gpu_result["qa_attempts"]
     qa_seed = gpu_result["qa_seed"]
-
-    # REJECTED = fundamentally broken output (grid artifacts, corrupted data,
-    # body horror, overt AI wonk).  This is an error, not a quality issue.
-    # Raise immediately so the recovery middleware can escalate to human.
-    if qa_quality == "rejected":
-        logger.error(
-            "QA REJECTED clip %s: %s",
-            output_path, qa_reason,
-        )
-        raise RuntimeError(
-            f"QA REJECTED: clip is fundamentally broken and cannot be used. "
-            f"Reason: {qa_reason}"
-        )
 
     # Video downloaded successfully — write to disk
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
