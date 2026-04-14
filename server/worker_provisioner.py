@@ -709,6 +709,11 @@ def setup_ssh_tunnel(
     _ssh_key = os.path.expanduser("~/.ssh/id_rsa")
     if not os.path.exists(_ssh_key):
         _ssh_key = os.path.expanduser("~/.ssh/id_ed25519")
+    if not os.path.exists(_ssh_key):
+        raise RuntimeError(
+            f"Cannot set up SSH tunnel for {spec.role}: "
+            f"no SSH identity file found at ~/.ssh/id_rsa or ~/.ssh/id_ed25519"
+        )
 
     tunnel_cmd = [
         "ssh",
