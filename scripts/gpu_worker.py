@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""GPU Worker — FastAPI service for TTS and video generation.
+"""GPU Worker — autonomous VM agent for TTS and video generation.
 
-Runs on a Vast.ai GPU VM. Exposes HTTP endpoints that the pipeline
-calls to generate narration (Qwen3-TTS) and video clips (LTX-2.3).
+Each VM runs its own agent (VMAgent) that manages the full lifecycle:
+    1. Bootstrap — install deps, download models, categorise errors
+    2. Model loading — load into VRAM with retry/recovery
+    3. Self-monitoring — GPU health, disk, memory on a continuous loop
+    4. Work execution — TTS/video generation via HTTP endpoints
+    5. Escalation — structured escalation log read by the central overseer
+
+The central process (server/infra_agent.py) is the *tending overseer*:
+it reads /status from each VM agent, processes escalations, and makes
+lifecycle decisions (reprovision, restart, etc.).  It does NOT duplicate
+the monitoring that the VM agent already performs.
 
 Usage:
     python gpu_worker.py --mode tts  [--port 8880] [--models-dir ...]  # TTS-only VM
@@ -12,9 +21,7 @@ Usage:
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
     {models_dir}/ltx2/                   — LTX-2.3 directory:
-        ltx-2.3-22b-dev.safetensors    — Official Lightricks single-file checkpoint (~46 GB)
-        ltx-2.3-spatial-upscaler-x2-1.1.safetensors — Spatial upscaler for two-stage pipeline
-        ltx-2.3-22b-distilled-lora-384.safetensors  — Distilled LoRA for stage 2
+        ltx-2-19b-dev.safetensors       — Official Lightricks single-file checkpoint
         gemma/                          — Gemma-3 1B text encoder weights
 
 The bootstrap script (gpu_bootstrap.sh) downloads these from B2/HuggingFace.
@@ -30,10 +37,14 @@ import io
 import json
 import logging
 import os
+import shutil
 import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
 
 import numpy as np
 import soundfile as sf
@@ -67,6 +78,504 @@ class BootstrapStatus(BaseModel):
     error_category: str = ""      # "auth", "network", "disk", "missing_file", "runtime"
     started_at: float = 0.0
     completed_at: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# VMAgent — autonomous infrastructure agent that runs ON this VM.
+#
+# Manages the full lifecycle: bootstrap, model loading, self-monitoring,
+# recovery, and escalation.  The central overseer reads /status to see
+# what this agent is doing and processes its escalation log.
+# ---------------------------------------------------------------------------
+
+class Severity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass
+class EscalationEvent:
+    """A single escalation event for the overseer to read."""
+    timestamp: float
+    severity: str          # "info" | "warning" | "critical"
+    source: str            # e.g. "bootstrap", "gpu", "disk", "generation"
+    message: str
+    details: dict = field(default_factory=dict)
+    acked: bool = False    # True once the overseer has acknowledged it
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "severity": self.severity,
+            "source": self.source,
+            "message": self.message,
+            "details": self.details,
+            "acked": self.acked,
+        }
+
+
+@dataclass
+class HealthSnapshot:
+    """Point-in-time self-monitoring snapshot."""
+    gpu_name: str = ""
+    vram_used_gb: float = 0.0
+    vram_total_gb: float = 0.0
+    vram_pct: float = 0.0
+    gpu_temp_c: float = 0.0
+    disk_free_gb: float = 0.0
+    disk_total_gb: float = 0.0
+    disk_pct: float = 0.0
+    checked_at: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "gpu_name": self.gpu_name,
+            "vram_used_gb": round(self.vram_used_gb, 2),
+            "vram_total_gb": round(self.vram_total_gb, 2),
+            "vram_pct": round(self.vram_pct, 1),
+            "gpu_temp_c": round(self.gpu_temp_c, 1),
+            "disk_free_gb": round(self.disk_free_gb, 1),
+            "disk_total_gb": round(self.disk_total_gb, 1),
+            "disk_pct": round(self.disk_pct, 1),
+            "checked_at": self.checked_at,
+        }
+
+
+class VMAgent:
+    """Autonomous infrastructure agent that runs on this VM.
+
+    Responsibilities:
+    1. Bootstrap lifecycle — run bootstrap script, categorise errors, retry
+       transient failures (network), escalate permanent ones.
+    2. Model loading — load models into VRAM with retry on OOM.
+    3. Self-monitoring — continuous background loop checking GPU health,
+       disk space, VRAM pressure, temperature.
+    4. Local recovery — when self-monitoring detects issues (VRAM > 95%,
+       disk < 5GB, temp > 85°C), take local action (log, escalate).
+    5. Escalation — maintain a structured escalation log that the central
+       overseer reads via /status and /escalations endpoints.
+    6. Task tracking — count generations completed, failures, avg latency.
+
+    The VMAgent is a singleton — created once at startup and referenced
+    by FastAPI endpoints.
+    """
+
+    def __init__(
+        self,
+        worker_mode: str,
+        models_dir: str,
+        output_dir: str,
+        monitor_interval: float = 30.0,
+    ) -> None:
+        self.worker_mode = worker_mode
+        self.models_dir = models_dir
+        self.output_dir = output_dir
+        self._monitor_interval = monitor_interval
+
+        # Bootstrap status
+        self.bootstrap = BootstrapStatus()
+
+        # Self-monitoring
+        self._health: HealthSnapshot = HealthSnapshot()
+        self._lock = threading.Lock()
+        self._shutdown = threading.Event()
+        self._monitor_thread: Optional[threading.Thread] = None
+
+        # Escalation log
+        self._escalations: list[EscalationEvent] = []
+
+        # Task tracking
+        self._tasks_completed: int = 0
+        self._tasks_failed: int = 0
+        self._total_gen_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Bootstrap lifecycle
+    # ------------------------------------------------------------------
+
+    def run_bootstrap(self) -> bool:
+        """Run the full bootstrap lifecycle: deps → models → load.
+
+        Returns True if bootstrap succeeded, False on failure.
+        Retries transient (network) errors up to 2 times.
+        """
+        self.bootstrap.started_at = time.time()
+
+        # Phase 1: Check if models are already present
+        bootstrap_needed = False
+        if self.worker_mode in ("tts", "both"):
+            marker = os.path.join(self.models_dir, "qwen3-tts-voicedesign", "model.safetensors")
+            if not os.path.isfile(marker):
+                bootstrap_needed = True
+        if self.worker_mode in ("ltx", "both"):
+            marker = os.path.join(self.models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
+            if not os.path.isfile(marker):
+                bootstrap_needed = True
+
+        if bootstrap_needed:
+            ok = self._run_bootstrap_script()
+            if not ok:
+                return False
+
+        # Phase 2: Load models into VRAM
+        ok = self._load_models()
+        if not ok:
+            return False
+
+        self.bootstrap.phase = "ready"
+        self.bootstrap.detail = "All models loaded"
+        self.bootstrap.completed_at = time.time()
+        elapsed = self.bootstrap.completed_at - self.bootstrap.started_at
+        logger.info("VMAgent: bootstrap + model loading complete in %.1fs", elapsed)
+        return True
+
+    def _run_bootstrap_script(self) -> bool:
+        """Execute gpu_bootstrap.sh with retry on transient failures."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        bootstrap_script = os.path.join(script_dir, "gpu_bootstrap.sh")
+
+        if not os.path.isfile(bootstrap_script):
+            self._fail_bootstrap(
+                f"Bootstrap script not found at {bootstrap_script}",
+                "missing_file",
+            )
+            return False
+
+        max_retries = 3  # total attempts (1 initial + 2 retries)
+        for attempt in range(1, max_retries + 1):
+            self.bootstrap.phase = "deps" if attempt == 1 else "models"
+            self.bootstrap.detail = (
+                f"Running bootstrap (attempt {attempt}/{max_retries}): "
+                "installing dependencies and downloading models"
+            )
+            logger.info(
+                "VMAgent: bootstrap attempt %d/%d", attempt, max_retries
+            )
+
+            try:
+                env = os.environ.copy()
+                env["WORKER_MODE"] = self.worker_mode
+                result = subprocess.run(
+                    ["bash", bootstrap_script],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,
+                )
+                if result.returncode == 0:
+                    logger.info("VMAgent: bootstrap succeeded on attempt %d", attempt)
+                    return True
+
+                stderr = result.stderr[-2000:] if result.stderr else ""
+                stdout_tail = result.stdout[-1000:] if result.stdout else ""
+                error_cat = self._categorise_error(stderr + stdout_tail)
+
+                # Only retry transient (network) errors
+                if error_cat == "network" and attempt < max_retries:
+                    wait = 15 * attempt
+                    self.escalate(
+                        Severity.WARNING, "bootstrap",
+                        f"Bootstrap attempt {attempt} failed (network) — "
+                        f"retrying in {wait}s: {stderr[-200:]}",
+                    )
+                    time.sleep(wait)
+                    continue
+
+                # Permanent failure
+                self._fail_bootstrap(
+                    f"Bootstrap failed (rc={result.returncode}, attempt {attempt}): "
+                    f"{stderr[-500:]}",
+                    error_cat,
+                )
+                return False
+
+            except subprocess.TimeoutExpired:
+                if attempt < max_retries:
+                    self.escalate(
+                        Severity.WARNING, "bootstrap",
+                        f"Bootstrap timed out on attempt {attempt} — retrying",
+                    )
+                    continue
+                self._fail_bootstrap("Bootstrap timed out after 3600s", "network")
+                return False
+            except Exception as e:
+                self._fail_bootstrap(f"Bootstrap exception: {e}", "runtime")
+                return False
+
+        # Should not reach here
+        self._fail_bootstrap("Bootstrap exhausted all retries", "runtime")
+        return False
+
+    def _load_models(self) -> bool:
+        """Load models into VRAM."""
+        self.bootstrap.phase = "loading"
+        self.bootstrap.detail = "Loading models into VRAM"
+
+        if self.worker_mode == "tts":
+            try:
+                with _model_lock:
+                    _load_tts()
+            except Exception as e:
+                self._fail_bootstrap(f"Failed to load TTS model: {e}", "runtime")
+                return False
+
+        if self.worker_mode in ("ltx", "both"):
+            try:
+                with _model_lock:
+                    _load_ltx()
+            except Exception as e:
+                self._fail_bootstrap(f"Failed to load LTX model: {e}", "runtime")
+                return False
+
+        return True
+
+    def _fail_bootstrap(self, error: str, category: str) -> None:
+        """Record a bootstrap failure and escalate."""
+        self.bootstrap.phase = "error"
+        self.bootstrap.error = error
+        self.bootstrap.error_category = category
+        logger.error("VMAgent BOOTSTRAP FAILED (%s): %s", category, error)
+        self.escalate(Severity.CRITICAL, "bootstrap", error, {"category": category})
+
+    @staticmethod
+    def _categorise_error(combined: str) -> str:
+        """Categorise an error from bootstrap output."""
+        if "401" in combined or "403" in combined or "GatedRepo" in combined:
+            return "auth"
+        if "404" in combined or "EntryNotFound" in combined:
+            return "missing_file"
+        if "No space left" in combined or "disk" in combined.lower():
+            return "disk"
+        if "ConnectionError" in combined or "timeout" in combined.lower():
+            return "network"
+        return "runtime"
+
+    # ------------------------------------------------------------------
+    # Self-monitoring loop
+    # ------------------------------------------------------------------
+
+    def start_monitoring(self) -> None:
+        """Launch the self-monitoring daemon thread."""
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            return
+        self._shutdown.clear()
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop,
+            name="vm-agent-monitor",
+            daemon=True,
+        )
+        self._monitor_thread.start()
+        logger.info("VMAgent: self-monitoring started (interval=%.0fs)", self._monitor_interval)
+
+    def stop_monitoring(self) -> None:
+        """Signal the monitoring loop to stop."""
+        self._shutdown.set()
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=5.0)
+
+    def _monitor_loop(self) -> None:
+        """Continuous self-monitoring: GPU, disk, VRAM, temperature."""
+        # Run one immediate check
+        self._check_health()
+
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(timeout=self._monitor_interval):
+                break
+            self._check_health()
+
+        logger.info("VMAgent: self-monitoring stopped")
+
+    def _check_health(self) -> None:
+        """Run all self-monitoring checks and escalate if needed."""
+        snap = HealthSnapshot(checked_at=time.time())
+
+        # GPU / VRAM
+        if torch.cuda.is_available():
+            snap.gpu_name = torch.cuda.get_device_name(0)
+            snap.vram_used_gb = torch.cuda.memory_allocated(0) / 1e9
+            snap.vram_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            snap.vram_pct = (
+                snap.vram_used_gb / max(snap.vram_total_gb, 0.01) * 100
+            )
+
+        # GPU temperature via nvidia-smi
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                snap.gpu_temp_c = float(result.stdout.strip().split("\n")[0])
+        except Exception:
+            pass
+
+        # Disk space
+        try:
+            usage = shutil.disk_usage(self.models_dir)
+            snap.disk_free_gb = usage.free / (1024**3)
+            snap.disk_total_gb = usage.total / (1024**3)
+            snap.disk_pct = usage.used / max(usage.total, 1) * 100
+        except Exception:
+            pass
+
+        with self._lock:
+            self._health = snap
+
+        # Escalate on concerning conditions
+        if snap.vram_pct > 95:
+            self.escalate(
+                Severity.WARNING, "gpu",
+                f"VRAM pressure: {snap.vram_pct:.0f}% used "
+                f"({snap.vram_used_gb:.1f}/{snap.vram_total_gb:.1f} GB)",
+            )
+        if snap.gpu_temp_c > 85:
+            self.escalate(
+                Severity.WARNING, "gpu",
+                f"GPU temperature high: {snap.gpu_temp_c:.0f}°C",
+            )
+        if snap.disk_free_gb < 5 and snap.disk_total_gb > 0:
+            self.escalate(
+                Severity.WARNING, "disk",
+                f"Disk space low: {snap.disk_free_gb:.1f} GB free",
+            )
+
+    # ------------------------------------------------------------------
+    # Escalation
+    # ------------------------------------------------------------------
+
+    def escalate(
+        self,
+        severity: Severity,
+        source: str,
+        message: str,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Add a structured escalation event.
+
+        The central overseer reads these via /escalations.
+        """
+        event = EscalationEvent(
+            timestamp=time.time(),
+            severity=severity.value,
+            source=source,
+            message=message,
+            details=details or {},
+        )
+        with self._lock:
+            self._escalations.append(event)
+            # Keep last 100 to prevent unbounded growth
+            if len(self._escalations) > 100:
+                self._escalations = self._escalations[-100:]
+
+        log_fn = {
+            Severity.INFO: logger.info,
+            Severity.WARNING: logger.warning,
+            Severity.CRITICAL: logger.critical,
+        }.get(severity, logger.warning)
+        log_fn("VMAgent ESCALATION [%s] %s: %s", severity.value, source, message)
+
+    def ack_escalations(self, before_ts: float) -> int:
+        """Mark escalations before `before_ts` as acknowledged.
+
+        Returns number of newly acknowledged events.
+        Called by the overseer via POST /escalations/ack.
+        """
+        count = 0
+        with self._lock:
+            for e in self._escalations:
+                if not e.acked and e.timestamp <= before_ts:
+                    e.acked = True
+                    count += 1
+        return count
+
+    # ------------------------------------------------------------------
+    # Task tracking
+    # ------------------------------------------------------------------
+
+    def record_task(self, success: bool, gen_time: float) -> None:
+        """Record a completed generation task."""
+        with self._lock:
+            if success:
+                self._tasks_completed += 1
+            else:
+                self._tasks_failed += 1
+            self._total_gen_time += gen_time
+
+    # ------------------------------------------------------------------
+    # Status reporting
+    # ------------------------------------------------------------------
+
+    def get_status(self) -> dict:
+        """Full status snapshot for the overseer.
+
+        This is the single source of truth for what this VM is doing.
+        The overseer reads this via GET /status.
+        """
+        with self._lock:
+            health = self._health.to_dict()
+            escalations = [e.to_dict() for e in self._escalations[-20:]]
+            unacked = sum(1 for e in self._escalations if not e.acked)
+            tasks_completed = self._tasks_completed
+            tasks_failed = self._tasks_failed
+            avg_gen = (
+                self._total_gen_time / max(tasks_completed + tasks_failed, 1)
+            )
+
+        return {
+            "worker_mode": self.worker_mode,
+            "bootstrap": {
+                "phase": self.bootstrap.phase,
+                "detail": self.bootstrap.detail,
+                "error": self.bootstrap.error,
+                "error_category": self.bootstrap.error_category,
+                "started_at": self.bootstrap.started_at,
+                "completed_at": self.bootstrap.completed_at,
+            },
+            "models": {
+                "tts_loaded": _tts_model is not None,
+                "ltx_loaded": _ltx_pipe is not None,
+            },
+            "health": health,
+            "escalations": {
+                "recent": escalations,
+                "unacked_count": unacked,
+                "total": len(self._escalations),
+            },
+            "tasks": {
+                "completed": tasks_completed,
+                "failed": tasks_failed,
+                "avg_gen_time_sec": round(avg_gen, 1),
+            },
+        }
+
+    def get_health_response(self) -> dict:
+        """Quick health check for backward compat with /health endpoint."""
+        with self._lock:
+            snap = self._health
+
+        status = "error" if self.bootstrap.phase == "error" else "ok"
+        return {
+            "status": status,
+            "gpu": snap.gpu_name,
+            "tts_loaded": _tts_model is not None,
+            "ltx_loaded": _ltx_pipe is not None,
+            "vram_used_gb": round(snap.vram_used_gb, 2),
+            "vram_total_gb": round(snap.vram_total_gb, 2),
+            "bootstrap": {
+                "phase": self.bootstrap.phase,
+                "detail": self.bootstrap.detail,
+                "error": self.bootstrap.error,
+                "error_category": self.bootstrap.error_category,
+                "started_at": self.bootstrap.started_at,
+                "completed_at": self.bootstrap.completed_at,
+            },
+        }
+
+
+# Module-level singleton — set in main()
+_vm_agent: Optional[VMAgent] = None
 
 
 # ---------------------------------------------------------------------------
@@ -960,7 +1469,16 @@ def _generate_video(
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
-async def health() -> HealthResponse:
+async def health():
+    """Quick health check — backward-compatible with provisioner.
+
+    If the VMAgent is running, delegate to it (richer data).
+    Otherwise fall back to the minimal HealthResponse.
+    """
+    if _vm_agent is not None:
+        return _vm_agent.get_health_response()
+
+    # Fallback for legacy callers (should not happen in normal operation)
     gpu_name = "unknown"
     vram_used = 0.0
     vram_total = 0.0
@@ -969,11 +1487,7 @@ async def health() -> HealthResponse:
         vram_used = torch.cuda.memory_allocated(0) / 1e9
         vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
 
-    # status reflects bootstrap health: "error" if bootstrap failed,
-    # "ok" otherwise (even if models aren't loaded yet — that's normal
-    # during startup and the provisioner checks tts_loaded/ltx_loaded).
     status = "error" if _bootstrap_status.phase == "error" else "ok"
-
     return HealthResponse(
         status=status,
         gpu=gpu_name,
@@ -983,6 +1497,43 @@ async def health() -> HealthResponse:
         vram_total_gb=round(vram_total, 2),
         bootstrap=_bootstrap_status,
     )
+
+
+@app.get("/status")
+async def status_endpoint():
+    """Full VM agent status — the overseer reads this.
+
+    Includes bootstrap, models, self-monitoring health, escalations,
+    and task tracking.  This is the single source of truth for what
+    this VM is doing.
+    """
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    return _vm_agent.get_status()
+
+
+@app.get("/escalations")
+async def escalations_endpoint():
+    """Return unacknowledged escalation events for the overseer."""
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    with _vm_agent._lock:
+        unacked = [
+            e.to_dict() for e in _vm_agent._escalations if not e.acked
+        ]
+    return {"escalations": unacked, "count": len(unacked)}
+
+
+@app.post("/escalations/ack")
+async def ack_escalations_endpoint(before_ts: float):
+    """Acknowledge escalations up to a given timestamp.
+
+    Called by the central overseer after it has processed the events.
+    """
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    count = _vm_agent.ack_escalations(before_ts)
+    return {"acknowledged": count}
 
 
 @app.post("/tts")
@@ -998,12 +1549,20 @@ def tts_endpoint(req: TTSRequest):
         req.scene_num, req.voice, req.language, len(req.text),
     )
     t0 = time.time()
+    success = False
 
     with _model_lock:
         try:
             audio_array, sr = _generate_tts(req.text, req.voice, req.language)
+            success = True
         except Exception as e:
             logger.error("TTS failed: %s", e, exc_info=True)
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
+                _vm_agent.escalate(
+                    Severity.WARNING, "generation",
+                    f"TTS generation failed: {e}",
+                )
             raise HTTPException(500, f"TTS generation failed: {e}")
 
     # Encode as WAV (no lock needed — local data only)
@@ -1013,6 +1572,8 @@ def tts_endpoint(req: TTSRequest):
 
     elapsed = time.time() - t0
     duration = len(audio_array) / sr
+    if _vm_agent:
+        _vm_agent.record_task(success, elapsed)
     logger.info(
         "TTS done: %.1fs audio in %.1fs (%.1fx realtime)",
         duration, elapsed, duration / max(elapsed, 0.01),
@@ -1066,12 +1627,22 @@ def video_endpoint(req: VideoRequest):
                 stg_blocks=req.stg_blocks,
             )
         except HTTPException:
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
             raise
         except Exception as e:
             logger.error("Video failed: %s", e, exc_info=True)
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
+                _vm_agent.escalate(
+                    Severity.WARNING, "generation",
+                    f"Video generation failed: {e}",
+                )
             raise HTTPException(500, f"Video generation failed: {e}")
 
     elapsed = time.time() - t0
+    if _vm_agent:
+        _vm_agent.record_task(True, elapsed)
     logger.info(
         "Video done: %d bytes in %.1fs, qa=%s",
         len(mp4_bytes), elapsed, qa_status.get("quality", "unknown"),
@@ -1137,7 +1708,7 @@ def load_models(model: str = "tts"):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="GPU Worker for Documentary Pipeline")
+    parser = argparse.ArgumentParser(description="GPU Worker — autonomous VM agent")
     parser.add_argument("--port", type=int, default=8880)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--models-dir", type=str, default="/workspace/models")
@@ -1153,136 +1724,58 @@ def main():
     )
     args = parser.parse_args()
 
-    global _models_dir, _output_dir, _worker_mode
+    global _models_dir, _output_dir, _worker_mode, _vm_agent, _bootstrap_status
     _models_dir = args.models_dir
     _output_dir = args.output_dir
     _worker_mode = args.mode
 
     os.makedirs(_output_dir, exist_ok=True)
 
-    logger.info("Starting GPU Worker on %s:%d (mode=%s)", args.host, args.port, _worker_mode)
+    # --- Create the VMAgent ---
+    # The agent manages the full lifecycle: bootstrap, model loading,
+    # self-monitoring, recovery, escalation.  FastAPI starts immediately
+    # so /health is reachable; the agent runs bootstrap + model loading
+    # in a background thread and reports structured status.
+    agent = VMAgent(
+        worker_mode=_worker_mode,
+        models_dir=_models_dir,
+        output_dir=_output_dir,
+    )
+    _vm_agent = agent
+    # Share the bootstrap status so legacy /health callers see it too
+    _bootstrap_status = agent.bootstrap
+
+    logger.info(
+        "Starting VM Agent on %s:%d (mode=%s)",
+        args.host, args.port, _worker_mode,
+    )
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
 
-    # Run bootstrap + model loading in a background thread so uvicorn
-    # starts immediately.  The /health endpoint reports structured bootstrap
-    # status so the provisioner knows exactly what's happening and can
-    # escalate failures through the recovery infrastructure.
-    import threading
+    # Background thread: bootstrap → model loading → start monitoring.
+    # FastAPI starts immediately so the /health endpoint is reachable
+    # during the bootstrap phase.  The overseer reads structured status
+    # from /health and /status to know exactly what's happening.
+    def _agent_lifecycle():
+        ok = agent.run_bootstrap()
+        if ok:
+            # Models loaded — start continuous self-monitoring
+            agent.start_monitoring()
+        else:
+            # Bootstrap failed — the agent has already escalated.
+            # The self-monitoring loop still starts so we report
+            # health even in the error state (e.g. disk, temp).
+            agent.start_monitoring()
+            logger.error(
+                "VMAgent: bootstrap failed — agent is in error state. "
+                "Overseer should read /status for details."
+            )
 
-    def _background_bootstrap_and_load():
-        global _bootstrap_status
-        _bootstrap_status.started_at = time.time()
-
-        # Phase 1: Run bootstrap script if models aren't present yet
-        bootstrap_needed = False
-        if _worker_mode in ("tts", "both"):
-            tts_marker = os.path.join(_models_dir, "qwen3-tts-voicedesign", "model.safetensors")
-            if not os.path.isfile(tts_marker):
-                bootstrap_needed = True
-        if _worker_mode in ("ltx", "both"):
-            ltx_marker = os.path.join(_models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
-            if not os.path.isfile(ltx_marker):
-                bootstrap_needed = True
-
-        if bootstrap_needed:
-            _bootstrap_status.phase = "deps"
-            _bootstrap_status.detail = "Running bootstrap: installing dependencies and downloading models"
-            logger.info("Bootstrap needed — running gpu_bootstrap.sh")
-
-            # Find the bootstrap script relative to this file
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            bootstrap_script = os.path.join(script_dir, "gpu_bootstrap.sh")
-            if not os.path.isfile(bootstrap_script):
-                _bootstrap_status.phase = "error"
-                _bootstrap_status.error = f"Bootstrap script not found at {bootstrap_script}"
-                _bootstrap_status.error_category = "missing_file"
-                logger.error("Bootstrap script not found: %s", bootstrap_script)
-                return
-
-            try:
-                _bootstrap_status.phase = "models"
-                _bootstrap_status.detail = "Downloading model weights"
-                env = os.environ.copy()
-                env["WORKER_MODE"] = _worker_mode
-                result = subprocess.run(
-                    ["bash", bootstrap_script],
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=3600,  # 1 hour max for bootstrap
-                )
-                if result.returncode != 0:
-                    stderr = result.stderr[-2000:] if result.stderr else ""
-                    stdout_tail = result.stdout[-1000:] if result.stdout else ""
-                    # Categorize the error
-                    error_cat = "runtime"
-                    combined = stderr + stdout_tail
-                    if "401" in combined or "403" in combined or "GatedRepo" in combined:
-                        error_cat = "auth"
-                    elif "404" in combined or "EntryNotFound" in combined:
-                        error_cat = "missing_file"
-                    elif "No space left" in combined or "disk" in combined.lower():
-                        error_cat = "disk"
-                    elif "ConnectionError" in combined or "timeout" in combined.lower():
-                        error_cat = "network"
-
-                    _bootstrap_status.phase = "error"
-                    _bootstrap_status.error = f"Bootstrap failed (rc={result.returncode}): {stderr[-500:]}"
-                    _bootstrap_status.error_category = error_cat
-                    logger.error(
-                        "Bootstrap failed (rc=%d, category=%s): %s",
-                        result.returncode, error_cat, stderr[-500:],
-                    )
-                    return
-                logger.info("Bootstrap completed successfully")
-            except subprocess.TimeoutExpired:
-                _bootstrap_status.phase = "error"
-                _bootstrap_status.error = "Bootstrap timed out after 3600s"
-                _bootstrap_status.error_category = "network"
-                logger.error("Bootstrap timed out")
-                return
-            except Exception as e:
-                _bootstrap_status.phase = "error"
-                _bootstrap_status.error = f"Bootstrap exception: {e}"
-                _bootstrap_status.error_category = "runtime"
-                logger.error("Bootstrap exception: %s", e, exc_info=True)
-                return
-
-        # Phase 2: Load models into VRAM
-        _bootstrap_status.phase = "loading"
-        _bootstrap_status.detail = "Loading models into VRAM"
-
-        if _worker_mode == "tts":
-            try:
-                with _model_lock:
-                    _load_tts()
-            except Exception as e:
-                _bootstrap_status.phase = "error"
-                _bootstrap_status.error = f"Failed to load TTS model: {e}"
-                _bootstrap_status.error_category = "runtime"
-                logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
-                return
-        if _worker_mode in ("ltx", "both"):
-            try:
-                with _model_lock:
-                    _load_ltx()
-            except Exception as e:
-                _bootstrap_status.phase = "error"
-                _bootstrap_status.error = f"Failed to load LTX model: {e}"
-                _bootstrap_status.error_category = "runtime"
-                logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
-                return
-
-        _bootstrap_status.phase = "ready"
-        _bootstrap_status.detail = "All models loaded"
-        _bootstrap_status.completed_at = time.time()
-        elapsed = _bootstrap_status.completed_at - _bootstrap_status.started_at
-        logger.info("Bootstrap + model loading complete in %.1fs", elapsed)
-
-    preload_thread = threading.Thread(target=_background_bootstrap_and_load, daemon=True)
-    preload_thread.start()
-    logger.info("Background bootstrap + model loading started")
+    lifecycle_thread = threading.Thread(
+        target=_agent_lifecycle, name="vm-agent-lifecycle", daemon=True,
+    )
+    lifecycle_thread.start()
+    logger.info("VMAgent lifecycle thread started")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

@@ -1,29 +1,38 @@
 """
-Active infrastructure agent — continuous health monitoring, auto-recovery,
-and escalation.
+Infrastructure overseer — reads VM agent status, processes escalations,
+makes lifecycle decisions.
 
-The contracts in ``contracts.py`` are **passive gates** checked at stage
-transitions.  This module is the **active watchdog** that runs continuously
-alongside the pipeline:
+Architecture (VM-side agent model):
 
-1. **Worker health polling** — every ``poll_interval`` seconds, hit each
-   worker's ``/health`` endpoint.  Track consecutive failures.
-2. **Auto-recovery** — when a worker fails, wait and retry.  If the worker
-   stays down, mark it degraded.
-3. **Pipeline pause** — when a *critical* worker (TTS during audio stage,
-   video during production stage) goes down, set a pause flag that
-   callbacks can check before starting expensive work.
-4. **Stage timing watchdog** — track how long the current stage has been
-   running.  ``2×`` expected duration → warning; ``4×`` → critical alert.
-5. **Escalation ladder** — log → retry → pause → alert operator.
+    Each GPU VM runs its own **VMAgent** (in ``scripts/gpu_worker.py``)
+    that manages the full lifecycle: bootstrap, model loading,
+    self-monitoring (GPU health, disk, VRAM, temperature), local
+    recovery, and structured escalation.
+
+    This module is the **central overseer** that runs on the backend
+    server.  It does NOT duplicate the monitoring the VM agents already
+    perform.  Instead it:
+
+    1. **Reads VM agent status** — every ``poll_interval`` seconds, hit
+       each VM's ``/status`` endpoint to get rich data (bootstrap phase,
+       health snapshot, escalation log, task tracking).
+    2. **Processes escalations** — reads unacked escalation events from
+       each VM agent and acts on them (log, pause pipeline, alert).
+    3. **Acknowledges escalations** — once processed, POSTs back to
+       ``/escalations/ack`` so the VM agent can prune its log.
+    4. **Pipeline pause** — when a critical VM agent reports errors or
+       unrecoverable failures, pauses the pipeline.
+    5. **Stage timing watchdog** — tracks how long the current stage has
+       been running.  ``2×`` expected duration → warning; ``4×`` → critical.
+    6. **Lifecycle decisions** — based on VM agent status, decides whether
+       to keep waiting, restart a VM, or alert the operator.
 
 Architecture invariants enforced:
 
 - One model per VM — never share, never swap.
-- Every required service must be confirmed healthy before pipeline start
-  (pre-flight in ``run_pipeline.py``).  This agent enforces the same rule
-  *continuously* throughout the run.
+- Every required service must be confirmed healthy before pipeline start.
 - Never silently degrade — if a critical worker dies, stop and report loud.
+- The overseer READS from VM agents; it does NOT do the work they do.
 
 Usage::
 
@@ -127,7 +136,17 @@ _EXPECTED_STAGE_DURATIONS: dict[str, float] = {
 
 
 class InfraAgent:
-    """Active infrastructure monitor that runs alongside the pipeline.
+    """Central overseer that reads VM agent status and makes lifecycle decisions.
+
+    Each VM runs its own VMAgent (in scripts/gpu_worker.py) that handles
+    bootstrap, self-monitoring, local recovery, and escalation.  This
+    overseer reads the rich /status endpoint from each VM agent and:
+
+    - Processes escalation events forwarded by VM agents
+    - Pauses the pipeline when critical workers go down
+    - Tracks stage timing and alerts on slow stages
+    - Auto-resumes when workers recover
+    - Uploads status to B2 for external dashboards
 
     Thread-safe: the pipeline (running in its own asyncio loop or thread)
     can call ``is_paused()``, ``get_status()``, ``notify_stage_start()``
@@ -136,10 +155,9 @@ class InfraAgent:
     Parameters
     ----------
     poll_interval:
-        Seconds between health polls (default 30).
+        Seconds between reading VM agent status (default 30).
     max_consecutive_failures:
-        How many consecutive failures before marking a worker degraded
-        and escalating (default 3).
+        How many consecutive failures before escalating (default 3).
     """
 
     def __init__(
@@ -194,7 +212,7 @@ class InfraAgent:
             self._workers = workers
 
         logger.info(
-            "InfraAgent discovered %d workers: %s",
+            "Overseer discovered %d workers: %s",
             len(workers),
             ", ".join(f"{w.role.value}@{w.url}" for w in workers),
         )
@@ -204,55 +222,160 @@ class InfraAgent:
     # ------------------------------------------------------------------
 
     def _check_worker_health(self, worker: WorkerSnapshot) -> None:
-        """Poll a single worker's /health endpoint (synchronous).
+        """Read a VM agent's /status endpoint (rich data) with /health fallback.
 
+        The overseer prefers /status because it includes bootstrap phase,
+        health snapshot (GPU temp, disk), escalation log, and task tracking.
+        Falls back to /health for backward compat if /status is not available.
         Updates the worker snapshot in-place.
         """
-        health_url = f"{worker.url.rstrip('/')}/health"
+        # Try /status first (VMAgent endpoint)
+        status_url = f"{worker.url.rstrip('/')}/status"
+        data = None
+        used_status = False
         try:
-            req = Request(health_url)
+            req = Request(status_url)
             with urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode())
-        except Exception as exc:
-            worker.status = WorkerStatus.UNREACHABLE
-            worker.consecutive_failures += 1
-            worker.last_error = str(exc)
-            worker.last_check = time.time()
-            worker.model_loaded = False
-            return
+            used_status = True
+        except Exception:
+            # Fall back to /health
+            health_url = f"{worker.url.rstrip('/')}/health"
+            try:
+                req = Request(health_url)
+                with urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+            except Exception as exc:
+                worker.status = WorkerStatus.UNREACHABLE
+                worker.consecutive_failures += 1
+                worker.last_error = str(exc)
+                worker.last_check = time.time()
+                worker.model_loaded = False
+                return
 
         worker.last_check = time.time()
-        worker.gpu_name = data.get("gpu", "")
-        worker.vram_used_gb = float(data.get("vram_used_gb", 0))
-        worker.vram_total_gb = float(data.get("vram_total_gb", 0))
 
-        if data.get("status") != "ok":
-            worker.status = WorkerStatus.DEGRADED
-            worker.consecutive_failures += 1
-            worker.last_error = f"unhealthy status: {data.get('status')}"
-            worker.model_loaded = False
-            return
+        if used_status:
+            # Rich data from VMAgent /status endpoint
+            health = data.get("health", {})
+            bootstrap = data.get("bootstrap", {})
+            models = data.get("models", {})
 
-        # Check model loaded
-        capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
-        loaded_key = f"{capability}_loaded"
-        if not data.get(loaded_key, False):
-            worker.status = WorkerStatus.DEGRADED
-            worker.consecutive_failures += 1
-            worker.last_error = f"{capability} model not loaded"
-            worker.model_loaded = False
-            return
+            worker.gpu_name = health.get("gpu_name", "")
+            worker.vram_used_gb = float(health.get("vram_used_gb", 0))
+            worker.vram_total_gb = float(health.get("vram_total_gb", 0))
 
-        # All good
+            # Check bootstrap phase
+            phase = bootstrap.get("phase", "")
+            if phase == "error":
+                worker.status = WorkerStatus.DEGRADED
+                worker.consecutive_failures += 1
+                worker.last_error = (
+                    f"Bootstrap failed ({bootstrap.get('error_category', 'unknown')}): "
+                    f"{bootstrap.get('error', '')[:200]}"
+                )
+                worker.model_loaded = False
+                return
+
+            # Check model loaded
+            capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
+            loaded_key = f"{capability}_loaded"
+            if not models.get(loaded_key, False):
+                # Not loaded yet — could still be bootstrapping
+                if phase in ("idle", "deps", "models", "loading"):
+                    # Still bootstrapping — don't count as failure
+                    worker.status = WorkerStatus.DEGRADED
+                    worker.last_error = f"Bootstrapping: {bootstrap.get('detail', phase)}"
+                    worker.model_loaded = False
+                    # Don't increment consecutive_failures during bootstrap
+                    return
+                worker.status = WorkerStatus.DEGRADED
+                worker.consecutive_failures += 1
+                worker.last_error = f"{capability} model not loaded"
+                worker.model_loaded = False
+                return
+
+            # Process VM agent escalations
+            self._process_vm_escalations(worker, data)
+
+        else:
+            # Legacy /health data
+            worker.gpu_name = data.get("gpu", "")
+            worker.vram_used_gb = float(data.get("vram_used_gb", 0))
+            worker.vram_total_gb = float(data.get("vram_total_gb", 0))
+
+            if data.get("status") != "ok":
+                worker.status = WorkerStatus.DEGRADED
+                worker.consecutive_failures += 1
+                worker.last_error = f"unhealthy status: {data.get('status')}"
+                worker.model_loaded = False
+                return
+
+            capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
+            loaded_key = f"{capability}_loaded"
+            if not data.get(loaded_key, False):
+                worker.status = WorkerStatus.DEGRADED
+                worker.consecutive_failures += 1
+                worker.last_error = f"{capability} model not loaded"
+                worker.model_loaded = False
+                return
+
+        # All good — model loaded, no errors
         if worker.consecutive_failures > 0:
             logger.info(
-                "InfraAgent: %s worker at %s recovered after %d failures",
+                "Overseer: %s worker at %s recovered after %d failures",
                 worker.role.value, worker.url, worker.consecutive_failures,
             )
         worker.status = WorkerStatus.HEALTHY
         worker.consecutive_failures = 0
         worker.last_error = ""
         worker.model_loaded = True
+
+    def _process_vm_escalations(self, worker: WorkerSnapshot, status_data: dict) -> None:
+        """Process escalation events from a VM agent.
+
+        Reads unacked escalations from the /status response and forwards
+        critical ones to the overseer's own escalation log.  Then acknowledges
+        them on the VM agent.
+        """
+        escalations_data = status_data.get("escalations", {})
+        recent = escalations_data.get("recent", [])
+        if not recent:
+            return
+
+        max_ts = 0.0
+        for esc in recent:
+            if esc.get("acked"):
+                continue
+            ts = esc.get("timestamp", 0.0)
+            max_ts = max(max_ts, ts)
+            sev_str = esc.get("severity", "info")
+            severity = {
+                "info": Severity.INFO,
+                "warning": Severity.WARNING,
+                "critical": Severity.CRITICAL,
+            }.get(sev_str, Severity.WARNING)
+
+            # Forward to overseer's escalation log with source prefix
+            self._escalate(
+                severity=severity,
+                source=f"vm:{worker.role.value}:{esc.get('source', 'unknown')}",
+                message=f"[VM Agent] {esc.get('message', '')}",
+                details=esc.get("details", {}),
+            )
+
+        # Acknowledge processed escalations on the VM agent
+        if max_ts > 0:
+            try:
+                ack_url = f"{worker.url.rstrip('/')}/escalations/ack?before_ts={max_ts}"
+                ack_req = Request(ack_url, method="POST", data=b"")
+                with urlopen(ack_req, timeout=5) as resp:
+                    resp.read()  # consume response
+            except Exception as exc:
+                logger.debug(
+                    "Overseer: failed to ack escalations on %s: %s",
+                    worker.url, exc,
+                )
 
     def _poll_all_workers(self) -> None:
         """Poll all registered workers and handle escalation."""
@@ -480,7 +603,7 @@ class InfraAgent:
             Severity.CRITICAL: logger.critical,
         }.get(severity, logger.warning)
 
-        log_fn("INFRA-AGENT [%s] %s: %s", severity.value, source, message)
+        log_fn("OVERSEER [%s] %s: %s", severity.value, source, message)
 
     # ------------------------------------------------------------------
     # Status reporting
@@ -608,11 +731,11 @@ class InfraAgent:
 
         Uses ``threading.Event.wait(timeout)`` for interruptible sleep.
         """
-        logger.info("InfraAgent: monitoring started (poll_interval=%.0fs)", self._poll_interval)
+        logger.info("Overseer: monitoring started (poll_interval=%.0fs)", self._poll_interval)
 
         # Initial health check
         self._poll_all_workers()
-        logger.info("InfraAgent: initial health: %s", self.get_worker_summary())
+        logger.info("Overseer: initial health: %s", self.get_worker_summary())
 
         poll_count = 0
         while not self._shutdown_event.is_set():
@@ -633,7 +756,7 @@ class InfraAgent:
             if self.is_paused():
                 self._check_auto_resume()
 
-        logger.info("InfraAgent: monitoring stopped after %d polls", poll_count)
+        logger.info("Overseer: monitoring stopped after %d polls", poll_count)
 
     def _check_auto_resume(self) -> None:
         """Auto-resume pipeline if the worker that caused the pause has recovered."""
@@ -695,7 +818,7 @@ class InfraAgent:
                 logger.warning("InfraAgent: worker %s already registered", url)
                 return
             self._workers.append(WorkerSnapshot(url=url, role=role))
-        logger.info("InfraAgent: added %s worker at %s", role.value, url)
+        logger.info("Overseer: added %s worker at %s", role.value, url)
 
     def remove_worker(self, url: str) -> None:
         """Unregister a worker (e.g. after terminating a VM).
@@ -704,7 +827,7 @@ class InfraAgent:
         """
         with self._lock:
             self._workers = [w for w in self._workers if w.url != url]
-        logger.info("InfraAgent: removed worker at %s", url)
+        logger.info("Overseer: removed worker at %s", url)
 
     def get_healthy_workers(self, role: Optional[WorkerRole] = None) -> list[str]:
         """Return URLs of all healthy workers, optionally filtered by role.
