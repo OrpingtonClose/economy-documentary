@@ -479,7 +479,11 @@ class ProductionOrchestrator:
         replan_count = 0
         completed_clip_ids: set[str] = set()
 
-        for batch_idx, batch in enumerate(plan.batches):
+        # Use while-loop so replanned batches are picked up — a for-loop
+        # evaluates the iterable once and would ignore plan reassignments.
+        batch_idx = 0
+        while batch_idx < len(plan.batches):
+            batch = plan.batches[batch_idx]
             self._emit_planning_event("batch_start", {
                 "batch_idx": batch_idx,
                 "total_batches": len(plan.batches),
@@ -528,6 +532,8 @@ class ProductionOrchestrator:
                     })
                 except Exception as e:
                     logger.warning("Replan failed, continuing with original plan: %s", e)
+
+            batch_idx += 1
 
         # Post-process all results through OTIO + gatekeeper
         total_clips, skipped_clips, errors, deferred_gk_clips = process_results_to_otio(
