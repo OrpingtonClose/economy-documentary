@@ -16,8 +16,8 @@ import logging
 from google.adk.agents import Agent
 
 from agents.model_config import build_model
-from callbacks.deterministic_steps import deterministic_production_callback
 from callbacks.timeline_guardian import timeline_guardian_callback
+from orchestrator.production_orchestrator import orchestrated_production_callback
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,6 @@ production_supervisor = Agent(
     model=build_model(),
     instruction=_INSTRUCTION,
     tools=[],
-    before_agent_callback=deterministic_production_callback,
+    before_agent_callback=orchestrated_production_callback,
     after_agent_callback=timeline_guardian_callback,
 )
