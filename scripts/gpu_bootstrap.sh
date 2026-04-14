@@ -90,19 +90,20 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # ---------------------------------------------------------------------------
 # IMPORTANT: The Docker image (pytorch/pytorch:2.6.0-cuda12.4) has conda
 # torch 2.6.0 pre-installed.  pip sees it as satisfying 'torch>=2.6.0' and
-# skips the cu130 install.  We MUST uninstall the conda version first so
-# pip actually installs the correct CUDA wheels (which bundle nvidia-cuda-runtime
-# providing libcudart.so.13 and have _maybe_view_chunk_cat).
-# NOTE: Neither pip uninstall nor conda remove reliably removes conda torch.
-# Force-delete the site-packages directories, then pip uninstall as fallback.
-echo "Removing pre-installed conda torch (rm -rf + pip uninstall)..."
+# skips the cu130 install.  We MUST aggressively clean conda torch first.
+# The combination of conda remove + rm -rf + --force-reinstall is the
+# community-tested bulletproof fix for this Docker image.
+echo "=== Cleaning conda PyTorch (cu12.4) ==="
+conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null || true
 rm -rf /opt/conda/lib/python*/site-packages/torch* \
        /opt/conda/lib/python*/site-packages/torchvision* \
-       /opt/conda/lib/python*/site-packages/torchaudio* 2>/dev/null || true
+       /opt/conda/lib/python*/site-packages/torchaudio* \
+       /opt/conda/lib/python*/site-packages/nvidia* \
+       /opt/conda/pkgs/*torch* 2>/dev/null || true
+
+echo "=== Installing PyTorch wheels (brings libcudart.so.13 + Torch >=2.7) ==="
 pip install --force-reinstall --no-cache-dir \
-    'torch>=2.6.0' \
-    'torchvision>=0.21.0' \
-    'torchaudio>=2.6.0' \
+    torch torchvision torchaudio \
     --index-url "$TORCH_INDEX"
 
 # Register NVIDIA pip package lib dirs (libcudart.so.13 etc.) with ldconfig.
