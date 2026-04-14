@@ -232,29 +232,9 @@ def generate_video_clip(
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
             qa_reason_raw = resp.headers.get("X-QA-Reason", "")
 
-            # REJECTED = fundamentally broken output (grid artifacts, corrupted
-            # data, body horror, overt AI wonk).  Raise INSIDE the recovery
-            # context so non_retryable_patterns can route to human escalation.
-            # In quick-test mode, demote to warning and accept the clip so
-            # the pipeline can complete end-to-end.
-            if qa_quality == "rejected":
-                import base64 as _b64
-                try:
-                    reason = _b64.b64decode(qa_reason_raw).decode("utf-8")
-                except Exception:
-                    reason = qa_reason_raw
-                if os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes"):
-                    logger.warning(
-                        "QA REJECTED clip (quick-test mode — accepting anyway): %s",
-                        reason[:200],
-                    )
-                    qa_quality = "rejected_accepted"
-                else:
-                    raise RuntimeError(
-                        f"QA REJECTED: clip is fundamentally broken and cannot be used. "
-                        f"Reason: {reason}"
-                    )
-
+            # Always return video bytes regardless of QA quality.
+            # Save-to-disk + B2 upload happens BEFORE the QA gate so
+            # that every generated clip is persisted for inspection.
             result_meta = {
                 "mp4_bytes": result_bytes,
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
@@ -308,26 +288,9 @@ def generate_video_clip(
     qa_attempts = gpu_result["qa_attempts"]
     qa_seed = gpu_result["qa_seed"]
 
-    # GAP 3.1: Client-side QA rejection gate — never accept poor-quality clips
-    if qa_quality == "poor":
-        raise RuntimeError(
-            f"Video clip REJECTED by QA (quality='poor'): {qa_reason}. "
-            f"Clip: {output_path}. The pipeline MUST NOT accept poor-quality "
-            f"clips — they waste all downstream assembly time."
-        )
-    if qa_quality == "unknown":
-        logger.warning(
-            "Video clip QA returned 'unknown' for %s — "
-            "this means QA failed to evaluate. Treating as degraded.",
-            output_path,
-        )
-        if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
-            raise RuntimeError(
-                f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
-                f"STRICT_QA mode requires all clips to pass QA."
-            )
-
-    # Video downloaded successfully — write to disk
+    # ── PERSIST FIRST ── save to disk + B2 before any QA gate ──────────
+    # Every generated clip is persisted for inspection regardless of QA
+    # outcome.  QA quality checks happen AFTER the clip is safely stored.
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "wb") as f:
         f.write(mp4_bytes)
@@ -358,6 +321,48 @@ def generate_video_clip(
         upload_video_clip(output_path, status_path)
     except Exception as b2_err:
         logger.warning("B2 upload failed for video clip %s: %s", output_path, b2_err)
+
+    # ── QA GATE ── quality checks run AFTER persist ────────────────────
+    _is_quick_test = os.environ.get(
+        "DOCUMENTARY_QUICK_TEST", ""
+    ).strip().lower() in ("1", "true", "yes")
+
+    if qa_quality == "rejected":
+        if _is_quick_test:
+            logger.warning(
+                "QA REJECTED clip %s (quick-test mode — accepting anyway): %s",
+                output_path, qa_reason[:200],
+            )
+            qa_quality = "rejected_accepted"
+        else:
+            raise RuntimeError(
+                f"QA REJECTED: clip is fundamentally broken and cannot be used. "
+                f"Clip saved at {output_path} and uploaded to B2 for inspection. "
+                f"Reason: {qa_reason}"
+            )
+    if qa_quality == "poor":
+        if _is_quick_test:
+            logger.warning(
+                "QA POOR clip %s (quick-test mode — accepting anyway): %s",
+                output_path, qa_reason[:200],
+            )
+        else:
+            raise RuntimeError(
+                f"Video clip REJECTED by QA (quality='poor'): {qa_reason}. "
+                f"Clip saved at {output_path} and uploaded to B2 for inspection. "
+                f"The pipeline MUST NOT accept poor-quality clips."
+            )
+    if qa_quality == "unknown":
+        logger.warning(
+            "Video clip QA returned 'unknown' for %s — "
+            "this means QA failed to evaluate. Treating as degraded.",
+            output_path,
+        )
+        if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
+            raise RuntimeError(
+                f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
+                f"STRICT_QA mode requires all clips to pass QA."
+            )
 
     # Probe the generated clip for actual duration (best-effort, never overwrites video)
     actual_dur = actual_duration
