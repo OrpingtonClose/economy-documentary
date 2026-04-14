@@ -1487,8 +1487,13 @@ class WorkerProvisioner:
                 self._provisioned = True
             self._start_infra_agent()
 
-    def cleanup(self) -> None:
-        """Clean up: kill SSH tunnels, destroy VMs, and stop InfraAgent."""
+    def cleanup(self, *, destroy_vms: bool = True) -> None:
+        """Clean up: kill SSH tunnels, optionally destroy VMs, stop InfraAgent.
+
+        Args:
+            destroy_vms: If True (default), destroy VMs to stop billing.
+                Pass False to leave VMs running for manual inspection.
+        """
         # Wait for any in-flight provisioning threads to finish
         for role, thread in self._threads.items():
             if thread.is_alive():
@@ -1501,7 +1506,7 @@ class WorkerProvisioner:
             specs = list(self._specs)
 
         for spec in specs:
-            self._cleanup_single_worker(spec)
+            self._cleanup_single_worker(spec, force_destroy=destroy_vms)
 
         # Clear specs so stale VM IDs aren't referenced again
         with self._lock:
