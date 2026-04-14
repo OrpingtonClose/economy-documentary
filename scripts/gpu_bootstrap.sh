@@ -19,8 +19,9 @@
 #   Gemma-3 1B text encoder:          ~ 2.0 GB
 #   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
 #   Total models:                      ~52   GB
-#   OS + software + output:            ~30   GB
-#   Minimum disk required:             ~85   GB  (recommend 120+)
+#   OS + software + HF cache:          ~50   GB  (downloads cached then moved)
+#   Peak disk during download:         ~100  GB  (checkpoint + HF cache)
+#   Minimum disk required:             ~120  GB  (recommend 150+)
 
 set -euo pipefail
 
@@ -154,28 +155,36 @@ snapshot_download(
 )
 print('Downloaded text_encoder/ and tokenizer/ from Lightricks/LTX-2')
 
-# Copy text_encoder files to gemma root
+# MOVE (not copy) text_encoder files to gemma root — avoids doubling disk usage
 te_dir = os.path.join(tmp_dir, 'text_encoder')
 if os.path.isdir(te_dir):
     for f in os.listdir(te_dir):
         src = os.path.join(te_dir, f)
         dst = os.path.join(gemma_dir, f)
         if os.path.isfile(src):
-            shutil.copy2(src, dst)
+            shutil.move(src, dst)
             print(f'  text_encoder/{f} -> gemma/')
 
-# Copy tokenizer files to gemma root
+# MOVE tokenizer files to gemma root
 tok_dir = os.path.join(tmp_dir, 'tokenizer')
 if os.path.isdir(tok_dir):
     for f in os.listdir(tok_dir):
         src = os.path.join(tok_dir, f)
         dst = os.path.join(gemma_dir, f)
         if os.path.isfile(src):
-            shutil.copy2(src, dst)
+            shutil.move(src, dst)
             print(f'  tokenizer/{f} -> gemma/')
 
-# Clean up temp download
+# Clean up temp download dir AND HuggingFace cache to reclaim disk
 shutil.rmtree(tmp_dir, ignore_errors=True)
+hf_cache = os.path.expanduser('~/.cache/huggingface')
+if os.path.isdir(hf_cache):
+    cache_size = sum(
+        os.path.getsize(os.path.join(dp, fn))
+        for dp, _, fns in os.walk(hf_cache) for fn in fns
+    )
+    shutil.rmtree(hf_cache, ignore_errors=True)
+    print(f'Cleaned HF cache ({cache_size / 1e9:.1f} GB reclaimed)')
 print('Gemma text encoder ready.')
 "
     else
