@@ -441,13 +441,15 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"gpu_ram>={vram_gb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
+        f"reliability>0.95 "
+        f"inet_down>200 "
         f"disk_space>={spec.min_disk_gb}"
     )
 
     search_result = _vast_cmd([
         "search", "offers",
         "--type", "on-demand",
-        "--order", "dph_total",
+        "--order", "inet_down-",  # fastest download first (image pull speed)
         "--raw",
         query,
     ])
@@ -465,12 +467,14 @@ def provision_vm(spec: WorkerSpec) -> str:
             f"gpu_ram>={vram_gb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
+            f"reliability>0.90 "
+            f"inet_down>100 "
             f"disk_space>={spec.min_disk_gb}"
         )
         search_result = _vast_cmd([
             "search", "offers",
             "--type", "on-demand",
-            "--order", "dph_total",
+            "--order", "inet_down-",
             "--raw",
             query,
         ])
@@ -1268,16 +1272,48 @@ class WorkerProvisioner:
         covers all steps end-to-end.  The health-wait step gets whatever
         time remains after provisioning + VM boot + SSH setup, with a
         minimum of 120s so the wait isn't uselessly short.
+
+        If the VM stays in "loading" (Docker image pull) for too long,
+        the VM is destroyed and re-provisioned on a different host.
+        Up to ``_MAX_LOADING_RETRIES`` retries are attempted.
         """
+        _MAX_LOADING_RETRIES = 2
+        _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
         _start = time.time()
 
-        # Step 1: Provision VM
-        provision_vm(spec)
+        for attempt in range(1 + _MAX_LOADING_RETRIES):
+            # Step 1: Provision VM
+            provision_vm(spec)
 
-        # Step 2: Wait for VM to be running
-        elapsed = int(time.time() - _start)
-        vm_timeout = max(min(timeout - elapsed, 600), 60)
-        wait_for_vm_running(spec, timeout=vm_timeout)
+            # Step 2: Wait for VM to be running — use a shorter timeout
+            # for image pull so we can retry on a faster host.
+            elapsed = int(time.time() - _start)
+            vm_timeout = max(min(timeout - elapsed, _LOADING_TIMEOUT), 60)
+            try:
+                wait_for_vm_running(spec, timeout=vm_timeout)
+                break  # VM is running — proceed to SSH + health
+            except RuntimeError:
+                if attempt < _MAX_LOADING_RETRIES:
+                    logger.warning(
+                        "%s VM %s stuck loading after %ds — destroying "
+                        "and retrying on a different host (attempt %d/%d)",
+                        spec.role, spec.vm_id, vm_timeout,
+                        attempt + 2, 1 + _MAX_LOADING_RETRIES,
+                    )
+                    # Destroy the slow VM to stop billing
+                    try:
+                        _vast_cmd(["destroy", "instance", spec.vm_id])
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to destroy slow VM %s: %s",
+                            spec.vm_id, exc,
+                        )
+                    spec.vm_id = ""
+                    spec.ssh_host = ""
+                    spec.ssh_port = 0
+                    continue
+                else:
+                    raise  # all retries exhausted
 
         # Step 3: Set up SSH tunnel
         setup_ssh_tunnel(spec)

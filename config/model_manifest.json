@@ -4,17 +4,17 @@
     "_comment": "Registry of available PyTorch Docker images. The provisioner picks the cheapest image that satisfies the model's min_torch and min_cuda constraints. Ordered by preference (newest first).",
     "images": [
       {
-        "tag": "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel",
+        "tag": "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime",
         "torch_version": "2.10.0",
         "cuda_version": "12.6"
       },
       {
-        "tag": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-devel",
+        "tag": "pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime",
         "torch_version": "2.7.0",
         "cuda_version": "12.6"
       },
       {
-        "tag": "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
+        "tag": "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime",
         "torch_version": "2.6.0",
         "cuda_version": "12.4"
       }
