@@ -15,7 +15,7 @@
 # Falls back to HuggingFace if B2 credentials are not set.
 #
 # Disk budget (ltx-pipelines: single-file checkpoint + gemma):
-#   ltx-2.3-22b-dev.safetensors:      ~46.1 GB
+#   ltx-2-19b-dev.safetensors:        ~40   GB
 #   Gemma-3 1B text encoder:          ~ 2.0 GB
 #   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
 #   Total models:                      ~52   GB
@@ -116,20 +116,20 @@ else
     LTX_DIR=/workspace/models/ltx2
     mkdir -p "$LTX_DIR"
 
-    # 1. Single-file checkpoint (~46 GB) — the core model weights
-    if [ ! -f "$LTX_DIR/ltx-2.3-22b-dev.safetensors" ]; then
-        echo "--- LTX-2.3 checkpoint (~46 GB) ---"
+    # 1. Single-file checkpoint (~40 GB) — the core model weights
+    if [ ! -f "$LTX_DIR/ltx-2-19b-dev.safetensors" ]; then
+        echo "--- LTX-2 19B checkpoint (~40 GB) ---"
         python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
     'Lightricks/LTX-2',
-    filename='ltx-2.3-22b-dev.safetensors',
+    filename='ltx-2-19b-dev.safetensors',
     local_dir='$LTX_DIR',
 )
 print('Checkpoint downloaded.')
 "
     else
-        echo "LTX-2.3 checkpoint already present."
+        echo "LTX-2 checkpoint already present."
     fi
 
     # 2. Gemma-3 1B text encoder — required by ltx-pipelines
@@ -213,7 +213,7 @@ if [ "$WORKER_MODE" != "ltx" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
 fi
 if [ "$WORKER_MODE" != "tts" ]; then
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2.3-22b-dev.safetensors"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2-19b-dev.safetensors"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/config.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/preprocessor_config.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"

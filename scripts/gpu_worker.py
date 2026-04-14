@@ -222,11 +222,11 @@ def _load_ltx():
     else:
         model_path = _models_dir
 
-    # Find the single-file checkpoint
-    ckpt_path = os.path.join(model_path, "ltx-2.3-22b-dev.safetensors")
+    # Find the single-file checkpoint (LTX-2 19B dev)
+    ckpt_path = os.path.join(model_path, "ltx-2-19b-dev.safetensors")
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"LTX-2.3 checkpoint not found at {ckpt_path}. "
+            f"LTX-2 checkpoint not found at {ckpt_path}. "
             "Run gpu_bootstrap.sh to download model files."
         )
 
