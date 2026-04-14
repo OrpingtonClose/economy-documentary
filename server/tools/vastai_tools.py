@@ -244,6 +244,10 @@ def provision_gpu_vm(
         return json.dumps(
             {"status": "error", "error": "No instance ID in create response", "response": create_result}
         )
+
+    # GAP 2.1: Register as owned so terminate_vm() accepts it
+    register_owned_vm(str(instance_id))
+
     return json.dumps(
         {
             "status": "provisioned",

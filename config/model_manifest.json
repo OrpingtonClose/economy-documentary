@@ -19,13 +19,13 @@
     "ltx_video": {
       "name": "LTX-Video-2.3",
       "source": "Lightricks/LTX-Video",
-      "params_billions": 7.0,
+      "params_billions": 19.0,
       "dtype": "bf16",
       "weights_gb": 71,
       "runtime_vram_gb": 80,
       "disk_gb": 200,
       "checkpoint_files": [
-        "ltx-video-2b-v0.9.5.safetensors",
+        "ltx-2-19b-dev.safetensors",
         "config.json"
       ],
       "worker_mode": "ltx"
