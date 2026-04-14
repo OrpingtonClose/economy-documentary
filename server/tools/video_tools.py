@@ -232,16 +232,72 @@ def generate_video_clip(
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
             qa_reason_raw = resp.headers.get("X-QA-Reason", "")
 
-            # Always return video bytes regardless of QA quality.
-            # Save-to-disk + B2 upload happens BEFORE the QA gate so
-            # that every generated clip is persisted for inspection.
+            # ── PERSIST FIRST ── save to disk + B2 before any QA gate ──
+            # Every generated clip is persisted for inspection regardless
+            # of QA outcome.  This happens INSIDE _call_gpu_worker so that
+            # QA rejection errors are still caught by execute_with_recovery
+            # and routed through the human escalation path (L4).
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            with open(output_path, "wb") as _f:
+                _f.write(result_bytes)
+
+            # Decode QA reason for status + error messages
+            import base64 as _b64
+            try:
+                _qa_reason = _b64.b64decode(qa_reason_raw).decode("utf-8") if qa_reason_raw else ""
+            except Exception:
+                _qa_reason = qa_reason_raw
+
+            _qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
+            _qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
+
+            # Write per-clip status.json
+            _clip_dir = os.path.dirname(output_path) or "."
+            _clip_name = os.path.splitext(os.path.basename(output_path))[0]
+            _status_path = os.path.join(_clip_dir, f"{_clip_name}_status.json")
+            try:
+                with open(_status_path, "w") as _sf:
+                    json.dump({
+                        "quality": qa_quality, "qa_reason": _qa_reason,
+                        "attempts": _qa_attempts, "seed": _qa_seed,
+                        "status": "completed", "prompt_preview": prompt[:200],
+                    }, _sf, indent=2)
+            except OSError:
+                pass
+
+            # Upload to B2 immediately
+            try:
+                from tools.b2_checkpoint import upload_video_clip
+                upload_video_clip(output_path, _status_path)
+            except Exception as _b2_err:
+                logger.warning("B2 upload failed for %s: %s", output_path, _b2_err)
+
+            # ── QA GATE ── raise INSIDE recovery context so
+            # non_retryable_patterns routes to human escalation (L4).
+            _is_quick_test = os.environ.get(
+                "DOCUMENTARY_QUICK_TEST", ""
+            ).strip().lower() in ("1", "true", "yes")
+
+            if qa_quality == "rejected":
+                if _is_quick_test:
+                    logger.warning(
+                        "QA REJECTED clip %s (quick-test — accepting): %s",
+                        output_path, _qa_reason[:200],
+                    )
+                    qa_quality = "rejected_accepted"
+                else:
+                    raise RuntimeError(
+                        f"QA REJECTED: clip is fundamentally broken and cannot be used. "
+                        f"Clip saved at {output_path} and uploaded to B2. "
+                        f"Reason: {_qa_reason}"
+                    )
+
             result_meta = {
-                "mp4_bytes": result_bytes,
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
                 "qa_quality": qa_quality,
-                "qa_reason_raw": qa_reason_raw,
-                "qa_attempts": int(resp.headers.get("X-QA-Attempts", "1")),
-                "qa_seed": int(resp.headers.get("X-QA-Seed", str(seed))),
+                "qa_reason": _qa_reason,
+                "qa_attempts": _qa_attempts,
+                "qa_seed": _qa_seed,
             }
             return result_meta
 
@@ -277,85 +333,34 @@ def generate_video_clip(
             "error": "Video generation skipped by human decision during recovery",
         })
 
-    mp4_bytes = gpu_result["mp4_bytes"]
+    # File already persisted to disk + B2 inside _call_gpu_worker.
     gen_time = gpu_result["gen_time"]
     qa_quality = gpu_result["qa_quality"]
-    _raw_reason = gpu_result["qa_reason_raw"]
-    try:
-        qa_reason = base64.b64decode(_raw_reason).decode("utf-8") if _raw_reason else ""
-    except Exception:
-        qa_reason = _raw_reason  # fallback: use raw value
+    qa_reason = gpu_result["qa_reason"]
     qa_attempts = gpu_result["qa_attempts"]
     qa_seed = gpu_result["qa_seed"]
 
-    # ── PERSIST FIRST ── save to disk + B2 before any QA gate ──────────
-    # Every generated clip is persisted for inspection regardless of QA
-    # outcome.  QA quality checks happen AFTER the clip is safely stored.
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    with open(output_path, "wb") as f:
-        f.write(mp4_bytes)
-
-    # Write per-clip status.json (bearnaise pattern)
-    clip_dir = os.path.dirname(output_path) or "."
-    clip_name = os.path.splitext(os.path.basename(output_path))[0]
-    status_path = os.path.join(clip_dir, f"{clip_name}_status.json")
-    clip_status = {
-        "quality": qa_quality,
-        "qa_reason": qa_reason,
-        "attempts": qa_attempts,
-        "seed": qa_seed,
-        "status": "completed",
-        "prompt_preview": prompt[:200],
-        "prompt_full": prompt,
-    }
-    try:
-        with open(status_path, "w") as sf:
-            json.dump(clip_status, sf, indent=2)
-        logger.info("Wrote clip status: %s (quality=%s)", status_path, qa_quality)
-    except OSError as e:
-        logger.warning("Failed to write clip status %s: %s", status_path, e)
-
-    # Upload video clip + QA status to B2 immediately after creation
-    try:
-        from tools.b2_checkpoint import upload_video_clip
-        upload_video_clip(output_path, status_path)
-    except Exception as b2_err:
-        logger.warning("B2 upload failed for video clip %s: %s", output_path, b2_err)
-
-    # ── QA GATE ── quality checks run AFTER persist ────────────────────
+    # Secondary QA gates (poor / unknown) — less severe, don't need
+    # human escalation, so handled outside recovery context.
     _is_quick_test = os.environ.get(
         "DOCUMENTARY_QUICK_TEST", ""
     ).strip().lower() in ("1", "true", "yes")
 
-    if qa_quality == "rejected":
-        if _is_quick_test:
-            logger.warning(
-                "QA REJECTED clip %s (quick-test mode — accepting anyway): %s",
-                output_path, qa_reason[:200],
-            )
-            qa_quality = "rejected_accepted"
-        else:
-            raise RuntimeError(
-                f"QA REJECTED: clip is fundamentally broken and cannot be used. "
-                f"Clip saved at {output_path} and uploaded to B2 for inspection. "
-                f"Reason: {qa_reason}"
-            )
     if qa_quality == "poor":
         if _is_quick_test:
             logger.warning(
-                "QA POOR clip %s (quick-test mode — accepting anyway): %s",
+                "QA POOR clip %s (quick-test — accepting): %s",
                 output_path, qa_reason[:200],
             )
         else:
             raise RuntimeError(
                 f"Video clip REJECTED by QA (quality='poor'): {qa_reason}. "
-                f"Clip saved at {output_path} and uploaded to B2 for inspection. "
+                f"Clip saved at {output_path} and uploaded to B2. "
                 f"The pipeline MUST NOT accept poor-quality clips."
             )
     if qa_quality == "unknown":
         logger.warning(
-            "Video clip QA returned 'unknown' for %s — "
-            "this means QA failed to evaluate. Treating as degraded.",
+            "Video clip QA returned 'unknown' for %s — treating as degraded.",
             output_path,
         )
         if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
