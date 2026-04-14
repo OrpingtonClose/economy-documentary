@@ -133,49 +133,49 @@ print('Checkpoint downloaded.')
     fi
 
     # 2. Gemma-3 1B text encoder — required by ltx-pipelines
-    #    We need BOTH:
-    #      - Model weights from google/gemma-3-1b-pt (model.safetensors, config.json)
-    #      - Tokenizer/processor files from Lightricks/LTX-2 tokenizer/ dir
-    #        (preprocessor_config.json is missing from google/gemma-3-1b-pt but
-    #         ltx-core's module_ops_from_gemma_root() requires it)
+    #    Download ALL files from Lightricks/LTX-2 (ungated) instead of
+    #    google/gemma-3-1b-pt (gated, requires HF auth).
+    #    Lightricks/LTX-2 has both text_encoder/ (weights) and tokenizer/ dirs.
     if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/preprocessor_config.json" ]; then
-        echo "--- Gemma-3 1B text encoder (weights + tokenizer) ---"
+        echo "--- Gemma-3 1B text encoder (from Lightricks/LTX-2, ungated) ---"
         mkdir -p "$LTX_DIR/gemma"
         python3 -c "
-from huggingface_hub import snapshot_download, hf_hub_download
-
-# 1. Download model weights + basic tokenizer from google/gemma-3-1b-pt
-snapshot_download(
-    'google/gemma-3-1b-pt',
-    local_dir='$LTX_DIR/gemma',
-)
-print('Gemma weights downloaded.')
-
-# 2. Overlay Lightricks tokenizer files (adds preprocessor_config.json etc.)
-for fname in ['preprocessor_config.json', 'processor_config.json', 'chat_template.jinja']:
-    try:
-        hf_hub_download(
-            'Lightricks/LTX-2',
-            filename=f'tokenizer/{fname}',
-            local_dir='$LTX_DIR/gemma',
-            local_dir_use_symlinks=False,
-        )
-        print(f'Downloaded tokenizer/{fname}')
-    except Exception as e:
-        print(f'Warning: could not download tokenizer/{fname}: {e}')
-
-# Move files from tokenizer/ subdirectory to gemma root if needed
 import os, shutil
-tok_subdir = os.path.join('$LTX_DIR/gemma', 'tokenizer')
-if os.path.isdir(tok_subdir):
-    for f in os.listdir(tok_subdir):
-        src = os.path.join(tok_subdir, f)
-        dst = os.path.join('$LTX_DIR/gemma', f)
-        if not os.path.exists(dst):
-            shutil.copy2(src, dst)
-            print(f'Copied {f} to gemma root')
-    shutil.rmtree(tok_subdir, ignore_errors=True)
+from huggingface_hub import snapshot_download
 
+gemma_dir = '$LTX_DIR/gemma'
+
+# Download text_encoder/ and tokenizer/ from Lightricks/LTX-2 (ungated)
+tmp_dir = '$LTX_DIR/_ltx2_download'
+snapshot_download(
+    'Lightricks/LTX-2',
+    local_dir=tmp_dir,
+    allow_patterns=['text_encoder/*', 'tokenizer/*'],
+)
+print('Downloaded text_encoder/ and tokenizer/ from Lightricks/LTX-2')
+
+# Copy text_encoder files to gemma root
+te_dir = os.path.join(tmp_dir, 'text_encoder')
+if os.path.isdir(te_dir):
+    for f in os.listdir(te_dir):
+        src = os.path.join(te_dir, f)
+        dst = os.path.join(gemma_dir, f)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+            print(f'  text_encoder/{f} -> gemma/')
+
+# Copy tokenizer files to gemma root
+tok_dir = os.path.join(tmp_dir, 'tokenizer')
+if os.path.isdir(tok_dir):
+    for f in os.listdir(tok_dir):
+        src = os.path.join(tok_dir, f)
+        dst = os.path.join(gemma_dir, f)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst)
+            print(f'  tokenizer/{f} -> gemma/')
+
+# Clean up temp download
+shutil.rmtree(tmp_dir, ignore_errors=True)
 print('Gemma text encoder ready.')
 "
     else
