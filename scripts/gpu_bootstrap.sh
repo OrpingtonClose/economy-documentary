@@ -91,7 +91,7 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # The Docker image (pytorch/pytorch:2.10.0-cuda12.6) ships with
 # PyTorch 2.10.0 pre-installed.  Verify it's present and correct.
 echo "=== Verifying pre-installed PyTorch ==="
-python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')"
+python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')" || echo 'WARNING: torch not importable — will attempt reinstall below'
 
 # If torch is somehow missing or too old, reinstall from the wheel index.
 TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,7) else 'no')" 2>/dev/null || echo "no")
