@@ -1304,16 +1304,17 @@ class WorkerProvisioner:
         minimum of 120s so the wait isn't uselessly short.
 
         If the VM stays in "loading" (Docker image pull) for too long,
-        the VM is destroyed and re-provisioned on a different host.
-        Up to ``_MAX_LOADING_RETRIES`` retries are attempted.
+        or the SSH proxy host consistently rejects our keys, the VM is
+        destroyed and re-provisioned on a different host.
+        Up to ``_MAX_PROVISION_RETRIES`` retries are attempted.
         """
-        _MAX_LOADING_RETRIES = 2
+        _MAX_PROVISION_RETRIES = 2
         _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
         _start = time.time()
-        _excluded_offers: set[int] = set()  # offer IDs of slow hosts
+        _excluded_offers: set[int] = set()  # offer IDs of bad hosts
 
-        for attempt in range(1 + _MAX_LOADING_RETRIES):
-            # Step 1: Provision VM (skip previously-tried slow offers)
+        for attempt in range(1 + _MAX_PROVISION_RETRIES):
+            # Step 1: Provision VM (skip previously-tried bad offers)
             selected_offer_id = provision_vm(
                 spec, excluded_offer_ids=_excluded_offers or None,
             )
@@ -1322,15 +1323,14 @@ class WorkerProvisioner:
             # for image pull so we can retry on a faster host.  On the
             # final attempt give the full remaining budget (up to 600s)
             # since there are no more retries to benefit from the cap.
-            is_final = (attempt >= _MAX_LOADING_RETRIES)
+            is_final = (attempt >= _MAX_PROVISION_RETRIES)
             cap = 600 if is_final else _LOADING_TIMEOUT
             elapsed = int(time.time() - _start)
             vm_timeout = max(min(timeout - elapsed, cap), 60)
             try:
                 wait_for_vm_running(spec, timeout=vm_timeout)
-                break  # VM is running — proceed to SSH + health
             except RuntimeError:
-                if attempt < _MAX_LOADING_RETRIES:
+                if attempt < _MAX_PROVISION_RETRIES:
                     # Track this offer so we don't pick it again
                     if selected_offer_id:
                         _excluded_offers.add(selected_offer_id)
@@ -1339,28 +1339,36 @@ class WorkerProvisioner:
                         "— destroying and retrying on a different host "
                         "(attempt %d/%d, excluded offers: %s)",
                         spec.role, spec.vm_id, selected_offer_id,
-                        vm_timeout, attempt + 2, 1 + _MAX_LOADING_RETRIES,
+                        vm_timeout, attempt + 2, 1 + _MAX_PROVISION_RETRIES,
                         _excluded_offers,
                     )
-                    # Destroy the slow VM to stop billing
-                    try:
-                        _vast_cmd(["destroy", "instance", spec.vm_id])
-                        spec.vm_id = ""
-                    except Exception as exc:
-                        logger.warning(
-                            "Failed to destroy slow VM %s: %s — "
-                            "VM may continue billing as orphan!",
-                            spec.vm_id, exc,
-                        )
-                        # Keep spec.vm_id so cleanup() can retry destruction
-                    spec.ssh_host = ""
-                    spec.ssh_port = 0
+                    self._destroy_and_reset_spec(spec)
                     continue
                 else:
                     raise  # all retries exhausted
 
-        # Step 3: Set up SSH tunnel
-        setup_ssh_tunnel(spec)
+            # Step 3: Set up SSH tunnel — retry on a new VM if proxy
+            # host consistently rejects our SSH keys.
+            try:
+                setup_ssh_tunnel(spec)
+            except RuntimeError:
+                if attempt < _MAX_PROVISION_RETRIES:
+                    if selected_offer_id:
+                        _excluded_offers.add(selected_offer_id)
+                    logger.warning(
+                        "%s VM %s (offer %s) SSH proxy rejected all keys "
+                        "— destroying and retrying on a different host "
+                        "(attempt %d/%d, excluded offers: %s)",
+                        spec.role, spec.vm_id, selected_offer_id,
+                        attempt + 2, 1 + _MAX_PROVISION_RETRIES,
+                        _excluded_offers,
+                    )
+                    self._destroy_and_reset_spec(spec)
+                    continue
+                else:
+                    raise  # all retries exhausted
+
+            break  # VM running + SSH tunnel established
 
         # Step 4: Wait for worker to be healthy
         # Bootstrap + model download can take 15-30 min (95GB at ~65 MB/s)
@@ -1380,6 +1388,22 @@ class WorkerProvisioner:
                 f"{spec.role} worker on VM {spec.vm_id} did not become "
                 f"healthy within {remaining}s after provisioning"
             )
+
+    def _destroy_and_reset_spec(self, spec: WorkerSpec) -> None:
+        """Destroy a VM and reset spec fields for re-provisioning."""
+        if spec.vm_id:
+            try:
+                _vast_cmd(["destroy", "instance", spec.vm_id])
+                spec.vm_id = ""
+            except Exception as exc:
+                logger.warning(
+                    "Failed to destroy VM %s: %s — "
+                    "VM may continue billing as orphan!",
+                    spec.vm_id, exc,
+                )
+                # Keep spec.vm_id so cleanup() can retry destruction
+        spec.ssh_host = ""
+        spec.ssh_port = 0
 
     def _cleanup_single_worker(self, spec: WorkerSpec) -> None:
         """Clean up a single worker's resources (tunnel + VM)."""
