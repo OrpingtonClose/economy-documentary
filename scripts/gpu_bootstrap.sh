@@ -205,9 +205,9 @@ print('Checkpoint downloaded.')
     fi
 
     # 2. Gemma-3 1B text encoder — required by ltx-pipelines
-    #    Download ALL files from Lightricks/LTX-2.3 (ungated) instead of
-    #    google/gemma-3-1b-pt (gated, requires HF auth).
-    #    Lightricks/LTX-2.3 has both text_encoder/ (weights) and tokenizer/ dirs.
+    #    Download from Lightricks/LTX-2 (NOT LTX-2.3 — the 2.3 repo only has
+    #    the combined checkpoint, no separate text_encoder/ or tokenizer/ dirs).
+    #    Lightricks/LTX-2 (ungated) has both text_encoder/ and tokenizer/ dirs.
     if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/config.json" ]; then
         echo "--- Gemma-3 1B text encoder (from Lightricks/LTX-2, ungated) ---"
         mkdir -p "$LTX_DIR/gemma"
@@ -218,13 +218,14 @@ from huggingface_hub import snapshot_download
 gemma_dir = '$LTX_DIR/gemma'
 
 # Download text_encoder/ and tokenizer/ from Lightricks/LTX-2 (ungated)
+# NOTE: Lightricks/LTX-2.3 does NOT have these dirs — only LTX-2 does.
 tmp_dir = '$LTX_DIR/_ltx2_download'
 snapshot_download(
-    'Lightricks/LTX-2.3',
+    'Lightricks/LTX-2',
     local_dir=tmp_dir,
     allow_patterns=['text_encoder/*', 'tokenizer/*'],
 )
-print('Downloaded text_encoder/ and tokenizer/ from Lightricks/LTX-2.3')
+print('Downloaded text_encoder/ and tokenizer/ from Lightricks/LTX-2')
 
 # MOVE (not copy) text_encoder files to gemma root — avoids doubling disk usage
 te_dir = os.path.join(tmp_dir, 'text_encoder')
