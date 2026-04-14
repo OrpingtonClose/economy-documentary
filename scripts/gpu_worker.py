@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""GPU Worker — FastAPI service for TTS and video generation.
+"""GPU Worker — autonomous VM agent for TTS and video generation.
 
-Runs on a Vast.ai GPU VM. Exposes HTTP endpoints that the pipeline
-calls to generate narration (Qwen3-TTS) and video clips (LTX-2.3).
+Each VM runs its own agent (VMAgent) that manages the full lifecycle:
+    1. Bootstrap — install deps, download models, categorise errors
+    2. Model loading — load into VRAM with retry/recovery
+    3. Self-monitoring — GPU health, disk, memory on a continuous loop
+    4. Work execution — TTS/video generation via HTTP endpoints
+    5. Escalation — structured escalation log read by the central overseer
+
+The central process (server/infra_agent.py) is the *tending overseer*:
+it reads /status from each VM agent, processes escalations, and makes
+lifecycle decisions (reprovision, restart, etc.).  It does NOT duplicate
+the monitoring that the VM agent already performs.
 
 Usage:
     python gpu_worker.py --mode tts  [--port 8880] [--models-dir ...]  # TTS-only VM
@@ -11,12 +20,12 @@ Usage:
 
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
-    {models_dir}/ltx2/                   — LTX-2.3 diffusers-format components
-                                  (model_index.json, text_encoder/, transformer/,
-                                   vae/, audio_vae/, vocoder/, connectors/, etc.)
+    {models_dir}/ltx2/                   — LTX-2.3 directory:
+        ltx-2-19b-dev.safetensors       — Official Lightricks single-file checkpoint
+        gemma/                          — Gemma-3 1B text encoder weights
 
-The bootstrap script (gpu_bootstrap.sh) downloads these from B2.
-Requires diffusers >= 0.37.0 for LTX2Pipeline support.
+The bootstrap script (gpu_bootstrap.sh) downloads these from B2/HuggingFace.
+Uses the official Lightricks ltx-pipelines package for inference.
 bf16 only — no FP8, no quantization.
 """
 from __future__ import annotations
@@ -28,9 +37,57 @@ import io
 import json
 import logging
 import os
+import shutil
+import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional
+
+# Ensure NVIDIA CUDA runtime libs (libcudart.so.13) are preloaded.
+# PyTorch cu130 doesn't bundle libcudart — it's in the nvidia-cuda-runtime
+# pip package at nvidia/cu13/lib/.  We preload it via ctypes RTLD_GLOBAL
+# so ltx-core compiled extensions can find it.
+import ctypes as _ctypes
+import glob as _glob
+try:
+    import site as _site
+    _search_dirs = []
+    for _sp in _site.getsitepackages():
+        _nv = os.path.join(_sp, "nvidia")
+        if os.path.isdir(_nv):
+            for _sub in os.listdir(_nv):
+                _lib = os.path.join(_nv, _sub, "lib")
+                if os.path.isdir(_lib):
+                    _search_dirs.append(_lib)
+    # Also check user site-packages
+    _usp = _site.getusersitepackages()
+    if isinstance(_usp, str):
+        _nv = os.path.join(_usp, "nvidia")
+        if os.path.isdir(_nv):
+            for _sub in os.listdir(_nv):
+                _lib = os.path.join(_nv, _sub, "lib")
+                if os.path.isdir(_lib):
+                    _search_dirs.append(_lib)
+    # Set LD_LIBRARY_PATH for subprocesses
+    if _search_dirs:
+        _ld = os.environ.get("LD_LIBRARY_PATH", "")
+        _new_paths = ":".join(d for d in _search_dirs if d not in _ld)
+        if _new_paths:
+            os.environ["LD_LIBRARY_PATH"] = f"{_new_paths}:{_ld}" if _ld else _new_paths
+    # Preload libcudart via ctypes so it's available for dlopen()
+    for _d in _search_dirs:
+        for _so in sorted(_glob.glob(os.path.join(_d, "libcudart*.so*"))):
+            try:
+                _ctypes.CDLL(_so, mode=_ctypes.RTLD_GLOBAL)
+            except OSError:
+                pass
+    del _search_dirs, _site
+except Exception:
+    pass
+del _ctypes, _glob
 
 import numpy as np
 import soundfile as sf
@@ -39,6 +96,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+
+# No monkey-patches needed — using official ltx-pipelines, not diffusers.
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,16 +108,530 @@ logger = logging.getLogger("gpu_worker")
 app = FastAPI(title="Documentary GPU Worker")
 
 # ---------------------------------------------------------------------------
+# Bootstrap status — defined early so it's available as a global before
+# the Pydantic request/response models section.
+# ---------------------------------------------------------------------------
+
+class BootstrapStatus(BaseModel):
+    """Structured bootstrap status — reported in /health so the provisioner
+    can see WHY a worker isn't ready, not just that it isn't."""
+    phase: str = "idle"           # idle | deps | models | loading | ready | error
+    detail: str = ""              # human-readable description of current activity
+    error: str = ""               # non-empty only when phase == "error"
+    error_category: str = ""      # "auth", "network", "disk", "missing_file", "runtime"
+    started_at: float = 0.0
+    completed_at: float = 0.0
+
+
+# ---------------------------------------------------------------------------
+# VMAgent — autonomous infrastructure agent that runs ON this VM.
+#
+# Manages the full lifecycle: bootstrap, model loading, self-monitoring,
+# recovery, and escalation.  The central overseer reads /status to see
+# what this agent is doing and processes its escalation log.
+# ---------------------------------------------------------------------------
+
+class Severity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+@dataclass
+class EscalationEvent:
+    """A single escalation event for the overseer to read."""
+    timestamp: float
+    severity: str          # "info" | "warning" | "critical"
+    source: str            # e.g. "bootstrap", "gpu", "disk", "generation"
+    message: str
+    details: dict = field(default_factory=dict)
+    acked: bool = False    # True once the overseer has acknowledged it
+
+    def to_dict(self) -> dict:
+        return {
+            "timestamp": self.timestamp,
+            "severity": self.severity,
+            "source": self.source,
+            "message": self.message,
+            "details": self.details,
+            "acked": self.acked,
+        }
+
+
+@dataclass
+class HealthSnapshot:
+    """Point-in-time self-monitoring snapshot."""
+    gpu_name: str = ""
+    vram_used_gb: float = 0.0
+    vram_total_gb: float = 0.0
+    vram_pct: float = 0.0
+    gpu_temp_c: float = 0.0
+    disk_free_gb: float = 0.0
+    disk_total_gb: float = 0.0
+    disk_pct: float = 0.0
+    checked_at: float = 0.0
+
+    def to_dict(self) -> dict:
+        return {
+            "gpu_name": self.gpu_name,
+            "vram_used_gb": round(self.vram_used_gb, 2),
+            "vram_total_gb": round(self.vram_total_gb, 2),
+            "vram_pct": round(self.vram_pct, 1),
+            "gpu_temp_c": round(self.gpu_temp_c, 1),
+            "disk_free_gb": round(self.disk_free_gb, 1),
+            "disk_total_gb": round(self.disk_total_gb, 1),
+            "disk_pct": round(self.disk_pct, 1),
+            "checked_at": self.checked_at,
+        }
+
+
+class VMAgent:
+    """Autonomous infrastructure agent that runs on this VM.
+
+    Responsibilities:
+    1. Bootstrap lifecycle — run bootstrap script, categorise errors, retry
+       transient failures (network), escalate permanent ones.
+    2. Model loading — load models into VRAM with retry on OOM.
+    3. Self-monitoring — continuous background loop checking GPU health,
+       disk space, VRAM pressure, temperature.
+    4. Local recovery — when self-monitoring detects issues (VRAM > 95%,
+       disk < 5GB, temp > 85°C), take local action (log, escalate).
+    5. Escalation — maintain a structured escalation log that the central
+       overseer reads via /status and /escalations endpoints.
+    6. Task tracking — count generations completed, failures, avg latency.
+
+    The VMAgent is a singleton — created once at startup and referenced
+    by FastAPI endpoints.
+    """
+
+    def __init__(
+        self,
+        worker_mode: str,
+        models_dir: str,
+        output_dir: str,
+        monitor_interval: float = 30.0,
+    ) -> None:
+        self.worker_mode = worker_mode
+        self.models_dir = models_dir
+        self.output_dir = output_dir
+        self._monitor_interval = monitor_interval
+
+        # Bootstrap status
+        self.bootstrap = BootstrapStatus()
+
+        # Self-monitoring
+        self._health: HealthSnapshot = HealthSnapshot()
+        self._lock = threading.Lock()
+        self._shutdown = threading.Event()
+        self._monitor_thread: Optional[threading.Thread] = None
+
+        # Escalation log
+        self._escalations: list[EscalationEvent] = []
+
+        # Task tracking
+        self._tasks_completed: int = 0
+        self._tasks_failed: int = 0
+        self._total_gen_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Bootstrap lifecycle
+    # ------------------------------------------------------------------
+
+    def run_bootstrap(self) -> bool:
+        """Run the full bootstrap lifecycle: deps → models → load.
+
+        Returns True if bootstrap succeeded, False on failure.
+        Retries transient (network) errors up to 2 times.
+        """
+        self.bootstrap.started_at = time.time()
+
+        # Phase 1: Check if models are already present
+        bootstrap_needed = False
+        if self.worker_mode in ("tts", "both"):
+            marker = os.path.join(self.models_dir, "qwen3-tts-voicedesign", "model.safetensors")
+            if not os.path.isfile(marker):
+                bootstrap_needed = True
+        if self.worker_mode in ("ltx", "both"):
+            marker = os.path.join(self.models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
+            if not os.path.isfile(marker):
+                bootstrap_needed = True
+
+        if bootstrap_needed:
+            ok = self._run_bootstrap_script()
+            if not ok:
+                return False
+
+        # Phase 2: Load models into VRAM
+        ok = self._load_models()
+        if not ok:
+            return False
+
+        self.bootstrap.phase = "ready"
+        self.bootstrap.detail = "All models loaded"
+        self.bootstrap.completed_at = time.time()
+        elapsed = self.bootstrap.completed_at - self.bootstrap.started_at
+        logger.info("VMAgent: bootstrap + model loading complete in %.1fs", elapsed)
+        return True
+
+    def _run_bootstrap_script(self) -> bool:
+        """Execute gpu_bootstrap.sh with retry on transient failures."""
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        bootstrap_script = os.path.join(script_dir, "gpu_bootstrap.sh")
+
+        if not os.path.isfile(bootstrap_script):
+            self._fail_bootstrap(
+                f"Bootstrap script not found at {bootstrap_script}",
+                "missing_file",
+            )
+            return False
+
+        max_retries = 3  # total attempts (1 initial + 2 retries)
+        for attempt in range(1, max_retries + 1):
+            self.bootstrap.phase = "deps" if attempt == 1 else "models"
+            self.bootstrap.detail = (
+                f"Running bootstrap (attempt {attempt}/{max_retries}): "
+                "installing dependencies and downloading models"
+            )
+            logger.info(
+                "VMAgent: bootstrap attempt %d/%d", attempt, max_retries
+            )
+
+            try:
+                env = os.environ.copy()
+                env["WORKER_MODE"] = self.worker_mode
+                result = subprocess.run(
+                    ["bash", bootstrap_script],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,
+                )
+                if result.returncode == 0:
+                    logger.info("VMAgent: bootstrap succeeded on attempt %d", attempt)
+                    return True
+
+                stderr = result.stderr[-2000:] if result.stderr else ""
+                stdout_tail = result.stdout[-1000:] if result.stdout else ""
+                error_cat = self._categorise_error(stderr + stdout_tail)
+
+                # Only retry transient (network) errors
+                if error_cat == "network" and attempt < max_retries:
+                    wait = 15 * attempt
+                    self.escalate(
+                        Severity.WARNING, "bootstrap",
+                        f"Bootstrap attempt {attempt} failed (network) — "
+                        f"retrying in {wait}s: {stderr[-200:]}",
+                    )
+                    time.sleep(wait)
+                    continue
+
+                # Permanent failure
+                self._fail_bootstrap(
+                    f"Bootstrap failed (rc={result.returncode}, attempt {attempt}): "
+                    f"{stderr[-500:]}",
+                    error_cat,
+                )
+                return False
+
+            except subprocess.TimeoutExpired:
+                if attempt < max_retries:
+                    self.escalate(
+                        Severity.WARNING, "bootstrap",
+                        f"Bootstrap timed out on attempt {attempt} — retrying",
+                    )
+                    continue
+                self._fail_bootstrap("Bootstrap timed out after 3600s", "network")
+                return False
+            except Exception as e:
+                self._fail_bootstrap(f"Bootstrap exception: {e}", "runtime")
+                return False
+
+        # Should not reach here
+        self._fail_bootstrap("Bootstrap exhausted all retries", "runtime")
+        return False
+
+    def _load_models(self) -> bool:
+        """Load models into VRAM."""
+        self.bootstrap.phase = "loading"
+        self.bootstrap.detail = "Loading models into VRAM"
+
+        if self.worker_mode in ("tts", "both"):
+            try:
+                with _model_lock:
+                    _load_tts()
+            except Exception as e:
+                self._fail_bootstrap(f"Failed to load TTS model: {e}", "runtime")
+                return False
+
+        if self.worker_mode in ("ltx", "both"):
+            try:
+                with _model_lock:
+                    _load_ltx()
+            except Exception as e:
+                self._fail_bootstrap(f"Failed to load LTX model: {e}", "runtime")
+                return False
+
+        return True
+
+    def _fail_bootstrap(self, error: str, category: str) -> None:
+        """Record a bootstrap failure and escalate."""
+        self.bootstrap.phase = "error"
+        self.bootstrap.error = error
+        self.bootstrap.error_category = category
+        logger.error("VMAgent BOOTSTRAP FAILED (%s): %s", category, error)
+        self.escalate(Severity.CRITICAL, "bootstrap", error, {"category": category})
+
+    @staticmethod
+    def _categorise_error(combined: str) -> str:
+        """Categorise an error from bootstrap output."""
+        if "401" in combined or "403" in combined or "GatedRepo" in combined:
+            return "auth"
+        if "404" in combined or "EntryNotFound" in combined:
+            return "missing_file"
+        if "No space left" in combined or "disk" in combined.lower():
+            return "disk"
+        if "ConnectionError" in combined or "timeout" in combined.lower():
+            return "network"
+        return "runtime"
+
+    # ------------------------------------------------------------------
+    # Self-monitoring loop
+    # ------------------------------------------------------------------
+
+    def start_monitoring(self) -> None:
+        """Launch the self-monitoring daemon thread."""
+        if self._monitor_thread is not None and self._monitor_thread.is_alive():
+            return
+        self._shutdown.clear()
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop,
+            name="vm-agent-monitor",
+            daemon=True,
+        )
+        self._monitor_thread.start()
+        logger.info("VMAgent: self-monitoring started (interval=%.0fs)", self._monitor_interval)
+
+    def stop_monitoring(self) -> None:
+        """Signal the monitoring loop to stop."""
+        self._shutdown.set()
+        if self._monitor_thread and self._monitor_thread.is_alive():
+            self._monitor_thread.join(timeout=5.0)
+
+    def _monitor_loop(self) -> None:
+        """Continuous self-monitoring: GPU, disk, VRAM, temperature."""
+        # Run one immediate check
+        self._check_health()
+
+        while not self._shutdown.is_set():
+            if self._shutdown.wait(timeout=self._monitor_interval):
+                break
+            self._check_health()
+
+        logger.info("VMAgent: self-monitoring stopped")
+
+    def _check_health(self) -> None:
+        """Run all self-monitoring checks and escalate if needed."""
+        snap = HealthSnapshot(checked_at=time.time())
+
+        # GPU / VRAM
+        if torch.cuda.is_available():
+            snap.gpu_name = torch.cuda.get_device_name(0)
+            snap.vram_used_gb = torch.cuda.memory_allocated(0) / 1e9
+            snap.vram_total_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            snap.vram_pct = (
+                snap.vram_used_gb / max(snap.vram_total_gb, 0.01) * 100
+            )
+
+        # GPU temperature via nvidia-smi
+        try:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                snap.gpu_temp_c = float(result.stdout.strip().split("\n")[0])
+        except Exception:
+            pass
+
+        # Disk space
+        try:
+            usage = shutil.disk_usage(self.models_dir)
+            snap.disk_free_gb = usage.free / (1024**3)
+            snap.disk_total_gb = usage.total / (1024**3)
+            snap.disk_pct = usage.used / max(usage.total, 1) * 100
+        except Exception:
+            pass
+
+        with self._lock:
+            self._health = snap
+
+        # Escalate on concerning conditions
+        if snap.vram_pct > 95:
+            self.escalate(
+                Severity.WARNING, "gpu",
+                f"VRAM pressure: {snap.vram_pct:.0f}% used "
+                f"({snap.vram_used_gb:.1f}/{snap.vram_total_gb:.1f} GB)",
+            )
+        if snap.gpu_temp_c > 85:
+            self.escalate(
+                Severity.WARNING, "gpu",
+                f"GPU temperature high: {snap.gpu_temp_c:.0f}°C",
+            )
+        if snap.disk_free_gb < 5 and snap.disk_total_gb > 0:
+            self.escalate(
+                Severity.WARNING, "disk",
+                f"Disk space low: {snap.disk_free_gb:.1f} GB free",
+            )
+
+    # ------------------------------------------------------------------
+    # Escalation
+    # ------------------------------------------------------------------
+
+    def escalate(
+        self,
+        severity: Severity,
+        source: str,
+        message: str,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Add a structured escalation event.
+
+        The central overseer reads these via /escalations.
+        """
+        event = EscalationEvent(
+            timestamp=time.time(),
+            severity=severity.value,
+            source=source,
+            message=message,
+            details=details or {},
+        )
+        with self._lock:
+            self._escalations.append(event)
+            # Keep last 100 to prevent unbounded growth
+            if len(self._escalations) > 100:
+                self._escalations = self._escalations[-100:]
+
+        log_fn = {
+            Severity.INFO: logger.info,
+            Severity.WARNING: logger.warning,
+            Severity.CRITICAL: logger.critical,
+        }.get(severity, logger.warning)
+        log_fn("VMAgent ESCALATION [%s] %s: %s", severity.value, source, message)
+
+    def ack_escalations(self, before_ts: float) -> int:
+        """Mark escalations before `before_ts` as acknowledged.
+
+        Returns number of newly acknowledged events.
+        Called by the overseer via POST /escalations/ack.
+        """
+        count = 0
+        with self._lock:
+            for e in self._escalations:
+                if not e.acked and e.timestamp <= before_ts:
+                    e.acked = True
+                    count += 1
+        return count
+
+    # ------------------------------------------------------------------
+    # Task tracking
+    # ------------------------------------------------------------------
+
+    def record_task(self, success: bool, gen_time: float) -> None:
+        """Record a completed generation task."""
+        with self._lock:
+            if success:
+                self._tasks_completed += 1
+            else:
+                self._tasks_failed += 1
+            self._total_gen_time += gen_time
+
+    # ------------------------------------------------------------------
+    # Status reporting
+    # ------------------------------------------------------------------
+
+    def get_status(self) -> dict:
+        """Full status snapshot for the overseer.
+
+        This is the single source of truth for what this VM is doing.
+        The overseer reads this via GET /status.
+        """
+        with self._lock:
+            health = self._health.to_dict()
+            escalations = [e.to_dict() for e in self._escalations[-20:]]
+            unacked = sum(1 for e in self._escalations if not e.acked)
+            tasks_completed = self._tasks_completed
+            tasks_failed = self._tasks_failed
+            avg_gen = (
+                self._total_gen_time / max(tasks_completed + tasks_failed, 1)
+            )
+
+        return {
+            "worker_mode": self.worker_mode,
+            "bootstrap": {
+                "phase": self.bootstrap.phase,
+                "detail": self.bootstrap.detail,
+                "error": self.bootstrap.error,
+                "error_category": self.bootstrap.error_category,
+                "started_at": self.bootstrap.started_at,
+                "completed_at": self.bootstrap.completed_at,
+            },
+            "models": {
+                "tts_loaded": _tts_model is not None,
+                "ltx_loaded": _ltx_pipe is not None,
+            },
+            "health": health,
+            "escalations": {
+                "recent": escalations,
+                "unacked_count": unacked,
+                "total": len(self._escalations),
+            },
+            "tasks": {
+                "completed": tasks_completed,
+                "failed": tasks_failed,
+                "avg_gen_time_sec": round(avg_gen, 1),
+            },
+        }
+
+    def get_health_response(self) -> dict:
+        """Quick health check for backward compat with /health endpoint."""
+        with self._lock:
+            snap = self._health
+
+        status = "error" if self.bootstrap.phase == "error" else "ok"
+        return {
+            "status": status,
+            "gpu": snap.gpu_name,
+            "tts_loaded": _tts_model is not None,
+            "ltx_loaded": _ltx_pipe is not None,
+            "vram_used_gb": round(snap.vram_used_gb, 2),
+            "vram_total_gb": round(snap.vram_total_gb, 2),
+            "bootstrap": {
+                "phase": self.bootstrap.phase,
+                "detail": self.bootstrap.detail,
+                "error": self.bootstrap.error,
+                "error_category": self.bootstrap.error_category,
+                "started_at": self.bootstrap.started_at,
+                "completed_at": self.bootstrap.completed_at,
+            },
+        }
+
+
+# Module-level singleton — set in main()
+_vm_agent: Optional[VMAgent] = None
+
+
+# ---------------------------------------------------------------------------
 # Global model handles — model swapping for VRAM management
 # ---------------------------------------------------------------------------
 _tts_model = None  # Qwen3TTSModel instance
-_ltx_pipe = None
-_ltx_upsample_pipe = None  # LTX2LatentUpsamplePipeline for two-stage generation
+_ltx_pipe = None  # TI2VidOneStagePipeline or TI2VidTwoStagesPipeline
 _active_model: str = ""  # "tts" or "ltx" — tracks which model is on GPU
 _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
 _model_lock = threading.Lock()  # Serialise all model load/unload/inference
 _worker_mode: str = "both"  # "tts", "ltx", or "both"
+_bootstrap_status = BootstrapStatus()  # structured bootstrap status
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -82,8 +655,13 @@ class VideoRequest(BaseModel):
     height: int = 512
     num_frames: int | None = None  # auto-calculated from duration if None
     seed: int = 42
-    num_inference_steps: int = 40  # full model: 40 steps (pipeline default)
-    guidance_scale: float = 4.0  # full model: CFG=4.0 (pipeline default)
+    # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
+    num_inference_steps: int = 30  # LTX-2.3 dev: 30 steps
+    guidance_scale: float = 3.0  # LTX-2.3 dev: CFG=3.0
+    stg_scale: float = 1.0  # spatio-temporal guidance scale
+    modality_scale: float = 3.0  # modality (video vs audio) guidance
+    guidance_rescale: float = 0.7  # guidance rescale factor
+    stg_blocks: list[int] = [28]  # spatio-temporal guidance block indices
 
 
 class HealthResponse(BaseModel):
@@ -93,6 +671,7 @@ class HealthResponse(BaseModel):
     ltx_loaded: bool
     vram_used_gb: float
     vram_total_gb: float
+    bootstrap: BootstrapStatus | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -135,15 +714,12 @@ def _unload_tts():
 
 def _unload_ltx():
     """Move LTX pipeline off GPU and free VRAM."""
-    global _ltx_pipe, _ltx_upsample_pipe, _active_model
+    global _ltx_pipe, _active_model
     if _ltx_pipe is None:
         return
     logger.info("Unloading LTX from GPU...")
     del _ltx_pipe
     _ltx_pipe = None
-    if _ltx_upsample_pipe is not None:
-        del _ltx_upsample_pipe
-        _ltx_upsample_pipe = None
     _active_model = ""
     gc.collect()
     torch.cuda.empty_cache()
@@ -183,19 +759,20 @@ def _load_tts():
 
 
 def _load_ltx():
-    """Load LTX-2.3 pipeline via diffusers (>= 0.37.0).
+    """Load LTX-2.3 pipeline using official Lightricks ltx-pipelines package.
 
-    Two-stage pipeline: Stage 1 generates latents, then LTX2LatentUpsamplePipeline
-    upsamples 2x in latent space before VAE decode.  This is the official
-    production-quality approach and eliminates grid-pattern artifacts.
+    Uses the single-file checkpoint (ltx-2.3-22b-dev.safetensors) with
+    TI2VidOneStagePipeline — no diffusers, no upscalers, no LoRAs.
+
+    The pipeline builds each component on demand and frees GPU memory
+    after use (block-based lifecycle), so peak VRAM is lower than loading
+    the entire model graph at once.
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
     loaded, so the guard is a safety net rather than normal path.
-    Loads all components fully on GPU (no cpu_offload). Requires 80GB+ VRAM
-    (model is ~71GB bf16). H200 (141GB) or A100 80GB recommended.
     """
-    global _ltx_pipe, _ltx_upsample_pipe, _active_model
+    global _ltx_pipe, _active_model
     if _ltx_pipe is not None:
         return
 
@@ -203,67 +780,49 @@ def _load_ltx():
     if _tts_model is not None:
         _unload_tts()
 
-    from diffusers import LTX2Pipeline
-    from diffusers.pipelines.ltx2 import LTX2LatentUpsamplePipeline
-    from diffusers.pipelines.ltx2.latent_upsampler import LTX2LatentUpsamplerModel
+    from ltx_pipelines.ti2vid_one_stage import TI2VidOneStagePipeline
 
-    # Try official dg845/LTX-2.3-Diffusers first (ltx23), then fall back
-    # to ltx2 or models_dir itself.
-    # Requires diffusers >= 0.38.0.dev0 from git main (PR #13217) for
-    # native LTX-2.3 support (video_mod_param_num=9 scale_shift_table).
+    # Locate model directory
     candidate_ltx23 = os.path.join(_models_dir, "ltx23")
     candidate_ltx2 = os.path.join(_models_dir, "ltx2")
-    if os.path.isfile(os.path.join(candidate_ltx23, "model_index.json")):
+    if os.path.isdir(candidate_ltx23):
         model_path = candidate_ltx23
-    elif os.path.isfile(os.path.join(candidate_ltx2, "model_index.json")):
+    elif os.path.isdir(candidate_ltx2):
         model_path = candidate_ltx2
-    elif os.path.isfile(os.path.join(_models_dir, "model_index.json")):
-        model_path = _models_dir
     else:
+        model_path = _models_dir
+
+    # Find the single-file checkpoint (LTX-2 19B dev)
+    ckpt_path = os.path.join(model_path, "ltx-2-19b-dev.safetensors")
+    if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"model_index.json not found in {candidate_ltx23}, "
-            f"{candidate_ltx2}, or {_models_dir}"
+            f"LTX-2 checkpoint not found at {ckpt_path}. "
+            "Run gpu_bootstrap.sh to download model files."
         )
-    logger.info("Loading LTX-2.3 via diffusers from %s ...", model_path)
+
+    # Find Gemma text encoder root
+    gemma_root = os.path.join(model_path, "gemma")
+    if not os.path.isdir(gemma_root):
+        raise FileNotFoundError(
+            f"Gemma text encoder not found at {gemma_root}. "
+            "Run gpu_bootstrap.sh to download model files."
+        )
+
     t0 = time.time()
 
-    pipe = LTX2Pipeline.from_pretrained(
-        model_path,
-        torch_dtype=torch.bfloat16,
-        low_cpu_mem_usage=False,
+    logger.info(
+        "Loading LTX-2.3 one-stage pipeline from %s ...", model_path
     )
-    # Audio components kept loaded — official LTX-2.3 connectors handle
-    # cross-modal bridging correctly.  Narration audio uses separate
-    # Qwen3-TTS worker.
-    pipe = pipe.to("cuda")
+    pipe = TI2VidOneStagePipeline(
+        checkpoint_path=ckpt_path,
+        gemma_root=gemma_root,
+        loras=[],
+    )
+    logger.info("One-stage pipeline created.")
+
     _ltx_pipe = pipe
-
-    # Load latent upsampler for two-stage generation (2x spatial upsample).
-    # This is the key to eliminating grid-pattern artifacts.
-    upsampler_path = os.path.join(model_path, "latent_upsampler")
-    if os.path.isdir(upsampler_path):
-        logger.info("Loading LTX2 latent upsampler from %s ...", upsampler_path)
-        latent_upsampler = LTX2LatentUpsamplerModel.from_pretrained(
-            model_path,
-            subfolder="latent_upsampler",
-            torch_dtype=torch.bfloat16,
-        )
-        upsample_pipe = LTX2LatentUpsamplePipeline(
-            vae=pipe.vae, latent_upsampler=latent_upsampler
-        )
-        upsample_pipe = upsample_pipe.to("cuda")
-        # Enable VAE tiling for upsample decode — output is 2x resolution
-        upsample_pipe.vae.enable_tiling()
-        _ltx_upsample_pipe = upsample_pipe
-        logger.info("Latent upsampler loaded.")
-    else:
-        logger.warning(
-            "latent_upsampler not found at %s — falling back to single-stage",
-            upsampler_path,
-        )
-
     _active_model = "ltx"
-    logger.info("LTX-2 loaded in %.1fs", time.time() - t0)
+    logger.info("LTX-2.3 loaded in %.1fs", time.time() - t0)
 
 
 # ---------------------------------------------------------------------------
@@ -385,9 +944,16 @@ _DASHSCOPE_API_KEY: str = os.environ.get("DASHSCOPE_API_KEY", "")
 _OPENROUTER_API_KEY: str = os.environ.get("OPENROUTER_API_KEY", "")
 # Which backend to use: DashScope (preferred) or OpenRouter (fallback)
 _QA_BACKEND: str = "dashscope" if _DASHSCOPE_API_KEY else ("openrouter" if _OPENROUTER_API_KEY else "")
-# Model for video QA — Qwen VL model with vision capabilities
-_QA_MODEL_DASHSCOPE: str = "qwen-vl-max"  # Qwen-VL-Max on DashScope
-_QA_MODEL_OPENROUTER: str = "qwen/qwen3.5-plus-02-15"  # fallback on OpenRouter
+# Two-pass QA model ensemble:
+#   Pass 1 (structural integrity): fast check for corruption, grid artifacts,
+#           body horror, overt AI wonk.  Uses a strong vision model.
+#   Pass 2 (semantic quality): prompt adherence, style conformance, artistic merit.
+#           Uses the main VL model.
+# If Pass 1 returns REJECTED, Pass 2 is skipped entirely.
+_QA_MODEL_DASHSCOPE_STRUCTURAL: str = "qwen-vl-max"  # structural integrity pass
+_QA_MODEL_DASHSCOPE_SEMANTIC: str = "qwen-vl-max"    # semantic quality pass
+_QA_MODEL_OPENROUTER_STRUCTURAL: str = "google/gemini-2.5-flash-preview"  # structural (OpenRouter)
+_QA_MODEL_OPENROUTER_SEMANTIC: str = "google/gemini-2.5-flash-preview"    # semantic (OpenRouter)
 
 
 def _frames_to_base64(frames, indices: list[int]) -> list[str]:
@@ -414,20 +980,69 @@ def _frames_to_base64(frames, indices: list[int]) -> list[str]:
     return result
 
 
-def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
-    """Send frames to Qwen-Omni via OpenRouter for visual quality assessment.
+def _call_vision_model(content_parts: list[dict], model: str, api_url: str, api_key: str) -> dict:
+    """Call a vision model and return parsed JSON response.
 
-    Returns dict with keys: quality ("poor"/"good"/"excellent"), qa_reason (str).
-    Following bearnaise pattern: per-clip LLM-based visual QA.
+    Returns dict with at minimum {quality, qa_reason} keys.
+    Raises on network/parse failure.
+    """
+    import httpx
+
+    resp = httpx.post(
+        api_url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": 400,
+            "temperature": 0.1,
+        },
+        timeout=90.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    text = data["choices"][0]["message"]["content"].strip()
+
+    # Parse JSON — handle markdown fencing
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.strip()
+
+    return json.loads(text)
+
+
+def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") -> dict:
+    """Two-pass visual QA ensemble for AI-generated video clips.
+
+    Pass 1 — STRUCTURAL INTEGRITY (fast, strict):
+        Detects fundamentally broken output: grid artifacts, corrupted data,
+        body horror, overt AI wonk.  Returns REJECTED immediately if found.
+
+    Pass 2 — SEMANTIC QUALITY (only if Pass 1 clears):
+        Evaluates prompt adherence, visual style conformance, artistic merit.
+        Returns rejected/poor/good/excellent.
+
+    Returns dict with keys: quality ("rejected"/"poor"/"good"/"excellent"),
+    qa_reason (str), qa_pass ("structural"/"semantic").
+
+    Quality levels:
+        rejected  — fundamentally broken: grid artifacts, digital noise,
+                    corrupted data, body horror, overt AI wonk.  NOT usable.
+        poor      — passed sanity checks but barely: wrong medium, bad
+                    prompt adherence, significant but non-horrific artifacts.
+        good      — acceptable quality with minor imperfections.
+        excellent — high quality, matches prompt and style closely.
 
     Args:
         prompt: The generation prompt for this clip.
         frames_b64: Base64-encoded JPEG frames (start, middle, end).
-        visual_style: Movie-level visual style description. When provided,
-            QA checks that the clip conforms to the film's declared aesthetic.
+        visual_style: Movie-level visual style description.
     """
-    import httpx
-
     if not _QA_BACKEND:
         raise RuntimeError(
             "OTIO VIOLATION: visual QA unavailable — neither DASHSCOPE_API_KEY "
@@ -435,15 +1050,71 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
             "cannot accept clips without quality verification."
         )
 
-    # Build multimodal content: frames as images + evaluation prompt
-    content_parts = []
-    for i, b64 in enumerate(frames_b64):
-        content_parts.append({
+    # Select backend URLs and models
+    if _QA_BACKEND == "dashscope":
+        api_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+        api_key = _DASHSCOPE_API_KEY
+        structural_model = _QA_MODEL_DASHSCOPE_STRUCTURAL
+        semantic_model = _QA_MODEL_DASHSCOPE_SEMANTIC
+    else:
+        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        api_key = _OPENROUTER_API_KEY
+        structural_model = _QA_MODEL_OPENROUTER_STRUCTURAL
+        semantic_model = _QA_MODEL_OPENROUTER_SEMANTIC
+
+    # Build image content parts (shared between both passes)
+    image_parts = []
+    for b64 in frames_b64:
+        image_parts.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
         })
 
-    # Build the style enforcement section
+    # ── Pass 1: Structural Integrity ──────────────────────────────────────
+    structural_parts = list(image_parts)
+    structural_parts.append({
+        "type": "text",
+        "text": (
+            "You are a video output integrity checker. Your ONLY job is to \n"
+            "detect fundamentally broken AI-generated video output.\n\n"
+            f"These {len(frames_b64)} frames are sampled from an AI-generated video clip.\n\n"
+            "Check for ANY of these defects:\n\n"
+            "1. CORRUPTED OUTPUT: grid patterns, repeating tile artifacts, \n"
+            "   digital noise, static, solid color frames, no discernible content.\n\n"
+            "2. OVERT AI WONK: uncanny valley distortion, impossible physics \n"
+            "   (objects phasing through each other, gravity violations), \n"
+            "   melting/morphing shapes, flickering geometry, surreal \n"
+            "   nonsensical compositions that no real camera could capture.\n\n"
+            "3. BODY HORROR: deformed human faces or limbs, extra/missing \n"
+            "   fingers, fused body parts, distorted eyes/teeth, inhuman \n"
+            "   proportions that are clearly unintentional and disturbing.\n\n"
+            "If ANY of the above defects are present, the output is REJECTED.\n"
+            "If the frames show actual coherent imagery (even if low quality), \n"
+            "it PASSES.\n\n"
+            "Respond in EXACTLY this JSON format (no markdown):\n"
+            '{"verdict": "rejected|pass", "defects": "description of defects found, or none"}'
+        ),
+    })
+
+    try:
+        logger.info("QA Pass 1 (structural) using %s (model=%s)", _QA_BACKEND, structural_model)
+        p1 = _call_vision_model(structural_parts, structural_model, api_url, api_key)
+        p1_verdict = p1.get("verdict", "pass").lower()
+        p1_defects = p1.get("defects", "none")
+        logger.info("QA Pass 1 result: verdict=%s, defects=%.120s", p1_verdict, p1_defects)
+
+        if p1_verdict == "rejected":
+            return {
+                "quality": "rejected",
+                "qa_reason": f"STRUCTURAL INTEGRITY FAILURE: {p1_defects}",
+                "qa_pass": "structural",
+            }
+    except Exception as e:
+        logger.error("QA Pass 1 (structural) failed: %s", e, exc_info=True)
+        # If structural check itself fails, proceed to semantic pass
+        # (don't block on QA infrastructure failures)
+
+    # ── Pass 2: Semantic Quality ──────────────────────────────────────────
     style_section = ""
     if visual_style:
         style_section = (
@@ -455,83 +1126,119 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
             f"other qualities.\n"
         )
 
-    content_parts.append({
+    semantic_parts = list(image_parts)
+    semantic_parts.append({
         "type": "text",
         "text": (
             f"You are a video quality assessor for AI-generated footage.\n\n"
             f"The video was generated from this prompt:\n"
             f'"{prompt}"\n'
             f"{style_section}\n"
-            f"These {len(frames_b64)} frames are sampled from the start, middle, and end of the clip.\n\n"
-            f"Evaluate the video quality:\n"
-            f"1. Does the visual content match what the prompt describes?\n"
-            f"2. Does the clip match the movie's visual style? (most important)\n"
-            f"3. Are there blatant AI artifacts: distorted shapes, impossible \n"
-            f"   geometry, morphing, grid patterns, or incoherent motion?\n"
-            f"4. Is the output clearly the WRONG medium (e.g. cartoon when the \n"
-            f"   movie style requires photorealism)?\n\n"
+            f"These {len(frames_b64)} frames are sampled from the start, middle, "
+            f"and end of the clip.\n\n"
+            f"The frames have already passed structural integrity checks (no \n"
+            f"corruption or grid artifacts). Now evaluate QUALITY:\n\n"
+            f"REJECTED — Overt AI wonk or body horror that passed the structural \n"
+            f"  check: uncanny valley faces, deformed limbs, impossible anatomy, \n"
+            f"  melting objects, reality-breaking physics. These are errors, not \n"
+            f"  style choices.\n\n"
+            f"POOR — Shows actual imagery but barely acceptable:\n"
+            f"  - Wrong medium (cartoon when photorealism required)\n"
+            f"  - Noticeable but non-horrific AI artifacts\n"
+            f"  - Complete prompt mismatch\n\n"
+            f"GOOD — Acceptable quality with minor imperfections.\n\n"
+            f"EXCELLENT — High quality, matches prompt and style closely.\n\n"
             f"Be LENIENT on minor imperfections (slight blur, small lighting \n"
-            f"differences). Only rate POOR for blatant failures: wrong medium, \n"
-            f"AI wonkiness, or complete prompt mismatch.\n\n"
+            f"differences).\n\n"
             f"Respond in EXACTLY this JSON format (no markdown, no extra text):\n"
-            f'{{"quality": "poor|good|excellent", "qa_reason": "brief description of what the video shows and why you rated it this way"}}'
+            f'{{"quality": "rejected|poor|good|excellent", "qa_reason": "brief '
+            f'description of what the video shows and why you rated it this way"}}'
         ),
     })
 
     try:
-        # Select backend: DashScope (preferred) or OpenRouter (fallback)
-        if _QA_BACKEND == "dashscope":
-            api_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
-            api_key = _DASHSCOPE_API_KEY
-            model = _QA_MODEL_DASHSCOPE
-        else:
-            api_url = "https://openrouter.ai/api/v1/chat/completions"
-            api_key = _OPENROUTER_API_KEY
-            model = _QA_MODEL_OPENROUTER
+        logger.info("QA Pass 2 (semantic) using %s (model=%s)", _QA_BACKEND, semantic_model)
+        p2 = _call_vision_model(semantic_parts, semantic_model, api_url, api_key)
+        quality = p2.get("quality", "unknown").lower()
+        qa_reason = p2.get("qa_reason", "No reason provided")
 
-        logger.info("Visual QA using %s (model=%s)", _QA_BACKEND, model)
-        resp = httpx.post(
-            api_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": content_parts}],
-                "max_tokens": 300,
-                "temperature": 0.1,
-            },
-            timeout=60.0,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"].strip()
-
-        # Parse JSON from response — handle markdown fencing
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
-
-        result = json.loads(text)
-        quality = result.get("quality", "unknown").lower()
-        qa_reason = result.get("qa_reason", "No reason provided")
-
-        if quality not in ("poor", "good", "excellent"):
+        if quality not in ("rejected", "poor", "good", "excellent"):
             quality = "unknown"
 
-        return {"quality": quality, "qa_reason": qa_reason}
+        return {"quality": quality, "qa_reason": qa_reason, "qa_pass": "semantic"}
 
     except Exception as e:
-        logger.error("Visual QA failed: %s", e, exc_info=True)
-        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}"}
+        logger.error("QA Pass 2 (semantic) failed: %s", e, exc_info=True)
+        return {"quality": "unknown", "qa_reason": f"QA request failed: {e}", "qa_pass": "error"}
 
 
 # ---------------------------------------------------------------------------
-# Video generation (LTX-2.3 via diffusers LTX2Pipeline)
+# Video generation (LTX-2.3 via official Lightricks ltx-pipelines)
 # ---------------------------------------------------------------------------
+
+def _ltx_generate_once(
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    num_frames: int,
+    fps: float,
+    seed: int,
+    num_inference_steps: int,
+    guidance_scale: float,
+    stg_scale: float,
+    modality_scale: float,
+    guidance_rescale: float,
+    stg_blocks: list[int],
+) -> np.ndarray:
+    """Run a single ltx-pipelines generation and return numpy uint8 frames.
+
+    The pipeline returns an Iterator[torch.Tensor] of video chunks (uint8,
+    shape (T, H, W, C)) and an Audio object.  We collect the video chunks
+    into a single numpy array for QA evaluation.
+    """
+    from ltx_core.components.guiders import MultiModalGuiderParams
+
+    video_guider = MultiModalGuiderParams(
+        cfg_scale=guidance_scale,
+        stg_scale=stg_scale,
+        rescale_scale=guidance_rescale,
+        modality_scale=modality_scale,
+        skip_step=0,
+        stg_blocks=stg_blocks,
+    )
+    audio_guider = MultiModalGuiderParams(
+        cfg_scale=7.0,
+        stg_scale=stg_scale,
+        rescale_scale=guidance_rescale,
+        modality_scale=modality_scale,
+        skip_step=0,
+        stg_blocks=stg_blocks,
+    )
+
+    video_iter, _audio = _ltx_pipe(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        seed=seed,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+        frame_rate=fps,
+        num_inference_steps=num_inference_steps,
+        video_guider_params=video_guider,
+        audio_guider_params=audio_guider,
+        images=[],  # text-to-video, no image conditioning
+    )
+
+    # Collect video chunks from iterator into numpy array
+    chunks = []
+    for chunk in video_iter:
+        # chunk is torch.Tensor (T, H, W, C) uint8 on CPU
+        chunks.append(chunk.cpu().numpy())
+    candidate_frames = np.concatenate(chunks, axis=0)  # (T, H, W, C) uint8
+
+    return candidate_frames
+
 
 def _generate_video(
     prompt: str,
@@ -544,8 +1251,12 @@ def _generate_video(
     guidance_scale: float,
     negative_prompt: str = "",
     visual_style: str = "",
+    stg_scale: float = 1.0,
+    modality_scale: float = 3.0,
+    guidance_rescale: float = 0.7,
+    stg_blocks: list[int] | None = None,
 ) -> tuple[bytes, dict]:
-    """Generate video clip using LTX-2.3 dev (full) model via diffusers.
+    """Generate video clip using LTX-2.3 dev (full) model via ltx-pipelines.
 
     Returns (raw_mp4_bytes, qa_status) where qa_status follows bearnaise
     pattern: {quality, qa_reason, attempts, seed}.
@@ -555,6 +1266,10 @@ def _generate_video(
         negative_prompt: Per-clip negative prompt from visual_style.avoid.
             Merged with baseline negatives.
         visual_style: Movie-level visual style description passed to QA.
+        stg_scale: Spatio-temporal guidance scale (LTX-2.3 specific).
+        modality_scale: Modality guidance scale (video vs audio balance).
+        guidance_rescale: CFG rescale factor to reduce oversaturation.
+        stg_blocks: Which transformer blocks to apply STG to.
     """
     # Fail fast if no QA backend — don't waste GPU time generating frames
     # that will be rejected anyway.  _QA_BACKEND is a module-level constant.
@@ -565,8 +1280,6 @@ def _generate_video(
         )
 
     _load_ltx()
-
-    from diffusers.utils import export_to_video
 
     fps = 24
     if num_frames is None:
@@ -592,76 +1305,55 @@ def _generate_video(
     )
     t0 = time.time()
 
+    # LTX-2.3 spatio-temporal guidance block indices
+    _stg_blocks = stg_blocks if stg_blocks is not None else [28]
+
     # Retry loop with Qwen-Omni visual QA (bearnaise pattern).
-    # After each generation: brightness/contrast check first (fast, free),
-    # then Qwen-Omni visual QA for semantic evaluation.
-    #
-    # Tracks passing (brightness OK) and failing results separately so that
-    # any brightness-passing frame is always preferred over a failing one,
-    # even if the failing frame has a higher raw score.
     max_attempts = 3
     current_seed = seed
-    # Best result that passed brightness/contrast thresholds
     best_passing_frames = None
-    best_passing_audio = None
     best_passing_score = -1.0
     best_passing_seed = seed
     best_passing_qa: dict = {"quality": "unknown", "qa_reason": "Not evaluated"}
-    # Best result among brightness-failing attempts (fallback only)
     best_failing_frames = None
-    best_failing_audio = None
     best_failing_score = -1.0
     best_failing_seed = seed
     final_attempt = 0
 
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
-        gen = torch.Generator("cuda").manual_seed(current_seed)
-        # Two-stage pipeline (official LTX-2.3 production approach):
-        #   Stage 1: generate latents at target resolution
-        #   Stage 2: latent upsample 2x → VAE decode at 2x resolution
-        # This eliminates grid-pattern artifacts from single-stage decode.
-        if _ltx_upsample_pipe is not None:
-            # Stage 1: generate raw latents (no VAE decode yet)
-            video_latent, audio_latent = _ltx_pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_frames=num_frames,
-                frame_rate=fps,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                generator=gen,
-                output_type="latent",
-                return_dict=False,
+
+        candidate_frames = _ltx_generate_once(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            num_frames=num_frames,
+            fps=fps,
+            seed=current_seed,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
+            stg_scale=stg_scale,
+            modality_scale=modality_scale,
+            guidance_rescale=guidance_rescale,
+            stg_blocks=_stg_blocks,
+        )
+
+        logger.info(
+            "Generation complete (attempt %d/%d): shape=%s, dtype=%s",
+            attempt, max_attempts, candidate_frames.shape, candidate_frames.dtype,
+        )
+
+        # Sanitise NaN/Inf (bfloat16 numerical instability during VAE decode)
+        if np.isnan(candidate_frames).any() or np.isinf(candidate_frames).any():
+            nan_frac = float(np.isnan(candidate_frames).mean())
+            logger.warning(
+                "NaN/Inf in decoded frames (%.1f%% NaN, attempt %d/%d, seed=%d)",
+                nan_frac * 100, attempt, max_attempts, current_seed,
             )
-            logger.info("Stage 1 latents generated, upsampling 2x...")
-            # Stage 2: upsample latents 2x in latent space → decode to numpy
-            upsample_out = _ltx_upsample_pipe(
-                latents=video_latent,
-                output_type="np",
-                return_dict=False,
-            )
-            candidate_frames = upsample_out[0][0]  # (frames,) → numpy (T, H, W, C)
-            candidate_audio = None  # We use Qwen3-TTS, not LTX audio
-        else:
-            # Fallback: single-stage (no upsampler available)
-            video_out, audio_out = _ltx_pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                width=width,
-                height=height,
-                num_frames=num_frames,
-                frame_rate=fps,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                generator=gen,
-                output_type="np",
-                return_dict=False,
-            )
-            candidate_frames = video_out[0]  # numpy array (T, H, W, C)
-            candidate_audio = audio_out[0] if audio_out is not None else None
+            candidate_frames = np.nan_to_num(
+                candidate_frames, nan=0, posinf=255, neginf=0
+            ).astype(np.uint8)
 
         # Stage 1: Fast brightness/contrast check (free, instant)
         brightness = _measure_frame_brightness(candidate_frames)
@@ -676,10 +1368,8 @@ def _generate_video(
             logger.warning(
                 "Video too dark/flat — skipping Qwen QA, retrying..."
             )
-            # Track best among failing attempts (fallback only)
             if score > best_failing_score:
                 best_failing_frames = candidate_frames
-                best_failing_audio = candidate_audio
                 best_failing_score = score
                 best_failing_seed = current_seed
             if attempt < max_attempts:
@@ -688,17 +1378,10 @@ def _generate_video(
             else:
                 break
 
-        # Brightness passed — track among passing attempts.
-        # QA is paired with frames so metadata always describes the selected output.
         is_new_best = score > best_passing_score
-        if is_new_best:
-            best_passing_frames = candidate_frames
-            best_passing_audio = candidate_audio
-            best_passing_score = score
-            best_passing_seed = current_seed
 
         # Stage 2: Qwen-Omni visual QA (semantic evaluation)
-        n = candidate_frames.shape[0] if hasattr(candidate_frames, 'shape') else len(candidate_frames)
+        n = candidate_frames.shape[0]
         sample_indices = [0, n // 2, n - 1] if n >= 3 else list(range(n))
         frames_b64 = _frames_to_base64(candidate_frames, sample_indices)
         qa_result = _qwen_visual_qa(prompt, frames_b64, visual_style=visual_style)
@@ -709,15 +1392,28 @@ def _generate_video(
             qa_result.get("qa_reason", ""),
         )
 
+        if qa_result["quality"] == "rejected":
+            logger.error(
+                "QA REJECTED output (attempt %d/%d): %s",
+                attempt, max_attempts, qa_result.get("qa_reason", ""),
+            )
+            if best_passing_qa.get("quality") not in ("poor", "good", "excellent"):
+                best_passing_frames = candidate_frames
+                best_passing_seed = current_seed
+                best_passing_qa = qa_result
+            break
+
         if qa_result["quality"] in ("good", "excellent"):
             best_passing_frames = candidate_frames
-            best_passing_audio = candidate_audio
+            best_passing_score = score
             best_passing_seed = current_seed
             best_passing_qa = qa_result
             break
 
-        # QA says poor or unknown — only update QA if these are the best frames
         if is_new_best:
+            best_passing_frames = candidate_frames
+            best_passing_score = score
+            best_passing_seed = current_seed
             best_passing_qa = qa_result
         if attempt < max_attempts:
             logger.warning(
@@ -734,12 +1430,10 @@ def _generate_video(
     # Prefer any brightness-passing frame over a brightness-failing one
     if best_passing_frames is not None:
         video_frames = best_passing_frames
-        video_audio = best_passing_audio
         best_seed = best_passing_seed
         best_qa = best_passing_qa
     else:
         video_frames = best_failing_frames
-        video_audio = best_failing_audio
         best_seed = best_failing_seed
         best_qa = {"quality": "unknown", "qa_reason": "All attempts failed brightness check"}
 
@@ -747,78 +1441,54 @@ def _generate_video(
     logger.info("Video generated in %.1fs (seed=%d, qa=%s)",
                 elapsed, best_seed, best_qa.get("quality", "unknown"))
 
-    # Export to MP4
+    # Export to MP4 using ffmpeg (video_frames is uint8 numpy)
     raw_path = os.path.join(
         _output_dir, f"clip_{uuid.uuid4().hex[:8]}_raw.mp4"
     )
-    output_path = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
+    output_path = os.path.join(
+        os.path.dirname(raw_path),
+        os.path.basename(raw_path).replace("_raw.mp4", ".mp4"),
+    )
     os.makedirs(_output_dir, exist_ok=True)
 
-    # Use diffusers encode_video for initial MP4 encoding (with audio)
-    try:
-        from diffusers.pipelines.ltx2.export_utils import encode_video as ltx_encode_video
-        # encode_video requires audio and audio_sample_rate
-        audio_sr = 44100  # LTX-2.3 default audio sample rate
-        if video_audio is not None:
-            ltx_encode_video(
-                video_frames,
-                audio=video_audio,
-                audio_sample_rate=audio_sr,
-                fps=fps,
-                output_path=raw_path,
-            )
-        else:
-            ltx_encode_video(
-                video_frames,
-                fps=fps,
-                output_path=raw_path,
-            )
-    except (ImportError, Exception) as exc:
-        logger.warning("encode_video failed (%s), falling back to export_to_video", exc)
-        # Fallback: convert numpy [0,1] to uint8 PIL frames for export_to_video
-        if isinstance(video_frames, np.ndarray) and video_frames.dtype != np.uint8:
-            from PIL import Image
-            pil_frames = [
-                Image.fromarray((np.clip(f, 0, 1) * 255).astype(np.uint8))
-                for f in video_frames
-            ]
-            export_to_video(pil_frames, raw_path, fps=fps)
-        else:
-            export_to_video(video_frames, raw_path, fps=fps)
-
-    # Re-encode to H.264.  diffusers' export_to_video / encode_video
-    # outputs mpeg4 Part 2 which most players cannot render.
-    try:
-        _reencode = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", raw_path,
-                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-                "-pix_fmt", "yuv420p",
-                "-c:a", "aac", "-b:a", "192k",
-                "-movflags", "+faststart",
-                output_path,
-            ],
-            capture_output=True, text=True, timeout=120,
+    # Write raw frames via ffmpeg pipe (no diffusers dependency)
+    _ffmpeg_write = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{video_frames.shape[2]}x{video_frames.shape[1]}",
+            "-pix_fmt", "rgb24",
+            "-r", str(fps),
+            "-i", "-",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            output_path,
+        ],
+        input=video_frames.tobytes(),
+        capture_output=True, timeout=120,
+    )
+    if _ffmpeg_write.returncode != 0:
+        stderr_msg = (_ffmpeg_write.stderr or b"")[:500]
+        logger.error(
+            "ffmpeg encode failed (rc=%d): %s",
+            _ffmpeg_write.returncode,
+            stderr_msg,
         )
-        if _reencode.returncode == 0 and os.path.exists(output_path):
-            logger.info("Re-encoded to H.264: %s", output_path)
-        else:
-            logger.warning("H.264 re-encode failed (rc=%d), using raw: %s",
-                           _reencode.returncode, _reencode.stderr[:300])
-            output_path = raw_path  # fall back to raw mpeg4
-    except Exception as exc:
-        logger.warning("H.264 re-encode error: %s, using raw", exc)
-        output_path = raw_path
+        # Architecture invariant: never silently degrade.  Raise so the
+        # recovery middleware can retry or escalate instead of passing
+        # invalid bytes through the pipeline.
+        raise RuntimeError(
+            f"ffmpeg video encoding failed (rc={_ffmpeg_write.returncode}): "
+            f"{stderr_msg}"
+        )
 
     with open(output_path, "rb") as f:
         data = f.read()
 
-    # Clean up both raw and H.264 files.  Use a set + the original
-    # H.264 path so that even when output_path was reassigned to
-    # raw_path on failure, the partially-created H.264 file is removed.
-    original_h264 = os.path.join(os.path.dirname(raw_path), os.path.basename(raw_path).replace("_raw.mp4", ".mp4"))
-    for p in {raw_path, output_path, original_h264}:
+    # Clean up temp files
+    for p in {raw_path, output_path}:
         try:
             os.unlink(p)
         except OSError:
@@ -842,7 +1512,16 @@ def _generate_video(
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
-async def health() -> HealthResponse:
+async def health():
+    """Quick health check — backward-compatible with provisioner.
+
+    If the VMAgent is running, delegate to it (richer data).
+    Otherwise fall back to the minimal HealthResponse.
+    """
+    if _vm_agent is not None:
+        return _vm_agent.get_health_response()
+
+    # Fallback for legacy callers (should not happen in normal operation)
     gpu_name = "unknown"
     vram_used = 0.0
     vram_total = 0.0
@@ -851,14 +1530,53 @@ async def health() -> HealthResponse:
         vram_used = torch.cuda.memory_allocated(0) / 1e9
         vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
 
+    status = "error" if _bootstrap_status.phase == "error" else "ok"
     return HealthResponse(
-        status="ok",
+        status=status,
         gpu=gpu_name,
         tts_loaded=_tts_model is not None,
         ltx_loaded=_ltx_pipe is not None,
         vram_used_gb=round(vram_used, 2),
         vram_total_gb=round(vram_total, 2),
+        bootstrap=_bootstrap_status,
     )
+
+
+@app.get("/status")
+async def status_endpoint():
+    """Full VM agent status — the overseer reads this.
+
+    Includes bootstrap, models, self-monitoring health, escalations,
+    and task tracking.  This is the single source of truth for what
+    this VM is doing.
+    """
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    return _vm_agent.get_status()
+
+
+@app.get("/escalations")
+async def escalations_endpoint():
+    """Return unacknowledged escalation events for the overseer."""
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    with _vm_agent._lock:
+        unacked = [
+            e.to_dict() for e in _vm_agent._escalations if not e.acked
+        ]
+    return {"escalations": unacked, "count": len(unacked)}
+
+
+@app.post("/escalations/ack")
+async def ack_escalations_endpoint(before_ts: float):
+    """Acknowledge escalations up to a given timestamp.
+
+    Called by the central overseer after it has processed the events.
+    """
+    if _vm_agent is None:
+        raise HTTPException(503, "VMAgent not initialised yet")
+    count = _vm_agent.ack_escalations(before_ts)
+    return {"acknowledged": count}
 
 
 @app.post("/tts")
@@ -874,12 +1592,20 @@ def tts_endpoint(req: TTSRequest):
         req.scene_num, req.voice, req.language, len(req.text),
     )
     t0 = time.time()
+    success = False
 
     with _model_lock:
         try:
             audio_array, sr = _generate_tts(req.text, req.voice, req.language)
+            success = True
         except Exception as e:
             logger.error("TTS failed: %s", e, exc_info=True)
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
+                _vm_agent.escalate(
+                    Severity.WARNING, "generation",
+                    f"TTS generation failed: {e}",
+                )
             raise HTTPException(500, f"TTS generation failed: {e}")
 
     # Encode as WAV (no lock needed — local data only)
@@ -889,6 +1615,8 @@ def tts_endpoint(req: TTSRequest):
 
     elapsed = time.time() - t0
     duration = len(audio_array) / sr
+    if _vm_agent:
+        _vm_agent.record_task(success, elapsed)
     logger.info(
         "TTS done: %.1fs audio in %.1fs (%.1fx realtime)",
         duration, elapsed, duration / max(elapsed, 0.01),
@@ -936,14 +1664,28 @@ def video_endpoint(req: VideoRequest):
                 guidance_scale=req.guidance_scale,
                 negative_prompt=req.negative_prompt,
                 visual_style=req.visual_style,
+                stg_scale=req.stg_scale,
+                modality_scale=req.modality_scale,
+                guidance_rescale=req.guidance_rescale,
+                stg_blocks=req.stg_blocks,
             )
         except HTTPException:
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
             raise
         except Exception as e:
             logger.error("Video failed: %s", e, exc_info=True)
+            if _vm_agent:
+                _vm_agent.record_task(False, time.time() - t0)
+                _vm_agent.escalate(
+                    Severity.WARNING, "generation",
+                    f"Video generation failed: {e}",
+                )
             raise HTTPException(500, f"Video generation failed: {e}")
 
     elapsed = time.time() - t0
+    if _vm_agent:
+        _vm_agent.record_task(True, elapsed)
     logger.info(
         "Video done: %d bytes in %.1fs, qa=%s",
         len(mp4_bytes), elapsed, qa_status.get("quality", "unknown"),
@@ -1009,7 +1751,7 @@ def load_models(model: str = "tts"):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="GPU Worker for Documentary Pipeline")
+    parser = argparse.ArgumentParser(description="GPU Worker — autonomous VM agent")
     parser.add_argument("--port", type=int, default=8880)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--models-dir", type=str, default="/workspace/models")
@@ -1025,39 +1767,58 @@ def main():
     )
     args = parser.parse_args()
 
-    global _models_dir, _output_dir, _worker_mode
+    global _models_dir, _output_dir, _worker_mode, _vm_agent, _bootstrap_status
     _models_dir = args.models_dir
     _output_dir = args.output_dir
     _worker_mode = args.mode
 
     os.makedirs(_output_dir, exist_ok=True)
 
-    logger.info("Starting GPU Worker on %s:%d (mode=%s)", args.host, args.port, _worker_mode)
+    # --- Create the VMAgent ---
+    # The agent manages the full lifecycle: bootstrap, model loading,
+    # self-monitoring, recovery, escalation.  FastAPI starts immediately
+    # so /health is reachable; the agent runs bootstrap + model loading
+    # in a background thread and reports structured status.
+    agent = VMAgent(
+        worker_mode=_worker_mode,
+        models_dir=_models_dir,
+        output_dir=_output_dir,
+    )
+    _vm_agent = agent
+    # Share the bootstrap status so legacy /health callers see it too
+    _bootstrap_status = agent.bootstrap
+
+    logger.info(
+        "Starting VM Agent on %s:%d (mode=%s)",
+        args.host, args.port, _worker_mode,
+    )
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
 
-    # Pre-load models in a background thread so uvicorn starts immediately.
-    # The /health endpoint reports tts_loaded/ltx_loaded status, so callers
-    # can poll until the model they need is ready.
-    import threading
+    # Background thread: bootstrap → model loading → start monitoring.
+    # FastAPI starts immediately so the /health endpoint is reachable
+    # during the bootstrap phase.  The overseer reads structured status
+    # from /health and /status to know exactly what's happening.
+    def _agent_lifecycle():
+        ok = agent.run_bootstrap()
+        if ok:
+            # Models loaded — start continuous self-monitoring
+            agent.start_monitoring()
+        else:
+            # Bootstrap failed — the agent has already escalated.
+            # The self-monitoring loop still starts so we report
+            # health even in the error state (e.g. disk, temp).
+            agent.start_monitoring()
+            logger.error(
+                "VMAgent: bootstrap failed — agent is in error state. "
+                "Overseer should read /status for details."
+            )
 
-    def _background_preload():
-        if _worker_mode == "tts":
-            try:
-                with _model_lock:
-                    _load_tts()
-            except Exception as e:
-                logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
-        if _worker_mode in ("ltx", "both"):
-            try:
-                with _model_lock:
-                    _load_ltx()
-            except Exception as e:
-                logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
-
-    preload_thread = threading.Thread(target=_background_preload, daemon=True)
-    preload_thread.start()
-    logger.info("Model pre-loading started in background thread")
+    lifecycle_thread = threading.Thread(
+        target=_agent_lifecycle, name="vm-agent-lifecycle", daemon=True,
+    )
+    lifecycle_thread.start()
+    logger.info("VMAgent lifecycle thread started")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

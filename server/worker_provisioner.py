@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -90,6 +91,12 @@ class WorkerSpec:
     status: str = "pending"  # "pending", "provisioning", "healthy", "failed"
     error: str = ""  # error message if status == "failed"
     ready_event: threading.Event = field(default_factory=threading.Event)
+    # Bootstrap error detail — populated by wait_for_worker_healthy when the
+    # worker's /health endpoint reports a bootstrap failure.  This gives the
+    # provisioner (and recovery middleware) structured information about WHY
+    # the worker failed, not just that it did.
+    bootstrap_error: str = ""
+    bootstrap_error_category: str = ""  # "auth", "network", "disk", "missing_file", "runtime"
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +108,8 @@ class WorkerSpec:
 #   + KV cache + activations ~ 5-8 GB total
 #   -> min_vram_gb = 8 (safe floor with headroom)
 #   -> gpu_type = any cheap GPU with >= 12 GB (RTX 3060, 3070, etc.)
-#   -> disk: ~4.3 GB model + ~30 GB OS/software = ~50 GB
+#   -> disk: WORKER_MODE=tts skips LTX models, only downloads ~4.3 GB TTS model
+#     so TTS VM needs ~50 GB (4.3 GB model + ~30 GB OS/software + headroom)
 #
 # Video: LTX-2.3 (dg845/LTX-2.3-Diffusers)
 #   text_encoder: ~46.6 GB (transformers format)
@@ -122,8 +130,8 @@ TTS_SPEC = WorkerSpec(
     gpu_type="RTX_4000",      # cheap GPU; broadened automatically if unavailable
     min_vram_gb=8,             # 1.7B model at bf16 = 3.4 GB + overhead
     max_price=1.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=50,            # ~4.3 GB model + OS
-    disk_gb=64,                # --disk arg (comfortable headroom)
+    min_disk_gb=50,            # ~4.3 GB TTS model + ~30 GB OS/software (WORKER_MODE=tts skips LTX)
+    disk_gb=64,                # --disk arg (comfortable headroom for TTS-only)
     worker_mode="tts",
 )
 
@@ -320,10 +328,15 @@ def provision_vm(spec: WorkerSpec) -> str:
 
     # Search for offers — VRAM is a hard floor, never compromised.
     # Use query-string filter format for vastai CLI.
-    vram_mb = spec.min_vram_gb * 1024
+    # IMPORTANT: The vastai CLI search filter treats gpu_ram in **GB**,
+    # but the API response returns gpu_ram in **MB**.  Empirically verified:
+    #   gpu_ram>=8   -> 64 offers (GTX 1070 Ti with gpu_ram=8192 in response)
+    #   gpu_ram>=8192 -> 0 offers
+    vram_gb = spec.min_vram_gb
+    vram_mb = spec.min_vram_gb * 1024  # for Python-side post-filter only
     query = (
         f"gpu_name={spec.gpu_type} "
-        f"gpu_ram>={vram_mb} "
+        f"gpu_ram>={vram_gb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
         f"disk_space>={spec.min_disk_gb}"
@@ -347,7 +360,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             spec.gpu_type, spec.min_vram_gb,
         )
         query = (
-            f"gpu_ram>={vram_mb} "
+            f"gpu_ram>={vram_gb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
             f"disk_space>={spec.min_disk_gb}"
@@ -413,35 +426,116 @@ def provision_vm(spec: WorkerSpec) -> str:
     b2_key_id = os.environ.get("B2_KEY_ID", "")
     b2_app_key = os.environ.get("B2_APPLICATION_KEY", "")
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
 
+    # Use 'export' so env vars survive through the && chain.
+    # Inline VAR=val only applies to the immediate next command,
+    # but Vast.ai's onstart runner may wrap the whole string in sh -c
+    # which loses inline vars for later commands in the chain.
+
+    # Auto-detect the current git branch so VMs clone the same branch
+    # (the bootstrap script may have fixes not yet merged to main).
+    try:
+        _branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            text=True,
+        ).strip()
+        if not _branch or _branch == "HEAD":
+            _branch = "main"
+    except Exception:
+        _branch = "main"
+    logger.info("VMs will clone branch: %s", _branch)
+
+    # Architecture: the worker starts FIRST (FastAPI immediately reachable),
+    # then runs bootstrap + model loading in a background thread.  The /health
+    # endpoint reports structured bootstrap status so the provisioner can see
+    # exactly what's happening and escalate failures immediately — no more
+    # blind timeouts.  The onstart installs minimal system deps + pip deps
+    # needed for gpu_worker.py to start, then launches the worker which
+    # handles the rest (model downloads, loading) internally.
     onstart = (
-        "apt-get update && apt-get install -y git curl && "
-        "git clone https://github.com/OrpingtonClose/economy-documentary.git "
+        f"export B2_KEY_ID={shlex.quote(b2_key_id)} && "
+        f"export B2_APPLICATION_KEY={shlex.quote(b2_app_key)} && "
+        f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
+        f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
+        f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
+        # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
+        # index as this onstart command (prevents cu124 overwriting cu130).
+        # TTS workers run on older/cheaper GPUs (e.g. GTX 1070 Ti, Pascal sm_61)
+        # which lack cu130 kernel images.  cu126 supports Pascal+ AND has
+        # torch >=2.7 (cu124 only goes up to 2.6.0 which lacks _maybe_view_chunk_cat).
+        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
+        "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
+        f"git clone -b {shlex.quote(_branch)} --single-branch "
+        "https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
-        "(cd /workspace/economy-documentary && git pull origin main) && "
-        f"B2_KEY_ID={shlex.quote(b2_key_id)} B2_APPLICATION_KEY={shlex.quote(b2_app_key)} "
-        "bash /workspace/economy-documentary/scripts/gpu_bootstrap.sh && "
-        f"DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} "
+        f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
+        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
+        # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
+        # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
+        # but we need enough to start the health endpoint immediately.
+        # IMPORTANT: The Docker image has conda torch 2.6.0 which satisfies
+        # 'torch>=2.6.0', so pip would skip the install.  Aggressively clean
+        # conda torch + nvidia dirs + conda pkg cache, then force-reinstall.
+        "conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null; "
+        "rm -rf /opt/conda/lib/python*/site-packages/torch* "
+        "/opt/conda/lib/python*/site-packages/torchvision* "
+        "/opt/conda/lib/python*/site-packages/torchaudio* "
+        "/opt/conda/lib/python*/site-packages/nvidia* "
+        "/opt/conda/pkgs/*torch* 2>/dev/null; "
+        "pip install --force-reinstall --no-cache-dir "
+        "torch torchvision torchaudio "
+        f"--index-url https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
+        # Verify correct torch was installed (catch conda remnants early)
+        "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
+        "pip install --no-cache-dir "
+        "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
+        "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
+        # Register NVIDIA pip package libs with ldconfig so libcudart.so.13
+        # is discoverable system-wide by any process (including ltx-core).
+        # PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
+        "python3 -c \""
+        "import os,site,pathlib;"
+        "nv_dirs=[str(p) for sp in site.getsitepackages() "
+        "for p in pathlib.Path(sp,'nvidia').glob('*/lib') if p.is_dir()];"
+        "open('/etc/ld.so.conf.d/nvidia-pip.conf','w').write(chr(10).join(nv_dirs)+chr(10)) if nv_dirs else None;"
+        "print(f'Registered {len(nv_dirs)} nvidia lib dirs')\" && "
+        "ldconfig && "
+        # Start the worker — it handles bootstrap internally and reports
+        # structured status via /health endpoint.
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
 
+    # NOTE: Do NOT use --raw here.  `vastai create instance --raw` returns
+    # an empty string.  Without --raw it returns text like:
+    #   Started. {'success': True, 'new_contract': 34856082, ...}
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
-        "--image", "pytorch/pytorch:2.3.0-cuda12.1-cudnn8-devel",
+        "--image", "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
         "--onstart-cmd", onstart,
-        "--raw",
     ])
 
+    # Parse the response — could be dict (if CLI returns JSON) or a string
+    # containing a Python dict literal like "Started. {'new_contract': ...}"
     if isinstance(create_result, dict):
         instance_id = create_result.get("new_contract")
         if instance_id:
             spec.vm_id = str(instance_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
+            return spec.vm_id
+
+    # Try to extract new_contract from text response
+    if isinstance(create_result, str) and "new_contract" in create_result:
+        match = re.search(r"'new_contract'\s*:\s*(\d+)", create_result)
+        if match:
+            spec.vm_id = match.group(1)
+            logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
             return spec.vm_id
 
     raise RuntimeError(
@@ -491,8 +585,14 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def setup_ssh_tunnel(spec: WorkerSpec) -> subprocess.Popen:
+def setup_ssh_tunnel(
+    spec: WorkerSpec, max_retries: int = 12, retry_delay: int = 15,
+) -> subprocess.Popen:
     """Set up an SSH tunnel from localhost:local_port to the GPU VM.
+
+    Retries up to *max_retries* times with *retry_delay* seconds between
+    attempts because the VM's SSH daemon may not be ready immediately
+    after Vast.ai reports status=running.
 
     Returns the tunnel subprocess.
     """
@@ -514,43 +614,72 @@ def setup_ssh_tunnel(spec: WorkerSpec) -> subprocess.Popen:
         f"root@{spec.ssh_host}",
     ]
 
-    logger.info(
-        "Setting up SSH tunnel: localhost:%d -> %s:%d (via %s:%d)",
-        spec.local_port, spec.ssh_host, spec.remote_port,
-        spec.ssh_host, spec.ssh_port,
-    )
-
-    proc = subprocess.Popen(
-        tunnel_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    # Give the tunnel a moment to establish
-    time.sleep(3)
-
-    if proc.poll() is not None:
-        stderr = proc.stderr.read().decode() if proc.stderr else ""
-        raise RuntimeError(
-            f"SSH tunnel for {spec.role} failed immediately: {stderr}"
+    last_err = ""
+    for attempt in range(1, max_retries + 1):
+        logger.info(
+            "Setting up SSH tunnel (attempt %d/%d): localhost:%d -> %s:%d (via %s:%d)",
+            attempt, max_retries,
+            spec.local_port, spec.ssh_host, spec.remote_port,
+            spec.ssh_host, spec.ssh_port,
         )
 
-    # Close stderr pipe to prevent buffer-fill blocking the SSH process.
-    # We only needed it for the immediate-failure diagnostic above.
-    if proc.stderr:
-        proc.stderr.close()
+        proc = subprocess.Popen(
+            tunnel_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
 
-    spec.tunnel_proc = proc
-    logger.info(
-        "SSH tunnel established: localhost:%d -> %s VM %s",
-        spec.local_port, spec.role, spec.vm_id,
+        # Give the tunnel a moment to establish
+        time.sleep(3)
+
+        if proc.poll() is not None:
+            last_err = proc.stderr.read().decode() if proc.stderr else ""
+            logger.warning(
+                "SSH tunnel attempt %d/%d for %s failed: %s",
+                attempt, max_retries, spec.role, last_err.strip(),
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+                continue
+            raise RuntimeError(
+                f"SSH tunnel for {spec.role} failed after {max_retries} attempts: {last_err}"
+            )
+
+        # Close stderr pipe to prevent buffer-fill blocking the SSH process.
+        # We only needed it for the immediate-failure diagnostic above.
+        if proc.stderr:
+            proc.stderr.close()
+
+        spec.tunnel_proc = proc
+        logger.info(
+            "SSH tunnel established: localhost:%d -> %s VM %s",
+            spec.local_port, spec.role, spec.vm_id,
+        )
+        return proc
+
+    # Should not reach here, but just in case
+    raise RuntimeError(
+        f"SSH tunnel for {spec.role} failed after {max_retries} attempts: {last_err}"
     )
-    return proc
 
 
 # ---------------------------------------------------------------------------
 # Wait for worker health
 # ---------------------------------------------------------------------------
+
+
+def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
+    """Fetch full health JSON from a worker, including bootstrap status.
+
+    Returns the parsed dict, or None if unreachable.
+    """
+    health_url = f"{url.rstrip('/')}/health"
+    try:
+        req = Request(health_url)
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
 
 
 def wait_for_worker_healthy(
@@ -561,12 +690,13 @@ def wait_for_worker_healthy(
     """Wait for a worker to become healthy after provisioning.
 
     The worker needs time to:
-    1. Boot the VM
-    2. Run gpu_bootstrap.sh (install deps, download models)
-    3. Start gpu_worker.py
-    4. Load the model into VRAM
+    1. Boot the VM and start gpu_worker.py (FastAPI starts immediately)
+    2. Run bootstrap in background (install deps, download models)
+    3. Load the model into VRAM
 
-    This can take 10-15 minutes for a fresh VM.
+    The worker's /health endpoint reports structured bootstrap status so we
+    can see exactly what's happening and escalate failures immediately
+    rather than waiting for a blind timeout.
     """
     url = f"http://localhost:{spec.local_port}"
     logger.info(
@@ -576,6 +706,7 @@ def wait_for_worker_healthy(
 
     start = time.time()
     last_status = "unknown"
+    last_bootstrap_phase = ""
     while time.time() - start < timeout:
         elapsed = int(time.time() - start)
 
@@ -589,22 +720,54 @@ def wait_for_worker_healthy(
             except Exception as exc:
                 logger.error("Failed to restart tunnel: %s", exc)
 
-        # Check health
-        reachable = check_worker_reachable(url, timeout=5)
-        if reachable:
-            healthy = check_worker_health(url, spec.capability, timeout=10)
-            if healthy:
-                logger.info(
-                    "%s worker at %s is HEALTHY after %ds",
-                    spec.role, url, elapsed,
+        # Fetch full health detail (includes bootstrap status)
+        health_data = _get_worker_health_detail(url, timeout=10)
+
+        if health_data is not None:
+            # --- Bootstrap error escalation ---
+            bootstrap = health_data.get("bootstrap") or {}
+            bootstrap_phase = bootstrap.get("phase", "")
+            bootstrap_error = bootstrap.get("error", "")
+            bootstrap_category = bootstrap.get("error_category", "")
+
+            if bootstrap_phase == "error":
+                # Bootstrap has failed — escalate immediately instead of
+                # waiting for the full timeout.  This is the key integration
+                # with the recovery architecture: structured error information
+                # flows from the VM back to the provisioner.
+                logger.error(
+                    "BOOTSTRAP FAILED on %s worker (category=%s): %s",
+                    spec.role, bootstrap_category, bootstrap_error,
                 )
-                return True
-            if last_status != "reachable_not_loaded":
+                # Store error on the spec so callers can inspect it
+                spec.bootstrap_error = bootstrap_error
+                spec.bootstrap_error_category = bootstrap_category
+                return False
+
+            # Log phase transitions
+            if bootstrap_phase and bootstrap_phase != last_bootstrap_phase:
                 logger.info(
-                    "  %s worker reachable but model not loaded yet (%ds)",
-                    spec.role, elapsed,
+                    "  %s worker bootstrap phase: %s — %s (%ds)",
+                    spec.role, bootstrap_phase,
+                    bootstrap.get("detail", ""), elapsed,
                 )
-                last_status = "reachable_not_loaded"
+                last_bootstrap_phase = bootstrap_phase
+
+            # Check if model is loaded (healthy)
+            if health_data.get("status") == "ok":
+                loaded_key = f"{spec.capability}_loaded"
+                if health_data.get(loaded_key, False):
+                    logger.info(
+                        "%s worker at %s is HEALTHY after %ds",
+                        spec.role, url, elapsed,
+                    )
+                    return True
+                if last_status != "reachable_not_loaded":
+                    logger.info(
+                        "  %s worker reachable but model not loaded yet (%ds)",
+                        spec.role, elapsed,
+                    )
+                    last_status = "reachable_not_loaded"
         else:
             if last_status != "unreachable":
                 logger.info(
@@ -650,6 +813,11 @@ class WorkerProvisioner:
         self._lock = threading.Lock()
         self._provisioned = False
         self._threads: dict[str, threading.Thread] = {}
+        self._provision_start_error: str = ""
+        # Event signalled after start_provisioning() populates _specs
+        # (or fails).  wait_for_worker() waits on this before checking
+        # _specs so it doesn't race against the background launcher.
+        self._specs_ready = threading.Event()
 
     # ------------------------------------------------------------------
     # Phase 1: Non-blocking — kick off background provisioning
@@ -668,10 +836,16 @@ class WorkerProvisioner:
         Call ``wait_for_worker(role)`` later to block until a specific
         worker is ready.
         """
+        # Clear any stale error from a previous run so re-runs aren't
+        # poisoned by old failures on this singleton.
+        self._provision_start_error = ""
+        self._specs_ready.clear()
+
         if _TEST_MODE:
             logger.info(
                 "WorkerProvisioner: TEST MODE — skipping worker provisioning"
             )
+            self._specs_ready.set()
             return
 
         # Build specs from defaults
@@ -707,6 +881,8 @@ class WorkerProvisioner:
 
         with self._lock:
             self._specs = specs_needed
+        # Signal that _specs is populated so wait_for_worker() can proceed.
+        self._specs_ready.set()
 
         # --- Credit-aware weighted budget ---
         # Check which workers actually need provisioning
@@ -778,7 +954,7 @@ class WorkerProvisioner:
         """
         spec.status = "provisioning"
         try:
-            self._provision_and_connect(spec, timeout=900)
+            self._provision_and_connect(spec, timeout=2400)
             spec.status = "healthy"
 
             # Update env var so contracts see the new URL
@@ -794,8 +970,19 @@ class WorkerProvisioner:
             logger.error(
                 "Background provisioning FAILED for %s: %s", spec.role, exc,
             )
-            # Clean up this worker's resources to stop billing
-            self._cleanup_single_worker(spec)
+            # Only clean up the SSH tunnel — do NOT destroy the VM.
+            # The user explicitly forbade auto-destroying VMs on failure.
+            # The VM stays running so it can be debugged or retried.
+            if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
+                logger.info(
+                    "Cleaning up SSH tunnel for %s (pid=%d)",
+                    spec.role, spec.tunnel_proc.pid,
+                )
+                spec.tunnel_proc.terminate()
+                try:
+                    spec.tunnel_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    spec.tunnel_proc.kill()
         finally:
             spec.ready_event.set()
 
@@ -806,7 +993,7 @@ class WorkerProvisioner:
     def wait_for_worker(
         self,
         role: str,
-        timeout: int = 900,
+        timeout: int = 2700,
     ) -> bool:
         """Wait for a specific worker to be ready.
 
@@ -819,6 +1006,24 @@ class WorkerProvisioner:
         """
         if _TEST_MODE:
             return True
+
+        # Wait for start_provisioning() to populate _specs.  When
+        # provisioning runs in a background thread there's a window
+        # where _specs is still empty.  Use a generous 120s ceiling
+        # (start_provisioning spec-building is <30s in practice).
+        if not self._specs_ready.wait(timeout=120):
+            raise RuntimeError(
+                "Timed out waiting for start_provisioning() to "
+                "populate worker specs (120s)"
+            )
+
+        # If start_provisioning() itself failed in the background thread,
+        # surface that error clearly instead of the confusing "No spec found".
+        if self._provision_start_error:
+            raise RuntimeError(
+                f"Worker provisioning failed to start: "
+                f"{self._provision_start_error}"
+            )
 
         spec = self._get_spec(role)
         if spec is None:
@@ -874,7 +1079,7 @@ class WorkerProvisioner:
         self,
         require_tts: bool = True,
         require_video: bool = True,
-        provision_timeout: int = 900,
+        provision_timeout: int = 2700,
     ) -> dict:
         """Ensure all required workers are healthy, provisioning if needed.
 
@@ -931,12 +1136,14 @@ class WorkerProvisioner:
         return status
 
     def _provision_and_connect(
-        self, spec: WorkerSpec, timeout: int = 900
+        self, spec: WorkerSpec, timeout: int = 2400
     ) -> None:
         """Provision a VM, set up tunnel, and wait for health.
 
         Full lifecycle for a single worker.  The wall-clock ``timeout``
-        is tracked across all steps so sub-steps never overshoot.
+        covers all steps end-to-end.  The health-wait step gets whatever
+        time remains after provisioning + VM boot + SSH setup, with a
+        minimum of 120s so the wait isn't uselessly short.
         """
         _start = time.time()
 
@@ -952,11 +1159,19 @@ class WorkerProvisioner:
         setup_ssh_tunnel(spec)
 
         # Step 4: Wait for worker to be healthy
-        # Bootstrap + model download can take 10-15 min
+        # Bootstrap + model download can take 15-30 min (95GB at ~65 MB/s)
         elapsed = int(time.time() - _start)
-        remaining = max(timeout - elapsed, 300)  # at least 5 min for health wait
+        remaining = max(timeout - elapsed, 120)  # honour timeout; 120s floor avoids useless waits
         healthy = wait_for_worker_healthy(spec, timeout=remaining)
         if not healthy:
+            # Include bootstrap error details if available — this is the
+            # structured information from the worker's /health endpoint.
+            if spec.bootstrap_error:
+                raise RuntimeError(
+                    f"{spec.role} worker BOOTSTRAP FAILED on VM {spec.vm_id} "
+                    f"(category={spec.bootstrap_error_category}): "
+                    f"{spec.bootstrap_error}"
+                )
             raise RuntimeError(
                 f"{spec.role} worker on VM {spec.vm_id} did not become "
                 f"healthy within {remaining}s after provisioning"
@@ -1054,6 +1269,9 @@ class WorkerProvisioner:
             self._specs = []
             self._provisioned = False
             self._threads = {}
+        # Clear stale error and specs_ready so re-runs aren't poisoned
+        self._provision_start_error = ""
+        self._specs_ready.clear()
 
         # Shutdown InfraAgent
         try:

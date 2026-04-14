@@ -91,6 +91,11 @@ class RecoveryPolicy:
     escalate_to_human: bool = True
     human_timeout_sec: float = 600.0     # max wait for human response
 
+    # Non-retryable: errors that should skip L1/L2/L3 and go straight to
+    # human escalation (L4).  These indicate fundamental problems that
+    # retrying or amending won't fix (e.g. QA REJECTED corrupted output).
+    non_retryable_patterns: tuple[str, ...] = ()
+
 
 # ── Pre-built policies for common operation types ─────────────────────────
 
@@ -140,6 +145,9 @@ VIDEO_POLICY = RecoveryPolicy(
     creative_amendments=[_video_amend_seed, _video_amend_steps],
     enable_env_assessment=True,
     escalate_to_human=True,
+    # QA REJECTED = fundamentally broken output.  Don't waste time retrying
+    # with different seeds or fewer steps — the model/config is wrong.
+    non_retryable_patterns=("QA REJECTED",),
 )
 
 TTS_POLICY = RecoveryPolicy(
@@ -641,6 +649,14 @@ def execute_with_recovery(
     last_error: Optional[Exception] = None
     diagnosis: Optional[EnvironmentalDiagnosis] = None
 
+    # ── Check for non-retryable patterns ──────────────────────────────
+    # Some errors indicate fundamental problems (e.g. QA REJECTED corrupted
+    # output) where retrying, amending, or diagnosing won't help.  Skip
+    # straight to human escalation.
+    def _is_non_retryable(err: Exception) -> bool:
+        err_str = str(err)
+        return any(pat in err_str for pat in policy.non_retryable_patterns)
+
     # ── Level 1: Retry ────────────────────────────────────────────────
     for retry_num in range(1, policy.max_retries + 1):
         try:
@@ -653,6 +669,22 @@ def execute_with_recovery(
             return result
         except Exception as e:
             last_error = e
+
+            # Non-retryable error — skip all recovery levels, go to escalation
+            if _is_non_retryable(e):
+                logger.error(
+                    "Recovery: '%s' hit non-retryable error, skipping to escalation: %s",
+                    operation_name, str(e)[:300],
+                )
+                attempts.append(RecoveryAttempt(
+                    level=RecoveryLevel.RETRY,
+                    attempt_num=retry_num,
+                    error=str(e)[:500],
+                    strategy="non-retryable error — skipping to human escalation",
+                    timestamp=time.time(),
+                ))
+                break
+
             is_retryable = isinstance(e, policy.retryable_exceptions)
             attempt = RecoveryAttempt(
                 level=RecoveryLevel.RETRY,
@@ -680,8 +712,14 @@ def execute_with_recovery(
             )
             time.sleep(backoff)
 
+    # ── Skip L2/L3 for non-retryable errors ───────────────────────────
+    _skip_to_escalation = last_error is not None and _is_non_retryable(last_error)
+
     # ── Level 2: Creative amendment ───────────────────────────────────
     amendments = policy.creative_amendments or []
+    if _skip_to_escalation:
+        logger.info("Recovery: skipping L2 (creative) for non-retryable error")
+        amendments = []  # skip all amendments
     for amend_num, amend_fn in enumerate(amendments[:policy.creative_budget], 1):
         try:
             current_kwargs = amend_fn(current_kwargs)
@@ -715,7 +753,9 @@ def execute_with_recovery(
             )
 
     # ── Level 3: Environmental assessment ─────────────────────────────
-    if policy.enable_env_assessment and last_error is not None:
+    if _skip_to_escalation:
+        logger.info("Recovery: skipping L3 (environmental) for non-retryable error")
+    elif policy.enable_env_assessment and last_error is not None:
         logger.info("Recovery L3: '%s' — running environmental assessment", operation_name)
         diagnosis = _assessor.diagnose(last_error, operation_name, context)
         attempts.append(RecoveryAttempt(

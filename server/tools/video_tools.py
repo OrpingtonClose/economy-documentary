@@ -177,8 +177,13 @@ def generate_video_clip(
         "height": 512,
         "num_frames": num_frames,
         "seed": seed,
-        "num_inference_steps": 40,  # full model: 40 steps (pipeline default)
-        "guidance_scale": 4.0,      # full model: CFG=4.0 (pipeline default)
+        # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
+        "num_inference_steps": 30,   # LTX-2.3 dev: 30 steps
+        "guidance_scale": 3.0,       # LTX-2.3 dev: CFG=3.0
+        "stg_scale": 1.0,            # spatio-temporal guidance
+        "modality_scale": 3.0,       # modality (video vs audio) guidance
+        "guidance_rescale": 0.7,     # guidance rescale factor
+        "stg_blocks": [28],          # STG block indices
     }).encode("utf-8")
 
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
@@ -198,8 +203,12 @@ def generate_video_clip(
         height=512,
         num_frames=num_frames,
         seed=seed,
-        num_inference_steps=40,
-        guidance_scale=4.0,
+        num_inference_steps=30,
+        guidance_scale=3.0,
+        stg_scale=1.0,
+        modality_scale=3.0,
+        guidance_rescale=0.7,
+        stg_blocks=None,
     ):
         inner_payload = json.dumps({
             "prompt": prompt,
@@ -212,15 +221,36 @@ def generate_video_clip(
             "seed": seed,
             "num_inference_steps": num_inference_steps,
             "guidance_scale": guidance_scale,
+            "stg_scale": stg_scale,
+            "modality_scale": modality_scale,
+            "guidance_rescale": guidance_rescale,
+            "stg_blocks": stg_blocks if stg_blocks is not None else [28],
         }).encode("utf-8")
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         with urlopen(req_inner, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
             result_bytes = resp.read()
+            qa_quality = resp.headers.get("X-QA-Quality", "unknown")
+            qa_reason_raw = resp.headers.get("X-QA-Reason", "")
+
+            # REJECTED = fundamentally broken output (grid artifacts, corrupted
+            # data, body horror, overt AI wonk).  Raise INSIDE the recovery
+            # context so non_retryable_patterns can route to human escalation.
+            if qa_quality == "rejected":
+                import base64 as _b64
+                try:
+                    reason = _b64.b64decode(qa_reason_raw).decode("utf-8")
+                except Exception:
+                    reason = qa_reason_raw
+                raise RuntimeError(
+                    f"QA REJECTED: clip is fundamentally broken and cannot be used. "
+                    f"Reason: {reason}"
+                )
+
             result_meta = {
                 "mp4_bytes": result_bytes,
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
-                "qa_quality": resp.headers.get("X-QA-Quality", "unknown"),
-                "qa_reason_raw": resp.headers.get("X-QA-Reason", ""),
+                "qa_quality": qa_quality,
+                "qa_reason_raw": qa_reason_raw,
                 "qa_attempts": int(resp.headers.get("X-QA-Attempts", "1")),
                 "qa_seed": int(resp.headers.get("X-QA-Seed", str(seed))),
             }
@@ -240,8 +270,12 @@ def generate_video_clip(
             "height": 512,
             "num_frames": num_frames,
             "seed": seed,
-            "num_inference_steps": 40,
-            "guidance_scale": 4.0,
+            "num_inference_steps": 30,
+            "guidance_scale": 3.0,
+            "stg_scale": 1.0,
+            "modality_scale": 3.0,
+            "guidance_rescale": 0.7,
+            "stg_blocks": [28],
         },
         policy=VIDEO_POLICY,
         context={"prompt": prompt, "duration": actual_duration},

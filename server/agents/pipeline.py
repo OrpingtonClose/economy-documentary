@@ -100,7 +100,7 @@ def _audio_before_with_gate(callback_context):
     try:
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
-        provisioner.wait_for_worker("tts", timeout=900)
+        provisioner.wait_for_worker("tts", timeout=2700)
         logger.info("TTS worker ready — audio stage proceeding")
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
@@ -147,7 +147,7 @@ def _production_before_with_gate(callback_context):
     try:
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
-        provisioner.wait_for_worker("video", timeout=900)
+        provisioner.wait_for_worker("video", timeout=2700)
         logger.info("Video worker ready — production stage proceeding")
     except Exception as exc:
         logger.error("Video worker not available: %s", exc)
@@ -250,31 +250,59 @@ def _init_pipeline_state(
         logger.info("Pre-set _timeline_path=%s", state["_timeline_path"])
 
     # ── Parallel lazy worker provisioning ─────────────────────────────
-    # Start GPU worker provisioning in background threads.  Returns
-    # IMMEDIATELY so the scenario stage (no GPU needed) can run while
-    # VMs bootstrap.  Each stage waits for only the worker it needs:
+    # Start GPU worker provisioning in a SEPARATE THREAD.
+    # start_provisioning() does blocking I/O (health checks, Vast.ai API)
+    # before launching per-worker threads.  Running it directly here would
+    # block the uvicorn async event loop and freeze the entire server.
+    # Each stage waits for only the worker it needs:
     #   - Audio stage calls wait_for_worker("tts") in its before_callback
     #   - Production stage calls wait_for_worker("video") in its before_callback
+    #
+    # IMPORTANT: Always reset _workers_provisioned at pipeline start.
+    # B2 state restore can carry over the True flag from a previous failed
+    # run (where _cleanup_pipeline_state never executed), causing this block
+    # to be skipped entirely — leaving the pipeline with no workers.
+    state["_workers_provisioned"] = False
     if not state.get("_workers_provisioned"):
+        import threading
         from worker_provisioner import get_provisioner
 
         provisioner = get_provisioner()
-        try:
-            provisioner.start_provisioning(
-                require_tts=True,
-                require_video=True,
-            )
-            state["_workers_provisioned"] = True
-            logger.info(
-                "Background worker provisioning started — "
-                "scenario stage will run while VMs bootstrap"
-            )
-        except Exception as exc:
-            logger.error("Worker provisioning failed to start: %s", exc)
-            state["_workers_provisioned"] = False
-            state["_worker_provision_error"] = str(exc)
-            # Don't block pipeline start — let stage before_callbacks
-            # handle the failure with a clear error message.
+
+        def _start_provisioning_bg():
+            try:
+                provisioner.start_provisioning(
+                    require_tts=True,
+                    require_video=True,
+                )
+                logger.info(
+                    "Background worker provisioning started — "
+                    "VMs bootstrapping while scenario runs"
+                )
+            except Exception as exc:
+                logger.error("Worker provisioning failed to start: %s", exc)
+                # Store the error on the provisioner so wait_for_worker()
+                # can surface a clear message instead of "No worker spec".
+                provisioner._provision_start_error = str(exc)
+                # Signal _specs_ready so wait_for_worker() unblocks immediately
+                # and checks _provision_start_error instead of waiting 120s.
+                provisioner._specs_ready.set()
+
+        t = threading.Thread(
+            target=_start_provisioning_bg,
+            name="provision-launcher",
+            daemon=True,
+        )
+        t.start()
+        # Mark as "attempted" — the flag means provisioning was kicked off,
+        # not that it succeeded.  If it fails, the error is stored on the
+        # provisioner singleton and wait_for_worker() will surface it.
+        # _cleanup_pipeline_state resets this flag so re-runs re-provision.
+        state["_workers_provisioned"] = True
+        logger.info(
+            "Provisioning launcher thread started — "
+            "scenario stage will run while VMs bootstrap"
+        )
 
     return None
 

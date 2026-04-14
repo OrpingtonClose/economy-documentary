@@ -4,24 +4,30 @@
 # the documentary pipeline's video + TTS generation environment.
 #
 # Usage:
-#   B2_KEY_ID=... B2_APPLICATION_KEY=... bash gpu_bootstrap.sh
+#   B2_KEY_ID=... B2_APPLICATION_KEY=... WORKER_MODE=tts|ltx|both bash gpu_bootstrap.sh
+#
+# WORKER_MODE controls which models are downloaded:
+#   tts  — only Qwen3-TTS (~4.3 GB, ~2 min on slow connections)
+#   ltx  — only LTX-2.3 video models (~48 GB)
+#   both — everything (default if not set)
 #
 # Models are pulled from Backblaze B2 (pre-cached) for speed.
 # Falls back to HuggingFace if B2 credentials are not set.
 #
-# Disk budget (selective download — skips duplicate text_encoder format):
-#   text_encoder (transformers fmt): ~46.6 GB
-#   transformer  (diffusers fmt):    ~37.8 GB
-#   vae + audio_vae + vocoder:       ~ 2.7 GB
-#   connectors + latent_upsampler:   ~ 3.9 GB
-#   Qwen3-TTS VoiceDesign:           ~ 4.3 GB
-#   Total models:                    ~95.3 GB
-#   OS + software + output:          ~30   GB
-#   Minimum disk required:           ~125  GB  (recommend 200+)
+# Disk budget (ltx-pipelines: single-file checkpoint + gemma):
+#   ltx-2-19b-dev.safetensors:        ~40   GB
+#   Gemma-3 1B text encoder:          ~ 2.0 GB
+#   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
+#   Total models:                      ~52   GB
+#   OS + software + HF cache:          ~50   GB  (downloads cached then moved)
+#   Peak disk during download:         ~100  GB  (checkpoint + HF cache)
+#   Minimum disk required:             ~120  GB  (recommend 150+)
 
 set -euo pipefail
 
-echo "=== GPU Bootstrap: Documentary Pipeline ==="
+# Default to 'both' if not set
+WORKER_MODE="${WORKER_MODE:-both}"
+echo "=== GPU Bootstrap: Documentary Pipeline (mode=$WORKER_MODE) ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 df -h /
 
@@ -43,18 +49,84 @@ mkdir -p /workspace/{models,output}
 cd /workspace
 
 # ---------------------------------------------------------------------------
+# CUDA compatibility — use TORCH_INDEX from provisioner or detect system CUDA
+# ---------------------------------------------------------------------------
+# The provisioner's onstart command sets TORCH_INDEX to ensure consistency
+# between the initial pip install and the bootstrap.  If not set (standalone
+# usage), fall back to system CUDA detection.
+if [ -n "${TORCH_INDEX:-}" ]; then
+    echo "Using TORCH_INDEX from environment: $TORCH_INDEX"
+else
+    SYSTEM_CUDA=""
+    if command -v nvcc &>/dev/null; then
+        SYSTEM_CUDA=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+')
+        echo "System CUDA: $SYSTEM_CUDA"
+    elif [ -f /usr/local/cuda/version.txt ]; then
+        SYSTEM_CUDA=$(cat /usr/local/cuda/version.txt | grep -oP '[0-9]+\.[0-9]+')
+        echo "System CUDA (from version.txt): $SYSTEM_CUDA"
+    else
+        SYSTEM_CUDA=$(nvidia-smi 2>/dev/null | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+' || true)
+        echo "System CUDA (from nvidia-smi): $SYSTEM_CUDA"
+    fi
+
+    CUDA_MAJOR=$(echo "$SYSTEM_CUDA" | cut -d. -f1)
+    CUDA_MINOR=$(echo "$SYSTEM_CUDA" | cut -d. -f2)
+    if [ "$CUDA_MAJOR" = "13" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    elif [ "$CUDA_MAJOR" = "12" ] && [ "$CUDA_MINOR" -ge 4 ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu124"
+    elif [ "$CUDA_MAJOR" = "12" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu121"
+    elif [ "$CUDA_MAJOR" = "11" ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu118"
+    else
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    fi
+fi
+echo "Using PyTorch wheel index: $TORCH_INDEX"
+
+# ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# torch 2.6+ required for diffusers 0.37 attention_dispatch compat
-# Driver supports CUDA 13.0, cu124 wheels work fine
-pip install --no-cache-dir \
-    'torch>=2.6.0' \
-    'torchvision>=0.21.0' \
-    'torchaudio>=2.6.0' \
-    --index-url https://download.pytorch.org/whl/cu124
+# IMPORTANT: The Docker image (pytorch/pytorch:2.6.0-cuda12.4) has conda
+# torch 2.6.0 pre-installed.  pip sees it as satisfying 'torch>=2.6.0' and
+# skips the cu130 install.  We MUST aggressively clean conda torch first.
+# The combination of conda remove + rm -rf + --force-reinstall is the
+# community-tested bulletproof fix for this Docker image.
+echo "=== Cleaning conda PyTorch (cu12.4) ==="
+conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null || true
+rm -rf /opt/conda/lib/python*/site-packages/torch* \
+       /opt/conda/lib/python*/site-packages/torchvision* \
+       /opt/conda/lib/python*/site-packages/torchaudio* \
+       /opt/conda/lib/python*/site-packages/nvidia* \
+       /opt/conda/pkgs/*torch* 2>/dev/null || true
 
-# diffusers >= 0.37.0 required for LTX2Pipeline
+echo "=== Installing PyTorch wheels (brings libcudart.so.13 + Torch >=2.7) ==="
+pip install --force-reinstall --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url "$TORCH_INDEX"
+
+# Register NVIDIA pip package lib dirs (libcudart.so.13 etc.) with ldconfig.
+# PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
+# but the dynamic linker doesn't search there by default.
+python3 -c "
+import site, pathlib
+nv_dirs = [str(p) for sp in site.getsitepackages()
+           for p in pathlib.Path(sp, 'nvidia').glob('*/lib') if p.is_dir()]
+if nv_dirs:
+    pathlib.Path('/etc/ld.so.conf.d/nvidia-pip.conf').write_text('\n'.join(nv_dirs) + '\n')
+    print(f'Registered {len(nv_dirs)} nvidia lib dirs with ldconfig')
+else:
+    print('No nvidia pip lib dirs found')
+"
+ldconfig
+echo "ldconfig updated — libcudart.so.13 should now be discoverable"
+
+# ltx-pipelines: official Lightricks inference code for LTX-2.3
+# No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.
 pip install --no-cache-dir \
+    'ltx-pipelines>=1.0.0' \
+    'ltx-core>=1.0.0' \
     'accelerate>=0.33.0' \
     'safetensors>=0.4.0' \
     'sentencepiece>=0.2.0' \
@@ -70,124 +142,124 @@ pip install --no-cache-dir \
 # Install sox for qwen-tts audio processing
 apt-get install -y sox libsox-dev
 
-# diffusers from git — the HuggingFace model dg845/LTX-2.3-Diffusers requires
-# LTX2VocoderWithBWE and updated transformer config fields (audio_cross_attn_mod,
-# gated_attn, perturbed_attn) that only exist in the dev branch (>= 0.38.0.dev0).
-# Stable 0.37.0 does NOT work. See huggingface/diffusers#13217.
-pip install --no-cache-dir \
-    git+https://github.com/huggingface/diffusers.git
-
 # ---------------------------------------------------------------------------
-# B2 model download — selective (skip duplicate formats to save ~50 GB)
+# Model downloads — ltx-pipelines uses single-file checkpoint + gemma
 # ---------------------------------------------------------------------------
 B2_BUCKET="ltx2-models-orpington"
+pip install --no-cache-dir huggingface_hub 2>/dev/null
 
 if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
-    echo "=== Downloading models from B2 (selective) ==="
+    echo "=== Downloading models (B2 primary, HuggingFace fallback) ==="
     export B2_APPLICATION_KEY_ID="$B2_KEY_ID"
     b2 account authorize "$B2_KEY_ID" "$B2_APPLICATION_KEY"
+fi
 
-    # --- Qwen3-TTS VoiceDesign (~4.3 GB) ---
-    if [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
-        echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
-        mkdir -p /workspace/models/qwen3-tts-voicedesign
-        pip install --no-cache-dir huggingface_hub 2>/dev/null
-        # Try B2 first, fall back to HuggingFace
+# --- Qwen3-TTS VoiceDesign (~4.3 GB) — needed for tts and both modes ---
+if [ "$WORKER_MODE" = "ltx" ]; then
+    echo "--- Skipping Qwen3-TTS (ltx-only mode) ---"
+elif [ ! -f /workspace/models/qwen3-tts-voicedesign/model.safetensors ]; then
+    echo "--- Qwen3-TTS VoiceDesign (~4.3 GB) ---"
+    mkdir -p /workspace/models/qwen3-tts-voicedesign
+    if [ -n "${B2_KEY_ID:-}" ]; then
         b2_tts_count=$(b2 ls "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" 2>/dev/null | grep -c model.safetensors || true)
         if [ "${b2_tts_count}" -gt 0 ]; then
             b2 sync --threads 8 "b2://${B2_BUCKET}/qwen3-tts-voicedesign/" /workspace/models/qwen3-tts-voicedesign/
         else
-            echo "  Not in B2 (or empty), downloading from HuggingFace..."
             python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
         fi
     else
-        echo "Qwen3-TTS VoiceDesign already present."
+        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign', local_dir='/workspace/models/qwen3-tts-voicedesign')"
     fi
+else
+    echo "Qwen3-TTS VoiceDesign already present."
+fi
 
-    # --- LTX-2.3 diffusers components ---
+# --- LTX-2.3 models (ltx-pipelines format) — needed for ltx and both modes ---
+if [ "$WORKER_MODE" = "tts" ]; then
+    echo "--- Skipping LTX-2.3 models (tts-only mode) ---"
+else
     LTX_DIR=/workspace/models/ltx2
     mkdir -p "$LTX_DIR"
 
-    # Root config
-    echo "--- LTX-2.3 config ---"
-    b2 file download "b2://${B2_BUCKET}/ltx2/model_index.json" \
-        "$LTX_DIR/model_index.json" 2>/dev/null || true
-
-    # text_encoder: ONLY transformers format (model-*.safetensors)
-    # The diffusion_pytorch_model-*.safetensors are a duplicate set (~50 GB) — skip them
-    echo "--- text_encoder (~46.6 GB, transformers format only) ---"
-    mkdir -p "$LTX_DIR/text_encoder"
-    for f in config.json generation_config.json model.safetensors.index.json; do
-        if [ ! -f "$LTX_DIR/text_encoder/$f" ]; then
-            b2 file download "b2://${B2_BUCKET}/ltx2/text_encoder/$f" \
-                "$LTX_DIR/text_encoder/$f" 2>/dev/null || true
-        fi
-    done
-    # Download model shards selectively (transformers format only)
-    # b2 ls returns full paths like "ltx2/text_encoder/model-00001-of-00011.safetensors"
-    # so we extract just the basename for matching
-    (b2 ls "b2://${B2_BUCKET}/ltx2/text_encoder/" 2>/dev/null || true) | while read -r fullpath; do
-        filename=$(basename "$fullpath")
-        case "$filename" in
-            model-*.safetensors)
-                if [ ! -f "$LTX_DIR/text_encoder/$filename" ]; then
-                    echo "  downloading: $filename"
-                    b2 file download "b2://${B2_BUCKET}/ltx2/text_encoder/$filename" \
-                        "$LTX_DIR/text_encoder/$filename"
-                else
-                    echo "  already have: $filename"
-                fi
-                ;;
-            diffusion_pytorch_model*)
-                echo "  skipping duplicate format: $filename"
-                ;;
-        esac
-    done
-
-    # transformer: all files (diffusers format, ~37.8 GB)
-    # NOTE: B2 cache must match diffusers git main. If stale, re-download from HuggingFace.
-    echo "--- transformer (~37.8 GB) ---"
-    mkdir -p "$LTX_DIR/transformer"
-    b2 sync --threads 8 "b2://${B2_BUCKET}/ltx2/transformer/" "$LTX_DIR/transformer/"
-    # Verify transformer config has required fields for diffusers >= 0.38.0.dev0
-    if ! python3 -c "import json; c=json.load(open('$LTX_DIR/transformer/config.json')); assert c.get('audio_cross_attn_mod') is not None" 2>/dev/null; then
-        echo "  WARNING: B2 transformer config stale, re-downloading from HuggingFace..."
-        rm -rf "$LTX_DIR/transformer"
-        python3 -c "from huggingface_hub import snapshot_download; snapshot_download('dg845/LTX-2.3-Diffusers', local_dir='$LTX_DIR', allow_patterns='transformer/*')"
+    # 1. Single-file checkpoint (~40 GB) — the core model weights
+    if [ ! -f "$LTX_DIR/ltx-2-19b-dev.safetensors" ]; then
+        echo "--- LTX-2 19B checkpoint (~40 GB) ---"
+        python3 -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    'Lightricks/LTX-2',
+    filename='ltx-2-19b-dev.safetensors',
+    local_dir='$LTX_DIR',
+)
+print('Checkpoint downloaded.')
+"
+    else
+        echo "LTX-2 checkpoint already present."
     fi
 
-    # Small components (< 3 GB each)
-    for subdir in scheduler tokenizer vae audio_vae vocoder connectors latent_upsampler; do
-        if b2 ls "b2://${B2_BUCKET}/ltx2/${subdir}/" &>/dev/null; then
-            echo "--- ${subdir} ---"
-            mkdir -p "$LTX_DIR/${subdir}"
-            b2 sync --threads 8 "b2://${B2_BUCKET}/ltx2/${subdir}/" "$LTX_DIR/${subdir}/"
-        fi
-    done
-
-    echo ""
-    echo "=== Download complete ==="
-    du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null
-    df -h /
-else
-    echo "WARNING: B2 credentials not set. Downloading from HuggingFace instead."
-    pip install --no-cache-dir huggingface_hub
-
-    python3 -c "
+    # 2. Gemma-3 1B text encoder — required by ltx-pipelines
+    #    Download ALL files from Lightricks/LTX-2 (ungated) instead of
+    #    google/gemma-3-1b-pt (gated, requires HF auth).
+    #    Lightricks/LTX-2 has both text_encoder/ (weights) and tokenizer/ dirs.
+    if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/config.json" ]; then
+        echo "--- Gemma-3 1B text encoder (from Lightricks/LTX-2, ungated) ---"
+        mkdir -p "$LTX_DIR/gemma"
+        python3 -c "
+import os, shutil
 from huggingface_hub import snapshot_download
-import os
 
-if not os.path.exists('/workspace/models/qwen3-tts-voicedesign/model.safetensors'):
-    print('Downloading Qwen3-TTS VoiceDesign from HuggingFace...')
-    snapshot_download('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-                      local_dir='/workspace/models/qwen3-tts-voicedesign')
+gemma_dir = '$LTX_DIR/gemma'
 
-if not os.path.exists('/workspace/models/ltx2/model_index.json'):
-    print('Downloading LTX-2.3 from HuggingFace...')
-    snapshot_download('dg845/LTX-2.3-Diffusers',
-                      local_dir='/workspace/models/ltx2')
+# Download text_encoder/ and tokenizer/ from Lightricks/LTX-2 (ungated)
+tmp_dir = '$LTX_DIR/_ltx2_download'
+snapshot_download(
+    'Lightricks/LTX-2',
+    local_dir=tmp_dir,
+    allow_patterns=['text_encoder/*', 'tokenizer/*'],
+)
+print('Downloaded text_encoder/ and tokenizer/ from Lightricks/LTX-2')
+
+# MOVE (not copy) text_encoder files to gemma root — avoids doubling disk usage
+te_dir = os.path.join(tmp_dir, 'text_encoder')
+if os.path.isdir(te_dir):
+    for f in os.listdir(te_dir):
+        src = os.path.join(te_dir, f)
+        dst = os.path.join(gemma_dir, f)
+        if os.path.isfile(src):
+            shutil.move(src, dst)
+            print(f'  text_encoder/{f} -> gemma/')
+
+# MOVE tokenizer files to gemma root
+tok_dir = os.path.join(tmp_dir, 'tokenizer')
+if os.path.isdir(tok_dir):
+    for f in os.listdir(tok_dir):
+        src = os.path.join(tok_dir, f)
+        dst = os.path.join(gemma_dir, f)
+        if os.path.isfile(src):
+            shutil.move(src, dst)
+            print(f'  tokenizer/{f} -> gemma/')
+
+# Clean up temp download dir AND HuggingFace cache to reclaim disk
+shutil.rmtree(tmp_dir, ignore_errors=True)
+hf_cache = os.path.expanduser('~/.cache/huggingface')
+if os.path.isdir(hf_cache):
+    cache_size = sum(
+        os.path.getsize(os.path.join(dp, fn))
+        for dp, _, fns in os.walk(hf_cache) for fn in fns
+    )
+    shutil.rmtree(hf_cache, ignore_errors=True)
+    print(f'Cleaned HF cache ({cache_size / 1e9:.1f} GB reclaimed)')
+print('Gemma text encoder ready.')
 "
-fi
+    else
+        echo "Gemma text encoder already present."
+    fi
+fi  # end WORKER_MODE != tts
+
+echo ""
+echo "=== Download complete ==="
+du -sh /workspace/models/ltx2/ /workspace/models/qwen3-tts-voicedesign/ 2>/dev/null || true
+df -h /
 
 # ---------------------------------------------------------------------------
 # Verify GPU
@@ -207,13 +279,20 @@ if torch.cuda.is_available():
 echo ""
 echo "=== Model verification ==="
 OK=true
-for f in \
-    /workspace/models/qwen3-tts-voicedesign/model.safetensors \
-    /workspace/models/ltx2/model_index.json \
-    /workspace/models/ltx2/text_encoder/config.json \
-    /workspace/models/ltx2/text_encoder/model.safetensors.index.json \
-    /workspace/models/ltx2/transformer/config.json \
-    /workspace/models/ltx2/vae/config.json; do
+
+# Build verification list based on WORKER_MODE
+VERIFY_FILES=""
+if [ "$WORKER_MODE" != "ltx" ]; then
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
+fi
+if [ "$WORKER_MODE" != "tts" ]; then
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2-19b-dev.safetensors"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/model.safetensors.index.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"
+fi
+
+for f in $VERIFY_FILES; do
     if [ -f "$f" ]; then
         echo "  OK: $f"
     else
