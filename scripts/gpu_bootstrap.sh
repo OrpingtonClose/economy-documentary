@@ -88,23 +88,29 @@ echo "Using PyTorch wheel index: $TORCH_INDEX"
 # ---------------------------------------------------------------------------
 # Python dependencies (install into system python — ephemeral VM)
 # ---------------------------------------------------------------------------
-# IMPORTANT: The Docker image (pytorch/pytorch:2.6.0-cuda12.4) has conda
-# torch 2.6.0 pre-installed.  pip sees it as satisfying 'torch>=2.6.0' and
-# skips the cu130 install.  We MUST aggressively clean conda torch first.
-# The combination of conda remove + rm -rf + --force-reinstall is the
-# community-tested bulletproof fix for this Docker image.
-echo "=== Cleaning conda PyTorch (cu12.4) ==="
-conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null || true
-rm -rf /opt/conda/lib/python*/site-packages/torch* \
-       /opt/conda/lib/python*/site-packages/torchvision* \
-       /opt/conda/lib/python*/site-packages/torchaudio* \
-       /opt/conda/lib/python*/site-packages/nvidia* \
-       /opt/conda/pkgs/*torch* 2>/dev/null || true
+# The Docker image is resolved from config/model_manifest.json and ships
+# with a compatible PyTorch pre-installed.  Verify it's present and correct.
+echo "=== Verifying pre-installed PyTorch ==="
+python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')" || echo 'WARNING: torch not importable — will attempt reinstall below'
 
-echo "=== Installing PyTorch wheels (brings libcudart.so.13 + Torch >=2.7) ==="
-pip install --force-reinstall --no-cache-dir \
-    torch torchvision torchaudio \
-    --index-url "$TORCH_INDEX"
+# If torch is somehow missing or too old, reinstall from the wheel index.
+# MIN_TORCH_VERSION is passed by the provisioner from config/model_manifest.json;
+# fall back to 2.7 if not set (e.g. manual bootstrap).
+MIN_TORCH="${MIN_TORCH_VERSION:-2.7.0}"
+TORCH_OK=$(python3 -c "
+import torch
+v = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:3])
+req = tuple(int(x) for x in '${MIN_TORCH}'.split('.')[:3])
+print('yes' if v >= req else 'no')
+" 2>/dev/null || echo "no")
+if [ "$TORCH_OK" != "yes" ]; then
+    echo "WARNING: torch too old or missing, reinstalling from $TORCH_INDEX"
+    pip install --break-system-packages --force-reinstall --no-cache-dir \
+        torch torchvision torchaudio \
+        --index-url "$TORCH_INDEX"
+else
+    echo "PyTorch version OK, skipping reinstall"
+fi
 
 # Register NVIDIA pip package lib dirs (libcudart.so.13 etc.) with ldconfig.
 # PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
@@ -124,7 +130,7 @@ echo "ldconfig updated — libcudart.so.13 should now be discoverable"
 
 # ltx-pipelines: official Lightricks inference code for LTX-2.3
 # No diffusers needed — ltx-pipelines uses the single-file checkpoint natively.
-pip install --no-cache-dir \
+pip install --break-system-packages --no-cache-dir \
     'ltx-pipelines>=1.0.0' \
     'ltx-core>=1.0.0' \
     'accelerate>=0.33.0' \
@@ -146,7 +152,7 @@ apt-get install -y sox libsox-dev
 # Model downloads — ltx-pipelines uses single-file checkpoint + gemma
 # ---------------------------------------------------------------------------
 B2_BUCKET="ltx2-models-orpington"
-pip install --no-cache-dir huggingface_hub 2>/dev/null
+pip install --break-system-packages --no-cache-dir huggingface_hub 2>/dev/null
 
 if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     echo "=== Downloading models (B2 primary, HuggingFace fallback) ==="

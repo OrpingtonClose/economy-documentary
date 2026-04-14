@@ -106,8 +106,8 @@ class WorkerSpec:
 def _load_model_manifest() -> dict:
     """Load config/model_manifest.json if available.
 
-    Returns a dict keyed by model role (e.g. "tts", "ltx_video") with
-    resource specs.  Falls back to empty dict if file is missing.
+    Returns the full manifest dict with 'models' and 'docker_images' sections.
+    Falls back to empty dict if file is missing.
     """
     manifest_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -115,14 +115,89 @@ def _load_model_manifest() -> dict:
     )
     try:
         with open(manifest_path) as f:
-            data = json.load(f)
-        return data.get("models", {})
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         logger.warning("Could not load model manifest from %s: %s", manifest_path, e)
         return {}
 
 
-_MODEL_MANIFEST = _load_model_manifest()
+_FULL_MANIFEST = _load_model_manifest()
+_MODEL_MANIFEST = _FULL_MANIFEST.get("models", {})
+
+
+def _parse_version(v: str) -> tuple:
+    """Parse a version string like '2.10.0' into a comparable tuple (2, 10, 0)."""
+    # Strip build metadata (e.g. '2.7.0+cu126' -> '2.7.0') per PEP 440
+    v = v.split("+")[0]
+    parts = []
+    for p in v.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
+def resolve_docker_image(worker_mode: str) -> tuple[str, str]:
+    """Pick the best Docker image for a worker mode from the model manifest.
+
+    Reads the model's min_torch / min_cuda requirements and the docker_images
+    registry from model_manifest.json.  Returns the first image whose torch
+    and CUDA versions satisfy the model constraints.
+
+    Returns:
+        (docker_image_tag, torch_wheel_index_url)
+    """
+    # Find the model entry that matches this worker_mode
+    model_spec = None
+    for _key, spec in _MODEL_MANIFEST.items():
+        if spec.get("worker_mode") == worker_mode:
+            model_spec = spec
+            break
+
+    # Defaults if manifest is missing or incomplete
+    default_image = "pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel"
+    default_index = "https://download.pytorch.org/whl/cu126"
+
+    if not model_spec:
+        logger.warning(
+            "No model manifest entry for worker_mode=%s, using default image %s",
+            worker_mode, default_image,
+        )
+        return default_image, default_index
+
+    min_torch = _parse_version(model_spec.get("min_torch", "2.6.0"))
+    min_cuda = _parse_version(model_spec.get("min_cuda", "12.4"))
+    wheel_suffix = model_spec.get("torch_wheel_suffix", "cu126")
+    torch_index = f"https://download.pytorch.org/whl/{wheel_suffix}"
+
+    # Search the image registry for the first image that satisfies constraints
+    images = _FULL_MANIFEST.get("docker_images", {}).get("images", [])
+    for img in images:
+        img_torch = _parse_version(img.get("torch_version", "0.0.0"))
+        img_cuda = _parse_version(img.get("cuda_version", "0.0"))
+        if img_torch >= min_torch and img_cuda >= min_cuda:
+            tag = img["tag"]
+            logger.info(
+                "Resolved Docker image for %s: %s (torch %s >= %s, cuda %s >= %s)",
+                worker_mode, tag,
+                img.get("torch_version"), model_spec.get("min_torch"),
+                img.get("cuda_version"), model_spec.get("min_cuda"),
+            )
+            return tag, torch_index
+
+    # No image in registry satisfies constraints — use the first one and warn
+    if images:
+        fallback = images[0]["tag"]
+        logger.warning(
+            "No image satisfies min_torch=%s min_cuda=%s for %s, falling back to %s",
+            model_spec.get("min_torch"), model_spec.get("min_cuda"),
+            worker_mode, fallback,
+        )
+        return fallback, torch_index
+
+    logger.warning("No docker_images in manifest, using default %s", default_image)
+    return default_image, default_index
 
 
 # ---------------------------------------------------------------------------
@@ -341,10 +416,12 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
         raise RuntimeError("vastai command timed out")
 
 
-def provision_vm(spec: WorkerSpec) -> str:
+def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -> int:
     """Provision a Vast.ai GPU VM for the given worker spec.
 
-    Returns the instance ID.
+    Returns the selected **offer** ID so callers can track it for retries
+    (distinct from the instance ID stored in ``spec.vm_id``).
+    *excluded_offer_ids* — offer IDs to skip (e.g. previously-tried slow hosts).
     """
     logger.info(
         "Provisioning %s worker: gpu=%s, vram>=%dGB, max $%.2f/hr, "
@@ -366,13 +443,15 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"gpu_ram>={vram_gb} "
         f"dph_total<={spec.max_price} "
         f"rentable=true "
+        f"reliability>0.95 "
+        f"inet_down>200 "
         f"disk_space>={spec.min_disk_gb}"
     )
 
     search_result = _vast_cmd([
         "search", "offers",
         "--type", "on-demand",
-        "--order", "dph_total",
+        "--order", "inet_down-",  # fastest download first (image pull speed)
         "--raw",
         query,
     ])
@@ -390,12 +469,14 @@ def provision_vm(spec: WorkerSpec) -> str:
             f"gpu_ram>={vram_gb} "
             f"dph_total<={spec.max_price} "
             f"rentable=true "
+            f"reliability>0.90 "
+            f"inet_down>100 "
             f"disk_space>={spec.min_disk_gb}"
         )
         search_result = _vast_cmd([
             "search", "offers",
             "--type", "on-demand",
-            "--order", "dph_total",
+            "--order", "inet_down-",
             "--raw",
             query,
         ])
@@ -423,6 +504,16 @@ def provision_vm(spec: WorkerSpec) -> str:
             )
         offers = filtered
 
+    # Exclude previously-tried offers (e.g. slow hosts during retry)
+    if excluded_offer_ids and offers:
+        before = len(offers)
+        offers = [o for o in offers if int(o.get("id", 0)) not in excluded_offer_ids]
+        if len(offers) < before:
+            logger.info(
+                "Excluded %d previously-tried offer(s); %d remain",
+                before - len(offers), len(offers),
+            )
+
     if not offers:
         raise RuntimeError(
             f"No GPU offers found for {spec.role} worker "
@@ -432,12 +523,15 @@ def provision_vm(spec: WorkerSpec) -> str:
             f"Current account budget allows up to ${spec.max_price:.2f}/hr."
         )
 
-    # Sort by price and pick cheapest
+    # Sort by download speed (fastest first) with price as tiebreaker.
+    # This preserves the --order inet_down- intent from the CLI search
+    # instead of overriding it with a pure price sort.
     sorted_offers = sorted(
-        offers, key=lambda o: float(o.get("dph_total", 999))
+        offers,
+        key=lambda o: (-float(o.get("inet_down", 0)), float(o.get("dph_total", 999))),
     )
     best = sorted_offers[0]
-    offer_id = best.get("id")
+    offer_id = int(best.get("id", 0))
 
     logger.info(
         "Selected offer %s: %s %dx, %.1fGB VRAM, $%.3f/hr, %.0fGB disk",
@@ -474,6 +568,18 @@ def provision_vm(spec: WorkerSpec) -> str:
         _branch = "main"
     logger.info("VMs will clone branch: %s", _branch)
 
+    # Resolve Docker image + torch wheel index from model manifest
+    _docker_image, _torch_index = resolve_docker_image(spec.worker_mode)
+    logger.info("Docker image for %s worker: %s", spec.role, _docker_image)
+
+    # Look up min_torch from the manifest so the bootstrap script can use it
+    # instead of a hardcoded version threshold.
+    _min_torch = "2.7.0"  # safe default
+    for _key, _mspec in _MODEL_MANIFEST.items():
+        if _mspec.get("worker_mode") == spec.worker_mode:
+            _min_torch = _mspec.get("min_torch", "2.7.0")
+            break
+
     # Architecture: the worker starts FIRST (FastAPI immediately reachable),
     # then runs bootstrap + model loading in a background thread.  The /health
     # endpoint reports structured bootstrap status so the provisioner can see
@@ -487,41 +593,30 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
-        # Pass TORCH_INDEX so the bootstrap script uses the same CUDA wheel
-        # index as this onstart command (prevents cu124 overwriting cu130).
-        # TTS workers run on older/cheaper GPUs (e.g. GTX 1070 Ti, Pascal sm_61)
-        # which lack cu130 kernel images.  cu126 supports Pascal+ AND has
-        # torch >=2.7 (cu124 only goes up to 2.6.0 which lacks _maybe_view_chunk_cat).
-        f"export TORCH_INDEX=https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
+        # Resolve Docker image + torch wheel index from the model manifest.
+        # TORCH_INDEX is passed to gpu_bootstrap.sh as a fallback for
+        # pip install --upgrade scenarios.
+        f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
+        f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
+        # Prevent CUDA OOM from memory fragmentation — the 19B LTX model
+        # leaves <3GB free on 80GB GPUs; expandable_segments lets PyTorch
+        # reuse reserved-but-unallocated memory instead of failing.
+        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
         f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
-        # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
-        # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
-        # but we need enough to start the health endpoint immediately.
-        # IMPORTANT: The Docker image has conda torch 2.6.0 which satisfies
-        # 'torch>=2.6.0', so pip would skip the install.  Aggressively clean
-        # conda torch + nvidia dirs + conda pkg cache, then force-reinstall.
-        "conda remove --force -y pytorch torchvision torchaudio cudatoolkit 2>/dev/null; "
-        "rm -rf /opt/conda/lib/python*/site-packages/torch* "
-        "/opt/conda/lib/python*/site-packages/torchvision* "
-        "/opt/conda/lib/python*/site-packages/torchaudio* "
-        "/opt/conda/lib/python*/site-packages/nvidia* "
-        "/opt/conda/pkgs/*torch* 2>/dev/null; "
-        "pip install --force-reinstall --no-cache-dir "
-        "torch torchvision torchaudio "
-        f"--index-url https://download.pytorch.org/whl/{'cu126' if spec.worker_mode == 'tts' else 'cu130'} && "
-        # Verify correct torch was installed (catch conda remnants early)
+        # Install Python deps needed for gpu_worker.py to start (FastAPI + deps).
+        # The Docker image already has torch pre-installed (resolved from manifest),
+        # so we only need FastAPI + other non-torch deps for the health endpoint.
         "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
-        "pip install --no-cache-dir "
+        "pip install --break-system-packages --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
-        # Register NVIDIA pip package libs with ldconfig so libcudart.so.13
-        # is discoverable system-wide by any process (including ltx-core).
-        # PyTorch cu130 installs nvidia-cuda-runtime to site-packages/nvidia/*/lib/
+        # Register NVIDIA pip package libs with ldconfig so CUDA shared
+        # libraries are discoverable system-wide by any process.
         "python3 -c \""
         "import os,site,pathlib;"
         "nv_dirs=[str(p) for sp in site.getsitepackages() "
@@ -546,7 +641,7 @@ def provision_vm(spec: WorkerSpec) -> str:
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
-        "--image", "pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
+        "--image", _docker_image,
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
@@ -565,7 +660,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
-            return spec.vm_id
+            return offer_id
 
     # Try to extract new_contract from text response
     if isinstance(create_result, str) and "new_contract" in create_result:
@@ -576,7 +671,7 @@ def provision_vm(spec: WorkerSpec) -> str:
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
-            return spec.vm_id
+            return offer_id
 
     raise RuntimeError(
         f"Failed to provision {spec.role} VM: unexpected response: {create_result}"
@@ -642,23 +737,46 @@ def setup_ssh_tunnel(
             f"no SSH connection details (host={spec.ssh_host}, port={spec.ssh_port})"
         )
 
-    tunnel_cmd = [
-        "ssh",
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
-        "-o", "ServerAliveInterval=30",
-        "-o", "ServerAliveCountMax=3",
-        "-N",  # no remote command
-        "-L", f"{spec.local_port}:localhost:{spec.remote_port}",
-        "-p", str(spec.ssh_port),
-        f"root@{spec.ssh_host}",
-    ]
+    # Collect all available SSH identity files.  Vast.ai proxy hosts can be
+    # inconsistent about which key they accept, so we try every available key
+    # on each attempt (round-robin) rather than locking to a single one.
+    _ssh_keys: list[str] = []
+    for _name in ("id_rsa", "id_ed25519"):
+        _path = os.path.expanduser(f"~/.ssh/{_name}")
+        if os.path.exists(_path):
+            _ssh_keys.append(_path)
+    if not _ssh_keys:
+        raise RuntimeError(
+            f"Cannot set up SSH tunnel for {spec.role}: "
+            f"no SSH identity file found at ~/.ssh/id_rsa or ~/.ssh/id_ed25519"
+        )
+
+    def _build_tunnel_cmd(key_path: str) -> list[str]:
+        return [
+            "ssh",
+            "-i", key_path,
+            "-o", "IdentitiesOnly=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "ServerAliveInterval=30",
+            "-o", "ServerAliveCountMax=3",
+            "-N",  # no remote command
+            "-L", f"{spec.local_port}:localhost:{spec.remote_port}",
+            "-p", str(spec.ssh_port),
+            f"root@{spec.ssh_host}",
+        ]
 
     last_err = ""
     for attempt in range(1, max_retries + 1):
+        # Rotate through available keys so we don't fail all attempts
+        # on a host that only accepts one of them.
+        _ssh_key = _ssh_keys[(attempt - 1) % len(_ssh_keys)]
+        tunnel_cmd = _build_tunnel_cmd(_ssh_key)
+
         logger.info(
-            "Setting up SSH tunnel (attempt %d/%d): localhost:%d -> %s:%d (via %s:%d)",
-            attempt, max_retries,
+            "Setting up SSH tunnel (attempt %d/%d, key=%s): "
+            "localhost:%d -> %s:%d (via %s:%d)",
+            attempt, max_retries, os.path.basename(_ssh_key),
             spec.local_port, spec.ssh_host, spec.remote_port,
             spec.ssh_host, spec.ssh_port,
         )
@@ -1184,16 +1302,62 @@ class WorkerProvisioner:
         covers all steps end-to-end.  The health-wait step gets whatever
         time remains after provisioning + VM boot + SSH setup, with a
         minimum of 120s so the wait isn't uselessly short.
+
+        If the VM stays in "loading" (Docker image pull) for too long,
+        the VM is destroyed and re-provisioned on a different host.
+        Up to ``_MAX_LOADING_RETRIES`` retries are attempted.
         """
+        _MAX_LOADING_RETRIES = 2
+        _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
         _start = time.time()
+        _excluded_offers: set[int] = set()  # offer IDs of slow hosts
 
-        # Step 1: Provision VM
-        provision_vm(spec)
+        for attempt in range(1 + _MAX_LOADING_RETRIES):
+            # Step 1: Provision VM (skip previously-tried slow offers)
+            selected_offer_id = provision_vm(
+                spec, excluded_offer_ids=_excluded_offers or None,
+            )
 
-        # Step 2: Wait for VM to be running
-        elapsed = int(time.time() - _start)
-        vm_timeout = max(min(timeout - elapsed, 600), 60)
-        wait_for_vm_running(spec, timeout=vm_timeout)
+            # Step 2: Wait for VM to be running — use a shorter timeout
+            # for image pull so we can retry on a faster host.  On the
+            # final attempt give the full remaining budget (up to 600s)
+            # since there are no more retries to benefit from the cap.
+            is_final = (attempt >= _MAX_LOADING_RETRIES)
+            cap = 600 if is_final else _LOADING_TIMEOUT
+            elapsed = int(time.time() - _start)
+            vm_timeout = max(min(timeout - elapsed, cap), 60)
+            try:
+                wait_for_vm_running(spec, timeout=vm_timeout)
+                break  # VM is running — proceed to SSH + health
+            except RuntimeError:
+                if attempt < _MAX_LOADING_RETRIES:
+                    # Track this offer so we don't pick it again
+                    if selected_offer_id:
+                        _excluded_offers.add(selected_offer_id)
+                    logger.warning(
+                        "%s VM %s (offer %s) stuck loading after %ds "
+                        "— destroying and retrying on a different host "
+                        "(attempt %d/%d, excluded offers: %s)",
+                        spec.role, spec.vm_id, selected_offer_id,
+                        vm_timeout, attempt + 2, 1 + _MAX_LOADING_RETRIES,
+                        _excluded_offers,
+                    )
+                    # Destroy the slow VM to stop billing
+                    try:
+                        _vast_cmd(["destroy", "instance", spec.vm_id])
+                        spec.vm_id = ""
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to destroy slow VM %s: %s — "
+                            "VM may continue billing as orphan!",
+                            spec.vm_id, exc,
+                        )
+                        # Keep spec.vm_id so cleanup() can retry destruction
+                    spec.ssh_host = ""
+                    spec.ssh_port = 0
+                    continue
+                else:
+                    raise  # all retries exhausted
 
         # Step 3: Set up SSH tunnel
         setup_ssh_tunnel(spec)

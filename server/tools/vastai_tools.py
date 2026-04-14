@@ -12,6 +12,7 @@ import os
 import subprocess
 
 from google.adk.tools import FunctionTool
+from worker_provisioner import resolve_docker_image
 
 # ---------------------------------------------------------------------------
 # VM ownership registry (GAP 2.1)
@@ -219,16 +220,18 @@ def provision_gpu_vm(
     )
 
     # Create instance from best offer.
-    # Use pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel for modern CUDA support.
-    # Request SSH access and port mappings for the GPU worker HTTP API.
+    # Docker image is resolved from config/model_manifest.json based on model
+    # runtime requirements (min_torch, min_cuda).  Default to "ltx" worker
+    # mode since this ADK tool is typically used for video generation VMs.
     # NOTE: Do NOT pass --raw — vastai CLI returns empty stdout with --raw
     # for create commands.  Without --raw it returns Python repr that we
     # parse via ast.literal_eval in _vast_cmd.
+    _docker_image, _torch_index = resolve_docker_image("ltx")
     create_result = _vast_cmd(
         [
             "create", "instance",
             str(offer_id),
-            "--image", "pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel",
+            "--image", _docker_image,
             "--disk", "224",
             "--ssh",
             "--direct",
