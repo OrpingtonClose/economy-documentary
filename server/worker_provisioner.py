@@ -420,6 +420,7 @@ def provision_vm(spec: WorkerSpec) -> str:
     b2_key_id = os.environ.get("B2_KEY_ID", "")
     b2_app_key = os.environ.get("B2_APPLICATION_KEY", "")
     dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
 
     # Use 'export' so env vars survive through the && chain.
     # Inline VAR=val only applies to the immediate next command,
@@ -445,6 +446,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         f"export B2_APPLICATION_KEY={shlex.quote(b2_app_key)} && "
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
+        f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
         "apt-get update && apt-get install -y git curl && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
