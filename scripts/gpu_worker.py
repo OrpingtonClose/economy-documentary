@@ -54,6 +54,22 @@ logger = logging.getLogger("gpu_worker")
 app = FastAPI(title="Documentary GPU Worker")
 
 # ---------------------------------------------------------------------------
+# Bootstrap status — defined early so it's available as a global before
+# the Pydantic request/response models section.
+# ---------------------------------------------------------------------------
+
+class BootstrapStatus(BaseModel):
+    """Structured bootstrap status — reported in /health so the provisioner
+    can see WHY a worker isn't ready, not just that it isn't."""
+    phase: str = "idle"           # idle | deps | models | loading | ready | error
+    detail: str = ""              # human-readable description of current activity
+    error: str = ""               # non-empty only when phase == "error"
+    error_category: str = ""      # "auth", "network", "disk", "missing_file", "runtime"
+    started_at: float = 0.0
+    completed_at: float = 0.0
+
+
+# ---------------------------------------------------------------------------
 # Global model handles — model swapping for VRAM management
 # ---------------------------------------------------------------------------
 _tts_model = None  # Qwen3TTSModel instance
@@ -63,6 +79,7 @@ _models_dir: str = "/workspace/models"
 _output_dir: str = "/workspace/output"
 _model_lock = threading.Lock()  # Serialise all model load/unload/inference
 _worker_mode: str = "both"  # "tts", "ltx", or "both"
+_bootstrap_status = BootstrapStatus()  # structured bootstrap status
 
 # ---------------------------------------------------------------------------
 # Pydantic request/response models
@@ -102,6 +119,7 @@ class HealthResponse(BaseModel):
     ltx_loaded: bool
     vram_used_gb: float
     vram_total_gb: float
+    bootstrap: BootstrapStatus | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -951,13 +969,19 @@ async def health() -> HealthResponse:
         vram_used = torch.cuda.memory_allocated(0) / 1e9
         vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
 
+    # status reflects bootstrap health: "error" if bootstrap failed,
+    # "ok" otherwise (even if models aren't loaded yet — that's normal
+    # during startup and the provisioner checks tts_loaded/ltx_loaded).
+    status = "error" if _bootstrap_status.phase == "error" else "ok"
+
     return HealthResponse(
-        status="ok",
+        status=status,
         gpu=gpu_name,
         tts_loaded=_tts_model is not None,
         ltx_loaded=_ltx_pipe is not None,
         vram_used_gb=round(vram_used, 2),
         vram_total_gb=round(vram_total, 2),
+        bootstrap=_bootstrap_status,
     )
 
 
@@ -1140,28 +1164,125 @@ def main():
     logger.info("Models dir: %s", _models_dir)
     logger.info("Output dir: %s", _output_dir)
 
-    # Pre-load models in a background thread so uvicorn starts immediately.
-    # The /health endpoint reports tts_loaded/ltx_loaded status, so callers
-    # can poll until the model they need is ready.
+    # Run bootstrap + model loading in a background thread so uvicorn
+    # starts immediately.  The /health endpoint reports structured bootstrap
+    # status so the provisioner knows exactly what's happening and can
+    # escalate failures through the recovery infrastructure.
     import threading
 
-    def _background_preload():
+    def _background_bootstrap_and_load():
+        global _bootstrap_status
+        _bootstrap_status.started_at = time.time()
+
+        # Phase 1: Run bootstrap script if models aren't present yet
+        bootstrap_needed = False
+        if _worker_mode in ("tts", "both"):
+            tts_marker = os.path.join(_models_dir, "qwen3-tts-voicedesign", "model.safetensors")
+            if not os.path.isfile(tts_marker):
+                bootstrap_needed = True
+        if _worker_mode in ("ltx", "both"):
+            ltx_marker = os.path.join(_models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
+            if not os.path.isfile(ltx_marker):
+                bootstrap_needed = True
+
+        if bootstrap_needed:
+            _bootstrap_status.phase = "deps"
+            _bootstrap_status.detail = "Running bootstrap: installing dependencies and downloading models"
+            logger.info("Bootstrap needed — running gpu_bootstrap.sh")
+
+            # Find the bootstrap script relative to this file
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            bootstrap_script = os.path.join(script_dir, "gpu_bootstrap.sh")
+            if not os.path.isfile(bootstrap_script):
+                _bootstrap_status.phase = "error"
+                _bootstrap_status.error = f"Bootstrap script not found at {bootstrap_script}"
+                _bootstrap_status.error_category = "missing_file"
+                logger.error("Bootstrap script not found: %s", bootstrap_script)
+                return
+
+            try:
+                _bootstrap_status.phase = "models"
+                _bootstrap_status.detail = "Downloading model weights"
+                env = os.environ.copy()
+                env["WORKER_MODE"] = _worker_mode
+                result = subprocess.run(
+                    ["bash", bootstrap_script],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600,  # 1 hour max for bootstrap
+                )
+                if result.returncode != 0:
+                    stderr = result.stderr[-2000:] if result.stderr else ""
+                    stdout_tail = result.stdout[-1000:] if result.stdout else ""
+                    # Categorize the error
+                    error_cat = "runtime"
+                    combined = stderr + stdout_tail
+                    if "401" in combined or "403" in combined or "GatedRepo" in combined:
+                        error_cat = "auth"
+                    elif "404" in combined or "EntryNotFound" in combined:
+                        error_cat = "missing_file"
+                    elif "No space left" in combined or "disk" in combined.lower():
+                        error_cat = "disk"
+                    elif "ConnectionError" in combined or "timeout" in combined.lower():
+                        error_cat = "network"
+
+                    _bootstrap_status.phase = "error"
+                    _bootstrap_status.error = f"Bootstrap failed (rc={result.returncode}): {stderr[-500:]}"
+                    _bootstrap_status.error_category = error_cat
+                    logger.error(
+                        "Bootstrap failed (rc=%d, category=%s): %s",
+                        result.returncode, error_cat, stderr[-500:],
+                    )
+                    return
+                logger.info("Bootstrap completed successfully")
+            except subprocess.TimeoutExpired:
+                _bootstrap_status.phase = "error"
+                _bootstrap_status.error = "Bootstrap timed out after 3600s"
+                _bootstrap_status.error_category = "network"
+                logger.error("Bootstrap timed out")
+                return
+            except Exception as e:
+                _bootstrap_status.phase = "error"
+                _bootstrap_status.error = f"Bootstrap exception: {e}"
+                _bootstrap_status.error_category = "runtime"
+                logger.error("Bootstrap exception: %s", e, exc_info=True)
+                return
+
+        # Phase 2: Load models into VRAM
+        _bootstrap_status.phase = "loading"
+        _bootstrap_status.detail = "Loading models into VRAM"
+
         if _worker_mode == "tts":
             try:
                 with _model_lock:
                     _load_tts()
             except Exception as e:
+                _bootstrap_status.phase = "error"
+                _bootstrap_status.error = f"Failed to load TTS model: {e}"
+                _bootstrap_status.error_category = "runtime"
                 logger.error("Failed to pre-load TTS: %s", e, exc_info=True)
+                return
         if _worker_mode in ("ltx", "both"):
             try:
                 with _model_lock:
                     _load_ltx()
             except Exception as e:
+                _bootstrap_status.phase = "error"
+                _bootstrap_status.error = f"Failed to load LTX model: {e}"
+                _bootstrap_status.error_category = "runtime"
                 logger.error("Failed to pre-load LTX: %s", e, exc_info=True)
+                return
 
-    preload_thread = threading.Thread(target=_background_preload, daemon=True)
+        _bootstrap_status.phase = "ready"
+        _bootstrap_status.detail = "All models loaded"
+        _bootstrap_status.completed_at = time.time()
+        elapsed = _bootstrap_status.completed_at - _bootstrap_status.started_at
+        logger.info("Bootstrap + model loading complete in %.1fs", elapsed)
+
+    preload_thread = threading.Thread(target=_background_bootstrap_and_load, daemon=True)
     preload_thread.start()
-    logger.info("Model pre-loading started in background thread")
+    logger.info("Background bootstrap + model loading started")
 
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

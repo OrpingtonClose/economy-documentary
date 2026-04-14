@@ -91,6 +91,12 @@ class WorkerSpec:
     status: str = "pending"  # "pending", "provisioning", "healthy", "failed"
     error: str = ""  # error message if status == "failed"
     ready_event: threading.Event = field(default_factory=threading.Event)
+    # Bootstrap error detail — populated by wait_for_worker_healthy when the
+    # worker's /health endpoint reports a bootstrap failure.  This gives the
+    # provisioner (and recovery middleware) structured information about WHY
+    # the worker failed, not just that it did.
+    bootstrap_error: str = ""
+    bootstrap_error_category: str = ""  # "auth", "network", "disk", "missing_file", "runtime"
 
 
 # ---------------------------------------------------------------------------
@@ -441,19 +447,36 @@ def provision_vm(spec: WorkerSpec) -> str:
         _branch = "main"
     logger.info("VMs will clone branch: %s", _branch)
 
+    # Architecture: the worker starts FIRST (FastAPI immediately reachable),
+    # then runs bootstrap + model loading in a background thread.  The /health
+    # endpoint reports structured bootstrap status so the provisioner can see
+    # exactly what's happening and escalate failures immediately — no more
+    # blind timeouts.  The onstart installs minimal system deps + pip deps
+    # needed for gpu_worker.py to start, then launches the worker which
+    # handles the rest (model downloads, loading) internally.
     onstart = (
         f"export B2_KEY_ID={shlex.quote(b2_key_id)} && "
         f"export B2_APPLICATION_KEY={shlex.quote(b2_app_key)} && "
         f"export WORKER_MODE={shlex.quote(spec.worker_mode)} && "
         f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
         f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
-        "apt-get update && apt-get install -y git curl && "
+        "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
         "/workspace/economy-documentary 2>/dev/null || "
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
         f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
-        "bash /workspace/economy-documentary/scripts/gpu_bootstrap.sh && "
+        # Install Python deps needed for gpu_worker.py to start (FastAPI + torch).
+        # The bootstrap script installs the rest (ltx-pipelines, qwen-tts, etc.)
+        # but we need enough to start the health endpoint immediately.
+        "pip install --no-cache-dir "
+        "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
+        "--index-url https://download.pytorch.org/whl/cu124 && "
+        "pip install --no-cache-dir "
+        "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
+        "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
+        # Start the worker — it handles bootstrap internally and reports
+        # structured status via /health endpoint.
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
@@ -618,6 +641,20 @@ def setup_ssh_tunnel(
 # ---------------------------------------------------------------------------
 
 
+def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
+    """Fetch full health JSON from a worker, including bootstrap status.
+
+    Returns the parsed dict, or None if unreachable.
+    """
+    health_url = f"{url.rstrip('/')}/health"
+    try:
+        req = Request(health_url)
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
 def wait_for_worker_healthy(
     spec: WorkerSpec,
     timeout: int = 900,
@@ -626,12 +663,13 @@ def wait_for_worker_healthy(
     """Wait for a worker to become healthy after provisioning.
 
     The worker needs time to:
-    1. Boot the VM
-    2. Run gpu_bootstrap.sh (install deps, download models)
-    3. Start gpu_worker.py
-    4. Load the model into VRAM
+    1. Boot the VM and start gpu_worker.py (FastAPI starts immediately)
+    2. Run bootstrap in background (install deps, download models)
+    3. Load the model into VRAM
 
-    This can take 10-15 minutes for a fresh VM.
+    The worker's /health endpoint reports structured bootstrap status so we
+    can see exactly what's happening and escalate failures immediately
+    rather than waiting for a blind timeout.
     """
     url = f"http://localhost:{spec.local_port}"
     logger.info(
@@ -641,6 +679,7 @@ def wait_for_worker_healthy(
 
     start = time.time()
     last_status = "unknown"
+    last_bootstrap_phase = ""
     while time.time() - start < timeout:
         elapsed = int(time.time() - start)
 
@@ -654,22 +693,54 @@ def wait_for_worker_healthy(
             except Exception as exc:
                 logger.error("Failed to restart tunnel: %s", exc)
 
-        # Check health
-        reachable = check_worker_reachable(url, timeout=5)
-        if reachable:
-            healthy = check_worker_health(url, spec.capability, timeout=10)
-            if healthy:
-                logger.info(
-                    "%s worker at %s is HEALTHY after %ds",
-                    spec.role, url, elapsed,
+        # Fetch full health detail (includes bootstrap status)
+        health_data = _get_worker_health_detail(url, timeout=10)
+
+        if health_data is not None:
+            # --- Bootstrap error escalation ---
+            bootstrap = health_data.get("bootstrap") or {}
+            bootstrap_phase = bootstrap.get("phase", "")
+            bootstrap_error = bootstrap.get("error", "")
+            bootstrap_category = bootstrap.get("error_category", "")
+
+            if bootstrap_phase == "error":
+                # Bootstrap has failed — escalate immediately instead of
+                # waiting for the full timeout.  This is the key integration
+                # with the recovery architecture: structured error information
+                # flows from the VM back to the provisioner.
+                logger.error(
+                    "BOOTSTRAP FAILED on %s worker (category=%s): %s",
+                    spec.role, bootstrap_category, bootstrap_error,
                 )
-                return True
-            if last_status != "reachable_not_loaded":
+                # Store error on the spec so callers can inspect it
+                spec.bootstrap_error = bootstrap_error
+                spec.bootstrap_error_category = bootstrap_category
+                return False
+
+            # Log phase transitions
+            if bootstrap_phase and bootstrap_phase != last_bootstrap_phase:
                 logger.info(
-                    "  %s worker reachable but model not loaded yet (%ds)",
-                    spec.role, elapsed,
+                    "  %s worker bootstrap phase: %s — %s (%ds)",
+                    spec.role, bootstrap_phase,
+                    bootstrap.get("detail", ""), elapsed,
                 )
-                last_status = "reachable_not_loaded"
+                last_bootstrap_phase = bootstrap_phase
+
+            # Check if model is loaded (healthy)
+            if health_data.get("status") == "ok":
+                loaded_key = f"{spec.capability}_loaded"
+                if health_data.get(loaded_key, False):
+                    logger.info(
+                        "%s worker at %s is HEALTHY after %ds",
+                        spec.role, url, elapsed,
+                    )
+                    return True
+                if last_status != "reachable_not_loaded":
+                    logger.info(
+                        "  %s worker reachable but model not loaded yet (%ds)",
+                        spec.role, elapsed,
+                    )
+                    last_status = "reachable_not_loaded"
         else:
             if last_status != "unreachable":
                 logger.info(
@@ -1055,6 +1126,14 @@ class WorkerProvisioner:
         remaining = max(timeout - elapsed, 120)  # honour timeout; 120s floor avoids useless waits
         healthy = wait_for_worker_healthy(spec, timeout=remaining)
         if not healthy:
+            # Include bootstrap error details if available — this is the
+            # structured information from the worker's /health endpoint.
+            if spec.bootstrap_error:
+                raise RuntimeError(
+                    f"{spec.role} worker BOOTSTRAP FAILED on VM {spec.vm_id} "
+                    f"(category={spec.bootstrap_error_category}): "
+                    f"{spec.bootstrap_error}"
+                )
             raise RuntimeError(
                 f"{spec.role} worker on VM {spec.vm_id} did not become "
                 f"healthy within {remaining}s after provisioning"
