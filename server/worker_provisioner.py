@@ -484,10 +484,11 @@ def provision_vm(spec: WorkerSpec) -> str:
         "rm -rf /opt/conda/lib/python*/site-packages/torch* "
         "/opt/conda/lib/python*/site-packages/torchvision* "
         "/opt/conda/lib/python*/site-packages/torchaudio* 2>/dev/null; "
-        "pip uninstall -y torch torchvision torchaudio 2>/dev/null; "
-        "pip install --no-cache-dir "
+        "pip install --force-reinstall --no-cache-dir "
         "'torch>=2.6.0' 'torchvision>=0.21.0' 'torchaudio>=2.6.0' "
         f"--index-url https://download.pytorch.org/whl/{'cu124' if spec.worker_mode == 'tts' else 'cu130'} && "
+        # Verify correct torch was installed (catch conda remnants early)
+        "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
         "pip install --no-cache-dir "
         "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
         "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "

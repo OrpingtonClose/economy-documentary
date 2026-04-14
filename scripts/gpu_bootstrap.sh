@@ -99,9 +99,7 @@ echo "Removing pre-installed conda torch (rm -rf + pip uninstall)..."
 rm -rf /opt/conda/lib/python*/site-packages/torch* \
        /opt/conda/lib/python*/site-packages/torchvision* \
        /opt/conda/lib/python*/site-packages/torchaudio* 2>/dev/null || true
-pip uninstall -y torch torchvision torchaudio 2>/dev/null || true
-
-pip install --no-cache-dir \
+pip install --force-reinstall --no-cache-dir \
     'torch>=2.6.0' \
     'torchvision>=0.21.0' \
     'torchaudio>=2.6.0' \
