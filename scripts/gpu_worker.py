@@ -30,13 +30,25 @@ bf16 only — no FP8, no quantization.
 """
 from __future__ import annotations
 
+import os
+
+# ---- CUDA memory allocator config (MUST be set before importing torch) ----
+# The 19B LTX transformer consumes ~78GB on 80GB GPUs, leaving <2GB for
+# inference activations.  PyTorch's default allocator fragments reserved
+# memory into small non-contiguous blocks that can't satisfy even 32MB
+# allocations.  ``expandable_segments`` lets the allocator grow and reuse
+# reserved memory efficiently, reclaiming the ~874MB of reserved-but-
+# unallocated memory that would otherwise be wasted.
+os.environ.setdefault(
+    "PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"
+)
+
 import argparse
 import base64
 import gc
 import io
 import json
 import logging
-import os
 import shutil
 import subprocess
 import threading
@@ -1210,8 +1222,37 @@ def _ltx_generate_once(
     The pipeline returns an Iterator[torch.Tensor] of video chunks (uint8,
     shape (T, H, W, C)) and an Audio object.  We collect the video chunks
     into a single numpy array for QA evaluation.
+
+    Memory strategy:
+        The 19B transformer consumes ~78GB on 80GB GPUs.  Before calling the
+        pipeline we aggressively reclaim every byte of VRAM:
+        1. gc.collect() — release Python references to GPU tensors
+        2. torch.cuda.empty_cache() — return cached blocks to the allocator
+        3. Log VRAM so we can diagnose OOM remotely
+        The pipeline itself loads/unloads components sequentially (text
+        encoder → video encoder → transformer → VAE decoder), but without
+        expandable_segments the ~874MB of reserved-but-unallocated memory
+        fragments into unusable small blocks.  We set expandable_segments at
+        module top level (before torch import) to prevent this.
     """
     from ltx_core.components.guiders import MultiModalGuiderParams
+
+    # Aggressive pre-generation VRAM cleanup
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+
+    # Log VRAM state for remote diagnosis
+    if torch.cuda.is_available():
+        _alloc = torch.cuda.memory_allocated() / 1e9
+        _resv = torch.cuda.memory_reserved() / 1e9
+        _total = torch.cuda.get_device_properties(0).total_mem / 1e9
+        logger.info(
+            "VRAM before pipeline call: allocated=%.2fGB reserved=%.2fGB "
+            "total=%.2fGB free=%.2fGB expandable_segments=%s",
+            _alloc, _resv, _total, _total - _resv,
+            os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "NOT SET"),
+        )
 
     video_guider = MultiModalGuiderParams(
         cfg_scale=guidance_scale,
