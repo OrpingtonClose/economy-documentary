@@ -834,14 +834,12 @@ def _generate_video(
             else:
                 break
 
-        # Brightness passed — track among passing attempts.
-        # QA is paired with frames so metadata always describes the selected output.
+        # Brightness passed — compute whether this is the new best score,
+        # but DEFER updating best_passing_* until AFTER QA confirms the
+        # result isn't rejected.  This maintains the invariant that
+        # best_passing_frames and best_passing_qa always describe the
+        # same attempt (no frame/QA mismatch).
         is_new_best = score > best_passing_score
-        if is_new_best:
-            best_passing_frames = candidate_frames
-            best_passing_audio = candidate_audio
-            best_passing_score = score
-            best_passing_seed = current_seed
 
         # Stage 2: Qwen-Omni visual QA (semantic evaluation)
         n = candidate_frames.shape[0] if hasattr(candidate_frames, 'shape') else len(candidate_frames)
@@ -857,15 +855,8 @@ def _generate_video(
 
         if qa_result["quality"] == "rejected":
             # REJECTED = fundamentally broken (grid artifacts, corrupted data).
-            # This is an error, not a quality issue. Don't waste more attempts
-            # — the model/config is likely wrong.  Return immediately with
-            # the rejection so the pipeline can escalate.
-            #
-            # BUT: if a previous attempt already produced a usable result
-            # (e.g. "poor"), preserve that instead of overwriting with the
-            # rejected output.  The earlier result proves the model CAN
-            # produce usable output; "rejected" on this attempt is just
-            # seed-dependent bad luck.
+            # Don't update best_passing_* with rejected frames — that would
+            # create a mismatch if a prior attempt had usable output.
             logger.error(
                 "QA REJECTED output (attempt %d/%d): %s",
                 attempt, max_attempts, qa_result.get("qa_reason", ""),
@@ -876,19 +867,25 @@ def _generate_video(
                 best_passing_audio = candidate_audio
                 best_passing_seed = current_seed
                 best_passing_qa = qa_result
-            # else: keep prior usable QA metadata (e.g. "poor") that matches
-            # the preserved frames — don't overwrite with "rejected"
+            # else: prior usable frames + QA are preserved (no overwrite)
             break
 
+        # QA is not rejected — safe to update best_passing_* atomically
+        # (frames + QA together) so they always describe the same attempt.
         if qa_result["quality"] in ("good", "excellent"):
             best_passing_frames = candidate_frames
             best_passing_audio = candidate_audio
+            best_passing_score = score
             best_passing_seed = current_seed
             best_passing_qa = qa_result
             break
 
-        # QA says poor or unknown — only update QA if these are the best frames
+        # QA says poor or unknown — only update if this is the best attempt
         if is_new_best:
+            best_passing_frames = candidate_frames
+            best_passing_audio = candidate_audio
+            best_passing_score = score
+            best_passing_seed = current_seed
             best_passing_qa = qa_result
         if attempt < max_attempts:
             logger.warning(
