@@ -242,17 +242,51 @@ def _load_ltx():
     if use_single_file:
         # Official Lightricks model: load transformer from single file,
         # rest of components from the local folder structure.
+        #
+        # NOTE: from_single_file() hits a meta-tensor dispatch bug in
+        # diffusers 0.38.0.dev0 + accelerate 1.12.  Work around it by
+        # loading the config, instantiating the model on CPU with
+        # to_empty(), and then loading the state dict manually.
         logger.info(
             "Loading LTX-2.3 transformer from official checkpoint: %s",
             single_file,
         )
-        transformer = LTX2VideoTransformer3DModel.from_single_file(
-            single_file,
-            config=model_path,
-            subfolder="transformer",
-            torch_dtype=torch.bfloat16,
-            device_map=None,        # avoid meta-tensor dispatch bug
-        )
+        try:
+            transformer = LTX2VideoTransformer3DModel.from_single_file(
+                single_file,
+                config=model_path,
+                subfolder="transformer",
+                torch_dtype=torch.bfloat16,
+                device_map=None,
+            )
+        except NotImplementedError:
+            # Meta-tensor workaround: load config → empty model → load weights
+            logger.warning(
+                "from_single_file() hit meta-tensor bug — using manual load"
+            )
+            from safetensors.torch import load_file as safetensors_load
+            from diffusers.loaders.single_file_utils import (
+                convert_single_file_checkpoint,
+            )
+
+            config_path = os.path.join(model_path, "transformer", "config.json")
+            transformer = LTX2VideoTransformer3DModel.from_config(
+                config_path, torch_dtype=torch.bfloat16
+            )
+            # Load single-file checkpoint and convert to diffusers format
+            raw_sd = safetensors_load(single_file, device="cpu")
+            try:
+                converted_sd = convert_single_file_checkpoint(
+                    raw_sd, transformer, original_format="lightricks"
+                )
+            except Exception:
+                # If conversion not available, weights are already in
+                # diffusers format (some single-file checkpoints are).
+                converted_sd = raw_sd
+            transformer.load_state_dict(converted_sd, strict=False)
+            transformer = transformer.to(torch.bfloat16)
+            del raw_sd, converted_sd
+
         logger.info(
             "Transformer loaded from single file in %.1fs. "
             "Loading rest of pipeline from %s ...",
