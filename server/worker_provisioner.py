@@ -741,7 +741,7 @@ def setup_ssh_tunnel(
     # on each attempt (round-robin) rather than locking to a single one.
     _ssh_dir = os.path.expanduser("~/.ssh")
     _ssh_keys: list[str] = []
-    for _fname in sorted(os.listdir(_ssh_dir)):
+    for _fname in sorted(os.listdir(_ssh_dir)) if os.path.isdir(_ssh_dir) else []:
         _fpath = os.path.join(_ssh_dir, _fname)
         # Skip public keys, known_hosts, config, authorized_keys, dirs
         if (
