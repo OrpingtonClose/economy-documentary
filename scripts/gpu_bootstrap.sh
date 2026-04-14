@@ -94,7 +94,15 @@ echo "=== Verifying pre-installed PyTorch ==="
 python3 -c "import torch; print(f'torch {torch.__version__} CUDA {torch.version.cuda} from {torch.__file__}')" || echo 'WARNING: torch not importable — will attempt reinstall below'
 
 # If torch is somehow missing or too old, reinstall from the wheel index.
-TORCH_OK=$(python3 -c "import torch; v=tuple(int(x) for x in torch.__version__.split('.')[:2]); print('yes' if v>=(2,7) else 'no')" 2>/dev/null || echo "no")
+# MIN_TORCH_VERSION is passed by the provisioner from config/model_manifest.json;
+# fall back to 2.7 if not set (e.g. manual bootstrap).
+MIN_TORCH="${MIN_TORCH_VERSION:-2.7.0}"
+TORCH_OK=$(python3 -c "
+import torch
+v = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:3])
+req = tuple(int(x) for x in '${MIN_TORCH}'.split('.')[:3])
+print('yes' if v >= req else 'no')
+" 2>/dev/null || echo "no")
 if [ "$TORCH_OK" != "yes" ]; then
     echo "WARNING: torch too old or missing, reinstalling from $TORCH_INDEX"
     pip install --force-reinstall --no-cache-dir \

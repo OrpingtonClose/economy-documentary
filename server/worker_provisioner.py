@@ -553,6 +553,14 @@ def provision_vm(spec: WorkerSpec) -> str:
     _docker_image, _torch_index = resolve_docker_image(spec.worker_mode)
     logger.info("Docker image for %s worker: %s", spec.role, _docker_image)
 
+    # Look up min_torch from the manifest so the bootstrap script can use it
+    # instead of a hardcoded version threshold.
+    _min_torch = "2.7.0"  # safe default
+    for _key, _mspec in _MODEL_MANIFEST.items():
+        if _mspec.get("worker_mode") == spec.worker_mode:
+            _min_torch = _mspec.get("min_torch", "2.7.0")
+            break
+
     # Architecture: the worker starts FIRST (FastAPI immediately reachable),
     # then runs bootstrap + model loading in a background thread.  The /health
     # endpoint reports structured bootstrap status so the provisioner can see
@@ -570,6 +578,7 @@ def provision_vm(spec: WorkerSpec) -> str:
         # TORCH_INDEX is passed to gpu_bootstrap.sh as a fallback for
         # pip install --upgrade scenarios.
         f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
+        f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
         f"git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
