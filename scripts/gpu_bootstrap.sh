@@ -162,8 +162,11 @@ if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     echo "--- Official Lightricks checkpoint (~46.1 GB) ---"
     CKPT_FILE="$LTX_DIR/ltx-2.3-22b-dev.safetensors"
     if [ ! -f "$CKPT_FILE" ]; then
-        # Try B2 first (faster if cached), fall back to HuggingFace
-        if b2 ls "b2://${B2_BUCKET}/ltx2/ltx-2.3-22b-dev.safetensors" &>/dev/null 2>&1; then
+        # Try B2 first (faster if cached), fall back to HuggingFace.
+        # b2 ls returns exit 0 even when no files match, so we must
+        # count matching lines instead of relying on the exit code.
+        b2_ckpt_count=$(b2 ls "b2://${B2_BUCKET}/ltx2/" 2>/dev/null | grep -c 'ltx-2.3-22b-dev.safetensors' || true)
+        if [ "${b2_ckpt_count}" -gt 0 ]; then
             echo "  Downloading from B2..."
             b2 file download "b2://${B2_BUCKET}/ltx2/ltx-2.3-22b-dev.safetensors" "$CKPT_FILE"
         else
