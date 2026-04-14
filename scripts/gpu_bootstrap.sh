@@ -197,7 +197,7 @@ print('Checkpoint downloaded.')
     #    Download ALL files from Lightricks/LTX-2 (ungated) instead of
     #    google/gemma-3-1b-pt (gated, requires HF auth).
     #    Lightricks/LTX-2 has both text_encoder/ (weights) and tokenizer/ dirs.
-    if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/preprocessor_config.json" ]; then
+    if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/config.json" ]; then
         echo "--- Gemma-3 1B text encoder (from Lightricks/LTX-2, ungated) ---"
         mkdir -p "$LTX_DIR/gemma"
         python3 -c "
@@ -284,7 +284,7 @@ fi
 if [ "$WORKER_MODE" != "tts" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2-19b-dev.safetensors"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/config.json"
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/preprocessor_config.json"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/model.safetensors.index.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"
 fi
 
