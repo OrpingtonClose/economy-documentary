@@ -217,8 +217,8 @@ def resolve_docker_image(worker_mode: str) -> tuple[str, str]:
 #   The pipeline uses a block-based lifecycle — only one major component
 #   in VRAM at a time (text encoder → transformer → VAE decoder).
 #   Peak VRAM = transformer alone: 22B params × 2 bytes (bf16) ≈ 46 GB
-#   + activations/KV cache ≈ 10-15 GB overhead
-#   -> min_vram_gb = 48 (safe floor: 46 GB model + ~10 GB activations)
+#   + activations/KV cache at 512×320 ≈ 2-4 GB overhead
+#   -> min_vram_gb = 48 (safe floor: 46 GB weights + ~2-4 GB activations)
 #   -> gpu_type = A6000 (48 GB), A100 (80 GB), H100, etc.
 #   -> disk: ~46 GB checkpoint + ~4 GB Gemma + ~30 GB OS + ~20 GB output ≈ 200 GB
 
@@ -243,7 +243,7 @@ VIDEO_SPEC = WorkerSpec(
     remote_port=8880,
     capability="ltx",
     gpu_type="A6000",          # 48 GB VRAM; broadened to A100/H100 if unavailable
-    min_vram_gb=48,            # ~46 GB bf16 transformer (block-based, one component at a time)
+    min_vram_gb=48,            # ~46 GB bf16 transformer + ~2-4 GB activations at 512×320
     max_price=5.00,            # fallback ceiling; overridden by weighted budget
     min_disk_gb=200,           # ~46 GB checkpoint + Gemma + OS + output
     disk_gb=224,               # --disk arg
