@@ -1188,6 +1188,65 @@ def deterministic_production_callback(
             parts=[genai_types.Part(text="ERROR: No visual concepts found")],
         )
 
+    # ── Consolidate sub-phrase concepts into one per voice per scene ────
+    # In full-scale mode the visual director creates multiple sub-phrase
+    # visual concepts per scene (6-7), but production generates exactly
+    # one video clip per narration phrase (V1/V2/V3 = phrase_idx 0/1/2).
+    # Merge sub-phrases by (scene_num, voice) → combined prompt + LoRA.
+    _voice_to_idx = {"V1": 0, "V2": 1, "V3": 2}
+    _has_voice_field = any(c.get("voice") for c in concepts)
+    if _has_voice_field and len(concepts) > 0:
+        _grouped: dict[tuple[int, str], list[dict]] = {}
+        for c in concepts:
+            sn = c.get("scene_num", 0)
+            voice = c.get("voice", "V1")
+            key = (sn, voice)
+            _grouped.setdefault(key, []).append(c)
+
+        consolidated = []
+        for (sn, voice), sub_phrases in sorted(_grouped.items()):
+            # Combine prompts from all sub-phrases for richer video generation
+            combined_prompts = []
+            for sp in sub_phrases:
+                p = sp.get("prompt", "") or sp.get("content", "")
+                if p:
+                    combined_prompts.append(p)
+            combined_prompt = ". ".join(combined_prompts) if combined_prompts else ""
+
+            # Use the dominant LoRA style (most common) and max weight
+            lora_styles = [sp.get("lora_style") or sp.get("lora_id", "documentary-realism") for sp in sub_phrases]
+            from collections import Counter
+            dominant_lora = Counter(lora_styles).most_common(1)[0][0] if lora_styles else "documentary-realism"
+            max_weight = max((sp.get("lora_weight", 0.75) for sp in sub_phrases), default=0.75)
+
+            # Duration from timing data or sum of sub-phrase durations
+            total_dur = 0.0
+            for sp in sub_phrases:
+                st = sp.get("start_time", 0.0)
+                et = sp.get("end_time", st + 5.0)
+                total_dur += (et - st)
+            if total_dur <= 0:
+                total_dur = 5.0
+
+            consolidated.append({
+                "scene_num": sn,
+                "phrase_idx": _voice_to_idx.get(voice, 0),
+                "voice": voice,
+                "duration": min(total_dur, 10.0),
+                "prompt": combined_prompt,
+                "lora_id": dominant_lora,
+                "lora_weight": max_weight,
+                "negative_prompt": sub_phrases[0].get("negative_prompt", ""),
+                "start_time": sub_phrases[0].get("start_time", 0.0),
+                "end_time": sub_phrases[-1].get("end_time", total_dur),
+            })
+
+        logger.info(
+            "Consolidated %d sub-phrase concepts → %d per-voice concepts",
+            len(concepts), len(consolidated),
+        )
+        concepts = consolidated
+
     from tools.video_tools import generate_video_clip, probe_clip
     from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report

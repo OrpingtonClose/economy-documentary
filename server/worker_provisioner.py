@@ -213,15 +213,14 @@ def resolve_docker_image(worker_mode: str) -> tuple[str, str]:
 #   -> disk: WORKER_MODE=tts skips LTX models, only downloads ~4.3 GB TTS model
 #     so TTS VM needs ~50 GB (4.3 GB model + ~30 GB OS/software + headroom)
 #
-# Video: LTX-2.3 (dg845/LTX-2.3-Diffusers)
-#   text_encoder: ~46.6 GB (transformers format)
-#   transformer:  ~37.8 GB (diffusers format)
-#   vae + audio_vae + vocoder + connectors + latent_upsampler: ~6.6 GB
-#   Total loaded in VRAM: ~71 GB bf16
-#   + inference overhead (latent upsampler, two-pass pipeline): ~9 GB
-#   -> min_vram_gb = 80 (gpu_worker.py: "Requires 80GB+ VRAM")
-#   -> gpu_type = A100_SXM4 (80 GB) or H100/H200
-#   -> disk: ~95 GB models + ~30 GB OS + ~20 GB output = ~200 GB
+# Video: LTX-2.3 (Lightricks/LTX-2.3, ltx-2.3-22b-dev.safetensors)
+#   The pipeline uses a block-based lifecycle — only one major component
+#   in VRAM at a time (text encoder → transformer → VAE decoder).
+#   Peak VRAM = transformer alone: 22B params × 2 bytes (bf16) ≈ 46 GB
+#   + activations/KV cache at 512×320 ≈ 2-4 GB overhead
+#   -> min_vram_gb = 48 (safe floor: 46 GB weights + ~2-4 GB activations)
+#   -> gpu_type = H200 (141 GB), H100 (80 GB), A100 (80 GB), etc.
+#   -> disk: ~46 GB checkpoint + ~4 GB Gemma + ~30 GB OS + ~20 GB output ≈ 200 GB
 
 TTS_SPEC = WorkerSpec(
     role="tts",
@@ -243,10 +242,10 @@ VIDEO_SPEC = WorkerSpec(
     local_port=8881,
     remote_port=8880,
     capability="ltx",
-    gpu_type="A100_SXM4",     # 80 GB VRAM; broadened to H100/H200 if unavailable
-    min_vram_gb=80,            # ~71 GB bf16 model loaded fully on GPU
+    gpu_type="H200",           # 141 GB VRAM; broadened to H100/A100 if unavailable
+    min_vram_gb=48,            # ~46 GB bf16 transformer + ~2-4 GB activations at 512×320
     max_price=5.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=200,           # ~95 GB models + OS + output
+    min_disk_gb=200,           # ~46 GB checkpoint + Gemma + OS + output
     disk_gb=224,               # --disk arg
     worker_mode="ltx",
 )
@@ -598,8 +597,8 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # pip install --upgrade scenarios.
         f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
         f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
-        # Prevent CUDA OOM from memory fragmentation — the 19B LTX model
-        # leaves <3GB free on 80GB GPUs; expandable_segments lets PyTorch
+        # Prevent CUDA OOM from memory fragmentation — the 22B LTX model
+        # needs ~46GB for the transformer; expandable_segments lets PyTorch
         # reuse reserved-but-unallocated memory instead of failing.
         "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
@@ -740,15 +739,29 @@ def setup_ssh_tunnel(
     # Collect all available SSH identity files.  Vast.ai proxy hosts can be
     # inconsistent about which key they accept, so we try every available key
     # on each attempt (round-robin) rather than locking to a single one.
+    _ssh_dir = os.path.expanduser("~/.ssh")
     _ssh_keys: list[str] = []
-    for _name in ("id_rsa", "id_ed25519"):
-        _path = os.path.expanduser(f"~/.ssh/{_name}")
-        if os.path.exists(_path):
-            _ssh_keys.append(_path)
+    for _fname in sorted(os.listdir(_ssh_dir)) if os.path.isdir(_ssh_dir) else []:
+        _fpath = os.path.join(_ssh_dir, _fname)
+        # Skip public keys, known_hosts, config, authorized_keys, dirs
+        if (
+            _fname.endswith(".pub")
+            or _fname in ("known_hosts", "known_hosts.old", "config", "authorized_keys")
+            or not os.path.isfile(_fpath)
+        ):
+            continue
+        # Only include files that look like SSH private keys (start with -----)
+        try:
+            with open(_fpath, "r") as f:
+                first_line = f.readline()
+            if first_line.startswith("-----"):
+                _ssh_keys.append(_fpath)
+        except (OSError, UnicodeDecodeError):
+            continue
     if not _ssh_keys:
         raise RuntimeError(
             f"Cannot set up SSH tunnel for {spec.role}: "
-            f"no SSH identity file found at ~/.ssh/id_rsa or ~/.ssh/id_ed25519"
+            f"no SSH identity files found in {_ssh_dir}"
         )
 
     def _build_tunnel_cmd(key_path: str) -> list[str]:
@@ -1405,8 +1418,17 @@ class WorkerProvisioner:
         spec.ssh_host = ""
         spec.ssh_port = 0
 
-    def _cleanup_single_worker(self, spec: WorkerSpec) -> None:
-        """Clean up a single worker's resources (tunnel + VM)."""
+    def _cleanup_single_worker(
+        self, spec: WorkerSpec, *, force_destroy: bool = False,
+    ) -> None:
+        """Clean up a single worker's resources (tunnel + VM).
+
+        Args:
+            force_destroy: If True, destroy the VM to stop billing.
+                Used by _cleanup_all_on_failure for orphaned VMs.
+                Normal cleanup (user-initiated) leaves VMs running
+                so the user can inspect them.
+        """
         if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
             logger.info(
                 "Cleaning up SSH tunnel for %s (pid=%d)",
@@ -1419,23 +1441,36 @@ class WorkerProvisioner:
                 spec.tunnel_proc.kill()
 
         if spec.vm_id:
-            logger.info(
-                "Destroying %s VM %s to stop billing",
-                spec.role, spec.vm_id,
-            )
-            try:
-                _vast_cmd(["destroy", "instance", spec.vm_id])
-            except Exception as exc:
-                logger.warning(
-                    "Failed to destroy VM %s: %s", spec.vm_id, exc,
+            if force_destroy:
+                logger.info(
+                    "Destroying %s VM %s to stop billing (failure cleanup)",
+                    spec.role, spec.vm_id,
+                )
+                try:
+                    _vast_cmd(["destroy", "instance", spec.vm_id])
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to destroy VM %s: %s — destroy manually "
+                        "via 'vastai destroy instance %s'",
+                        spec.vm_id, exc, spec.vm_id,
+                    )
+            else:
+                logger.info(
+                    "VM %s (%s) left running — destroy manually via "
+                    "'vastai destroy instance %s' when done",
+                    spec.vm_id, spec.role, spec.vm_id,
                 )
 
     def _cleanup_all_on_failure(self) -> None:
-        """Clean up all provisioned resources after a failure."""
+        """Clean up all provisioned resources after a failure.
+
+        Unlike normal cleanup(), this destroys VMs to prevent billing
+        for orphaned instances that will never be used.
+        """
         with self._lock:
             specs = list(self._specs)
         for spec in specs:
-            self._cleanup_single_worker(spec)
+            self._cleanup_single_worker(spec, force_destroy=True)
 
     def _start_infra_agent(self) -> None:
         """Start the InfraAgent and register provisioned workers."""
@@ -1476,8 +1511,13 @@ class WorkerProvisioner:
                 self._provisioned = True
             self._start_infra_agent()
 
-    def cleanup(self) -> None:
-        """Clean up: kill SSH tunnels, destroy VMs, and stop InfraAgent."""
+    def cleanup(self, *, destroy_vms: bool = True) -> None:
+        """Clean up: kill SSH tunnels, optionally destroy VMs, stop InfraAgent.
+
+        Args:
+            destroy_vms: If True (default), destroy VMs to stop billing.
+                Pass False to leave VMs running for manual inspection.
+        """
         # Wait for any in-flight provisioning threads to finish
         for role, thread in self._threads.items():
             if thread.is_alive():
@@ -1490,7 +1530,7 @@ class WorkerProvisioner:
             specs = list(self._specs)
 
         for spec in specs:
-            self._cleanup_single_worker(spec)
+            self._cleanup_single_worker(spec, force_destroy=destroy_vms)
 
         # Clear specs so stale VM IDs aren't referenced again
         with self._lock:

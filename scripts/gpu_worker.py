@@ -21,7 +21,7 @@ Usage:
 Models are expected at:
     {models_dir}/qwen3-tts-voicedesign/  — Qwen3-TTS-12Hz-1.7B-VoiceDesign
     {models_dir}/ltx2/                   — LTX-2.3 directory:
-        ltx-2-19b-dev.safetensors       — Official Lightricks single-file checkpoint
+        ltx-2.3-22b-dev.safetensors      — Official Lightricks LTX-2.3 single-file checkpoint
         gemma/                          — Gemma-3 1B text encoder weights
 
 The bootstrap script (gpu_bootstrap.sh) downloads these from B2/HuggingFace.
@@ -33,8 +33,9 @@ from __future__ import annotations
 import os
 
 # ---- CUDA memory allocator config (MUST be set before importing torch) ----
-# The 19B LTX transformer consumes ~78GB on 80GB GPUs, leaving <2GB for
-# inference activations.  PyTorch's default allocator fragments reserved
+# The 22B LTX-2.3 transformer weighs ~46GB at bf16.  The pipeline uses a
+# block-based lifecycle (text encoder → transformer → VAE) so only one
+# major component is in VRAM at a time.  PyTorch's default allocator fragments reserved
 # memory into small non-contiguous blocks that can't satisfy even 32MB
 # allocations.  ``expandable_segments`` lets the allocator grow and reuse
 # reserved memory efficiently, reclaiming the ~874MB of reserved-but-
@@ -264,7 +265,7 @@ class VMAgent:
             if not os.path.isfile(marker):
                 bootstrap_needed = True
         if self.worker_mode in ("ltx", "both"):
-            marker = os.path.join(self.models_dir, "ltx2", "ltx-2-19b-dev.safetensors")
+            marker = os.path.join(self.models_dir, "ltx2", "ltx-2.3-22b-dev.safetensors")
             if not os.path.isfile(marker):
                 bootstrap_needed = True
 
@@ -667,9 +668,10 @@ class VideoRequest(BaseModel):
     negative_prompt: str = ""  # per-clip negative prompt from visual_style.avoid
     visual_style: str = ""  # movie-level visual style description for QA
     duration_sec: float = 5.0
-    # 512x320 fits comfortably on 80GB GPUs where the 19B LTX model + Gemma
-    # text encoder consume ~78GB of VRAM, leaving only ~1.5GB for activations.
-    # 768x512 requires ~3.6GB of activation memory and OOMs on A100-80GB.
+    # The pipeline uses a block-based lifecycle: text encoder → transformer
+    # → VAE decoder, loading/unloading each sequentially.  The ~46GB
+    # transformer fits on 80GB GPUs with headroom for activations.
+    # 512x320 generates comfortably on A100-80GB.
     width: int = 512
     height: int = 320
     num_frames: int | None = None  # auto-calculated from duration if None
@@ -788,9 +790,18 @@ def _load_ltx():
     Uses the single-file checkpoint (ltx-2.3-22b-dev.safetensors) with
     TI2VidOneStagePipeline — no diffusers, no upscalers, no LoRAs.
 
-    The pipeline builds each component on demand and frees GPU memory
-    after use (block-based lifecycle), so peak VRAM is lower than loading
-    the entire model graph at once.
+    The pipeline uses a block-based lifecycle: each component (text encoder,
+    transformer, VAE decoder) is built on demand and freed after use.
+    Each builder's sd_ops filter tensors at the safetensors level (only
+    loading keys matching the component's prefix), so the full 46GB file
+    is never loaded wholesale.  Peak VRAM is dominated by the ~44GB
+    transformer alone, not the sum of all components.
+
+    We use StateDictRegistry (instead of the default DummyRegistry) so
+    that state dicts are loaded to **CPU** first and then moved to GPU
+    per-component.  This prevents transient GPU spikes from the loader
+    and enables cross-builder caching when the same checkpoint is read
+    for different components.
 
     Always unloads TTS first if loaded — prevents OOM from both models
     coexisting in VRAM.  In single-mode (--mode ltx) TTS should never be
@@ -805,6 +816,8 @@ def _load_ltx():
         _unload_tts()
 
     from ltx_pipelines.ti2vid_one_stage import TI2VidOneStagePipeline
+    from ltx_core.loader.registry import StateDictRegistry
+    from ltx_pipelines.utils.model_ledger import ModelLedger
 
     # Locate model directory
     candidate_ltx23 = os.path.join(_models_dir, "ltx23")
@@ -816,11 +829,11 @@ def _load_ltx():
     else:
         model_path = _models_dir
 
-    # Find the single-file checkpoint (LTX-2 19B dev)
-    ckpt_path = os.path.join(model_path, "ltx-2-19b-dev.safetensors")
+    # Find the single-file checkpoint (LTX-2.3 22B dev)
+    ckpt_path = os.path.join(model_path, "ltx-2.3-22b-dev.safetensors")
     if not os.path.isfile(ckpt_path):
         raise FileNotFoundError(
-            f"LTX-2 checkpoint not found at {ckpt_path}. "
+            f"LTX-2.3 checkpoint not found at {ckpt_path}. "
             "Run gpu_bootstrap.sh to download model files."
         )
 
@@ -842,7 +855,24 @@ def _load_ltx():
         gemma_root=gemma_root,
         loras=[],
     )
-    logger.info("One-stage pipeline created.")
+
+    # Replace the default DummyRegistry with StateDictRegistry so that
+    # checkpoint tensors are loaded to CPU first, then moved to GPU
+    # per-component.  This avoids loading the full 46GB state dict
+    # directly onto GPU (which with DummyRegistry causes transient
+    # spikes that combine with autograd graphs to OOM).
+    registry = StateDictRegistry()
+    pipe.model_ledger = ModelLedger(
+        dtype=pipe.dtype,
+        device=pipe.device,
+        checkpoint_path=ckpt_path,
+        gemma_root_path=gemma_root,
+        loras=[],
+        registry=registry,
+    )
+    logger.info(
+        "One-stage pipeline created (StateDictRegistry → CPU-side caching)."
+    )
 
     _ltx_pipe = pipe
     _active_model = "ltx"
@@ -1202,6 +1232,7 @@ def _qwen_visual_qa(prompt: str, frames_b64: list[str], visual_style: str = "") 
 # Video generation (LTX-2.3 via official Lightricks ltx-pipelines)
 # ---------------------------------------------------------------------------
 
+@torch.inference_mode()
 def _ltx_generate_once(
     prompt: str,
     negative_prompt: str,
@@ -1224,16 +1255,25 @@ def _ltx_generate_once(
     into a single numpy array for QA evaluation.
 
     Memory strategy:
-        The 19B transformer consumes ~78GB on 80GB GPUs.  Before calling the
-        pipeline we aggressively reclaim every byte of VRAM:
+        The 22B transformer weighs ~44GB at bf16.  The pipeline uses a
+        block-based lifecycle that loads/unloads components sequentially
+        (text encoder → transformer → VAE decoder), so peak VRAM is
+        dominated by the transformer alone (~44GB + activations).
+
+        CRITICAL: @torch.inference_mode() is required.  Without it,
+        PyTorch retains autograd computation graphs for every intermediate
+        tensor across all transformer layers and all diffusion steps.
+        This inflates VRAM from ~47GB (weights + activations) to ~140GB
+        (weights + autograd graphs), causing OOM on 141GB H200 GPUs.
+        The ltx-pipelines library's own main() uses this decorator;
+        our worker must too.
+
+        Additional VRAM hygiene:
         1. gc.collect() — release Python references to GPU tensors
         2. torch.cuda.empty_cache() — return cached blocks to the allocator
-        3. Log VRAM so we can diagnose OOM remotely
-        The pipeline itself loads/unloads components sequentially (text
-        encoder → video encoder → transformer → VAE decoder), but without
-        expandable_segments the ~874MB of reserved-but-unallocated memory
-        fragments into unusable small blocks.  We set expandable_segments at
-        module top level (before torch import) to prevent this.
+        3. try/finally — ensure cleanup even if pipeline.__call__ raises
+        4. Log VRAM so we can diagnose OOM remotely
+        5. expandable_segments=True — prevent allocator fragmentation
     """
     from ltx_core.components.guiders import MultiModalGuiderParams
 
@@ -1271,26 +1311,51 @@ def _ltx_generate_once(
         stg_blocks=stg_blocks,
     )
 
-    video_iter, _audio = _ltx_pipe(
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        seed=seed,
-        height=height,
-        width=width,
-        num_frames=num_frames,
-        frame_rate=fps,
-        num_inference_steps=num_inference_steps,
-        video_guider_params=video_guider,
-        audio_guider_params=audio_guider,
-        images=[],  # text-to-video, no image conditioning
-    )
+    try:
+        video_iter, _audio = _ltx_pipe(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            frame_rate=fps,
+            num_inference_steps=num_inference_steps,
+            video_guider_params=video_guider,
+            audio_guider_params=audio_guider,
+            images=[],  # text-to-video, no image conditioning
+        )
 
-    # Collect video chunks from iterator into numpy array
-    chunks = []
-    for chunk in video_iter:
-        # chunk is torch.Tensor (T, H, W, C) uint8 on CPU
-        chunks.append(chunk.cpu().numpy())
-    candidate_frames = np.concatenate(chunks, axis=0)  # (T, H, W, C) uint8
+        # Collect video chunks from iterator into numpy array
+        chunks = []
+        for chunk in video_iter:
+            # chunk is torch.Tensor (T, H, W, C) uint8 on CPU
+            chunks.append(chunk.cpu().numpy())
+        candidate_frames = np.concatenate(chunks, axis=0)  # (T, H, W, C) uint8
+    except Exception:
+        # On OOM or any pipeline error, force-free everything before
+        # re-raising so that the next retry starts with a clean slate
+        # instead of accumulating leaked transformers.
+        logger.warning(
+            "Pipeline call failed — running emergency VRAM cleanup"
+        )
+        gc.collect()
+        torch.cuda.empty_cache()
+        raise
+    finally:
+        # Always reclaim VRAM after generation, whether it succeeded
+        # or failed.  This pairs with the pre-generation cleanup above
+        # to bound peak memory across retry attempts.
+        gc.collect()
+        torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            _alloc = torch.cuda.memory_allocated() / 1e9
+            _resv = torch.cuda.memory_reserved() / 1e9
+            logger.info(
+                "VRAM after pipeline call: allocated=%.2fGB "
+                "reserved=%.2fGB",
+                _alloc, _resv,
+            )
 
     return candidate_frames
 
@@ -1378,8 +1443,8 @@ def _generate_video(
     for attempt in range(1, max_attempts + 1):
         final_attempt = attempt
 
-        # Reclaim fragmented VRAM before each attempt — the 19B model
-        # leaves <3GB free on 80GB GPUs, so even small fragments matter.
+        # Reclaim fragmented VRAM before each attempt — with layer
+        # streaming headroom is ample, but cleanup prevents accumulation.
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -1807,7 +1872,7 @@ async def verify_endpoint():
 
     # LTX model
     ltx_dir = os.path.join(_models_dir, "ltx2")
-    ltx_ckpt = os.path.join(ltx_dir, "ltx-2-19b-dev.safetensors")
+    ltx_ckpt = os.path.join(ltx_dir, "ltx-2.3-22b-dev.safetensors")
     if os.path.exists(ltx_ckpt):
         model_files["ltx"] = {
             "path": ltx_ckpt,

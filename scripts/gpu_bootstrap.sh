@@ -15,7 +15,7 @@
 # Falls back to HuggingFace if B2 credentials are not set.
 #
 # Disk budget (ltx-pipelines: single-file checkpoint + gemma):
-#   ltx-2-19b-dev.safetensors:        ~40   GB
+#   ltx-2.3-22b-dev.safetensors:      ~46   GB
 #   Gemma-3 1B text encoder:          ~ 2.0 GB
 #   Qwen3-TTS VoiceDesign:            ~ 4.3 GB
 #   Total models:                      ~52   GB
@@ -187,26 +187,27 @@ else
     LTX_DIR=/workspace/models/ltx2
     mkdir -p "$LTX_DIR"
 
-    # 1. Single-file checkpoint (~40 GB) — the core model weights
-    if [ ! -f "$LTX_DIR/ltx-2-19b-dev.safetensors" ]; then
-        echo "--- LTX-2 19B checkpoint (~40 GB) ---"
+    # 1. Single-file checkpoint (~46 GB) — the core model weights
+    #    Using official Lightricks/LTX-2.3 repo (22B dev model, bf16).
+    if [ ! -f "$LTX_DIR/ltx-2.3-22b-dev.safetensors" ]; then
+        echo "--- LTX-2.3 22B checkpoint (~46 GB) ---"
         python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
-    'Lightricks/LTX-2',
-    filename='ltx-2-19b-dev.safetensors',
+    'Lightricks/LTX-2.3',
+    filename='ltx-2.3-22b-dev.safetensors',
     local_dir='$LTX_DIR',
 )
 print('Checkpoint downloaded.')
 "
     else
-        echo "LTX-2 checkpoint already present."
+        echo "LTX-2.3 checkpoint already present."
     fi
 
     # 2. Gemma-3 1B text encoder — required by ltx-pipelines
-    #    Download ALL files from Lightricks/LTX-2 (ungated) instead of
-    #    google/gemma-3-1b-pt (gated, requires HF auth).
-    #    Lightricks/LTX-2 has both text_encoder/ (weights) and tokenizer/ dirs.
+    #    Download from Lightricks/LTX-2 (NOT LTX-2.3 — the 2.3 repo only has
+    #    the combined checkpoint, no separate text_encoder/ or tokenizer/ dirs).
+    #    Lightricks/LTX-2 (ungated) has both text_encoder/ and tokenizer/ dirs.
     if [ ! -d "$LTX_DIR/gemma" ] || [ ! -f "$LTX_DIR/gemma/config.json" ]; then
         echo "--- Gemma-3 1B text encoder (from Lightricks/LTX-2, ungated) ---"
         mkdir -p "$LTX_DIR/gemma"
@@ -217,6 +218,7 @@ from huggingface_hub import snapshot_download
 gemma_dir = '$LTX_DIR/gemma'
 
 # Download text_encoder/ and tokenizer/ from Lightricks/LTX-2 (ungated)
+# NOTE: Lightricks/LTX-2.3 does NOT have these dirs — only LTX-2 does.
 tmp_dir = '$LTX_DIR/_ltx2_download'
 snapshot_download(
     'Lightricks/LTX-2',
@@ -292,7 +294,7 @@ if [ "$WORKER_MODE" != "ltx" ]; then
     VERIFY_FILES="$VERIFY_FILES /workspace/models/qwen3-tts-voicedesign/model.safetensors"
 fi
 if [ "$WORKER_MODE" != "tts" ]; then
-    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2-19b-dev.safetensors"
+    VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/ltx-2.3-22b-dev.safetensors"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/config.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/model.safetensors.index.json"
     VERIFY_FILES="$VERIFY_FILES /workspace/models/ltx2/gemma/tokenizer.model"
