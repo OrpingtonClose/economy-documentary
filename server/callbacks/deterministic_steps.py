@@ -834,25 +834,29 @@ def _normalize_concept_durations(
     concepts: list[dict],
     narr_durations: dict,
 ) -> list[dict]:
-    """Normalize visual concept durations to match narration timing.
+    """Normalize visual concept durations AND count to match narration timing.
 
-    ARCHITECTURE RULE: The sum of video concept durations for a scene MUST
-    equal the sum of narration durations for that scene.  The LLM visual
-    director may create concepts with durations based on semantic content
-    shifts, which do NOT sum to narration duration.  This function scales
-    them proportionally so the total matches while preserving relative
-    proportions (the LLM still controls WHERE visual breaks happen).
+    ARCHITECTURE RULES:
+    1. The NUMBER of visual concepts per scene MUST equal the number of
+       narration phrases (V1, V2, V3) for that scene.  The gatekeeper
+       enforces 1:1 mapping between concepts and phrases.
+    2. The sum of video concept durations for a scene MUST equal the sum
+       of narration durations for that scene.
 
-    Individual concept durations are capped at 10.0s (LTX-2.3 limit).
-    When a concept exceeds 10s after scaling, it is split into multiple
-    sub-concepts of ≤10s each.
+    The LLM visual director may generate more concepts than narration
+    phrases (e.g. 7 concepts for 3 phrases).  This function:
+    - Consolidates concepts by merging groups into one concept per phrase,
+      picking the best prompt from each group and combining prompts.
+    - Scales the resulting durations to match the narration duration.
+    - Caps individual durations at 10.0s (LTX-2.3 limit), splitting if
+      needed.
 
     Args:
         concepts: List of visual concept dicts from the LLM.
         narr_durations: Dict from get_narration_durations_by_scene().
 
     Returns:
-        New list of concepts with normalized durations.
+        New list of concepts with normalized durations and counts.
     """
     # Group concepts by scene
     by_scene: dict[int, list[dict]] = {}
@@ -870,39 +874,91 @@ def _normalize_concept_durations(
             normalized.extend(scene_concepts)
             continue
 
+        num_phrases = len(scene_phrases)
         target_dur = sum(dur for _, dur in scene_phrases)
-        current_dur = sum(c.get("duration", 5.0) for c in scene_concepts)
 
-        if current_dur <= 0 or target_dur <= 0:
+        if target_dur <= 0:
             normalized.extend(scene_concepts)
             continue
 
-        scale = target_dur / current_dur
+        # ── CONSOLIDATION: merge concepts down to match phrase count ──
+        # When the LLM generates more concepts than narration phrases,
+        # distribute concepts evenly across phrases and merge each group.
+        if len(scene_concepts) > num_phrases:
+            logger.info(
+                "Scene %d: consolidating %d concepts → %d (matching %d phrases)",
+                sn, len(scene_concepts), num_phrases, num_phrases,
+            )
+            consolidated: list[dict] = []
+            # Distribute concepts evenly across phrases using round-robin
+            # allocation so each phrase gets roughly equal coverage.
+            per_phrase = len(scene_concepts) / num_phrases
+            for pidx in range(num_phrases):
+                start_idx = int(round(pidx * per_phrase))
+                end_idx = int(round((pidx + 1) * per_phrase))
+                group = scene_concepts[start_idx:end_idx]
+                if not group:
+                    group = [scene_concepts[-1]]  # safety fallback
 
+                # Merge: use the first concept as base, combine prompts
+                merged = dict(group[0])
+                if len(group) > 1:
+                    # Combine unique prompts, keeping the first as primary
+                    all_prompts = []
+                    seen_prompts: set[str] = set()
+                    for g in group:
+                        p = g.get("prompt", "")
+                        if p and p not in seen_prompts:
+                            all_prompts.append(p)
+                            seen_prompts.add(p)
+                    # Use primary prompt but note the merged visual intent
+                    if len(all_prompts) > 1:
+                        merged["prompt"] = all_prompts[0] + ". Then: " + ". ".join(all_prompts[1:])
+                    # Sum durations from the group (will be re-scaled below)
+                    merged["duration"] = sum(
+                        g.get("duration", 5.0) for g in group
+                    )
+                merged["phrase_idx"] = pidx
+                merged["scene_num"] = sn
+                consolidated.append(merged)
+            scene_concepts = consolidated
+
+        # ── DURATION SCALING: match narration duration per phrase ──
+        # Assign each concept the duration of its corresponding phrase
         scene_normalized: list[dict] = []
-        for c in scene_concepts:
+        for pidx, c in enumerate(scene_concepts):
             c_copy = dict(c)
-            raw_dur = c_copy.get("duration", 5.0) * scale
+            c_copy["phrase_idx"] = pidx
+            c_copy["scene_num"] = sn
 
-            if raw_dur <= _LTX_CAP:
-                c_copy["duration"] = round(raw_dur, 2)
+            if pidx < len(scene_phrases):
+                # Use exact narration phrase duration
+                phrase_dur = scene_phrases[pidx][1]
+            else:
+                # Fallback: proportional scaling
+                current_dur = sum(cc.get("duration", 5.0) for cc in scene_concepts)
+                phrase_dur = c_copy.get("duration", 5.0) * (target_dur / current_dur) if current_dur > 0 else 5.0
+
+            if phrase_dur <= _LTX_CAP:
+                c_copy["duration"] = round(phrase_dur, 2)
                 c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
                 scene_normalized.append(c_copy)
             else:
                 # Split into sub-concepts of ≤10s
-                remaining = raw_dur
+                remaining = phrase_dur
                 sub_idx = 0
                 while remaining > 0.5:
                     chunk = min(remaining, _LTX_CAP)
                     sub = dict(c_copy)
                     sub["duration"] = round(chunk, 2)
+                    sub["phrase_idx"] = pidx  # keep same phrase_idx for splits
                     if sub_idx > 0:
                         sub["prompt"] = c_copy.get("prompt", "") + f" (continuation {sub_idx + 1})"
                     scene_normalized.append(sub)
                     remaining -= chunk
                     sub_idx += 1
 
-        # Re-index phrase_idx sequentially to avoid collisions after splitting
+        # Re-index phrase_idx sequentially
         for idx, c in enumerate(scene_normalized):
             c["phrase_idx"] = idx
         normalized.extend(scene_normalized)
@@ -910,8 +966,8 @@ def _normalize_concept_durations(
         # Log normalization
         new_dur = sum(c.get("duration", 0) for c in normalized if c.get("scene_num") == sn)
         logger.info(
-            "Scene %d: normalized visual concepts %.2fs → %.2fs (target=%.2fs, scale=%.2f)",
-            sn, current_dur, new_dur, target_dur, scale,
+            "Scene %d: %d concepts, %.2fs total (target=%.2fs, phrases=%d)",
+            sn, len(scene_normalized), new_dur, target_dur, num_phrases,
         )
 
     return normalized
