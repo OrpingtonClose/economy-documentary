@@ -1479,7 +1479,7 @@ def deterministic_assembly_callback(
 
             # Collect ALL narration clip paths and total duration,
             # inserting tasteful silence pauses between voice segments.
-            INTER_VOICE_PAUSE_SEC = 1.0  # pause between V1→V2→V3 within a scene
+            INTER_VOICE_PAUSE_SEC = 3.0  # breathing room between V1→V2→V3 within a scene
             audio_paths = []
             total_audio_duration = 0.0
             for idx, a_clip in enumerate(a_clips):
@@ -1556,24 +1556,27 @@ def deterministic_assembly_callback(
                         f"source_range duration={src_dur:.3f}s — must be >0"
                     )
 
-                # Insert a black-frame gap before every clip after the
-                # first, matching the inter-voice silence pause in audio.
-                # This keeps video and audio aligned throughout playback.
+                # Insert a freeze-frame gap before every clip after
+                # the first, matching the inter-voice silence pause in
+                # audio.  Freeze-frames use the last frame of the
+                # preceding clip so the viewer sees a static hold
+                # instead of a jarring black screen.
                 if clip_idx > 0 and INTER_VOICE_PAUSE_SEC > 0:
-                    black_gap_path = os.path.join(
+                    freeze_gap_path = os.path.join(
                         assembly_dir,
                         f"scene_{scene_num:03d}{lang_suffix}_vgap_{clip_idx:03d}.mp4",
                     )
-                    black_gap = _generate_black_video(
-                        INTER_VOICE_PAUSE_SEC, black_gap_path,
+                    prev_clip = video_paths[-1] if video_paths else v_path
+                    freeze_gap = _generate_freeze_frame_video(
+                        prev_clip, INTER_VOICE_PAUSE_SEC, freeze_gap_path,
                     )
-                    if not black_gap:
+                    if not freeze_gap:
                         raise RuntimeError(
                             f"OTIO VIOLATION: failed to generate inter-voice "
-                            f"video gap for scene {scene_num}{lang_suffix} "
+                            f"freeze-frame gap for scene {scene_num}{lang_suffix} "
                             f"clip {clip_idx}"
                         )
-                    video_paths.append(black_gap)
+                    video_paths.append(freeze_gap)
 
                 trimmed_clip_path = os.path.join(
                     assembly_dir,
@@ -1771,12 +1774,12 @@ def deterministic_assembly_callback(
     )
 
     # Concatenate primary track with inter-scene pauses
-    INTER_SCENE_PAUSE_SEC = 2.0  # tasteful pause between scenes
+    INTER_SCENE_PAUSE_SEC = 4.0  # breathing room between scenes
     final_name = "final_documentary_ru.mp4" if is_dual else "final_documentary.mp4"
     final_path = os.path.join(output_dir, final_name)
     if muxed_paths:
         try:
-            # Insert black-video+silence segments between scenes
+            # Insert freeze-frame+silence segments between scenes
             paths_with_pauses = []
             for i, mp in enumerate(muxed_paths):
                 if i > 0:
@@ -1787,14 +1790,23 @@ def deterministic_assembly_callback(
                         assembly_dir, f"scene_pause_primary_{i}.wav"
                     )
                     sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
-                    blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
-                    if sil and blk:
-                        # Mux silence + black into a single transition clip
+                    # Use freeze-frame from previous scene instead of black
+                    prev_scene = muxed_paths[i - 1]
+                    frz = _generate_freeze_frame_video(
+                        prev_scene, INTER_SCENE_PAUSE_SEC, pause_path,
+                    )
+                    if not frz:
+                        # Fallback to black if freeze-frame fails
+                        frz = _generate_black_video(
+                            INTER_SCENE_PAUSE_SEC, pause_path,
+                        )
+                    if sil and frz:
+                        # Mux silence + freeze-frame into a transition clip
                         transition_path = os.path.join(
                             assembly_dir, f"scene_transition_primary_{i}.mp4"
                         )
                         mux_res = json.loads(mux_audio_video(
-                            audio_path=sil, video_path=blk, output_path=transition_path,
+                            audio_path=sil, video_path=frz, output_path=transition_path,
                         ))
                         if "error" not in mux_res:
                             paths_with_pauses.append(transition_path)
@@ -1831,13 +1843,20 @@ def deterministic_assembly_callback(
                             assembly_dir, f"scene_pause_en_{i}.wav"
                         )
                         sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
-                        blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
-                        if sil and blk:
+                        prev_scene = alt_muxed[i - 1]
+                        frz = _generate_freeze_frame_video(
+                            prev_scene, INTER_SCENE_PAUSE_SEC, pause_path,
+                        )
+                        if not frz:
+                            frz = _generate_black_video(
+                                INTER_SCENE_PAUSE_SEC, pause_path,
+                            )
+                        if sil and frz:
                             transition_path = os.path.join(
                                 assembly_dir, f"scene_transition_en_{i}.mp4"
                             )
                             mux_res = json.loads(mux_audio_video(
-                                audio_path=sil, video_path=blk, output_path=transition_path,
+                                audio_path=sil, video_path=frz, output_path=transition_path,
                             ))
                             if "error" not in mux_res:
                                 alt_paths_with_pauses.append(transition_path)
@@ -1948,6 +1967,46 @@ def _generate_black_video(duration_sec: float, output_path: str, width: int = 51
         logger.warning("Black video generation failed: %s", result.stderr[:200])
     except Exception as e:
         logger.warning("Black video generation error: %s", e)
+    return ""
+
+
+def _generate_freeze_frame_video(
+    source_video: str, duration_sec: float, output_path: str,
+) -> str:
+    """Generate a freeze-frame video by looping the last frame of *source_video*.
+
+    This avoids jarring black-frame gaps between clips: the viewer sees a
+    static hold of the preceding shot instead of a black screen.
+
+    Returns the output path on success, empty string on failure.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    # Step 1: extract last frame as PNG
+    frame_path = output_path.replace(".mp4", "_lastframe.png")
+    extract_cmd = [
+        "ffmpeg", "-y", "-sseof", "-0.1", "-i", source_video,
+        "-frames:v", "1", "-q:v", "2", frame_path,
+    ]
+    # Step 2: loop that frame for the requested duration
+    loop_cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", frame_path,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-t", str(duration_sec),
+        "-r", "24",
+        output_path,
+    ]
+    try:
+        r1 = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=10)
+        if r1.returncode != 0 or not os.path.exists(frame_path):
+            logger.warning("Freeze-frame extract failed: %s", r1.stderr[:200])
+            return ""
+        r2 = subprocess.run(loop_cmd, capture_output=True, text=True, timeout=15)
+        if r2.returncode == 0 and os.path.exists(output_path):
+            return output_path
+        logger.warning("Freeze-frame loop failed: %s", r2.stderr[:200])
+    except Exception as e:
+        logger.warning("Freeze-frame generation error: %s", e)
     return ""
 
 
