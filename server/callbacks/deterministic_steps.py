@@ -485,7 +485,7 @@ def deterministic_audio_callback(
         for voice_block in voices:
             voice = voice_block.get("voice", "V1")
             text = voice_block.get("text", "")
-            if not text:
+            if not text or not text.strip():
                 continue
 
             if language == "dual_ru_en":
@@ -1002,13 +1002,18 @@ def write_visual_metadata_to_otio(
     if alignment_data:
         for concept in concepts:
             sn = concept.get("scene_num", 0)
-            pidx = concept.get("phrase_idx", 0)
-            # Try exact match first, then fallback to scene-level
-            voices = ["V1", "V2", "V3"]
-            voice_key = voices[pidx] if pidx < len(voices) else voices[0]
-            align_key = f"scene_{sn:03d}_{voice_key}"
-            if align_key in alignment_data:
-                concept["whisperx_alignment"] = alignment_data[align_key]
+            # Attach ALL alignment data for this scene rather than
+            # trying to map phrase_idx to a voice index (which is
+            # incorrect after concept normalization re-indexes phrase_idx).
+            # Each alignment key is scene_{NNN}_{voice} or
+            # scene_{NNN}_{voice}_{lang} in dual mode.
+            scene_prefix = f"scene_{sn:03d}_"
+            scene_align = {
+                k: v for k, v in alignment_data.items()
+                if k.startswith(scene_prefix)
+            }
+            if scene_align:
+                concept["whisperx_alignment"] = scene_align
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
