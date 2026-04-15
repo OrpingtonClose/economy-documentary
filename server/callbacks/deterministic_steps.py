@@ -1990,8 +1990,13 @@ def deterministic_assembly_callback(
             import shutil
             shutil.copy2(alt_path, alt_final_path)
 
+    scene_count = len(set(
+        item.metadata.get('documentary', {}).get('scene_num', 0)
+        for item in vid_track
+        if isinstance(item, otio.schema.Clip)
+    ))
     summary_parts = [
-        f"Assembly complete: {len(muxed_paths)} scenes assembled.",
+        f"Assembly complete: {scene_count} scenes assembled via pure OTIO renderer.",
     ]
     if os.path.exists(final_path):
         probe_result = json.loads(probe_clip(mp4_path=final_path))
@@ -2021,7 +2026,7 @@ def deterministic_assembly_callback(
     if _b2_ok:
         upload_stage_marker("assembly")
 
-    logger.info("Deterministic assembly: %d scenes, final=%s", len(muxed_paths), final_path)
+    logger.info("Deterministic assembly: %d scenes, final=%s", scene_count, final_path)
 
     # INFRA: notify stage complete
     _infra = get_infra_agent()
