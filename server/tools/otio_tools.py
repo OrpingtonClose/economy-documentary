@@ -210,11 +210,189 @@ def add_narration_clip(
     )
 
 
+def add_narration_gap(
+    scene_num: int,
+    duration: float,
+    gap_type: str,
+    gap_index: int = 0,
+    tool_context=None,
+) -> str:
+    """Add an intentional silence Gap to the A1_Narration track.
+
+    These gaps are PLANNED pauses — breathing room between voice segments
+    or transitions between scenes.  They are part of the immutable OTIO
+    contract and must be rendered faithfully by the assembler.
+
+    Args:
+        scene_num: Scene number this gap belongs to (for metadata).
+        duration: Duration of the silence in seconds.
+        gap_type: One of "inter_voice" (pause between V1→V2→V3 within a
+                  scene) or "inter_scene" (transition between scenes).
+        gap_index: Unique index for this gap within the scene (for
+                   idempotency — prevents duplicates on pipeline restart).
+
+    Returns:
+        JSON string with gap details.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return json.dumps({"error": "Timeline not found. Create one first."})
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        narration_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_A1:
+                narration_track = track
+                break
+
+        if narration_track is None:
+            return json.dumps({"error": "A1_Narration track not found"})
+
+        gap_name = f"scene_{scene_num:03d}_{gap_type}_{gap_index:03d}"
+
+        # Idempotency check: don't add duplicates on pipeline restart
+        for item in narration_track:
+            if isinstance(item, otio.schema.Gap) and item.name == gap_name:
+                return json.dumps({
+                    "status": "already_exists",
+                    "gap_name": gap_name,
+                    "message": "Gap already exists, skipping duplicate",
+                })
+
+        gap = otio.schema.Gap(
+            name=gap_name,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(duration * 24, 24),
+            ),
+        )
+        gap.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "gap_type": gap_type,
+            "type": "silence",
+        }
+        narration_track.append(gap)
+        otio.adapters.write_to_file(timeline, timeline_path)
+
+    logger.info("Added narration gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)
+    return json.dumps({
+        "status": "added",
+        "gap_name": gap_name,
+        "duration": duration,
+        "gap_type": gap_type,
+    })
+
+
+def add_video_gap(
+    scene_num: int,
+    duration: float,
+    gap_type: str,
+    gap_index: int = 0,
+    tool_context=None,
+) -> str:
+    """Add an intentional visual Gap to the V1_Video track.
+
+    These gaps correspond to planned pauses on the narration track.
+    During assembly they are rendered as freeze-frames (holding the last
+    frame of the preceding clip) so the viewer sees a static hold instead
+    of a jarring black screen.
+
+    The gap is inserted in sorted position by scene_num (matching the
+    narration track order) rather than blindly appended, because
+    add_video_clip inserts clips in sorted order too — appending gaps
+    would cluster them at the end after production adds clips.
+
+    Args:
+        scene_num: Scene number this gap belongs to (for metadata).
+        duration: Duration of the gap in seconds.
+        gap_type: One of "inter_voice" or "inter_scene".
+        gap_index: Unique index for this gap within the scene (for
+                   idempotency — prevents duplicates on pipeline restart).
+
+    Returns:
+        JSON string with gap details.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return json.dumps({"error": "Timeline not found. Create one first."})
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        video_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_V1:
+                video_track = track
+                break
+
+        if video_track is None:
+            return json.dumps({"error": "V1_Video track not found"})
+
+        gap_name = f"scene_{scene_num:03d}_{gap_type}_{gap_index:03d}"
+
+        # Idempotency check: don't add duplicates on pipeline restart
+        for item in video_track:
+            if isinstance(item, otio.schema.Gap) and item.name == gap_name:
+                return json.dumps({
+                    "status": "already_exists",
+                    "gap_name": gap_name,
+                    "message": "Gap already exists, skipping duplicate",
+                })
+
+        gap = otio.schema.Gap(
+            name=gap_name,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(duration * 24, 24),
+            ),
+        )
+        # Assign a sort_order to gaps so they interleave correctly
+        # with clips during add_video_clip's sorted insertion.
+        # Inter-voice gaps use gap_index as their phrase position,
+        # inter-scene gaps use a large value to sort after all phrases.
+        if gap_type == "inter_scene":
+            gap_sort_phrase = 9999  # after all phrases in this scene
+        else:
+            # inter_voice gap after voice N → sort after phrase N
+            gap_sort_phrase = gap_index
+
+        gap.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "gap_type": gap_type,
+            "type": "freeze_frame",
+            "phrase_idx": gap_sort_phrase,
+        }
+        # Insert in sorted position by (scene_num, phrase_idx) so gaps
+        # stay interleaved with clips (add_video_clip also uses this
+        # sort order).
+        insert_pos = len(video_track)  # default: append at end
+        for i, item in enumerate(video_track):
+            meta = item.metadata.get("documentary", {})
+            item_scene = meta.get("scene_num", 0)
+            item_phrase = meta.get("phrase_idx", 0)
+            if (item_scene, item_phrase) > (scene_num, gap_sort_phrase):
+                insert_pos = i
+                break
+        video_track.insert(insert_pos, gap)
+        otio.adapters.write_to_file(timeline, timeline_path)
+
+    logger.info("Added video gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)
+    return json.dumps({
+        "status": "added",
+        "gap_name": gap_name,
+        "duration": duration,
+        "gap_type": gap_type,
+    })
+
+
 def get_narration_durations_by_scene(tool_context=None) -> dict:
     """Read the OTIO timeline and return narration durations per scene.
 
     Returns a dict mapping scene_num -> list of (voice, duration_sec) tuples,
-    ordered as they appear on the A1_Narration track.
+    ordered as they appear on the A1_Narration track.  Only includes Clip
+    items — Gap items (inter-voice/inter-scene pauses) are excluded.
 
     This is the AUTHORITATIVE source for how long video clips must be.
     Video concepts MUST be sized to match these durations.
@@ -434,12 +612,15 @@ def add_video_clip(
 
         # Insert clip in correct sorted position by (scene_num, phrase_idx).
         # First, try replacing the scene's placeholder gap (only for phrase 0).
+        # IMPORTANT: only replace gaps with status="empty" (placeholders from
+        # create_timeline), NOT inter-voice/inter-scene structural gaps.
         replaced = False
         if phrase_idx == 0:
             for i, item in enumerate(video_track):
                 if isinstance(item, otio.schema.Gap):
                     gap_meta = item.metadata.get("documentary", {})
-                    if gap_meta.get("scene_num") == scene_num:
+                    if (gap_meta.get("scene_num") == scene_num
+                            and gap_meta.get("status") == "empty"):
                         video_track[i] = clip
                         replaced = True
                         break
