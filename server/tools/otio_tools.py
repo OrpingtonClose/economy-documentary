@@ -210,11 +210,136 @@ def add_narration_clip(
     )
 
 
+def add_narration_gap(
+    scene_num: int,
+    duration: float,
+    gap_type: str,
+    tool_context=None,
+) -> str:
+    """Add an intentional silence Gap to the A1_Narration track.
+
+    These gaps are PLANNED pauses — breathing room between voice segments
+    or transitions between scenes.  They are part of the immutable OTIO
+    contract and must be rendered faithfully by the assembler.
+
+    Args:
+        scene_num: Scene number this gap belongs to (for metadata).
+        duration: Duration of the silence in seconds.
+        gap_type: One of "inter_voice" (pause between V1→V2→V3 within a
+                  scene) or "inter_scene" (transition between scenes).
+
+    Returns:
+        JSON string with gap details.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return json.dumps({"error": "Timeline not found. Create one first."})
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        narration_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_A1:
+                narration_track = track
+                break
+
+        if narration_track is None:
+            return json.dumps({"error": "A1_Narration track not found"})
+
+        gap_name = f"scene_{scene_num:03d}_{gap_type}"
+        gap = otio.schema.Gap(
+            name=gap_name,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(duration * 24, 24),
+            ),
+        )
+        gap.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "gap_type": gap_type,
+            "type": "silence",
+        }
+        narration_track.append(gap)
+        otio.adapters.write_to_file(timeline, timeline_path)
+
+    logger.info("Added narration gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)
+    return json.dumps({
+        "status": "added",
+        "gap_name": gap_name,
+        "duration": duration,
+        "gap_type": gap_type,
+    })
+
+
+def add_video_gap(
+    scene_num: int,
+    duration: float,
+    gap_type: str,
+    tool_context=None,
+) -> str:
+    """Add an intentional visual Gap to the V1_Video track.
+
+    These gaps correspond to planned pauses on the narration track.
+    During assembly they are rendered as freeze-frames (holding the last
+    frame of the preceding clip) so the viewer sees a static hold instead
+    of a jarring black screen.
+
+    Args:
+        scene_num: Scene number this gap belongs to (for metadata).
+        duration: Duration of the gap in seconds.
+        gap_type: One of "inter_voice" or "inter_scene".
+
+    Returns:
+        JSON string with gap details.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return json.dumps({"error": "Timeline not found. Create one first."})
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        video_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_V1:
+                video_track = track
+                break
+
+        if video_track is None:
+            return json.dumps({"error": "V1_Video track not found"})
+
+        gap_name = f"scene_{scene_num:03d}_{gap_type}"
+        gap = otio.schema.Gap(
+            name=gap_name,
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, 24),
+                duration=otio.opentime.RationalTime(duration * 24, 24),
+            ),
+        )
+        gap.metadata["documentary"] = {
+            "scene_num": scene_num,
+            "gap_type": gap_type,
+            "type": "freeze_frame",
+        }
+        video_track.append(gap)
+        otio.adapters.write_to_file(timeline, timeline_path)
+
+    logger.info("Added video gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)
+    return json.dumps({
+        "status": "added",
+        "gap_name": gap_name,
+        "duration": duration,
+        "gap_type": gap_type,
+    })
+
+
 def get_narration_durations_by_scene(tool_context=None) -> dict:
     """Read the OTIO timeline and return narration durations per scene.
 
     Returns a dict mapping scene_num -> list of (voice, duration_sec) tuples,
-    ordered as they appear on the A1_Narration track.
+    ordered as they appear on the A1_Narration track.  Only includes Clip
+    items — Gap items (inter-voice/inter-scene pauses) are excluded.
 
     This is the AUTHORITATIVE source for how long video clips must be.
     Video concepts MUST be sized to match these durations.
