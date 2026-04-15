@@ -1341,8 +1341,11 @@ def deterministic_production_callback(
                         "Skipping scene_%03d_phrase_%03d (already generated, quality=%s)",
                         scene_num, phrase_idx, prev_quality,
                     )
-                    return {"skipped": True, "output_path": output_path, "scene_num": scene_num,
+                    skip_result = {"skipped": True, "output_path": output_path, "scene_num": scene_num,
                             "phrase_idx": phrase_idx, "duration": duration, "lora_id": lora_id}
+                    if sub_idx is not None:
+                        skip_result["_sub_idx"] = sub_idx
+                    return skip_result
             except (json.JSONDecodeError, OSError):
                 pass  # re-generate if status file is corrupt
 
@@ -1436,7 +1439,7 @@ def deterministic_production_callback(
                 errors.append(err_msg)
 
     # Process results: probe + add to OTIO timeline (must be sequential for OTIO)
-    for result in sorted(results, key=lambda r: (r.get("scene_num", 0), r.get("phrase_idx", 0))):
+    for result in sorted(results, key=lambda r: (r.get("scene_num", 0), r.get("phrase_idx", 0), r.get("_sub_idx", -1))):
         scene_num = result.get("scene_num", 0)
         phrase_idx = result.get("phrase_idx", 0)
         duration = result.get("duration", 5.0)
@@ -1449,6 +1452,7 @@ def deterministic_production_callback(
                 probe_result_json = probe_clip(mp4_path=output_path)
                 probe_result = json.loads(probe_result_json)
                 actual_duration = probe_result.get("duration", duration * 1.15)
+                skip_sub_idx = result.get("_sub_idx")
                 clip_result_json = add_video_clip(
                     scene_num=scene_num,
                     phrase_idx=phrase_idx,
@@ -1457,6 +1461,7 @@ def deterministic_production_callback(
                     source_range=duration,
                     available_range=actual_duration,
                     lora_id=lora_id,
+                    sub_idx=skip_sub_idx,
                     tool_context=_MockToolContext(state),
                 )
                 clip_result = json.loads(clip_result_json)
