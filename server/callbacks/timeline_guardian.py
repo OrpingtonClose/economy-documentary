@@ -158,6 +158,11 @@ def _validate_visual_direction(timeline, state: dict) -> Optional[str]:
     for item in video_track:
         if isinstance(item, otio.schema.Gap):
             metadata = item.metadata.get("documentary", {})
+            # Skip structural gaps (inter_voice / inter_scene pauses) —
+            # they are timing placeholders and never carry prompt/lora_id.
+            gap_type = metadata.get("gap_type", "")
+            if gap_type in ("inter_voice", "inter_scene"):
+                continue
             if not metadata.get("prompt"):
                 errors.append(f"Gap '{item.name}' missing prompt metadata")
             if not metadata.get("lora_id"):
