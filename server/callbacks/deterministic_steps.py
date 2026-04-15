@@ -1293,18 +1293,22 @@ def deterministic_production_callback(
             if total_dur <= 0:
                 total_dur = 5.0
 
-            consolidated.append({
+            entry: dict = {
                 "scene_num": sn,
                 "phrase_idx": _voice_to_idx.get(voice, 0),
                 "voice": voice,
-                "duration": min(total_dur, 10.0),
+                "duration": total_dur,
                 "prompt": combined_prompt,
                 "lora_id": dominant_lora,
                 "lora_weight": max_weight,
                 "negative_prompt": sub_phrases[0].get("negative_prompt", ""),
                 "start_time": sub_phrases[0].get("start_time", 0.0),
                 "end_time": sub_phrases[-1].get("end_time", total_dur),
-            })
+            }
+            if total_dur > _LTX_CAP:
+                entry["needs_split"] = True
+                entry["split_count"] = math.ceil(total_dur / _LTX_CAP)
+            consolidated.append(entry)
 
         logger.info(
             "Consolidated %d sub-phrase concepts → %d per-voice concepts",
