@@ -183,6 +183,12 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
     for item in video_track:
         if isinstance(item, otio.schema.Gap):
             gap_meta = item.metadata.get("documentary", {})
+            gap_type = gap_meta.get("gap_type", "")
+            # Structural gaps (inter_voice, inter_scene) are intentional timing
+            # separators that mirror the A1_Narration track.  Only placeholder
+            # gaps (status="empty") indicate unfinished production.
+            if gap_type in ("inter_voice", "inter_scene"):
+                continue  # structural gap — expected
             errors.append(
                 f"Scene {gap_meta.get('scene_num', '?')} video gap not "
                 f"replaced with clip \u2014 production incomplete"
@@ -301,9 +307,12 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
         errors.append("A1_Narration track not found")
 
     if video_track is not None:
-        # Check for remaining gaps
+        # Check for remaining gaps — only count placeholder gaps, not
+        # structural gaps (inter_voice, inter_scene) which are intentional.
         gap_count = sum(
-            1 for item in video_track if isinstance(item, otio.schema.Gap)
+            1 for item in video_track
+            if isinstance(item, otio.schema.Gap)
+            and item.metadata.get("documentary", {}).get("gap_type", "") not in ("inter_voice", "inter_scene")
         )
         if gap_count > 0:
             errors.append(f"V1_Video still has {gap_count} unfilled gap(s)")
