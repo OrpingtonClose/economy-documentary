@@ -523,6 +523,7 @@ def add_video_clip(
     source_range: float,
     available_range: float,
     lora_id: str,
+    sub_idx: int | None = None,
     tool_context=None,
 ) -> str:
     """Add a video clip to V1_Video track.
@@ -532,7 +533,7 @@ def add_video_clip(
     block the write — the batch gatekeeper in the production callback
     validates after all artifacts are uploaded to B2 (audit trail).
 
-    Idempotent: checks for existing clip with same scene_num + phrase_idx.
+    Idempotent: checks for existing clip with same scene_num + phrase_idx + sub_idx.
 
     Args:
         scene_num: Scene number (1-based).
@@ -542,6 +543,7 @@ def add_video_clip(
         source_range: Source range duration in seconds.
         available_range: Available range duration in seconds.
         lora_id: LoRA identifier used for generation.
+        sub_idx: Optional sub-clip index for split concepts (0-based).
 
     Returns:
         JSON string with clip details.
@@ -575,7 +577,8 @@ def add_video_clip(
                 scene_num, phrase_idx, gate_warning,
             )
 
-        clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+        suffix = f"_sub{sub_idx:02d}" if sub_idx is not None else ""
+        clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}{suffix}"
 
         # Idempotency check
         for item in video_track:
@@ -608,6 +611,7 @@ def add_video_clip(
             "lora_id": lora_id,
             "available_range": available_range,
             "type": "video",
+            **(({"sub_idx": sub_idx}) if sub_idx is not None else {}),
         }
 
         # Insert clip in correct sorted position by (scene_num, phrase_idx).
@@ -632,7 +636,9 @@ def add_video_clip(
                 meta = item.metadata.get("documentary", {})
                 item_scene = meta.get("scene_num", 0)
                 item_phrase = meta.get("phrase_idx", 0)
-                if (item_scene, item_phrase) > (scene_num, phrase_idx):
+                item_sub = meta.get("sub_idx", -1)
+                cur_sub = sub_idx if sub_idx is not None else -1
+                if (item_scene, item_phrase, item_sub) > (scene_num, phrase_idx, cur_sub):
                     insert_pos = i
                     break
 

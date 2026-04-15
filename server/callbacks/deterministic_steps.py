@@ -1374,6 +1374,8 @@ def deterministic_production_callback(
         gen_result["duration"] = duration
         gen_result["lora_id"] = lora_id
         gen_result["_output_path"] = output_path
+        if sub_idx is not None:
+            gen_result["_sub_idx"] = sub_idx
 
         # AG-UI: update artifact with result
         qa_scores = {}
@@ -1500,8 +1502,15 @@ def deterministic_production_callback(
 
             # B2 upload already happened inside generate_video_clip().
             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
-            scene_phrases = narr_durations.get(scene_num, [])
-            expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
+            # For sub-clips (from split concepts), use the sub-clip's own
+            # duration as expected_dur — NOT the full phrase duration.
+            result_sub_idx = result.get("_sub_idx")
+            if result_sub_idx is not None:
+                # Sub-clip: expected duration is the sub-clip's own duration
+                expected_dur = duration
+            else:
+                scene_phrases = narr_durations.get(scene_num, [])
+                expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
             _deferred_gk_clips.append({
                 "mp4_path": output_path,
                 "scene_num": scene_num,
@@ -1518,6 +1527,7 @@ def deterministic_production_callback(
                 source_range=duration,
                 available_range=actual_duration,
                 lora_id=lora_id,
+                sub_idx=result_sub_idx,
                 tool_context=_MockToolContext(state),
             )
             clip_result = json.loads(clip_result_json)
