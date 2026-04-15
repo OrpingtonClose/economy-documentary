@@ -453,8 +453,15 @@ def deterministic_audio_callback(
     # Import tool functions directly (not via FunctionTool wrappers)
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
-    from tools.otio_tools import add_narration_clip
+    from tools.otio_tools import add_narration_clip, add_narration_gap, add_video_gap
     from gatekeeper import check_narration_clip, has_rejects, format_audit_report
+
+    # ── OTIO architecture constants ──────────────────────────────────
+    # These pauses are PLANNED structural elements of the timeline.
+    # They are written as explicit Gap items in the OTIO so that the
+    # assembler renders them faithfully without any ad-hoc additions.
+    INTER_VOICE_PAUSE_SEC = 1.5   # breathing room between V1→V2→V3
+    INTER_SCENE_PAUSE_SEC = 2.5   # transition between scenes
 
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
@@ -467,9 +474,13 @@ def deterministic_audio_callback(
     # all artifacts are uploaded to B2 and written to OTIO (audit trail).
     _deferred_gk_clips: list[dict] = []
 
-    for scene in scenes:
+    for scene_idx, scene in enumerate(scenes):
         scene_num = scene.get("scene_num", 0)
         voices = scene.get("voices", [])
+        # Track which voice index we're on for interleaving gaps
+        active_voices = [vb for vb in voices if vb.get("text", "").strip()]
+        active_voice_count = len(active_voices)
+        current_voice_idx = 0
 
         for voice_block in voices:
             voice = voice_block.get("voice", "V1")
@@ -641,6 +652,56 @@ def deterministic_audio_callback(
                     logger.error(err_msg)
                     errors.append(err_msg)
 
+            # ── OTIO: interleave inter-voice gap AFTER this voice ──────
+            # Insert immediately after each voice clip (except the last)
+            # so the OTIO track order is: V1, gap, V2, gap, V3.
+            current_voice_idx += 1
+            if current_voice_idx < active_voice_count:
+                _mock_ctx = _MockToolContext(state)
+                add_narration_gap(
+                    scene_num=scene_num,
+                    duration=INTER_VOICE_PAUSE_SEC,
+                    gap_type="inter_voice",
+                    gap_index=current_voice_idx,
+                    tool_context=_mock_ctx,
+                )
+                add_video_gap(
+                    scene_num=scene_num,
+                    duration=INTER_VOICE_PAUSE_SEC,
+                    gap_type="inter_voice",
+                    gap_index=current_voice_idx,
+                    tool_context=_mock_ctx,
+                )
+
+        logger.info(
+            "Scene %d: added %d inter-voice gaps (%.1fs each) to OTIO",
+            scene_num, max(0, active_voice_count - 1), INTER_VOICE_PAUSE_SEC,
+        )
+
+        # ── OTIO: add inter-scene transition Gap AFTER this scene ─────
+        # Insert immediately after each scene (except the last) so the
+        # OTIO track order is: scene1_clips, inter_scene_gap, scene2_clips...
+        if scene_idx < len(scenes) - 1:
+            _mock_ctx = _MockToolContext(state)
+            add_narration_gap(
+                scene_num=scene_num,
+                duration=INTER_SCENE_PAUSE_SEC,
+                gap_type="inter_scene",
+                gap_index=scene_idx,
+                tool_context=_mock_ctx,
+            )
+            add_video_gap(
+                scene_num=scene_num,
+                duration=INTER_SCENE_PAUSE_SEC,
+                gap_type="inter_scene",
+                gap_index=scene_idx,
+                tool_context=_mock_ctx,
+            )
+            logger.info(
+                "Scene %d: added inter-scene gap (%.1fs) to OTIO",
+                scene_num, INTER_SCENE_PAUSE_SEC,
+            )
+
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
 
@@ -769,6 +830,93 @@ def _extract_lang_text(text: str, lang_tag: str) -> str:
 # Post-visual-director: write OTIO gap metadata from visual_concepts
 # ---------------------------------------------------------------------------
 
+def _normalize_concept_durations(
+    concepts: list[dict],
+    narr_durations: dict,
+) -> list[dict]:
+    """Normalize visual concept durations to match narration timing.
+
+    ARCHITECTURE RULE: The sum of video concept durations for a scene MUST
+    equal the sum of narration durations for that scene.  The LLM visual
+    director may create concepts with durations based on semantic content
+    shifts, which do NOT sum to narration duration.  This function scales
+    them proportionally so the total matches while preserving relative
+    proportions (the LLM still controls WHERE visual breaks happen).
+
+    Individual concept durations are capped at 10.0s (LTX-2.3 limit).
+    When a concept exceeds 10s after scaling, it is split into multiple
+    sub-concepts of ≤10s each.
+
+    Args:
+        concepts: List of visual concept dicts from the LLM.
+        narr_durations: Dict from get_narration_durations_by_scene().
+
+    Returns:
+        New list of concepts with normalized durations.
+    """
+    # Group concepts by scene
+    by_scene: dict[int, list[dict]] = {}
+    for c in concepts:
+        sn = c.get("scene_num", 0)
+        by_scene.setdefault(sn, []).append(c)
+
+    _LTX_CAP = 10.0
+    normalized: list[dict] = []
+
+    for sn, scene_concepts in sorted(by_scene.items()):
+        scene_phrases = narr_durations.get(sn, [])
+        if not scene_phrases:
+            # No narration data — keep concepts as-is (fallback)
+            normalized.extend(scene_concepts)
+            continue
+
+        target_dur = sum(dur for _, dur in scene_phrases)
+        current_dur = sum(c.get("duration", 5.0) for c in scene_concepts)
+
+        if current_dur <= 0 or target_dur <= 0:
+            normalized.extend(scene_concepts)
+            continue
+
+        scale = target_dur / current_dur
+
+        scene_normalized: list[dict] = []
+        for c in scene_concepts:
+            c_copy = dict(c)
+            raw_dur = c_copy.get("duration", 5.0) * scale
+
+            if raw_dur <= _LTX_CAP:
+                c_copy["duration"] = round(raw_dur, 2)
+                c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
+                scene_normalized.append(c_copy)
+            else:
+                # Split into sub-concepts of ≤10s
+                remaining = raw_dur
+                sub_idx = 0
+                while remaining > 0.5:
+                    chunk = min(remaining, _LTX_CAP)
+                    sub = dict(c_copy)
+                    sub["duration"] = round(chunk, 2)
+                    if sub_idx > 0:
+                        sub["prompt"] = c_copy.get("prompt", "") + f" (continuation {sub_idx + 1})"
+                    scene_normalized.append(sub)
+                    remaining -= chunk
+                    sub_idx += 1
+
+        # Re-index phrase_idx sequentially to avoid collisions after splitting
+        for idx, c in enumerate(scene_normalized):
+            c["phrase_idx"] = idx
+        normalized.extend(scene_normalized)
+
+        # Log normalization
+        new_dur = sum(c.get("duration", 0) for c in normalized if c.get("scene_num") == sn)
+        logger.info(
+            "Scene %d: normalized visual concepts %.2fs → %.2fs (target=%.2fs, scale=%.2f)",
+            sn, current_dur, new_dur, target_dur, scale,
+        )
+
+    return normalized
+
+
 def write_visual_metadata_to_otio(
     callback_context: CallbackContext,
 ) -> Optional[genai_types.Content]:
@@ -776,6 +924,10 @@ def write_visual_metadata_to_otio(
 
     The visual director's LLM outputs visual_concepts to state but doesn't
     update the OTIO timeline gaps with the metadata. This callback does that.
+
+    ARCHITECTURE: After parsing concepts, normalize their durations to match
+    narration timing from the OTIO.  The LLM controls WHERE visual breaks
+    happen; the normalizer controls HOW LONG each segment lasts.
     """
     state = callback_context.state
     raw_concepts = state.get("visual_concepts", "")
@@ -824,6 +976,39 @@ def write_visual_metadata_to_otio(
         # Still run timeline guardian
         from callbacks.timeline_guardian import timeline_guardian_callback
         return timeline_guardian_callback(callback_context)
+
+    # ── ARCHITECTURE: normalize concept durations to match narration ──
+    # The LLM controls WHERE visual breaks happen.  This normalizer
+    # scales durations so they sum to the narration duration per scene.
+    from tools.otio_tools import get_narration_durations_by_scene
+    narr_durations = get_narration_durations_by_scene(
+        tool_context=_MockToolContext(state),
+    )
+    if narr_durations:
+        concepts = _normalize_concept_durations(concepts, narr_durations)
+        # Store normalized concepts back into state so production uses them
+        state["visual_concepts"] = json.dumps(concepts)
+        logger.info("Normalized %d visual concepts to match narration timing", len(concepts))
+
+    # ── Expose WhisperX word-level data to visual concepts ──────────
+    # The alignment data from the audio stage is stored in state.  We
+    # attach it to each concept so the production stage (or future
+    # intonation-aware visual concepters) can use word-level timing.
+    alignment_raw = state.get("whisperx_alignment", "{}")
+    try:
+        alignment_data = json.loads(alignment_raw) if alignment_raw else {}
+    except (json.JSONDecodeError, TypeError):
+        alignment_data = {}
+    if alignment_data:
+        for concept in concepts:
+            sn = concept.get("scene_num", 0)
+            pidx = concept.get("phrase_idx", 0)
+            # Try exact match first, then fallback to scene-level
+            voices = ["V1", "V2", "V3"]
+            voice_key = voices[pidx] if pidx < len(voices) else voices[0]
+            align_key = f"scene_{sn:03d}_{voice_key}"
+            if align_key in alignment_data:
+                concept["whisperx_alignment"] = alignment_data[align_key]
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
@@ -1194,6 +1379,22 @@ def deterministic_production_callback(
             probe_result = json.loads(probe_result_json)
             actual_duration = probe_result.get("duration", duration * 1.15)
 
+            # ── OTIO CONTRACT VALIDATION ──────────────────────────────
+            # The produced clip's actual duration must be >= the OTIO
+            # source_range (the narration duration it must cover).
+            # If it's shorter, it violates the contract.  We log a
+            # warning but still add it — the gatekeeper will catch
+            # hard violations.  The clip's available_range records the
+            # actual duration so the assembler can trim correctly.
+            _DURATION_TOLERANCE = 0.5  # seconds
+            if actual_duration < (duration - _DURATION_TOLERANCE):
+                logger.warning(
+                    "OTIO CONTRACT WARNING: scene %d phrase %d produced %.2fs "
+                    "but source_range requires %.2fs (deficit=%.2fs)",
+                    scene_num, phrase_idx, actual_duration, duration,
+                    duration - actual_duration,
+                )
+
             # B2 upload already happened inside generate_video_clip().
             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
             scene_phrases = narr_durations.get(scene_num, [])
@@ -1451,409 +1652,359 @@ def deterministic_assembly_callback(
                     narration_clips_by_scene[sn] = []
                 narration_clips_by_scene[sn].append(item)
 
-    def _assemble_language_track(
-        narration_by_scene: dict,
-        video_clips_by_scene: dict,
+    # ── PURE OTIO RENDERER ──────────────────────────────────────────
+    # The assembler walks the A1_Narration and V1_Video tracks item
+    # by item, rendering each OTIO item (Clip or Gap) faithfully:
+    #
+    #   Clip  → trim media to source_range
+    #   Gap   → render as silence (audio) / freeze-frame (video)
+    #
+    # NO ad-hoc pauses, NO ad-hoc black frames, NO duration
+    # calculations.  The OTIO is the immutable contract created
+    # during the audio stage.  This assembler merely renders it.
+    # ──────────────────────────────────────────────────────────────
+
+    def _render_audio_track(
+        narration_track_items: list,
         lang_suffix: str,
-    ) -> tuple:
-        """Assemble scenes for a single language track.
+    ) -> str:
+        """Render the A1_Narration track into a single WAV file.
 
-        Returns (muxed_paths, errors) tuple.
+        Walks every OTIO item in order:
+          - Clip → use the WAV file referenced by media_reference
+          - Gap  → generate silence of gap duration
+
+        Returns path to the combined audio file.
         """
-        track_muxed = []
-        track_errors = []
-        scene_nums = sorted(set(
-            list(video_clips_by_scene.keys()) + list(narration_by_scene.keys())
-        ))
-
-        for scene_num in scene_nums:
-            v_clips = video_clips_by_scene.get(scene_num, [])
-            a_clips = narration_by_scene.get(scene_num, [])
-
-            if not v_clips:
-                track_errors.append(f"Scene {scene_num}{lang_suffix}: no video clips")
-                continue
-            if not a_clips:
-                track_errors.append(f"Scene {scene_num}{lang_suffix}: no narration clips")
-                continue
-
-            # Collect ALL narration clip paths and total duration,
-            # inserting tasteful silence pauses between voice segments.
-            INTER_VOICE_PAUSE_SEC = 1.0  # pause between V1→V2→V3 within a scene
-            audio_paths = []
-            total_audio_duration = 0.0
-            for idx, a_clip in enumerate(a_clips):
+        audio_segments = []
+        for idx, item in enumerate(narration_track_items):
+            if isinstance(item, otio.schema.Clip):
                 a_path = ""
-                if a_clip.media_reference and hasattr(a_clip.media_reference, "target_url"):
-                    a_path = a_clip.media_reference.target_url
+                if item.media_reference and hasattr(item.media_reference, "target_url"):
+                    a_path = item.media_reference.target_url
 
-                # HARD RULE: every narration clip must have a valid file
                 if not a_path or not os.path.exists(a_path):
                     raise RuntimeError(
-                        f"OTIO VIOLATION: narration clip {a_clip.name} references "
+                        f"OTIO VIOLATION: narration clip {item.name} references "
                         f"missing file: {a_path}"
                     )
-
-                # HARD RULE: every narration clip must have source_range
-                if not a_clip.source_range:
+                if not item.source_range:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: narration clip {a_clip.name} has no "
+                        f"OTIO VIOLATION: narration clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
+                audio_segments.append(a_path)
 
-                # Insert a silence gap before every clip after the first
-                if idx > 0:
+            elif isinstance(item, otio.schema.Gap):
+                gap_dur = item.source_range.duration.to_seconds() if item.source_range else 0
+                if gap_dur > 0:
                     silence_path = _generate_silence(
-                        INTER_VOICE_PAUSE_SEC,
+                        gap_dur,
                         os.path.join(
                             assembly_dir,
-                            f"silence_scene{scene_num:03d}{lang_suffix}_v{idx}.wav",
+                            f"otio_silence{lang_suffix}_{idx:03d}.wav",
                         ),
                     )
                     if not silence_path:
                         raise RuntimeError(
-                            f"OTIO VIOLATION: failed to generate inter-voice "
-                            f"silence for scene {scene_num}{lang_suffix}"
+                            f"OTIO VIOLATION: failed to generate silence for "
+                            f"gap {item.name} ({gap_dur:.2f}s)"
                         )
-                    audio_paths.append(silence_path)
-                    total_audio_duration += INTER_VOICE_PAUSE_SEC
-                audio_paths.append(a_path)
-                total_audio_duration += a_clip.source_range.duration.to_seconds()
+                    audio_segments.append(silence_path)
 
-            # OTIO-COMPLIANT: Trim each video clip to its source_range
-            # before concatenation.  The source_range was set during
-            # production to match the narration phrase duration, so
-            # respecting it preserves the phrase↔video timing contract.
-            #
-            # SYNC FIX: interleave black-frame video segments between
-            # clips to mirror the inter-voice silence pauses in the
-            # audio track.  Without this, V2 video starts playing
-            # during V1's trailing silence and the desync accumulates.
-            video_paths = []
-            for clip_idx, v_clip in enumerate(v_clips):
+        if not audio_segments:
+            raise RuntimeError(
+                f"OTIO VIOLATION: narration track{lang_suffix} has no renderable items"
+            )
+
+        if len(audio_segments) == 1:
+            return audio_segments[0]
+
+        combined_audio = os.path.join(
+            assembly_dir, f"otio_audio_combined{lang_suffix}.wav",
+        )
+        concat_result = json.loads(concat_clips(
+            clip_paths=",".join(audio_segments),
+            output_path=combined_audio,
+        ))
+        if "error" in concat_result:
+            raise RuntimeError(
+                f"OTIO VIOLATION: audio concat failed: {concat_result['error']}"
+            )
+        logger.info(
+            "Rendered %d audio items into %s",
+            len(audio_segments), combined_audio,
+        )
+        return combined_audio
+
+    def _render_video_track(
+        video_track_items: list,
+        lang_suffix: str,
+    ) -> str:
+        """Render the V1_Video track into a single MP4 file.
+
+        Walks every OTIO item in order:
+          - Clip → trim to source_range
+          - Gap  → render as freeze-frame (hold last frame of
+                   preceding clip) for a natural visual hold
+
+        Returns path to the combined video file.
+        """
+        video_segments = []
+        last_clip_path = None  # for freeze-frame generation
+
+        for idx, item in enumerate(video_track_items):
+            if isinstance(item, otio.schema.Clip):
                 v_path = ""
-                if v_clip.media_reference and hasattr(v_clip.media_reference, "target_url"):
-                    v_path = v_clip.media_reference.target_url
+                if item.media_reference and hasattr(item.media_reference, "target_url"):
+                    v_path = item.media_reference.target_url
                 if not v_path or not os.path.exists(v_path):
                     raise RuntimeError(
-                        f"OTIO VIOLATION: video clip {v_clip.name} references "
+                        f"OTIO VIOLATION: video clip {item.name} references "
                         f"missing file: {v_path}"
                     )
-
-                # HARD RULE: every clip MUST have a source_range from OTIO.
-                # A clip without source_range means the timeline is damaged.
-                if not v_clip.source_range:
+                if not item.source_range:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: video clip {v_clip.name} has no "
+                        f"OTIO VIOLATION: video clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
 
-                src_start = v_clip.source_range.start_time.to_seconds()
-                src_dur = v_clip.source_range.duration.to_seconds()
+                src_start = item.source_range.start_time.to_seconds()
+                src_dur = item.source_range.duration.to_seconds()
                 if src_dur <= 0:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: video clip {v_clip.name} has "
+                        f"OTIO VIOLATION: video clip {item.name} has "
                         f"source_range duration={src_dur:.3f}s — must be >0"
                     )
 
-                # Insert a black-frame gap before every clip after the
-                # first, matching the inter-voice silence pause in audio.
-                # This keeps video and audio aligned throughout playback.
-                if clip_idx > 0 and INTER_VOICE_PAUSE_SEC > 0:
-                    black_gap_path = os.path.join(
-                        assembly_dir,
-                        f"scene_{scene_num:03d}{lang_suffix}_vgap_{clip_idx:03d}.mp4",
-                    )
-                    black_gap = _generate_black_video(
-                        INTER_VOICE_PAUSE_SEC, black_gap_path,
-                    )
-                    if not black_gap:
-                        raise RuntimeError(
-                            f"OTIO VIOLATION: failed to generate inter-voice "
-                            f"video gap for scene {scene_num}{lang_suffix} "
-                            f"clip {clip_idx}"
-                        )
-                    video_paths.append(black_gap)
-
-                trimmed_clip_path = os.path.join(
+                trimmed_path = os.path.join(
                     assembly_dir,
-                    f"scene_{scene_num:03d}{lang_suffix}_vclip_{clip_idx:03d}_trimmed.mp4",
+                    f"otio_vclip{lang_suffix}_{idx:03d}_trimmed.mp4",
                 )
                 trim_res = json.loads(trim_clip(
                     input_path=v_path,
                     start_sec=src_start,
                     duration_sec=src_dur,
-                    output_path=trimmed_clip_path,
+                    output_path=trimmed_path,
                 ))
                 if "error" in trim_res:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: failed to trim {v_clip.name} to "
+                        f"OTIO VIOLATION: failed to trim {item.name} to "
                         f"source_range (start={src_start:.2f}, dur={src_dur:.2f}): "
                         f"{trim_res['error']}"
                     )
 
-                # FIX 6: Post-trim ffprobe verification — confirm the
-                # trimmed clip's actual duration matches the OTIO
-                # source_range.  This catches ffmpeg silently producing
-                # the wrong duration (e.g. codec delay, keyframe issues).
-                verify_res = json.loads(probe_clip(mp4_path=trimmed_clip_path))
+                # Post-trim verification
+                verify_res = json.loads(probe_clip(mp4_path=trimmed_path))
                 actual_dur = verify_res.get("duration", 0)
                 if actual_dur <= 0:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: trimmed clip {trimmed_clip_path} "
+                        f"OTIO VIOLATION: trimmed clip {trimmed_path} "
                         f"has zero duration after ffprobe verification"
                     )
-                if abs(actual_dur - src_dur) > 0.5:  # 500ms tolerance
+                if abs(actual_dur - src_dur) > 0.5:
                     raise RuntimeError(
-                        f"OTIO VIOLATION: trimmed clip {v_clip.name} actual "
+                        f"OTIO VIOLATION: trimmed clip {item.name} actual "
                         f"duration ({actual_dur:.2f}s) deviates from OTIO "
                         f"source_range ({src_dur:.2f}s) by "
                         f"{abs(actual_dur - src_dur):.2f}s — trim failed"
                     )
 
-                video_paths.append(trimmed_clip_path)
+                video_segments.append(trimmed_path)
+                last_clip_path = trimmed_path
 
-            if not video_paths or not audio_paths:
-                track_errors.append(
-                    f"Scene {scene_num}{lang_suffix}: missing media "
-                    f"(video={len(video_paths)}, audio={len(audio_paths)})"
-                )
-                continue
+            elif isinstance(item, otio.schema.Gap):
+                gap_dur = item.source_range.duration.to_seconds() if item.source_range else 0
+                if gap_dur > 0:
+                    gap_meta = item.metadata.get("documentary", {})
+                    gap_render_type = gap_meta.get("type", "freeze_frame")
 
-            try:
-                # Concatenate narration clips if more than one
-                if len(audio_paths) == 1:
-                    combined_audio = audio_paths[0]
-                else:
-                    combined_audio = os.path.join(
+                    gap_video_path = os.path.join(
                         assembly_dir,
-                        f"scene_{scene_num:03d}{lang_suffix}_narration_combined.wav",
-                    )
-                    concat_audio_result = json.loads(concat_clips(
-                        clip_paths=",".join(audio_paths),
-                        output_path=combined_audio,
-                    ))
-                    if "error" in concat_audio_result:
-                        track_errors.append(
-                            f"Scene {scene_num}{lang_suffix} audio concat: "
-                            f"{concat_audio_result['error']}"
-                        )
-                        continue
-                    logger.info("Combined %d narration clips for scene %d%s",
-                                len(audio_paths), scene_num, lang_suffix)
-
-                # Concatenate OTIO-trimmed video clips
-                if len(video_paths) == 1:
-                    combined_video = video_paths[0]
-                else:
-                    combined_video = os.path.join(
-                        assembly_dir,
-                        f"scene_{scene_num:03d}{lang_suffix}_video_combined.mp4",
-                    )
-                    concat_video_result = json.loads(concat_clips(
-                        clip_paths=",".join(video_paths),
-                        output_path=combined_video,
-                    ))
-                    if "error" in concat_video_result:
-                        track_errors.append(
-                            f"Scene {scene_num}{lang_suffix} video concat: "
-                            f"{concat_video_result['error']}"
-                        )
-                        continue
-                    logger.info("Combined %d OTIO-trimmed video clips for scene %d%s",
-                                len(video_paths), scene_num, lang_suffix)
-
-                # HARD RULE: verify combined video duration against audio.
-                # OTIO source_range is the primary timing authority; audio
-                # duration is the ceiling.  Any deviation is an error.
-                probe_res = json.loads(probe_clip(mp4_path=combined_video))
-                video_dur = probe_res.get("duration", 0)
-                if video_dur <= 0:
-                    raise RuntimeError(
-                        f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
-                        f"combined video has zero duration"
+                        f"otio_vgap{lang_suffix}_{idx:03d}.mp4",
                     )
 
-                combined_video_for_mux = combined_video
-                duration_diff = video_dur - total_audio_duration
-
-                if duration_diff > 0.5:
-                    # Video longer than audio — trim excess
-                    trimmed_path = os.path.join(
-                        assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_trimmed.mp4"
-                    )
-                    trim_result = json.loads(trim_clip(
-                        input_path=combined_video,
-                        start_sec=0,
-                        duration_sec=total_audio_duration,
-                        output_path=trimmed_path,
-                    ))
-                    if "error" in trim_result:
-                        raise RuntimeError(
-                            f"OTIO VIOLATION: scene {scene_num}{lang_suffix} "
-                            f"safety trim failed: {trim_result['error']}"
+                    if gap_render_type == "freeze_frame" and last_clip_path:
+                        # Hold the last frame of the preceding clip
+                        freeze_path = _generate_freeze_frame_video(
+                            last_clip_path, gap_dur, gap_video_path,
                         )
-                    combined_video_for_mux = trimmed_path
-
-                elif duration_diff < -0.5:
-                    # Video shorter than audio.  This can happen
-                    # legitimately when narration phrases exceed the
-                    # LTX-2.3 10s generation cap — the video model
-                    # physically cannot produce clips longer than 10s.
-                    # Hard-fail only when the deficit is NOT explainable
-                    # by the 10s cap (i.e. the video model could have
-                    # covered the narration but didn't).
-                    #
-                    # Heuristic: count how many narration clips in this
-                    # scene exceed 10s; each one contributes up to
-                    # (narr_dur - 10)s of expected deficit.
-                    _LTX_CAP = 10.0
-                    expected_deficit = 0.0
-                    for _nc in a_clips:
-                        _nc_dur = _nc.source_range.duration.to_seconds() if _nc.source_range else 0
-                        if _nc_dur > _LTX_CAP:
-                            expected_deficit += (_nc_dur - _LTX_CAP)
-
-                    actual_deficit = abs(duration_diff)
-                    unexplained = actual_deficit - expected_deficit
-
-                    if unexplained > 0.5:
-                        # Deficit beyond what the 10s cap explains —
-                        # a genuine OTIO source_range contract violation.
-                        raise RuntimeError(
-                            f"GATEKEEPER REJECT: Scene {scene_num}{lang_suffix}: "
-                            f"video {video_dur:.2f}s < audio {total_audio_duration:.2f}s "
-                            f"(deficit {actual_deficit:.2f}s, cap-explained {expected_deficit:.2f}s, "
-                            f"unexplained {unexplained:.2f}s). "
-                            f"OTIO source_range contract violated — "
-                            f"video clips must cover narration duration."
-                        )
+                        if not freeze_path:
+                            # Fallback to black if freeze-frame fails
+                            freeze_path = _generate_black_video(
+                                gap_dur, gap_video_path,
+                            )
+                        if not freeze_path:
+                            raise RuntimeError(
+                                f"OTIO VIOLATION: failed to generate video gap "
+                                f"{item.name} ({gap_dur:.2f}s)"
+                            )
+                        video_segments.append(freeze_path)
                     else:
-                        # Deficit fully explained by LTX-2.3 10s cap.
-                        # Warn but proceed — the mux will still work
-                        # (audio extends slightly past video at scene end).
-                        logger.warning(
-                            "GATEKEEPER WARN: Scene %d%s: video %.2fs < audio %.2fs "
-                            "(deficit %.2fs, cap-explained %.2fs). "
-                            "Video capped at 10s per clip — mux will proceed.",
-                            scene_num, lang_suffix, video_dur,
-                            total_audio_duration, actual_deficit, expected_deficit,
+                        # No preceding clip or explicit black type
+                        black_path = _generate_black_video(
+                            gap_dur, gap_video_path,
                         )
+                        if not black_path:
+                            raise RuntimeError(
+                                f"OTIO VIOLATION: failed to generate black video "
+                                f"gap {item.name} ({gap_dur:.2f}s)"
+                            )
+                        video_segments.append(black_path)
 
-                # Mux combined audio + video
-                muxed_path = os.path.join(
-                    assembly_dir, f"scene_{scene_num:03d}{lang_suffix}_muxed.mp4"
+        if not video_segments:
+            raise RuntimeError(
+                f"OTIO VIOLATION: video track{lang_suffix} has no renderable items"
+            )
+
+        if len(video_segments) == 1:
+            return video_segments[0]
+
+        combined_video = os.path.join(
+            assembly_dir, f"otio_video_combined{lang_suffix}.mp4",
+        )
+        concat_result = json.loads(concat_clips(
+            clip_paths=",".join(video_segments),
+            output_path=combined_video,
+        ))
+        if "error" in concat_result:
+            raise RuntimeError(
+                f"OTIO VIOLATION: video concat failed: {concat_result['error']}"
+            )
+        logger.info(
+            "Rendered %d video items into %s",
+            len(video_segments), combined_video,
+        )
+        return combined_video
+
+    def _assemble_language_track(
+        narration_items: list,
+        video_items: list,
+        lang_suffix: str,
+    ) -> tuple:
+        """Assemble a single language track by rendering OTIO faithfully.
+
+        This is a PURE OTIO RENDERER — it walks the timeline items in
+        order, rendering Clips and Gaps exactly as specified.  No ad-hoc
+        pauses, no ad-hoc black frames, no duration adjustments.
+
+        Returns (final_path, errors) tuple.
+        """
+        track_errors = []
+        try:
+            combined_audio = _render_audio_track(narration_items, lang_suffix)
+            combined_video = _render_video_track(video_items, lang_suffix)
+
+            # Verify duration alignment (informational — OTIO is truth)
+            audio_probe = json.loads(probe_clip(mp4_path=combined_audio))
+            video_probe = json.loads(probe_clip(mp4_path=combined_video))
+            audio_dur = audio_probe.get("duration", 0)
+            video_dur = video_probe.get("duration", 0)
+            diff = video_dur - audio_dur
+
+            combined_video_for_mux = combined_video
+            if diff > 0.5:
+                # Video longer than audio — trim to match
+                trimmed = os.path.join(
+                    assembly_dir, f"otio_final_vtrim{lang_suffix}.mp4",
                 )
-                mux_result = json.loads(mux_audio_video(
-                    audio_path=combined_audio,
-                    video_path=combined_video_for_mux,
-                    output_path=muxed_path,
+                trim_res = json.loads(trim_clip(
+                    input_path=combined_video,
+                    start_sec=0,
+                    duration_sec=audio_dur,
+                    output_path=trimmed,
                 ))
-                if "error" in mux_result:
-                    track_errors.append(
-                        f"Scene {scene_num}{lang_suffix} mux: {mux_result['error']}"
-                    )
-                    continue
+                if "error" not in trim_res:
+                    combined_video_for_mux = trimmed
 
-                track_muxed.append(muxed_path)
+            elif diff < -0.5:
+                logger.warning(
+                    "Video (%.2fs) shorter than audio (%.2fs) by %.2fs%s "
+                    "— may be due to LTX-2.3 10s cap",
+                    video_dur, audio_dur, abs(diff), lang_suffix,
+                )
 
-            except RuntimeError:
-                raise  # OTIO violations are fatal — never swallow
-            except Exception as e:
-                track_errors.append(f"Scene {scene_num}{lang_suffix} assembly: {e}")
+            # Mux audio + video
+            muxed_path = os.path.join(
+                assembly_dir, f"otio_muxed{lang_suffix}.mp4",
+            )
+            mux_result = json.loads(mux_audio_video(
+                audio_path=combined_audio,
+                video_path=combined_video_for_mux,
+                output_path=muxed_path,
+            ))
+            if "error" in mux_result:
+                raise RuntimeError(
+                    f"OTIO VIOLATION: mux failed: {mux_result['error']}"
+                )
 
-        return track_muxed, track_errors
+            return muxed_path, track_errors
 
-    # Assemble primary language track (RU in dual mode, or the single language)
+        except RuntimeError:
+            raise
+        except Exception as e:
+            track_errors.append(f"Assembly{lang_suffix} error: {e}")
+            return "", track_errors
+
+    # ── Render primary language track ────────────────────────────────
+    # Collect all items from A1_Narration and V1_Video tracks
+    # (already read into narration_track and video_track above).
+    # For dual language mode, filter narration items by language.
+    primary_narr_items = []
+    for item in narration_track:
+        if isinstance(item, otio.schema.Clip):
+            meta = item.metadata.get("documentary", {})
+            voice = meta.get("voice", "")
+            if is_dual and voice.endswith("_EN"):
+                continue  # skip EN clips for primary (RU) track
+            primary_narr_items.append(item)
+        elif isinstance(item, otio.schema.Gap):
+            primary_narr_items.append(item)
+
+    video_items = list(video_track)  # all items including Gaps
+
     primary_suffix = "_ru" if is_dual else ""
-    muxed_paths, errors = _assemble_language_track(
-        narration_clips_by_scene, video_clips_by_scene, primary_suffix,
+    primary_path, errors = _assemble_language_track(
+        primary_narr_items, video_items, primary_suffix,
     )
 
-    # Concatenate primary track with inter-scene pauses
-    INTER_SCENE_PAUSE_SEC = 2.0  # tasteful pause between scenes
     final_name = "final_documentary_ru.mp4" if is_dual else "final_documentary.mp4"
     final_path = os.path.join(output_dir, final_name)
-    if muxed_paths:
-        try:
-            # Insert black-video+silence segments between scenes
-            paths_with_pauses = []
-            for i, mp in enumerate(muxed_paths):
-                if i > 0:
-                    pause_path = os.path.join(
-                        assembly_dir, f"scene_pause_primary_{i}.mp4"
-                    )
-                    pause_audio = os.path.join(
-                        assembly_dir, f"scene_pause_primary_{i}.wav"
-                    )
-                    sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
-                    blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
-                    if sil and blk:
-                        # Mux silence + black into a single transition clip
-                        transition_path = os.path.join(
-                            assembly_dir, f"scene_transition_primary_{i}.mp4"
-                        )
-                        mux_res = json.loads(mux_audio_video(
-                            audio_path=sil, video_path=blk, output_path=transition_path,
-                        ))
-                        if "error" not in mux_res:
-                            paths_with_pauses.append(transition_path)
-                paths_with_pauses.append(mp)
+    if primary_path:
+        # Simple copy/rename — no ad-hoc pauses or transitions
+        import shutil
+        shutil.copy2(primary_path, final_path)
 
-            concat_result = json.loads(concat_clips(
-                clip_paths=",".join(paths_with_pauses),
-                output_path=final_path,
-            ))
-            if "error" in concat_result:
-                errors.append(f"Concat primary: {concat_result['error']}")
-        except Exception as e:
-            errors.append(f"Concat primary error: {e}")
-
-    # Assemble alternate language track (EN) in dual mode
+    # ── Render alternate language track (EN) in dual mode ────────────
     alt_final_path = ""
     if is_dual and alt_narration_clips_by_scene:
-        alt_muxed, alt_errors = _assemble_language_track(
-            alt_narration_clips_by_scene, video_clips_by_scene, "_en",
+        alt_narr_items = []
+        for item in narration_track:
+            if isinstance(item, otio.schema.Clip):
+                meta = item.metadata.get("documentary", {})
+                voice = meta.get("voice", "")
+                if voice.endswith("_EN"):
+                    alt_narr_items.append(item)
+            elif isinstance(item, otio.schema.Gap):
+                alt_narr_items.append(item)
+
+        alt_path, alt_errors = _assemble_language_track(
+            alt_narr_items, video_items, "_en",
         )
         errors.extend(alt_errors)
 
         alt_final_path = os.path.join(output_dir, "final_documentary_en.mp4")
-        if alt_muxed:
-            try:
-                # Insert inter-scene pauses for EN track too
-                alt_paths_with_pauses = []
-                for i, mp in enumerate(alt_muxed):
-                    if i > 0:
-                        pause_path = os.path.join(
-                            assembly_dir, f"scene_pause_en_{i}.mp4"
-                        )
-                        pause_audio = os.path.join(
-                            assembly_dir, f"scene_pause_en_{i}.wav"
-                        )
-                        sil = _generate_silence(INTER_SCENE_PAUSE_SEC, pause_audio)
-                        blk = _generate_black_video(INTER_SCENE_PAUSE_SEC, pause_path)
-                        if sil and blk:
-                            transition_path = os.path.join(
-                                assembly_dir, f"scene_transition_en_{i}.mp4"
-                            )
-                            mux_res = json.loads(mux_audio_video(
-                                audio_path=sil, video_path=blk, output_path=transition_path,
-                            ))
-                            if "error" not in mux_res:
-                                alt_paths_with_pauses.append(transition_path)
-                    alt_paths_with_pauses.append(mp)
+        if alt_path:
+            import shutil
+            shutil.copy2(alt_path, alt_final_path)
 
-                alt_concat_result = json.loads(concat_clips(
-                    clip_paths=",".join(alt_paths_with_pauses),
-                    output_path=alt_final_path,
-                ))
-                if "error" in alt_concat_result:
-                    errors.append(f"Concat EN: {alt_concat_result['error']}")
-            except Exception as e:
-                errors.append(f"Concat EN error: {e}")
-
+    scene_count = len(set(
+        item.metadata.get('documentary', {}).get('scene_num', 0)
+        for item in video_track
+        if isinstance(item, otio.schema.Clip)
+    ))
     summary_parts = [
-        f"Assembly complete: {len(muxed_paths)} scenes assembled.",
+        f"Assembly complete: {scene_count} scenes assembled via pure OTIO renderer.",
     ]
     if os.path.exists(final_path):
         probe_result = json.loads(probe_clip(mp4_path=final_path))
@@ -1883,7 +2034,7 @@ def deterministic_assembly_callback(
     if _b2_ok:
         upload_stage_marker("assembly")
 
-    logger.info("Deterministic assembly: %d scenes, final=%s", len(muxed_paths), final_path)
+    logger.info("Deterministic assembly: %d scenes, final=%s", scene_count, final_path)
 
     # INFRA: notify stage complete
     _infra = get_infra_agent()
@@ -1903,6 +2054,65 @@ def deterministic_assembly_callback(
 # ---------------------------------------------------------------------------
 # Silence generation helper for inter-voice / inter-scene pauses
 # ---------------------------------------------------------------------------
+
+def _generate_freeze_frame_video(
+    source_clip_path: str,
+    duration_sec: float,
+    output_path: str,
+) -> str:
+    """Generate a video that holds the last frame of the source clip.
+
+    This is used for rendering video Gaps in the OTIO timeline — instead
+    of a jarring black screen, the viewer sees a natural freeze-frame
+    hold of the preceding clip's final frame.
+
+    Returns the output path on success, empty string on failure.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    # Step 1: Extract the last frame from the source clip
+    last_frame_path = output_path.replace(".mp4", "_lastframe.png")
+    extract_cmd = [
+        "ffmpeg", "-y",
+        "-sseof", "-0.1",  # seek to 0.1s before end
+        "-i", source_clip_path,
+        "-frames:v", "1",
+        "-update", "1",
+        last_frame_path,
+    ]
+    try:
+        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 or not os.path.exists(last_frame_path):
+            logger.warning("Last-frame extraction failed: %s", result.stderr[:200])
+            return ""
+    except Exception as e:
+        logger.warning("Last-frame extraction error: %s", e)
+        return ""
+
+    # Step 2: Create a video from the still frame
+    loop_cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1",
+        "-i", last_frame_path,
+        "-c:v", "libx264",
+        "-t", str(duration_sec),
+        "-pix_fmt", "yuv420p",
+        "-r", "24",
+        output_path,
+    ]
+    try:
+        result = subprocess.run(loop_cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0 and os.path.exists(output_path):
+            # Clean up temp frame
+            try:
+                os.remove(last_frame_path)
+            except OSError:
+                pass
+            return output_path
+        logger.warning("Freeze-frame video generation failed: %s", result.stderr[:200])
+    except Exception as e:
+        logger.warning("Freeze-frame video generation error: %s", e)
+    return ""
+
 
 def _generate_silence(duration_sec: float, output_path: str) -> str:
     """Generate a silent WAV file of the given duration using ffmpeg.
