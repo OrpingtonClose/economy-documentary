@@ -282,10 +282,11 @@ def generate_video_clip(
                 "DOCUMENTARY_AUTO_APPROVE", ""
             ).strip().lower() in ("1", "true", "yes")
 
-            if qa_quality == "rejected":
+            if qa_quality in ("rejected", "poor"):
                 if _is_quick_test or _is_auto_approve:
                     logger.warning(
-                        "QA REJECTED clip %s (%s — accepting): %s",
+                        "QA %s clip %s (%s — accepting): %s",
+                        qa_quality.upper(),
                         output_path,
                         "quick-test" if _is_quick_test else "auto-approve",
                         _qa_reason[:200],
@@ -293,7 +294,7 @@ def generate_video_clip(
                     qa_quality = "rejected_accepted"
                     # Re-write status.json so persisted quality matches
                     # the pipeline's actual decision (rejected_accepted,
-                    # not the raw "rejected" written earlier).
+                    # not the raw quality written earlier).
                     try:
                         with open(_status_path, "w") as _sf2:
                             json.dump({
@@ -304,10 +305,14 @@ def generate_video_clip(
                     except OSError:
                         pass
                 else:
+                    # Raise a retryable error that the recovery middleware
+                    # can catch. Include QA_HINTS so the creative amendment
+                    # (_video_amend_prompt_with_qa_hints) can inject
+                    # corrective guidance into the prompt for the next attempt.
                     raise RuntimeError(
-                        f"QA REJECTED: clip is fundamentally broken and cannot be used. "
-                        f"Clip saved at {output_path} and uploaded to B2. "
-                        f"Reason: {_qa_reason}"
+                        f"QA {qa_quality.upper()}: visual quality below threshold. "
+                        f"Clip saved at {output_path} for inspection. "
+                        f"QA_HINTS: {_qa_reason}"
                     )
 
             result_meta = {
@@ -358,30 +363,7 @@ def generate_video_clip(
     qa_attempts = gpu_result["qa_attempts"]
     qa_seed = gpu_result["qa_seed"]
 
-    # Secondary QA gates (poor / unknown) — less severe, don't need
-    # human escalation, so handled outside recovery context.
-    _is_quick_test = os.environ.get(
-        "DOCUMENTARY_QUICK_TEST", ""
-    ).strip().lower() in ("1", "true", "yes")
-
-    _is_auto_approve_outer = os.environ.get(
-        "DOCUMENTARY_AUTO_APPROVE", ""
-    ).strip().lower() in ("1", "true", "yes")
-
-    if qa_quality == "poor":
-        if _is_quick_test or _is_auto_approve_outer:
-            logger.warning(
-                "QA POOR clip %s (%s — accepting): %s",
-                output_path,
-                "quick-test" if _is_quick_test else "auto-approve",
-                qa_reason[:200],
-            )
-        else:
-            raise RuntimeError(
-                f"Video clip REJECTED by QA (quality='poor'): {qa_reason}. "
-                f"Clip saved at {output_path} and uploaded to B2. "
-                f"The pipeline MUST NOT accept poor-quality clips."
-            )
+    # QA "unknown" — handled outside recovery context as a degraded signal.
     if qa_quality == "unknown":
         logger.warning(
             "Video clip QA returned 'unknown' for %s — treating as degraded.",

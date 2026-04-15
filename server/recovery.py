@@ -99,6 +99,47 @@ class RecoveryPolicy:
 
 # ── Pre-built policies for common operation types ─────────────────────────
 
+def _video_amend_prompt_with_qa_hints(kwargs: dict) -> dict:
+    """Creative amendment: inject corrective hints from QA feedback into the prompt.
+
+    When a clip is QA-rejected, the QA reason often contains actionable
+    feedback (e.g. "shows mountains instead of food", "missing kitchen
+    setting").  This amendment parses the last error's QA reason and
+    prepends corrective guidance to the prompt so the model is more
+    likely to generate on-topic content on the next attempt.
+    """
+    import random
+    kwargs = dict(kwargs)
+    # Also randomise seed so we don't regenerate the exact same output
+    kwargs["seed"] = random.randint(0, 2**32 - 1)
+
+    # The QA reason is embedded in the RuntimeError message after "QA_HINTS:"
+    # by _call_gpu_worker when quality is "rejected" or "poor".
+    qa_hints = kwargs.pop("_qa_hints", "")
+    if not qa_hints:
+        # Fallback: no structured hints, just add a generic corrective prefix
+        prompt = kwargs.get("prompt", "")
+        kwargs["prompt"] = (
+            "IMPORTANT: Generate content that precisely matches the described "
+            "subject matter and visual style. Avoid generic landscapes or "
+            "unrelated imagery. " + prompt
+        )
+        logger.info("Recovery L2: added generic corrective prefix to prompt (no QA hints)")
+        return kwargs
+
+    prompt = kwargs.get("prompt", "")
+    kwargs["prompt"] = (
+        f"CORRECTIVE GUIDANCE (previous attempt was rejected): {qa_hints}. "
+        f"You MUST address the above feedback. "
+        + prompt
+    )
+    logger.info(
+        "Recovery L2: injected QA corrective hints into prompt: %s",
+        qa_hints[:200],
+    )
+    return kwargs
+
+
 def _video_amend_seed(kwargs: dict) -> dict:
     """Creative amendment: try a different random seed."""
     import random
@@ -153,13 +194,18 @@ def _tts_amend_chunk(kwargs: dict) -> dict:
 VIDEO_POLICY = RecoveryPolicy(
     max_retries=3,
     retry_backoff_base=5.0,
-    creative_budget=2,
-    creative_amendments=[_video_amend_seed, _video_amend_steps],
+    creative_budget=3,
+    creative_amendments=[
+        _video_amend_prompt_with_qa_hints,
+        _video_amend_seed,
+        _video_amend_steps,
+    ],
     enable_env_assessment=True,
     escalate_to_human=True,
-    # QA REJECTED = fundamentally broken output.  Don't waste time retrying
-    # with different seeds or fewer steps — the model/config is wrong.
-    non_retryable_patterns=("QA REJECTED",),
+    # QA rejections are now retryable — corrective hints from the QA
+    # reason are injected into the prompt via _video_amend_prompt_with_qa_hints.
+    # Only truly unrecoverable errors (GPU crashes, OOM) skip retries.
+    non_retryable_patterns=(),
 )
 
 TTS_POLICY = RecoveryPolicy(
@@ -726,6 +772,17 @@ def execute_with_recovery(
 
     # ── Skip L2/L3 for non-retryable errors ───────────────────────────
     _skip_to_escalation = last_error is not None and _is_non_retryable(last_error)
+
+    # ── Extract QA hints from last error for creative amendments ─────
+    # When video QA rejects a clip, the error message contains
+    # "QA_HINTS: <reason>" which creative amendments can use to inject
+    # corrective guidance into the prompt.
+    if last_error is not None:
+        _err_str = str(last_error)
+        _hints_marker = "QA_HINTS: "
+        _hints_idx = _err_str.find(_hints_marker)
+        if _hints_idx >= 0:
+            current_kwargs["_qa_hints"] = _err_str[_hints_idx + len(_hints_marker):]
 
     # ── Level 2: Creative amendment ───────────────────────────────────
     amendments = policy.creative_amendments or []
