@@ -348,20 +348,31 @@ def add_video_gap(
                 duration=otio.opentime.RationalTime(duration * 24, 24),
             ),
         )
+        # Assign a sort_order to gaps so they interleave correctly
+        # with clips during add_video_clip's sorted insertion.
+        # Inter-voice gaps use gap_index as their phrase position,
+        # inter-scene gaps use a large value to sort after all phrases.
+        if gap_type == "inter_scene":
+            gap_sort_phrase = 9999  # after all phrases in this scene
+        else:
+            # inter_voice gap after voice N → sort after phrase N
+            gap_sort_phrase = gap_index
+
         gap.metadata["documentary"] = {
             "scene_num": scene_num,
             "gap_type": gap_type,
             "type": "freeze_frame",
+            "phrase_idx": gap_sort_phrase,
         }
-        # Insert in sorted position by scene_num so gaps stay interleaved
-        # with clips (add_video_clip also inserts in sorted order).
-        # For inter_scene gaps, they go after all items of this scene.
-        # For inter_voice gaps, they go after the current scene content.
+        # Insert in sorted position by (scene_num, phrase_idx) so gaps
+        # stay interleaved with clips (add_video_clip also uses this
+        # sort order).
         insert_pos = len(video_track)  # default: append at end
         for i, item in enumerate(video_track):
             meta = item.metadata.get("documentary", {})
             item_scene = meta.get("scene_num", 0)
-            if item_scene > scene_num:
+            item_phrase = meta.get("phrase_idx", 0)
+            if (item_scene, item_phrase) > (scene_num, gap_sort_phrase):
                 insert_pos = i
                 break
         video_track.insert(insert_pos, gap)
@@ -601,12 +612,15 @@ def add_video_clip(
 
         # Insert clip in correct sorted position by (scene_num, phrase_idx).
         # First, try replacing the scene's placeholder gap (only for phrase 0).
+        # IMPORTANT: only replace gaps with status="empty" (placeholders from
+        # create_timeline), NOT inter-voice/inter-scene structural gaps.
         replaced = False
         if phrase_idx == 0:
             for i, item in enumerate(video_track):
                 if isinstance(item, otio.schema.Gap):
                     gap_meta = item.metadata.get("documentary", {})
-                    if gap_meta.get("scene_num") == scene_num:
+                    if (gap_meta.get("scene_num") == scene_num
+                            and gap_meta.get("status") == "empty"):
                         video_track[i] = clip
                         replaced = True
                         break
