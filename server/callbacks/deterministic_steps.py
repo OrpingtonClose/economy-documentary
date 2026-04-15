@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -26,6 +27,10 @@ from google.adk.agents.callback_context import CallbackContext
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
+
+# Maximum duration for a single LTX-Video 2.3 clip (seconds).
+# Concepts longer than this are split into sub-clips by the production stage.
+_LTX_CAP = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -834,25 +839,29 @@ def _normalize_concept_durations(
     concepts: list[dict],
     narr_durations: dict,
 ) -> list[dict]:
-    """Normalize visual concept durations to match narration timing.
+    """Normalize visual concept durations AND count to match narration timing.
 
-    ARCHITECTURE RULE: The sum of video concept durations for a scene MUST
-    equal the sum of narration durations for that scene.  The LLM visual
-    director may create concepts with durations based on semantic content
-    shifts, which do NOT sum to narration duration.  This function scales
-    them proportionally so the total matches while preserving relative
-    proportions (the LLM still controls WHERE visual breaks happen).
+    ARCHITECTURE RULES:
+    1. The NUMBER of visual concepts per scene MUST equal the number of
+       narration phrases (V1, V2, V3) for that scene.  The gatekeeper
+       enforces 1:1 mapping between concepts and phrases.
+    2. The sum of video concept durations for a scene MUST equal the sum
+       of narration durations for that scene.
 
-    Individual concept durations are capped at 10.0s (LTX-2.3 limit).
-    When a concept exceeds 10s after scaling, it is split into multiple
-    sub-concepts of ≤10s each.
+    The LLM visual director may generate more concepts than narration
+    phrases (e.g. 7 concepts for 3 phrases).  This function:
+    - Consolidates concepts by merging groups into one concept per phrase,
+      picking the best prompt from each group and combining prompts.
+    - Scales the resulting durations to match the narration duration.
+    - Caps individual durations at 10.0s (LTX-2.3 limit), splitting if
+      needed.
 
     Args:
         concepts: List of visual concept dicts from the LLM.
         narr_durations: Dict from get_narration_durations_by_scene().
 
     Returns:
-        New list of concepts with normalized durations.
+        New list of concepts with normalized durations and counts.
     """
     # Group concepts by scene
     by_scene: dict[int, list[dict]] = {}
@@ -860,7 +869,6 @@ def _normalize_concept_durations(
         sn = c.get("scene_num", 0)
         by_scene.setdefault(sn, []).append(c)
 
-    _LTX_CAP = 10.0
     normalized: list[dict] = []
 
     for sn, scene_concepts in sorted(by_scene.items()):
@@ -870,48 +878,105 @@ def _normalize_concept_durations(
             normalized.extend(scene_concepts)
             continue
 
+        num_phrases = len(scene_phrases)
         target_dur = sum(dur for _, dur in scene_phrases)
-        current_dur = sum(c.get("duration", 5.0) for c in scene_concepts)
 
-        if current_dur <= 0 or target_dur <= 0:
+        if target_dur <= 0:
             normalized.extend(scene_concepts)
             continue
 
-        scale = target_dur / current_dur
+        # ── COUNT NORMALIZATION: ensure concept count == phrase count ──
+        # When the LLM generates more concepts than narration phrases,
+        # distribute concepts evenly across phrases and merge each group.
+        # When fewer, duplicate the last concept to fill missing phrases.
+        if len(scene_concepts) > num_phrases:
+            logger.info(
+                "Scene %d: consolidating %d concepts → %d (matching %d phrases)",
+                sn, len(scene_concepts), num_phrases, num_phrases,
+            )
+            consolidated: list[dict] = []
+            # Distribute concepts evenly across phrases using round-robin
+            # allocation so each phrase gets roughly equal coverage.
+            per_phrase = len(scene_concepts) / num_phrases
+            for pidx in range(num_phrases):
+                start_idx = int(round(pidx * per_phrase))
+                end_idx = int(round((pidx + 1) * per_phrase))
+                group = scene_concepts[start_idx:end_idx]
+                if not group:
+                    group = [scene_concepts[-1]]  # safety fallback
 
+                # Merge: use the first concept as base, combine prompts
+                merged = dict(group[0])
+                if len(group) > 1:
+                    # Combine unique prompts, keeping the first as primary
+                    all_prompts = []
+                    seen_prompts: set[str] = set()
+                    for g in group:
+                        p = g.get("prompt", "")
+                        if p and p not in seen_prompts:
+                            all_prompts.append(p)
+                            seen_prompts.add(p)
+                    # Use primary prompt but note the merged visual intent
+                    if len(all_prompts) > 1:
+                        merged["prompt"] = all_prompts[0] + ". Then: " + ". ".join(all_prompts[1:])
+                    # Sum durations from the group (will be re-scaled below)
+                    merged["duration"] = sum(
+                        g.get("duration", 5.0) for g in group
+                    )
+                merged["phrase_idx"] = pidx
+                merged["scene_num"] = sn
+                consolidated.append(merged)
+            scene_concepts = consolidated
+        elif len(scene_concepts) < num_phrases:
+            # Expand: duplicate last concept to fill missing phrases
+            logger.info(
+                "Scene %d: expanding %d concepts → %d (matching %d phrases)",
+                sn, len(scene_concepts), num_phrases, num_phrases,
+            )
+            template = scene_concepts[-1]
+            while len(scene_concepts) < num_phrases:
+                extra = dict(template)
+                extra["phrase_idx"] = len(scene_concepts)
+                extra["scene_num"] = sn
+                extra["prompt"] = template.get("prompt", "") + " (extended coverage)"
+                scene_concepts.append(extra)
+
+        # ── DURATION SCALING: match narration duration per phrase ──
+        # Assign each concept the duration of its corresponding phrase.
+        # IMPORTANT: Do NOT split concepts here even if duration > LTX cap.
+        # The production stage handles splitting into sub-clips internally.
+        # Splitting here would break the 1:1 concept↔phrase invariant that
+        # the gatekeeper enforces.
         scene_normalized: list[dict] = []
-        for c in scene_concepts:
+        for pidx, c in enumerate(scene_concepts):
             c_copy = dict(c)
-            raw_dur = c_copy.get("duration", 5.0) * scale
+            c_copy["phrase_idx"] = pidx
+            c_copy["scene_num"] = sn
 
-            if raw_dur <= _LTX_CAP:
-                c_copy["duration"] = round(raw_dur, 2)
-                c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
-                scene_normalized.append(c_copy)
+            if pidx < len(scene_phrases):
+                # Use exact narration phrase duration
+                phrase_dur = scene_phrases[pidx][1]
             else:
-                # Split into sub-concepts of ≤10s
-                remaining = raw_dur
-                sub_idx = 0
-                while remaining > 0.5:
-                    chunk = min(remaining, _LTX_CAP)
-                    sub = dict(c_copy)
-                    sub["duration"] = round(chunk, 2)
-                    if sub_idx > 0:
-                        sub["prompt"] = c_copy.get("prompt", "") + f" (continuation {sub_idx + 1})"
-                    scene_normalized.append(sub)
-                    remaining -= chunk
-                    sub_idx += 1
+                # Fallback: proportional scaling
+                current_dur = sum(cc.get("duration", 5.0) for cc in scene_concepts)
+                phrase_dur = c_copy.get("duration", 5.0) * (target_dur / current_dur) if current_dur > 0 else 5.0
 
-        # Re-index phrase_idx sequentially to avoid collisions after splitting
-        for idx, c in enumerate(scene_normalized):
-            c["phrase_idx"] = idx
+            c_copy["duration"] = round(phrase_dur, 2)
+            c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
+            # Store the full duration; production will split into ≤10s clips
+            # if needed for LTX-2.3.  We preserve 1 concept = 1 phrase here.
+            if phrase_dur > _LTX_CAP:
+                c_copy["needs_split"] = True
+                c_copy["split_count"] = math.ceil(phrase_dur / _LTX_CAP)
+            scene_normalized.append(c_copy)
+
         normalized.extend(scene_normalized)
 
         # Log normalization
         new_dur = sum(c.get("duration", 0) for c in normalized if c.get("scene_num") == sn)
         logger.info(
-            "Scene %d: normalized visual concepts %.2fs → %.2fs (target=%.2fs, scale=%.2f)",
-            sn, current_dur, new_dur, target_dur, scale,
+            "Scene %d: %d concepts, %.2fs total (target=%.2fs, phrases=%d)",
+            sn, len(scene_normalized), new_dur, target_dur, num_phrases,
         )
 
     return normalized
@@ -1287,19 +1352,49 @@ def deterministic_production_callback(
     num_workers = max(1, len([u for u in worker_urls.split(",") if u.strip()])) if worker_urls else 1
     logger.info("Video generation: %d GPU worker(s), %d concepts to generate", num_workers, len(concepts))
 
-    def _generate_one_clip(concept: dict) -> dict:
-        """Generate a single video clip (thread-safe for parallel execution)."""
+    def _generate_one_clip(concept: dict) -> dict | list[dict]:
+        """Generate video clip(s) for a concept. Returns list if split needed.
+
+        When a concept has ``needs_split=True`` (duration > LTX cap of 10s),
+        we generate multiple sub-clips of ≤10s each and return a list so
+        the caller can add them all to the OTIO timeline.
+        """
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
-        duration = min(concept.get("duration", 5.0), 10.0)
+        full_duration = concept.get("duration", 5.0)
+
+        # Split concepts >10s into multiple sub-clips for LTX-2.3
+        if concept.get("needs_split") and full_duration > _LTX_CAP:
+            split_count = concept.get("split_count", math.ceil(full_duration / _LTX_CAP))
+            sub_dur = full_duration / split_count
+            logger.info(
+                "Splitting scene_%03d_phrase_%03d: %.2fs → %d sub-clips of %.2fs",
+                scene_num, phrase_idx, full_duration, split_count, sub_dur,
+            )
+            sub_results = []
+            for sub_idx in range(split_count):
+                sub_concept = dict(concept)
+                sub_concept["duration"] = round(sub_dur, 2)
+                sub_concept["needs_split"] = False  # prevent recursion
+                sub_concept["_sub_idx"] = sub_idx
+                sub_concept["_sub_count"] = split_count
+                if sub_idx > 0:
+                    sub_concept["prompt"] = concept.get("prompt", "") + f" (continuation {sub_idx + 1})"
+                sub_results.append(_generate_one_clip(sub_concept))
+            return sub_results
+
+        duration = min(full_duration, _LTX_CAP)
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)
         clip_negative = concept.get("negative_prompt", default_negative)
-        output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}.mp4")
+        # Sub-clips from splitting get a suffix to avoid filename collisions
+        sub_idx = concept.get("_sub_idx")
+        suffix = f"_sub{sub_idx:02d}" if sub_idx is not None else ""
+        output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}{suffix}.mp4")
 
         # Skip already-generated clips (resume support)
-        status_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}_status.json")
+        status_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}{suffix}_status.json")
         if os.path.exists(output_path) and os.path.exists(status_path):
             try:
                 with open(status_path) as sf:
@@ -1310,13 +1405,17 @@ def deterministic_production_callback(
                         "Skipping scene_%03d_phrase_%03d (already generated, quality=%s)",
                         scene_num, phrase_idx, prev_quality,
                     )
-                    return {"skipped": True, "output_path": output_path, "scene_num": scene_num,
+                    skip_result = {"skipped": True, "output_path": output_path, "scene_num": scene_num,
                             "phrase_idx": phrase_idx, "duration": duration, "lora_id": lora_id}
+                    if sub_idx is not None:
+                        skip_result["_sub_idx"] = sub_idx
+                    return skip_result
             except (json.JSONDecodeError, OSError):
                 pass  # re-generate if status file is corrupt
 
         # AG-UI: emit "generating" artifact event
-        artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}"
+        sub_suffix = f"-sub{sub_idx:02d}" if sub_idx is not None else ""
+        artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}{sub_suffix}"
         _feedback_store.register_artifact(ArtifactEvent(
             id=artifact_id,
             artifact_type=ArtifactType.VIDEO_CLIP,
@@ -1343,6 +1442,8 @@ def deterministic_production_callback(
         gen_result["duration"] = duration
         gen_result["lora_id"] = lora_id
         gen_result["_output_path"] = output_path
+        if sub_idx is not None:
+            gen_result["_sub_idx"] = sub_idx
 
         # AG-UI: update artifact with result
         qa_scores = {}
@@ -1364,8 +1465,16 @@ def deterministic_production_callback(
 
         return gen_result
 
+    def _collect_result(result: dict | list[dict], dest: list[dict]) -> None:
+        """Flatten split results (lists) into the destination list."""
+        if isinstance(result, list):
+            for r in result:
+                _collect_result(r, dest)  # handle nested splits
+        else:
+            dest.append(result)
+
     # Generate clips in parallel across available GPU workers
-    results = []
+    results: list[dict] = []
     if num_workers > 1:
         logger.info("Parallel video generation: %d workers, %d clips", num_workers, len(concepts))
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -1374,7 +1483,7 @@ def deterministic_production_callback(
             }
             for future in as_completed(future_to_concept):
                 try:
-                    results.append(future.result())
+                    _collect_result(future.result(), results)
                 except RuntimeError:
                     raise  # Video generation failures are fatal — never swallow
                 except Exception as e:
@@ -1386,7 +1495,7 @@ def deterministic_production_callback(
         # Sequential fallback (single worker)
         for concept in concepts:
             try:
-                results.append(_generate_one_clip(concept))
+                _collect_result(_generate_one_clip(concept), results)
             except RuntimeError:
                 raise  # Video generation failures are fatal — never swallow
             except Exception as e:
@@ -1395,7 +1504,7 @@ def deterministic_production_callback(
                 errors.append(err_msg)
 
     # Process results: probe + add to OTIO timeline (must be sequential for OTIO)
-    for result in sorted(results, key=lambda r: (r.get("scene_num", 0), r.get("phrase_idx", 0))):
+    for result in sorted(results, key=lambda r: (r.get("scene_num", 0), r.get("phrase_idx", 0), r.get("_sub_idx", -1))):
         scene_num = result.get("scene_num", 0)
         phrase_idx = result.get("phrase_idx", 0)
         duration = result.get("duration", 5.0)
@@ -1408,6 +1517,7 @@ def deterministic_production_callback(
                 probe_result_json = probe_clip(mp4_path=output_path)
                 probe_result = json.loads(probe_result_json)
                 actual_duration = probe_result.get("duration", duration * 1.15)
+                skip_sub_idx = result.get("_sub_idx")
                 clip_result_json = add_video_clip(
                     scene_num=scene_num,
                     phrase_idx=phrase_idx,
@@ -1416,6 +1526,7 @@ def deterministic_production_callback(
                     source_range=duration,
                     available_range=actual_duration,
                     lora_id=lora_id,
+                    sub_idx=skip_sub_idx,
                     tool_context=_MockToolContext(state),
                 )
                 clip_result = json.loads(clip_result_json)
@@ -1461,8 +1572,15 @@ def deterministic_production_callback(
 
             # B2 upload already happened inside generate_video_clip().
             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
-            scene_phrases = narr_durations.get(scene_num, [])
-            expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
+            # For sub-clips (from split concepts), use the sub-clip's own
+            # duration as expected_dur — NOT the full phrase duration.
+            result_sub_idx = result.get("_sub_idx")
+            if result_sub_idx is not None:
+                # Sub-clip: expected duration is the sub-clip's own duration
+                expected_dur = duration
+            else:
+                scene_phrases = narr_durations.get(scene_num, [])
+                expected_dur = scene_phrases[phrase_idx][1] if phrase_idx < len(scene_phrases) else duration
             _deferred_gk_clips.append({
                 "mp4_path": output_path,
                 "scene_num": scene_num,
@@ -1479,6 +1597,7 @@ def deterministic_production_callback(
                 source_range=duration,
                 available_range=actual_duration,
                 lora_id=lora_id,
+                sub_idx=result_sub_idx,
                 tool_context=_MockToolContext(state),
             )
             clip_result = json.loads(clip_result_json)
