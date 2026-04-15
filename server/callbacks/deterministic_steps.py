@@ -474,9 +474,13 @@ def deterministic_audio_callback(
     # all artifacts are uploaded to B2 and written to OTIO (audit trail).
     _deferred_gk_clips: list[dict] = []
 
-    for scene in scenes:
+    for scene_idx, scene in enumerate(scenes):
         scene_num = scene.get("scene_num", 0)
         voices = scene.get("voices", [])
+        # Track which voice index we're on for interleaving gaps
+        active_voices = [vb for vb in voices if vb.get("text", "").strip()]
+        active_voice_count = len(active_voices)
+        current_voice_idx = 0
 
         for voice_block in voices:
             voice = voice_block.get("voice", "V1")
@@ -648,56 +652,51 @@ def deterministic_audio_callback(
                     logger.error(err_msg)
                     errors.append(err_msg)
 
-        # ── OTIO: add inter-voice breathing-room Gaps ────────────────
-        # After all voices for this scene are on the timeline, insert
-        # explicit Gap items between them.  These are PLANNED pauses,
-        # not ad-hoc assembly additions.  We add N-1 gaps for N voices.
-        voice_count = len([vb for vb in voices if vb.get("text", "").strip()])
-        _mock_ctx = _MockToolContext(state)
-        for gap_idx in range(voice_count - 1):
+            # ── OTIO: interleave inter-voice gap AFTER this voice ──────
+            # Insert immediately after each voice clip (except the last)
+            # so the OTIO track order is: V1, gap, V2, gap, V3.
+            current_voice_idx += 1
+            if current_voice_idx < active_voice_count:
+                _mock_ctx = _MockToolContext(state)
+                add_narration_gap(
+                    scene_num=scene_num,
+                    duration=INTER_VOICE_PAUSE_SEC,
+                    gap_type="inter_voice",
+                    tool_context=_mock_ctx,
+                )
+                add_video_gap(
+                    scene_num=scene_num,
+                    duration=INTER_VOICE_PAUSE_SEC,
+                    gap_type="inter_voice",
+                    tool_context=_mock_ctx,
+                )
+
+        logger.info(
+            "Scene %d: added %d inter-voice gaps (%.1fs each) to OTIO",
+            scene_num, max(0, active_voice_count - 1), INTER_VOICE_PAUSE_SEC,
+        )
+
+        # ── OTIO: add inter-scene transition Gap AFTER this scene ─────
+        # Insert immediately after each scene (except the last) so the
+        # OTIO track order is: scene1_clips, inter_scene_gap, scene2_clips...
+        if scene_idx < len(scenes) - 1:
+            _mock_ctx = _MockToolContext(state)
             add_narration_gap(
                 scene_num=scene_num,
-                duration=INTER_VOICE_PAUSE_SEC,
-                gap_type="inter_voice",
+                duration=INTER_SCENE_PAUSE_SEC,
+                gap_type="inter_scene",
                 tool_context=_mock_ctx,
             )
             add_video_gap(
                 scene_num=scene_num,
-                duration=INTER_VOICE_PAUSE_SEC,
-                gap_type="inter_voice",
+                duration=INTER_SCENE_PAUSE_SEC,
+                gap_type="inter_scene",
                 tool_context=_mock_ctx,
             )
-        logger.info(
-            "Scene %d: added %d inter-voice gaps (%.1fs each) to OTIO",
-            scene_num, max(0, voice_count - 1), INTER_VOICE_PAUSE_SEC,
-        )
-
-    # ── OTIO: add inter-scene transition Gaps ────────────────────────
-    # Between every pair of consecutive scenes, add an explicit
-    # transition Gap.  These are PLANNED structural pauses.
-    scene_nums_with_clips = sorted(set(
-        s.get("scene_num", 0) for s in scenes
-        if any(vb.get("text", "").strip() for vb in s.get("voices", []))
-    ))
-    _mock_ctx = _MockToolContext(state)
-    for i in range(len(scene_nums_with_clips) - 1):
-        sn = scene_nums_with_clips[i]
-        add_narration_gap(
-            scene_num=sn,
-            duration=INTER_SCENE_PAUSE_SEC,
-            gap_type="inter_scene",
-            tool_context=_mock_ctx,
-        )
-        add_video_gap(
-            scene_num=sn,
-            duration=INTER_SCENE_PAUSE_SEC,
-            gap_type="inter_scene",
-            tool_context=_mock_ctx,
-        )
-    logger.info(
-        "Added %d inter-scene gaps (%.1fs each) to OTIO",
-        max(0, len(scene_nums_with_clips) - 1), INTER_SCENE_PAUSE_SEC,
-    )
+            logger.info(
+                "Scene %d: added inter-scene gap (%.1fs) to OTIO",
+                scene_num, INTER_SCENE_PAUSE_SEC,
+            )
 
     # Store alignment data in state
     state["whisperx_alignment"] = json.dumps(alignment_data)
@@ -1992,7 +1991,7 @@ def deterministic_assembly_callback(
 
     scene_count = len(set(
         item.metadata.get('documentary', {}).get('scene_num', 0)
-        for item in vid_track
+        for item in video_track
         if isinstance(item, otio.schema.Clip)
     ))
     summary_parts = [
