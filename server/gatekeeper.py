@@ -1019,24 +1019,30 @@ def check_stage_handoff(
 
         for sn, narr_count in narr_by_scene.items():
             concept_count = concepts_by_scene.get(sn, 0)
-            if concept_count != narr_count:
+            if concept_count < narr_count:
+                # Fewer concepts than narration phrases means missing visual
+                # direction — this is a hard reject.
                 checks.append(GatekeeperCheck(
                     name="concepts_match_narration",
                     category="cross_track",
                     verdict=GatekeeperVerdict.REJECT,
                     message=(
                         f"Scene {sn}: {concept_count} visual concept(s) but "
-                        f"{narr_count} narration phrase(s). Must be equal."
+                        f"{narr_count} narration phrase(s). Need at least {narr_count}."
                     ),
                     stage=f"{from_stage}→{to_stage}",
                     scene_num=sn,
                 ))
             else:
+                # concepts >= narration is fine — full-scale mode creates
+                # sub-phrase visual concepts that get consolidated per voice
+                # before video generation.
                 checks.append(GatekeeperCheck(
                     name="concepts_match_narration",
                     category="cross_track",
                     verdict=GatekeeperVerdict.PASS,
-                    metadata={"scene_num": sn, "count": narr_count},
+                    metadata={"scene_num": sn, "concepts": concept_count,
+                              "narration": narr_count},
                     stage=f"{from_stage}→{to_stage}",
                     scene_num=sn,
                 ))
