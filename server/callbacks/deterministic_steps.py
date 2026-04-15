@@ -1350,7 +1350,8 @@ def deterministic_production_callback(
                 pass  # re-generate if status file is corrupt
 
         # AG-UI: emit "generating" artifact event
-        artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}"
+        sub_suffix = f"-sub{sub_idx:02d}" if sub_idx is not None else ""
+        artifact_id = f"video-s{scene_num:03d}-p{phrase_idx:03d}{sub_suffix}"
         _feedback_store.register_artifact(ArtifactEvent(
             id=artifact_id,
             artifact_type=ArtifactType.VIDEO_CLIP,
