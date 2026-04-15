@@ -278,11 +278,17 @@ def generate_video_clip(
                 "DOCUMENTARY_QUICK_TEST", ""
             ).strip().lower() in ("1", "true", "yes")
 
+            _is_auto_approve = os.environ.get(
+                "DOCUMENTARY_AUTO_APPROVE", ""
+            ).strip().lower() in ("1", "true", "yes")
+
             if qa_quality == "rejected":
-                if _is_quick_test:
+                if _is_quick_test or _is_auto_approve:
                     logger.warning(
-                        "QA REJECTED clip %s (quick-test — accepting): %s",
-                        output_path, _qa_reason[:200],
+                        "QA REJECTED clip %s (%s — accepting): %s",
+                        output_path,
+                        "quick-test" if _is_quick_test else "auto-approve",
+                        _qa_reason[:200],
                     )
                     qa_quality = "rejected_accepted"
                 else:
@@ -346,11 +352,17 @@ def generate_video_clip(
         "DOCUMENTARY_QUICK_TEST", ""
     ).strip().lower() in ("1", "true", "yes")
 
+    _is_auto_approve_outer = os.environ.get(
+        "DOCUMENTARY_AUTO_APPROVE", ""
+    ).strip().lower() in ("1", "true", "yes")
+
     if qa_quality == "poor":
-        if _is_quick_test:
+        if _is_quick_test or _is_auto_approve_outer:
             logger.warning(
-                "QA POOR clip %s (quick-test — accepting): %s",
-                output_path, qa_reason[:200],
+                "QA POOR clip %s (%s — accepting): %s",
+                output_path,
+                "quick-test" if _is_quick_test else "auto-approve",
+                qa_reason[:200],
             )
         else:
             raise RuntimeError(
