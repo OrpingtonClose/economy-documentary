@@ -924,7 +924,11 @@ def _normalize_concept_durations(
             scene_concepts = consolidated
 
         # ── DURATION SCALING: match narration duration per phrase ──
-        # Assign each concept the duration of its corresponding phrase
+        # Assign each concept the duration of its corresponding phrase.
+        # IMPORTANT: Do NOT split concepts here even if duration > LTX cap.
+        # The production stage handles splitting into sub-clips internally.
+        # Splitting here would break the 1:1 concept↔phrase invariant that
+        # the gatekeeper enforces.
         scene_normalized: list[dict] = []
         for pidx, c in enumerate(scene_concepts):
             c_copy = dict(c)
@@ -939,28 +943,15 @@ def _normalize_concept_durations(
                 current_dur = sum(cc.get("duration", 5.0) for cc in scene_concepts)
                 phrase_dur = c_copy.get("duration", 5.0) * (target_dur / current_dur) if current_dur > 0 else 5.0
 
-            if phrase_dur <= _LTX_CAP:
-                c_copy["duration"] = round(phrase_dur, 2)
-                c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
-                scene_normalized.append(c_copy)
-            else:
-                # Split into sub-concepts of ≤10s
-                remaining = phrase_dur
-                sub_idx = 0
-                while remaining > 0.5:
-                    chunk = min(remaining, _LTX_CAP)
-                    sub = dict(c_copy)
-                    sub["duration"] = round(chunk, 2)
-                    sub["phrase_idx"] = pidx  # keep same phrase_idx for splits
-                    if sub_idx > 0:
-                        sub["prompt"] = c_copy.get("prompt", "") + f" (continuation {sub_idx + 1})"
-                    scene_normalized.append(sub)
-                    remaining -= chunk
-                    sub_idx += 1
+            c_copy["duration"] = round(phrase_dur, 2)
+            c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
+            # Store the full duration; production will split into ≤10s clips
+            # if needed for LTX-2.3.  We preserve 1 concept = 1 phrase here.
+            if phrase_dur > _LTX_CAP:
+                c_copy["needs_split"] = True
+                c_copy["split_count"] = int(phrase_dur / _LTX_CAP) + 1
+            scene_normalized.append(c_copy)
 
-        # Re-index phrase_idx sequentially
-        for idx, c in enumerate(scene_normalized):
-            c["phrase_idx"] = idx
         normalized.extend(scene_normalized)
 
         # Log normalization
