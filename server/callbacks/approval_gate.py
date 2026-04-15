@@ -26,7 +26,7 @@ from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
-_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-output")
+_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline/output")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
 # Auto-approve all stages in test mode (no human needed)

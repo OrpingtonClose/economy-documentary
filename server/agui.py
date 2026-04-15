@@ -518,7 +518,7 @@ async def respond_to_escalation(escalation_id: str, body: dict):
 # File-backed AG-UI endpoints — read pipeline output from disk
 # ---------------------------------------------------------------------------
 
-_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/workspace/documentary-output")
+_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline/output")
 
 # Approval gate: sequential workflow state
 # Stages: scenario -> prompts -> clips -> timeline -> assembly
