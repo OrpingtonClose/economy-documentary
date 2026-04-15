@@ -341,6 +341,24 @@ def _visual_phase_setup(callback_context):
         else:
             logger.warning("QUICK-TEST: no scenes found, falling through to LLM-based visual planning")
 
+    # Ensure visual_style has a default so LLM agent templates don't crash
+    # with KeyError when {visual_style} is referenced but not set.
+    if not state.get("visual_style"):
+        _default_vs = json.dumps({
+            "style": "cinematic documentary realism",
+            "palette": "warm earth tones with natural highlights",
+            "camera_language": "steady, observational",
+            "realism_anchors": ["4K", "raw footage", "natural lighting"],
+            "avoid": ["CGI", "cartoon", "anime", "text overlay", "split screen"],
+        }, ensure_ascii=False)
+        state["visual_style"] = _default_vs
+        logger.warning("visual_style not in state — injected default: %s", _default_vs)
+
+    # Also ensure content_analysis has a default (referenced by coherence_evaluator)
+    if not state.get("content_analysis"):
+        state["content_analysis"] = json.dumps({"mode": "pending", "note": "awaiting content_analyst output"})
+        logger.warning("content_analysis not in state — injected placeholder")
+
     # INFRA: notify stage start for timing watchdog (only if stage will actually run)
     from infra_agent import get_infra_agent, check_infra_pause
     _infra = get_infra_agent()
