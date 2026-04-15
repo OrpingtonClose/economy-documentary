@@ -190,9 +190,17 @@ def _extract_scenes_array(text: str) -> list | None:
             if any("scene_num" in item for item in candidate):
                 return candidate
 
-    # Fallback: return the largest array of dicts (likely scenes)
+    # Fallback: return the largest array of dicts that look like scenes.
+    # IMPORTANT: Require at least one dict to have "scene_num" or "voices" key.
+    # Without this check, the correction loop's voice-block arrays
+    # ([{voice, text, tone}, ...]) are mistaken for scenes and overwrite
+    # the real 10-scene array — causing the audio stage to generate 0 clips.
     dict_arrays = [c for c in candidates if len(c) >= 2 and all(isinstance(item, dict) for item in c)]
-    if dict_arrays:
-        return max(dict_arrays, key=len)
+    scene_arrays = [
+        c for c in dict_arrays
+        if any("scene_num" in item or "voices" in item for item in c)
+    ]
+    if scene_arrays:
+        return max(scene_arrays, key=len)
 
     return None
