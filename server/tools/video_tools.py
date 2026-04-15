@@ -291,6 +291,18 @@ def generate_video_clip(
                         _qa_reason[:200],
                     )
                     qa_quality = "rejected_accepted"
+                    # Re-write status.json so persisted quality matches
+                    # the pipeline's actual decision (rejected_accepted,
+                    # not the raw "rejected" written earlier).
+                    try:
+                        with open(_status_path, "w") as _sf2:
+                            json.dump({
+                                "quality": qa_quality, "qa_reason": _qa_reason,
+                                "attempts": _qa_attempts, "seed": _qa_seed,
+                                "status": "completed", "prompt_preview": prompt[:200],
+                            }, _sf2, indent=2)
+                    except OSError:
+                        pass
                 else:
                     raise RuntimeError(
                         f"QA REJECTED: clip is fundamentally broken and cannot be used. "
