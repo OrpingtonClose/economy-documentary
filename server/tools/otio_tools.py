@@ -214,6 +214,7 @@ def add_narration_gap(
     scene_num: int,
     duration: float,
     gap_type: str,
+    gap_index: int = 0,
     tool_context=None,
 ) -> str:
     """Add an intentional silence Gap to the A1_Narration track.
@@ -227,6 +228,8 @@ def add_narration_gap(
         duration: Duration of the silence in seconds.
         gap_type: One of "inter_voice" (pause between V1→V2→V3 within a
                   scene) or "inter_scene" (transition between scenes).
+        gap_index: Unique index for this gap within the scene (for
+                   idempotency — prevents duplicates on pipeline restart).
 
     Returns:
         JSON string with gap details.
@@ -247,7 +250,17 @@ def add_narration_gap(
         if narration_track is None:
             return json.dumps({"error": "A1_Narration track not found"})
 
-        gap_name = f"scene_{scene_num:03d}_{gap_type}"
+        gap_name = f"scene_{scene_num:03d}_{gap_type}_{gap_index:03d}"
+
+        # Idempotency check: don't add duplicates on pipeline restart
+        for item in narration_track:
+            if isinstance(item, otio.schema.Gap) and item.name == gap_name:
+                return json.dumps({
+                    "status": "already_exists",
+                    "gap_name": gap_name,
+                    "message": "Gap already exists, skipping duplicate",
+                })
+
         gap = otio.schema.Gap(
             name=gap_name,
             source_range=otio.opentime.TimeRange(
@@ -276,6 +289,7 @@ def add_video_gap(
     scene_num: int,
     duration: float,
     gap_type: str,
+    gap_index: int = 0,
     tool_context=None,
 ) -> str:
     """Add an intentional visual Gap to the V1_Video track.
@@ -285,10 +299,17 @@ def add_video_gap(
     frame of the preceding clip) so the viewer sees a static hold instead
     of a jarring black screen.
 
+    The gap is inserted in sorted position by scene_num (matching the
+    narration track order) rather than blindly appended, because
+    add_video_clip inserts clips in sorted order too — appending gaps
+    would cluster them at the end after production adds clips.
+
     Args:
         scene_num: Scene number this gap belongs to (for metadata).
         duration: Duration of the gap in seconds.
         gap_type: One of "inter_voice" or "inter_scene".
+        gap_index: Unique index for this gap within the scene (for
+                   idempotency — prevents duplicates on pipeline restart).
 
     Returns:
         JSON string with gap details.
@@ -309,7 +330,17 @@ def add_video_gap(
         if video_track is None:
             return json.dumps({"error": "V1_Video track not found"})
 
-        gap_name = f"scene_{scene_num:03d}_{gap_type}"
+        gap_name = f"scene_{scene_num:03d}_{gap_type}_{gap_index:03d}"
+
+        # Idempotency check: don't add duplicates on pipeline restart
+        for item in video_track:
+            if isinstance(item, otio.schema.Gap) and item.name == gap_name:
+                return json.dumps({
+                    "status": "already_exists",
+                    "gap_name": gap_name,
+                    "message": "Gap already exists, skipping duplicate",
+                })
+
         gap = otio.schema.Gap(
             name=gap_name,
             source_range=otio.opentime.TimeRange(
@@ -322,7 +353,18 @@ def add_video_gap(
             "gap_type": gap_type,
             "type": "freeze_frame",
         }
-        video_track.append(gap)
+        # Insert in sorted position by scene_num so gaps stay interleaved
+        # with clips (add_video_clip also inserts in sorted order).
+        # For inter_scene gaps, they go after all items of this scene.
+        # For inter_voice gaps, they go after the current scene content.
+        insert_pos = len(video_track)  # default: append at end
+        for i, item in enumerate(video_track):
+            meta = item.metadata.get("documentary", {})
+            item_scene = meta.get("scene_num", 0)
+            if item_scene > scene_num:
+                insert_pos = i
+                break
+        video_track.insert(insert_pos, gap)
         otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info("Added video gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)

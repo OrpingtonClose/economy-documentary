@@ -662,12 +662,14 @@ def deterministic_audio_callback(
                     scene_num=scene_num,
                     duration=INTER_VOICE_PAUSE_SEC,
                     gap_type="inter_voice",
+                    gap_index=current_voice_idx,
                     tool_context=_mock_ctx,
                 )
                 add_video_gap(
                     scene_num=scene_num,
                     duration=INTER_VOICE_PAUSE_SEC,
                     gap_type="inter_voice",
+                    gap_index=current_voice_idx,
                     tool_context=_mock_ctx,
                 )
 
@@ -685,12 +687,14 @@ def deterministic_audio_callback(
                 scene_num=scene_num,
                 duration=INTER_SCENE_PAUSE_SEC,
                 gap_type="inter_scene",
+                gap_index=scene_idx,
                 tool_context=_mock_ctx,
             )
             add_video_gap(
                 scene_num=scene_num,
                 duration=INTER_SCENE_PAUSE_SEC,
                 gap_type="inter_scene",
+                gap_index=scene_idx,
                 tool_context=_mock_ctx,
             )
             logger.info(
@@ -875,6 +879,7 @@ def _normalize_concept_durations(
 
         scale = target_dur / current_dur
 
+        scene_normalized: list[dict] = []
         for c in scene_concepts:
             c_copy = dict(c)
             raw_dur = c_copy.get("duration", 5.0) * scale
@@ -882,7 +887,7 @@ def _normalize_concept_durations(
             if raw_dur <= _LTX_CAP:
                 c_copy["duration"] = round(raw_dur, 2)
                 c_copy["end_time"] = c_copy.get("start_time", 0) + c_copy["duration"]
-                normalized.append(c_copy)
+                scene_normalized.append(c_copy)
             else:
                 # Split into sub-concepts of ≤10s
                 remaining = raw_dur
@@ -892,11 +897,15 @@ def _normalize_concept_durations(
                     sub = dict(c_copy)
                     sub["duration"] = round(chunk, 2)
                     if sub_idx > 0:
-                        sub["phrase_idx"] = c_copy.get("phrase_idx", 0) + sub_idx
                         sub["prompt"] = c_copy.get("prompt", "") + f" (continuation {sub_idx + 1})"
-                    normalized.append(sub)
+                    scene_normalized.append(sub)
                     remaining -= chunk
                     sub_idx += 1
+
+        # Re-index phrase_idx sequentially to avoid collisions after splitting
+        for idx, c in enumerate(scene_normalized):
+            c["phrase_idx"] = idx
+        normalized.extend(scene_normalized)
 
         # Log normalization
         new_dur = sum(c.get("duration", 0) for c in normalized if c.get("scene_num") == sn)
