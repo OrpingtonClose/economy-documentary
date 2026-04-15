@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -26,6 +27,10 @@ from google.adk.agents.callback_context import CallbackContext
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
+
+# Maximum duration for a single LTX-Video 2.3 clip (seconds).
+# Concepts longer than this are split into sub-clips by the production stage.
+_LTX_CAP = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -864,7 +869,6 @@ def _normalize_concept_durations(
         sn = c.get("scene_num", 0)
         by_scene.setdefault(sn, []).append(c)
 
-    _LTX_CAP = 10.0
     normalized: list[dict] = []
 
     for sn, scene_concepts in sorted(by_scene.items()):
@@ -929,11 +933,12 @@ def _normalize_concept_durations(
                 "Scene %d: expanding %d concepts → %d (matching %d phrases)",
                 sn, len(scene_concepts), num_phrases, num_phrases,
             )
+            template = scene_concepts[-1]
             while len(scene_concepts) < num_phrases:
-                extra = dict(scene_concepts[-1])
+                extra = dict(template)
                 extra["phrase_idx"] = len(scene_concepts)
                 extra["scene_num"] = sn
-                extra["prompt"] = scene_concepts[-1].get("prompt", "") + " (extended coverage)"
+                extra["prompt"] = template.get("prompt", "") + " (extended coverage)"
                 scene_concepts.append(extra)
 
         # ── DURATION SCALING: match narration duration per phrase ──
@@ -962,7 +967,7 @@ def _normalize_concept_durations(
             # if needed for LTX-2.3.  We preserve 1 concept = 1 phrase here.
             if phrase_dur > _LTX_CAP:
                 c_copy["needs_split"] = True
-                c_copy["split_count"] = -(-int(phrase_dur) // int(_LTX_CAP))  # ceiling division
+                c_copy["split_count"] = math.ceil(phrase_dur / _LTX_CAP)
             scene_normalized.append(c_copy)
 
         normalized.extend(scene_normalized)
@@ -1296,7 +1301,7 @@ def deterministic_production_callback(
 
         # Split concepts >10s into multiple sub-clips for LTX-2.3
         if concept.get("needs_split") and full_duration > _LTX_CAP:
-            split_count = concept.get("split_count", -(-int(full_duration) // int(_LTX_CAP)))
+            split_count = concept.get("split_count", math.ceil(full_duration / _LTX_CAP))
             sub_dur = full_duration / split_count
             logger.info(
                 "Splitting scene_%03d_phrase_%03d: %.2fs → %d sub-clips of %.2fs",
