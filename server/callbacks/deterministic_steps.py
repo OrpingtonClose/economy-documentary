@@ -881,9 +881,10 @@ def _normalize_concept_durations(
             normalized.extend(scene_concepts)
             continue
 
-        # ── CONSOLIDATION: merge concepts down to match phrase count ──
+        # ── COUNT NORMALIZATION: ensure concept count == phrase count ──
         # When the LLM generates more concepts than narration phrases,
         # distribute concepts evenly across phrases and merge each group.
+        # When fewer, duplicate the last concept to fill missing phrases.
         if len(scene_concepts) > num_phrases:
             logger.info(
                 "Scene %d: consolidating %d concepts → %d (matching %d phrases)",
@@ -922,6 +923,18 @@ def _normalize_concept_durations(
                 merged["scene_num"] = sn
                 consolidated.append(merged)
             scene_concepts = consolidated
+        elif len(scene_concepts) < num_phrases:
+            # Expand: duplicate last concept to fill missing phrases
+            logger.info(
+                "Scene %d: expanding %d concepts → %d (matching %d phrases)",
+                sn, len(scene_concepts), num_phrases, num_phrases,
+            )
+            while len(scene_concepts) < num_phrases:
+                extra = dict(scene_concepts[-1])
+                extra["phrase_idx"] = len(scene_concepts)
+                extra["scene_num"] = sn
+                extra["prompt"] = scene_concepts[-1].get("prompt", "") + " (extended coverage)"
+                scene_concepts.append(extra)
 
         # ── DURATION SCALING: match narration duration per phrase ──
         # Assign each concept the duration of its corresponding phrase.
@@ -949,7 +962,7 @@ def _normalize_concept_durations(
             # if needed for LTX-2.3.  We preserve 1 concept = 1 phrase here.
             if phrase_dur > _LTX_CAP:
                 c_copy["needs_split"] = True
-                c_copy["split_count"] = int(phrase_dur / _LTX_CAP) + 1
+                c_copy["split_count"] = -(-int(phrase_dur) // int(_LTX_CAP))  # ceiling division
             scene_normalized.append(c_copy)
 
         normalized.extend(scene_normalized)
@@ -1270,19 +1283,49 @@ def deterministic_production_callback(
     num_workers = max(1, len([u for u in worker_urls.split(",") if u.strip()])) if worker_urls else 1
     logger.info("Video generation: %d GPU worker(s), %d concepts to generate", num_workers, len(concepts))
 
-    def _generate_one_clip(concept: dict) -> dict:
-        """Generate a single video clip (thread-safe for parallel execution)."""
+    def _generate_one_clip(concept: dict) -> dict | list[dict]:
+        """Generate video clip(s) for a concept. Returns list if split needed.
+
+        When a concept has ``needs_split=True`` (duration > LTX cap of 10s),
+        we generate multiple sub-clips of ≤10s each and return a list so
+        the caller can add them all to the OTIO timeline.
+        """
         scene_num = concept.get("scene_num", 0)
         phrase_idx = concept.get("phrase_idx", 0)
-        duration = min(concept.get("duration", 5.0), 10.0)
+        full_duration = concept.get("duration", 5.0)
+
+        # Split concepts >10s into multiple sub-clips for LTX-2.3
+        if concept.get("needs_split") and full_duration > _LTX_CAP:
+            split_count = concept.get("split_count", -(-int(full_duration) // int(_LTX_CAP)))
+            sub_dur = full_duration / split_count
+            logger.info(
+                "Splitting scene_%03d_phrase_%03d: %.2fs → %d sub-clips of %.2fs",
+                scene_num, phrase_idx, full_duration, split_count, sub_dur,
+            )
+            sub_results = []
+            for sub_idx in range(split_count):
+                sub_concept = dict(concept)
+                sub_concept["duration"] = round(sub_dur, 2)
+                sub_concept["needs_split"] = False  # prevent recursion
+                sub_concept["_sub_idx"] = sub_idx
+                sub_concept["_sub_count"] = split_count
+                if sub_idx > 0:
+                    sub_concept["prompt"] = concept.get("prompt", "") + f" (continuation {sub_idx + 1})"
+                sub_results.append(_generate_one_clip(sub_concept))
+            return sub_results
+
+        duration = min(full_duration, _LTX_CAP)
         prompt = concept.get("prompt", "")
         lora_id = concept.get("lora_id", "documentary-realism")
         lora_weight = concept.get("lora_weight", 0.75)
         clip_negative = concept.get("negative_prompt", default_negative)
-        output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}.mp4")
+        # Sub-clips from splitting get a suffix to avoid filename collisions
+        sub_idx = concept.get("_sub_idx")
+        suffix = f"_sub{sub_idx:02d}" if sub_idx is not None else ""
+        output_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}{suffix}.mp4")
 
         # Skip already-generated clips (resume support)
-        status_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}_status.json")
+        status_path = os.path.join(video_dir, f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}{suffix}_status.json")
         if os.path.exists(output_path) and os.path.exists(status_path):
             try:
                 with open(status_path) as sf:
@@ -1347,8 +1390,16 @@ def deterministic_production_callback(
 
         return gen_result
 
+    def _collect_result(result: dict | list[dict], dest: list[dict]) -> None:
+        """Flatten split results (lists) into the destination list."""
+        if isinstance(result, list):
+            for r in result:
+                _collect_result(r, dest)  # handle nested splits
+        else:
+            dest.append(result)
+
     # Generate clips in parallel across available GPU workers
-    results = []
+    results: list[dict] = []
     if num_workers > 1:
         logger.info("Parallel video generation: %d workers, %d clips", num_workers, len(concepts))
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -1357,7 +1408,7 @@ def deterministic_production_callback(
             }
             for future in as_completed(future_to_concept):
                 try:
-                    results.append(future.result())
+                    _collect_result(future.result(), results)
                 except RuntimeError:
                     raise  # Video generation failures are fatal — never swallow
                 except Exception as e:
@@ -1369,7 +1420,7 @@ def deterministic_production_callback(
         # Sequential fallback (single worker)
         for concept in concepts:
             try:
-                results.append(_generate_one_clip(concept))
+                _collect_result(_generate_one_clip(concept), results)
             except RuntimeError:
                 raise  # Video generation failures are fatal — never swallow
             except Exception as e:
