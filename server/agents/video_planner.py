@@ -151,6 +151,8 @@ def run_deterministic_production(tool_context=None) -> str:
         if result is not None:
             return f"Video production complete. Result: {result}"
         return "Video production complete."
+    except RuntimeError:
+        raise  # OTIO violations, gatekeeper rejections, contract failures are fatal
     except Exception as e:
         logger.exception("video production failed")
         return f"Video production failed: {e}"

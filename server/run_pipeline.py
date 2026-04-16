@@ -231,8 +231,11 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
 
     # Restore from B2 if a previous run exists for this topic
     try:
-        from tools.b2_checkpoint import restore_pipeline
-        os.environ["DOCUMENTARY_TOPIC"] = topic
+        from tools.b2_checkpoint import restore_pipeline, set_run_id
+        # Generate a thread-safe run ID instead of mutating os.environ
+        import time as _time
+        safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
+        set_run_id(f"{safe_topic}_{int(_time.time())}")
         restored = restore_pipeline(topic)
         stages_complete = restored.get("stages_complete", [])
         if restored["run_id"]:

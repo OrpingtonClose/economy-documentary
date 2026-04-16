@@ -5,7 +5,6 @@ Replaces server/callbacks/before_model.py and server/callbacks/after_model.py.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import threading
@@ -21,43 +20,48 @@ _DEFAULT_MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_LLM", "2"))
 
 
 class ConcurrencyPlugin(Plugin):
-    """Manages LLM concurrency via semaphore and logs token usage."""
+    """Manages LLM concurrency via semaphore and logs token usage.
+
+    Uses threading.local() to track per-call start times so that
+    before/after hooks are matched correctly even if the framework
+    dispatches them on different threads in the future.
+    """
 
     name = "concurrency"
 
     def __init__(self, max_concurrent: int = _DEFAULT_MAX_CONCURRENT) -> None:
         self._max_concurrent = max_concurrent
         self._semaphore = threading.Semaphore(max_concurrent)
-        self._active_calls: dict[int, float] = {}
+        self._local = threading.local()
+        self._active_count = 0
         self._lock = threading.Lock()
         super().__init__()
 
     @hook
     def before_model_call(self, event: BeforeModelCallEvent) -> None:
         """Acquire LLM semaphore before model call."""
-        tid = threading.get_ident()
         self._semaphore.acquire()
+        self._local.start_time = time.monotonic()
         with self._lock:
-            self._active_calls[tid] = time.monotonic()
+            self._active_count += 1
+            active = self._active_count
         logger.debug(
-            "thread=<%s>, active=<%d>, max=<%d> | acquired llm semaphore",
-            tid,
-            len(self._active_calls),
+            "active=<%d>, max=<%d> | acquired llm semaphore",
+            active,
             self._max_concurrent,
         )
 
     @hook
     def after_model_call(self, event: AfterModelCallEvent) -> None:
         """Release LLM semaphore and log token usage."""
-        tid = threading.get_ident()
-        start_time = 0.0
+        start_time = getattr(self._local, "start_time", 0.0)
+        self._local.start_time = 0.0
         with self._lock:
-            start_time = self._active_calls.pop(tid, 0.0)
+            self._active_count = max(0, self._active_count - 1)
         self._semaphore.release()
 
         elapsed = time.monotonic() - start_time if start_time else 0.0
         logger.debug(
-            "thread=<%s>, elapsed_ms=<%d> | released llm semaphore",
-            tid,
+            "elapsed_ms=<%d> | released llm semaphore",
             int(elapsed * 1000),
         )

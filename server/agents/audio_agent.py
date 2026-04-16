@@ -56,6 +56,8 @@ def generate_all_narration(tool_context=None) -> str:
         if result is not None:
             return f"Audio generation complete. Result: {result}"
         return "Audio generation complete."
+    except RuntimeError:
+        raise  # OTIO violations, contract failures are fatal
     except Exception as e:
         logger.exception("audio generation failed")
         return f"Audio generation failed: {e}"

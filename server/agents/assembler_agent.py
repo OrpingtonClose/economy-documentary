@@ -49,6 +49,8 @@ def render_final_video(tool_context=None) -> str:
         if result is not None:
             return f"Assembly complete. Result: {result}"
         return "Assembly complete."
+    except RuntimeError:
+        raise  # OTIO violations are fatal
     except Exception as e:
         logger.exception("assembly failed")
         return f"Assembly failed: {e}"
