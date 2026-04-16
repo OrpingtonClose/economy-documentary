@@ -347,6 +347,14 @@ class WorkQueue:
         completed.sort(key=lambda c: (c.scene_num, c.phrase_idx))
         return completed
 
+    def get_in_progress_clips(self) -> list[QueuedClip]:
+        """Return clips currently assigned or generating."""
+        with self._lock:
+            return [
+                c for c in self._clips.values()
+                if c.status in (ClipStatus.ASSIGNED, ClipStatus.GENERATING)
+            ]
+
     def get_dead_letter_clips(self) -> list[QueuedClip]:
         """Return all dead-lettered clips."""
         with self._lock:

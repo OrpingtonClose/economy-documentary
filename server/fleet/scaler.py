@@ -282,8 +282,23 @@ class FleetScaler:
 
         released = 0
         with self._lock:
-            # Pick VMs with fewest in-progress clips (prefer idle ones)
-            vm_ids = sorted(self._active_vms.keys())
+            # Prefer releasing idle VMs — cross-reference with work queue
+            # to find which VMs have clips currently assigned/generating.
+            busy_workers: set[str] = set()
+            if self._work_queue:
+                for clip in self._work_queue.get_in_progress_clips():
+                    if clip.assigned_to:
+                        busy_workers.add(clip.assigned_to)
+
+            # Sort: idle VMs first (not in busy_workers), then by ID
+            vm_ids = sorted(
+                self._active_vms.keys(),
+                key=lambda vid: (
+                    # VMs whose URL matches a busy worker sort last
+                    1 if self._active_vms[vid].get("url", "") in busy_workers else 0,
+                    vid,
+                ),
+            )
 
         for vm_id in vm_ids[:to_release]:
             self._release_vm(vm_id)

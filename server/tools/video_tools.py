@@ -12,15 +12,12 @@ Rules:
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import logging
 import os
 import subprocess
 import threading
-import time
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from google.adk.tools import FunctionTool
@@ -61,6 +58,8 @@ def _get_next_worker_url() -> str:
                 return url
     except ImportError:
         pass
+    except Exception as e:
+        logger.warning("InfraAgent worker lookup failed, falling back to env vars: %s", e)
 
     # 2. Round-robin from env vars (blind fallback)
     urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
@@ -184,26 +183,7 @@ def generate_video_clip(
     # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
     seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
 
-    payload = json.dumps({
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "visual_style": visual_style,
-        "duration_sec": actual_duration,
-        "width": 512,
-        "height": 320,
-        "num_frames": num_frames,
-        "seed": seed,
-        # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
-        "num_inference_steps": 30,   # LTX-2.3 dev: 30 steps
-        "guidance_scale": 3.0,       # LTX-2.3 dev: CFG=3.0
-        "stg_scale": 1.0,            # spatio-temporal guidance
-        "modality_scale": 3.0,       # modality (video vs audio) guidance
-        "guidance_rescale": 0.7,     # guidance rescale factor
-        "stg_blocks": [28],          # STG block indices
-    }).encode("utf-8")
-
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
-    req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     # Use graduated recovery middleware instead of ad-hoc retry loops.
     # The middleware handles: retry → creative amendment → env assessment → human escalation.
