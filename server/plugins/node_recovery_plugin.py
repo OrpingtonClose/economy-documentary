@@ -109,6 +109,7 @@ class NodeRecoveryPlugin:
                 missing_state,
             )
             event.cancel_node = error_msg
+            return
 
         # Check required services — skip in test mode (synthetic data)
         _test_mode = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
