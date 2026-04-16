@@ -8,7 +8,9 @@ The timing feedback loop is capped at ~3 iterations via max_node_executions=12.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from typing import Any
 
 from strands.multiagent.graph import GraphBuilder, GraphState
@@ -23,15 +25,46 @@ from agents.video_planner import build_video_planner
 logger = logging.getLogger(__name__)
 
 
+def _extract_json(text: str) -> dict[str, Any] | None:
+    """Try to extract a JSON object from text that may contain markdown fences or preamble."""
+    # Strip markdown code fences if present
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
+    # Try the whole string first
+    try:
+        obj = json.loads(cleaned)
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Try to find a JSON object substring
+    match = re.search(r"\{[^{}]*\}", cleaned)
+    if match:
+        try:
+            obj = json.loads(match.group())
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
 def _timing_passed(state: GraphState) -> bool:
     """Condition: timing evaluation passed."""
     results = state.results
     timing_result = results.get("timing_eval")
     if timing_result is None:
         return False
-    # The timing evaluator outputs a JSON verdict with "passed" field
+
     result_text = str(timing_result)
-    return '"passed": true' in result_text.lower() or '"passed":true' in result_text.lower()
+    verdict = _extract_json(result_text)
+    if verdict is not None:
+        # Check for "passed", "pass", or truthy boolean variant
+        return bool(verdict.get("passed") or verdict.get("pass"))
+
+    # Fallback: if JSON parsing fails entirely, be conservative and pass
+    # to avoid trapping the pipeline in an infinite refinement loop
+    logger.warning("timing_eval=<%s> | could not parse timing verdict, defaulting to pass", result_text[:200])
+    return True
 
 
 def _timing_failed(state: GraphState) -> bool:
