@@ -554,6 +554,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         )
         if response.get("action") != "skip":
             raise RuntimeError(_no_gpu_msg)
+        return 0  # sentinel: no VM provisioned (callers must handle 0)
 
     # Sort by download speed (fastest first) with price as tiebreaker.
     # This preserves the --order inet_down- intent from the CLI search

@@ -405,6 +405,7 @@ def timeline_guardian_callback(
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)
+        return None  # human chose to skip — do NOT call validator with None timeline
 
     error = validator(timeline, state)
 
@@ -422,6 +423,7 @@ def timeline_guardian_callback(
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)
+        return None  # human chose to skip — leave otio_violation set, do NOT clear it
 
     # Validation passed -- clear any previous violation
     state["otio_violation"] = None

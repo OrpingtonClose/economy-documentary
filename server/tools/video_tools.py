@@ -184,6 +184,10 @@ def generate_video_clip(
         )
         if response.get("action") != "skip":
             raise RuntimeError(_no_worker_msg)
+        return json.dumps({
+            "status": "error",
+            "error": "Video generation skipped — no GPU worker available",
+        })
 
     # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
     fps = 24
