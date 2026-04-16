@@ -86,6 +86,43 @@ def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=No
     if visual_style_json and visual_style_json.strip():
         state["visual_style"] = visual_style_json
 
+    # Also create OTIO timeline if not already created
+    topic = state.get("topic", "Documentary")
+    num_scenes = len(scenes) if scenes else 2
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        try:
+            from tools.otio_tools import create_timeline as _create_tl
+            # Call the underlying function directly (not as a tool)
+            import opentimelineio as otio
+            from tools.otio_tools import _timeline_path, _ensure_dir, _otio_lock
+            from tools.otio_tools import TRACK_V1, TRACK_A1, TRACK_A2
+            with _otio_lock:
+                timeline = otio.schema.Timeline(name=f"Documentary: {topic}")
+                video_track = otio.schema.Track(name=TRACK_V1, kind=otio.schema.TrackKind.Video)
+                for i in range(1, num_scenes + 1):
+                    gap = otio.schema.Gap(
+                        name=f"scene_{i:03d}_video",
+                        source_range=otio.opentime.TimeRange(
+                            start_time=otio.opentime.RationalTime(0, 24),
+                            duration=otio.opentime.RationalTime(0, 24),
+                        ),
+                    )
+                    gap.metadata["documentary"] = {"scene_num": i, "status": "empty"}
+                    video_track.append(gap)
+                narration_track = otio.schema.Track(name=TRACK_A1, kind=otio.schema.TrackKind.Audio)
+                music_track = otio.schema.Track(name=TRACK_A2, kind=otio.schema.TrackKind.Audio)
+                timeline.tracks.append(video_track)
+                timeline.tracks.append(narration_track)
+                timeline.tracks.append(music_track)
+                path = _timeline_path(topic)
+                _ensure_dir(path)
+                otio.adapters.write_to_file(timeline, path)
+            state["_timeline_path"] = path
+            logger.info("save_scenario: also created OTIO timeline at %s", path)
+        except Exception as exc:
+            logger.warning("save_scenario: OTIO timeline creation failed: %s", exc)
+
     # Upload scenario to B2 checkpoint if available
     try:
         from tools.b2_checkpoint import upload_scenario as _b2_upload
@@ -94,7 +131,7 @@ def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=No
         logger.debug("B2 scenario upload skipped: %s", exc)
 
     count = len(scenes) if scenes else "unknown"
-    return f"Saved {count} scenes to pipeline state. Downstream agents can now access them."
+    return f"Saved {count} scenes to pipeline state and created OTIO timeline. Downstream agents can now access them."
 
 
 SCENARIO_PLANNER_PROMPT = """\
@@ -121,16 +158,13 @@ Each scene must have:
 
 CRITICAL WORKFLOW — follow these steps IN ORDER:
 1. Use read_corpus to load the source material
-2. Use query_production_capabilities, query_voice_profiles, query_gatekeeper_rules
-   to discover constraints
+2. Use query_production_capabilities, query_voice_profiles to discover constraints
 3. Design your scenes as a JSON array
-4. Use create_timeline to initialize the OTIO timeline
-5. **IMMEDIATELY call save_scenario** with your scenes JSON array as the first
-   argument and a visual_style JSON object as the second argument. Example:
-   save_scenario(scenes_json='[{"scene_num": 1, ...}]', visual_style_json='{"mood": "..."}')
-   This is the MOST IMPORTANT step. Without it, the entire pipeline fails.
-6. Call validate_deliverables("scenario") to verify scenes were persisted correctly.
-   If it reports failures with a "fix" field, follow those instructions exactly.
+4. Call save_scenario with your complete scenes JSON array and visual_style JSON.
+   save_scenario will ALSO create the OTIO timeline automatically.
+   THIS IS THE MOST IMPORTANT STEP. Without it, the entire pipeline fails.
+   Example: save_scenario(scenes_json='[{"scene_num": 1, "title": "...", ...}]', visual_style_json='{"mood": "cinematic"}')
+5. Call validate_deliverables("scenario") to verify everything was saved correctly.
 
 SELF-HEALING:
 If validate_deliverables reports failures:
