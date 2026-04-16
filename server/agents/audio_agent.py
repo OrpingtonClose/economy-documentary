@@ -41,15 +41,13 @@ def generate_all_narration(tool_context=None) -> str:
     # We adapt the invocation_state to work with it.
     state = tool_context.invocation_state if tool_context else {}
 
-    # The deterministic callbacks call state.to_dict() in 10 places.
-    # We must NOT copy the dict (StateDict(s) would shallow-copy), so we
-    # attach to_dict directly to the original dict to preserve identity.
-    if not hasattr(state, "to_dict"):
-        state.to_dict = lambda: dict(state)  # type: ignore[attr-defined]
+    # Wrap state in StateDictProxy which delegates to the original dict by
+    # reference (no copying) and adds .to_dict() for ADK compatibility.
+    from callbacks._compat import StateDictProxy
 
     class _StateAdapter:
         def __init__(self, s: dict) -> None:
-            self.state = s
+            self.state = s if isinstance(s, StateDictProxy) else StateDictProxy(s)
 
     adapter = _StateAdapter(state)
 

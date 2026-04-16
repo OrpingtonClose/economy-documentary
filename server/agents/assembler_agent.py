@@ -36,12 +36,11 @@ def render_final_video(tool_context=None) -> str:
 
     state = tool_context.invocation_state if tool_context else {}
 
-    if not hasattr(state, "to_dict"):
-        state.to_dict = lambda: dict(state)  # type: ignore[attr-defined]
+    from callbacks._compat import StateDictProxy
 
     class _StateAdapter:
         def __init__(self, s: dict) -> None:
-            self.state = s
+            self.state = s if isinstance(s, StateDictProxy) else StateDictProxy(s)
 
     adapter = _StateAdapter(state)
 
