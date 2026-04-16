@@ -145,6 +145,13 @@ def run_deterministic_production(tool_context=None) -> str:
 
     state = tool_context.invocation_state if tool_context else {}
 
+    # Guard: visual_concepts must be persisted before production runs
+    if not state.get("visual_concepts"):
+        return (
+            "Error: visual_concepts not found in pipeline state. "
+            "You must call save_visual_concepts BEFORE run_deterministic_production."
+        )
+
     from callbacks._compat import StateDictProxy
 
     class _StateAdapter:

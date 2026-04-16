@@ -330,11 +330,17 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     import copy
 
     state_snapshot = copy.deepcopy(initial_state)
+    # Keep a reference to the last attempt's state so that if all retries
+    # fail, we still return partial progress (scenes generated, audio files
+    # created, etc.) rather than the blank initial snapshot.
+    last_attempt_state: dict[str, Any] = {}
 
     try:
         from recovery import RecoveryPolicy, execute_with_recovery
 
         def _run_graph(**kwargs: Any) -> Any:
+            # Save reference to last attempt's state before resetting
+            last_attempt_state.update(initial_state)
             # Reset initial_state to clean snapshot before each attempt
             initial_state.clear()
             initial_state.update(copy.deepcopy(state_snapshot))
@@ -362,6 +368,11 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
             result = None
     except Exception as exc:
         logger.exception("Pipeline execution failed after recovery attempts")
+        # Restore partial progress from last attempt so caller can inspect
+        # what work was completed (scenes, audio, etc.) before failure.
+        if last_attempt_state:
+            initial_state.clear()
+            initial_state.update(last_attempt_state)
         result = None
     finally:
         reporter.send("phase_end", phase="assembly", status="completed")
