@@ -15,7 +15,10 @@ import time
 
 logger = logging.getLogger(__name__)
 
-_AUTO_APPROVE = os.environ.get("DOCUMENTARY_TEST_MODE", "").lower() in ("1", "true", "yes")
+_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
+_AUTO_APPROVE = _TEST_MODE or os.environ.get(
+    "DOCUMENTARY_AUTO_APPROVE", ""
+).strip().lower() in ("1", "true", "yes")
 
 _APPROVAL_FILE = os.path.join(
     os.environ.get("PIPELINE_STATE_DIR", "/tmp/documentary-pipeline"),

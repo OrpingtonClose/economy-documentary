@@ -6,6 +6,7 @@ Replaces server/callbacks/before_tool.py and server/callbacks/after_tool.py.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -28,9 +29,9 @@ _TOOL_GROUPS: dict[str, str] = {
 }
 
 _DEFAULT_LIMITS: dict[str, int] = {
-    "gpu": 2,
-    "tts": 1,
-    "vastai": 3,
+    "gpu": int(os.environ.get("GPU_CONCURRENCY", "1")),
+    "tts": int(os.environ.get("TTS_CONCURRENCY", "2")),
+    "vastai": int(os.environ.get("VASTAI_CONCURRENCY", "3")),
 }
 
 

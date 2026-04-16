@@ -152,7 +152,7 @@ async def run_pipeline_endpoint(request: Request):
                     os.environ[key] = "true"
 
             try:
-                result = await loop.run_in_executor(
+                pipeline_future = loop.run_in_executor(
                     None,
                     lambda: run_pipeline(
                         topic=topic,
@@ -161,6 +161,20 @@ async def run_pipeline_endpoint(request: Request):
                         quick_test=quick_test,
                     ),
                 )
+
+                # Send heartbeats while waiting so proxies/browsers
+                # don't drop the idle SSE connection during long runs.
+                while not pipeline_future.done():
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(pipeline_future),
+                            timeout=_HEARTBEAT_INTERVAL,
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"
+                else:
+                    result = pipeline_future.result()
             finally:
                 # Restore env vars to prevent leaking across requests
                 for key, prev in _env_overrides.items():
