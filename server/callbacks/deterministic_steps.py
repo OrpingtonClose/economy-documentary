@@ -1890,8 +1890,8 @@ def deterministic_production_callback(
         for c in concepts:
             queued.append(_QueuedClip(
                 clip_id=f"scene_{_safe_int(c.get('scene_num', 0)):03d}_phrase_{_safe_int(c.get('phrase_idx', 0)):03d}",
-                scene_num=c.get("scene_num", 0),
-                phrase_idx=c.get("phrase_idx", 0),
+                scene_num=_safe_int(c.get("scene_num", 0)),
+                phrase_idx=_safe_int(c.get("phrase_idx", 0)),
                 prompt=c.get("prompt", ""),
                 negative_prompt=c.get("negative_prompt", ""),
                 duration=c.get("duration", 5.0),

@@ -306,7 +306,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
                         errors.append(
                             f"Scene {sn} timing mismatch: video source_range total "
                             f"({total_video:.2f}s) vs narration/{report_lang or 'default'} "
-                            f"({total_audio:.2f}s) \u2014 drift > 1s"
+                            f"({total_audio:.2f}s) \u2014 drift > {_tolerance}s"
                         )
                         break
 
