@@ -302,8 +302,10 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
 
     pipeline = build_pipeline()
 
+    # Pass initial_state as invocation_state — the graph mutates it in place
+    # so we can read the final pipeline state from it after execution.
     try:
-        result = pipeline(user_message)
+        result = pipeline(user_message, invocation_state=initial_state)
         logger.info("Pipeline graph execution completed")
     except Exception as exc:
         logger.exception("Pipeline execution failed")
@@ -322,11 +324,12 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     elapsed = time.time() - start_time
     logger.info("Pipeline completed in %.1f seconds", elapsed)
 
-    state = dict(initial_state)
-    state["_elapsed_sec"] = round(elapsed, 1)
-    state["_result"] = str(result) if result else None
+    # initial_state was mutated by the graph during execution — it now
+    # contains the final pipeline state (scenes, timeline, alignment, etc.)
+    initial_state["_elapsed_sec"] = round(elapsed, 1)
+    initial_state["_result"] = str(result) if result else None
 
-    return state
+    return initial_state
 
 
 def main():

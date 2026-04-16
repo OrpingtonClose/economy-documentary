@@ -144,19 +144,30 @@ async def run_pipeline_endpoint(request: Request):
             from run_pipeline import run_pipeline
             loop = asyncio.get_event_loop()
 
+            # Set env vars in a scoped way — clean up in finally
+            _env_overrides: dict[str, str | None] = {}
             if quick_test:
-                os.environ["DOCUMENTARY_TEST_MODE"] = "true"
-                os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
+                for key in ("DOCUMENTARY_TEST_MODE", "DOCUMENTARY_QUICK_TEST"):
+                    _env_overrides[key] = os.environ.get(key)
+                    os.environ[key] = "true"
 
-            result = await loop.run_in_executor(
-                None,
-                lambda: run_pipeline(
-                    topic=topic,
-                    corpus_path=corpus_path,
-                    language=language,
-                    quick_test=quick_test,
-                ),
-            )
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: run_pipeline(
+                        topic=topic,
+                        corpus_path=corpus_path,
+                        language=language,
+                        quick_test=quick_test,
+                    ),
+                )
+            finally:
+                # Restore env vars to prevent leaking across requests
+                for key, prev in _env_overrides.items():
+                    if prev is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = prev
 
             # Send result
             serializable = {}

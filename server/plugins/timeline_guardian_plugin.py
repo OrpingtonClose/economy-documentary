@@ -41,12 +41,14 @@ class TimelineGuardianPlugin(Plugin):
                 validator = _VALIDATORS[pipeline_phase]
                 errors = validator(timeline, state)
                 if errors:
-                    logger.warning(
-                        "phase=<%s>, errors=<%d> | timeline validation failed",
+                    error_msg = f"OTIO VIOLATION [{pipeline_phase}]: {errors}"
+                    logger.error(
+                        "phase=<%s>, errors=<%d> | timeline validation FAILED",
                         pipeline_phase,
                         len(errors) if isinstance(errors, list) else 1,
                     )
-                    state["_timeline_warnings"] = errors
+                    state["otio_violation"] = error_msg
+                    raise RuntimeError(error_msg)
                 else:
                     logger.debug(
                         "phase=<%s> | timeline validation passed", pipeline_phase
