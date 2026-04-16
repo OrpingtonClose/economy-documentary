@@ -192,13 +192,31 @@ class WorkQueue:
             if not clip:
                 return
 
-            # Guard: ignore late failure reports from a previous worker
+            # Guard 1: ignore reports for clips already in a terminal state.
+            if clip.status in (ClipStatus.COMPLETED, ClipStatus.DEAD_LETTER):
+                logger.debug(
+                    "WorkQueue: ignoring failure for %s from %s "
+                    "(clip already %s)",
+                    clip_id, worker_id, clip.status.value,
+                )
+                return
+
+            # Guard 2: ignore late failure reports from a previous worker
             # if the clip has already been reclaimed and reassigned.
             if clip.assigned_to and clip.assigned_to != worker_id:
                 logger.debug(
                     "WorkQueue: ignoring late failure for %s from %s "
                     "(now assigned to %s)",
                     clip_id, worker_id, clip.assigned_to,
+                )
+                return
+
+            # Guard 3: ignore duplicate failure from a worker that already
+            # has an error recorded (e.g. timeout reclaimed then late report).
+            if worker_id in clip.failed_worker_ids:
+                logger.debug(
+                    "WorkQueue: ignoring duplicate failure for %s from %s",
+                    clip_id, worker_id,
                 )
                 return
 
