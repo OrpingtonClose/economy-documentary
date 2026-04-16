@@ -23,7 +23,7 @@ import time
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from google.adk.tools import FunctionTool
+from strands import tool
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,7 @@ def _generate_solid_color_mp4(
         return False
 
 
+@tool
 def generate_video_clip(
     prompt: str,
     duration_sec: float,
@@ -409,6 +410,7 @@ def generate_video_clip(
     )
 
 
+@tool
 def probe_clip(mp4_path: str, tool_context=None) -> str:
     """Probe an MP4 file for duration, resolution, and FPS using ffprobe.
 
@@ -482,8 +484,6 @@ def probe_clip(mp4_path: str, tool_context=None) -> str:
         return json.dumps({"error": f"ffprobe output parse error: {e}"})
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-generate_video_clip_tool = FunctionTool(generate_video_clip)
-probe_clip_tool = FunctionTool(probe_clip)
+video_tools = [generate_video_clip, probe_clip]
 
 video_tools = [generate_video_clip_tool, probe_clip_tool]

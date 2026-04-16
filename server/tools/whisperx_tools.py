@@ -12,7 +12,7 @@ import logging
 import os
 from typing import Optional
 
-from google.adk.tools import FunctionTool
+from strands import tool
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ def _generate_synthetic_alignment(text: str) -> dict:
     }
 
 
+@tool
 def align_narration(
     wav_path: str,
     text: str,
@@ -163,7 +164,6 @@ def align_narration(
         )
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-align_narration_tool = FunctionTool(align_narration)
+whisperx_tools = [align_narration]
 
 whisperx_tools = [align_narration_tool]

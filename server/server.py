@@ -1,25 +1,24 @@
-"""FastAPI + AG-UI server for the documentary pipeline.
+"""FastAPI server for the documentary pipeline.
 
 Provides:
-- POST / -- AG-UI endpoint for CopilotKit frontend (unified SSE stream)
+- POST /run -- pipeline execution endpoint (SSE stream)
 - /dashboard/* -- pipeline REST endpoints (snapshots, runs, reports)
-- /agui/* -- artifact, escalation, and feedback REST endpoints
+- /health -- health check
 - Request logging middleware
-- Pipeline collector middleware for dashboard integration
 
-All real-time events (pipeline progress, artifacts, gatekeeper, escalations)
-flow through the single CopilotKit SSE stream at POST /.  There are no
-separate SSE channels — the chat connection IS the pipeline connection.
+All real-time events flow through the SSE stream at POST /run.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -29,22 +28,10 @@ from starlette.responses import Response, StreamingResponse
 
 load_dotenv()
 
-from ag_ui.core import CustomEvent, EventType, RunAgentInput
-from ag_ui.encoder import EventEncoder
-from ag_ui_adk import ADKAgent
-from google.adk.apps import App
-
-from agents.model_config import ADK_MODEL_NAME
-from agents.pipeline import pipeline_agent
-# Callbacks are wired directly into individual Agent sub-agents
-# (scenario_director.py, visual_director.py) — not at the AG-UI level.
-# See: before_model, after_model, before_tool, after_tool callbacks.
 from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
-from agui import router as agui_router, subscribe_agui_events, unsubscribe_agui_events
 from dashboard.sse import router as dashboard_router
-from plugins import build_plugins, setup_otel
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -52,25 +39,21 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 
 def _validate_env() -> None:
     """Validate required environment variables at startup."""
-    model = ADK_MODEL_NAME
+    model = os.environ.get("ADK_MODEL", "")
     if not model:
-        raise ValueError("ADK_MODEL environment variable is required")
+        logger.warning("ADK_MODEL environment variable is not set")
 
-    # Check for at least one API key
-    has_google = bool(os.environ.get("GOOGLE_API_KEY"))
     has_openai = bool(os.environ.get("OPENAI_API_KEY"))
     has_api_base = bool(os.environ.get("OPENAI_API_BASE"))
 
-    if not (has_google or has_openai or has_api_base):
+    if not (has_openai or has_api_base):
         logger.warning(
-            "No API keys configured. Set GOOGLE_API_KEY for Gemini "
-            "or OPENAI_API_KEY + OPENAI_API_BASE for LiteLLM routing."
+            "No API keys configured. Set OPENAI_API_KEY + OPENAI_API_BASE for LiteLLM routing."
         )
 
     logger.info(
-        "Model configuration: ADK_MODEL=%s, Gemini=%s, LiteLLM=%s",
-        model,
-        "yes" if has_google else "no",
+        "Model configuration: ADK_MODEL=%s, LiteLLM=%s",
+        model or "(default)",
         "yes" if (has_openai or has_api_base) else "no",
     )
 
@@ -92,61 +75,20 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
-    """Create and manage PipelineCollector for each AG-UI request."""
-
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path != "/" or request.method != "POST":
-            return await call_next(request)
-
-        run_id = f"run_{uuid.uuid4().hex[:8]}"
-        collector = PipelineCollector(run_id=run_id)
-        set_active_collector(collector)
-        insert_run(run_id)
-
-        try:
-            response = await call_next(request)
-
-            # For SSE responses, we need to wrap the body iterator
-            if hasattr(response, "body_iterator"):
-                original_iterator = response.body_iterator
-
-                async def wrapped_iterator():
-                    try:
-                        async for chunk in original_iterator:
-                            yield chunk
-                    finally:
-                        data = collector.finalize()
-                        finalize_run(run_id, status=data["status"], metadata=data)
-                        insert_snapshot(run_id, data)
-                        remove_collector(run_id)
-                        logger.info("Pipeline run %s finalized", run_id)
-
-                response.body_iterator = wrapped_iterator()
-
-            return response
-        except Exception:
-            collector.finalize(status="error")
-            finalize_run(run_id, status="error")
-            remove_collector(run_id)
-            raise
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: setup OTel, validate env, init DB."""
+    """Application lifespan: validate env, init DB."""
     _validate_env()
-    setup_otel()
     init_db()
-    logger.info("Documentary pipeline server started")
+    logger.info("Documentary pipeline server started (Strands SDK)")
     yield
     logger.info("Documentary pipeline server shutting down")
 
 
 app = FastAPI(
     title="Documentary Pipeline",
-    description="ADHD-friendly AI documentary pipeline with Google ADK + AG-UI",
-    version="0.1.0",
+    description="ADHD-friendly AI documentary pipeline with Strands Agents SDK",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -159,143 +101,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Middleware stack (order matters: last added = first executed)
-app.add_middleware(AGUIRunCollectorMiddleware)
+# Middleware
 app.add_middleware(RequestLoggingMiddleware)
 
 # Dashboard routes
 app.include_router(dashboard_router)
 
-# AG-UI routes (artifact feedback, escalations, regeneration)
-app.include_router(agui_router)
+_HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats
 
 
-# AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
-# into the CopilotKit SSE stream so the connection never goes idle.
-_adk_app = App(
-    name="documentary_pipeline",
-    root_agent=pipeline_agent,
-    plugins=build_plugins(),
-)
-adk_agent = ADKAgent.from_app(
-    app=_adk_app,
-)
+@app.post("/run")
+async def run_pipeline_endpoint(request: Request):
+    """Pipeline execution endpoint with SSE stream.
 
-_HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
+    Accepts JSON body with:
+    - topic (str): Documentary topic
+    - corpus_path (str): Path to research corpus
+    - language (str, optional): Language mode (default: dual_ru_en)
+    - quick_test (bool, optional): Quick test mode
 
-
-@app.post("/")
-async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
-    """AG-UI endpoint with unified SSE stream.
-
-    Merges three event sources into one SSE connection:
-    1. AG-UI protocol events from the ADK agent (text, tool calls, state)
-    2. Pipeline events from emit_agui_event() (artifacts, gatekeeper, escalations)
-    3. Heartbeat comments every few seconds to keep the connection alive
-
-    This prevents the browser/proxy from closing the connection during long
-    deterministic operations (TTS generation, video rendering) that can take
-    10+ minutes per stage.
+    Returns an SSE stream with pipeline progress events.
     """
-    accept_header = request.headers.get("accept")
-    encoder = EventEncoder(accept=accept_header)
+    body = await request.json()
+    topic = body.get("topic", "")
+    corpus_path = body.get("corpus_path", "")
+    language = body.get("language", "dual_ru_en")
+    quick_test = body.get("quick_test", False)
 
-    # Subscribe to pipeline events (artifacts, gatekeeper, escalations)
-    pipeline_queue = subscribe_agui_events()
+    if not topic:
+        return {"error": "topic is required"}
+
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+    collector = PipelineCollector(run_id=run_id)
+    set_active_collector(collector)
+    insert_run(run_id)
 
     async def event_generator():
-        merged: asyncio.Queue = asyncio.Queue()
-
-        async def agent_reader():
-            """Read AG-UI events from the ADK agent and forward to merged queue."""
-            try:
-                async for event in adk_agent.run(input_data):
-                    await merged.put(("agent", event))
-            except Exception as exc:
-                await merged.put(("agent_error", exc))
-            finally:
-                await merged.put(("agent_done", None))
-
-        async def pipeline_reader():
-            """Poll the thread-safe deque for pipeline events."""
-            try:
-                while True:
-                    if pipeline_queue:
-                        event = pipeline_queue.popleft()
-                        await merged.put(("pipeline", event))
-                    else:
-                        await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                pass
-
-        agent_task = asyncio.create_task(agent_reader())
-        pipe_task = asyncio.create_task(pipeline_reader())
-
         try:
-            while True:
+            yield f"data: {json.dumps({'type': 'run_start', 'run_id': run_id, 'topic': topic})}\n\n"
+
+            # Run pipeline in a thread to avoid blocking
+            from run_pipeline import run_pipeline
+            loop = asyncio.get_event_loop()
+
+            if quick_test:
+                os.environ["DOCUMENTARY_TEST_MODE"] = "true"
+                os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
+
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_pipeline(
+                    topic=topic,
+                    corpus_path=corpus_path,
+                    language=language,
+                    quick_test=quick_test,
+                ),
+            )
+
+            # Send result
+            serializable = {}
+            for k, v in result.items():
                 try:
-                    kind, payload = await asyncio.wait_for(
-                        merged.get(), timeout=_HEARTBEAT_INTERVAL
-                    )
-                except asyncio.TimeoutError:
-                    # No events for a while — send SSE comment to keep alive
-                    yield ": heartbeat\n\n"
-                    continue
+                    json.dumps(v)
+                    serializable[k] = v
+                except (TypeError, ValueError):
+                    serializable[k] = str(v)
 
-                if kind == "agent_done":
-                    break
-                elif kind == "agent_error":
-                    logger.error("ADK agent error in unified stream: %s", payload)
-                    from ag_ui.core import RunErrorEvent
-                    err_event = RunErrorEvent(
-                        type=EventType.RUN_ERROR,
-                        message=f"Agent execution failed: {payload}",
-                        code="AGENT_ERROR",
-                    )
-                    try:
-                        yield encoder.encode(err_event)
-                    except Exception:
-                        yield 'event: error\ndata: {"error": "Agent execution failed"}\n\n'
-                    break
-                elif kind == "agent":
-                    try:
-                        yield encoder.encode(payload)
-                    except Exception as enc_err:
-                        logger.error("Event encoding error: %s", enc_err)
-                elif kind == "pipeline":
-                    # Forward pipeline events as AG-UI CustomEvents
-                    custom = CustomEvent(
-                        type=EventType.CUSTOM,
-                        name="pipeline_event",
-                        value=payload,
-                    )
-                    try:
-                        yield encoder.encode(custom)
-                    except Exception as enc_err:
-                        logger.error("Pipeline event encoding error: %s", enc_err)
+            yield f"data: {json.dumps({'type': 'run_complete', 'run_id': run_id, 'result': serializable})}\n\n"
 
-            # Drain remaining pipeline events after agent finishes
-            while pipeline_queue:
-                event = pipeline_queue.popleft()
-                custom = CustomEvent(
-                    type=EventType.CUSTOM,
-                    name="pipeline_event",
-                    value=event,
-                )
-                try:
-                    yield encoder.encode(custom)
-                except Exception:
-                    pass
-
+        except Exception as exc:
+            logger.exception("Pipeline execution failed")
+            yield f"data: {json.dumps({'type': 'run_error', 'run_id': run_id, 'error': str(exc)})}\n\n"
         finally:
-            pipe_task.cancel()
-            if not agent_task.done():
-                agent_task.cancel()
-            unsubscribe_agui_events(pipeline_queue)
+            data = collector.finalize()
+            finalize_run(run_id, status=data.get("status", "unknown"), metadata=data)
+            insert_snapshot(run_id, data)
+            remove_collector(run_id)
 
     return StreamingResponse(
         event_generator(),
-        media_type=encoder.get_content_type(),
+        media_type="text/event-stream",
     )
 
 
@@ -304,8 +189,9 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "model": ADK_MODEL_NAME,
-        "version": "0.1.0",
+        "model": os.environ.get("ADK_MODEL", "(default)"),
+        "framework": "strands-agents",
+        "version": "0.2.0",
     }
 
 
