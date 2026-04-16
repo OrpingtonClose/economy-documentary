@@ -1,22 +1,22 @@
 """
-SSE and REST endpoints for real-time pipeline dashboard.
+REST endpoints for pipeline dashboard.
 
-Ported from MiroThinker. Provides:
-- /dashboard/stream -- SSE endpoint for live pipeline updates
-- /dashboard/latest -- latest snapshot
+Provides:
+- /dashboard/latest -- latest snapshot (polled by frontend)
 - /dashboard/runs -- list of all runs
 - /dashboard/runs/{run_id} -- detail for a specific run
 - /dashboard/html/{run_id} -- HTML report for a run
+
+Real-time streaming is handled by the unified CopilotKit SSE endpoint
+(POST /) in server.py.  There is no separate /dashboard/stream SSE.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from starlette.responses import StreamingResponse
 
 from dashboard import get_all_active_collectors, get_any_active_collector, set_active_collector
 from dashboard.collector import PipelineCollector
@@ -26,30 +26,6 @@ from dashboard.html_report import generate_dashboard_html
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-
-
-@router.get("/stream")
-async def dashboard_stream():
-    """SSE endpoint for live pipeline updates."""
-    async def event_generator():
-        while True:
-            collector = get_any_active_collector()
-            if collector:
-                snapshot = collector.snapshot()
-                yield f"data: {json.dumps(snapshot)}\n\n"
-            else:
-                yield f"data: {json.dumps({'status': 'idle'})}\n\n"
-            await asyncio.sleep(1.0)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
 
 
 @router.get("/latest")

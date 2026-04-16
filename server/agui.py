@@ -17,9 +17,13 @@ This module provides:
    clip / scene / style level.
 
 Architecture:
-    Pipeline callbacks → emit_agui_event() → SSE stream → Frontend dashboard
+    Pipeline callbacks → emit_agui_event() → unified CopilotKit SSE stream
     Frontend dashboard → POST /agui/* → resolve_escalation() / store feedback
     Pipeline reads feedback via get_feedback_for_scene() / get_active_constraints()
+
+All real-time events flow through the single CopilotKit SSE stream (POST /).
+The server.py unified endpoint subscribes to emit_agui_event() and forwards
+pipeline events as AG-UI CustomEvents alongside agent protocol events.
 """
 
 from __future__ import annotations
@@ -308,39 +312,6 @@ def emit_agui_event(event_type: str, data: dict) -> None:
 # ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
-
-@router.get("/stream")
-async def agui_stream():
-    """SSE endpoint for AG-UI events (artifacts, escalations, feedback)."""
-    import asyncio
-    from starlette.responses import StreamingResponse
-
-    queue = subscribe_agui_events()
-
-    async def event_generator():
-        try:
-            while True:
-                if queue:
-                    event = queue.popleft()
-                    yield f"data: {json.dumps(event)}\n\n"
-                    await asyncio.sleep(0.05)  # small yield for burst draining
-                else:
-                    # Heartbeat
-                    yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
-                    await asyncio.sleep(1.0)
-        finally:
-            unsubscribe_agui_events(queue)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
 
 @router.get("/artifacts")
 async def get_artifacts(type: str | None = None):
