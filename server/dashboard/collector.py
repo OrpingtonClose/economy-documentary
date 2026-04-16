@@ -158,6 +158,15 @@ class PipelineCollector:
                     le.status = "completed"
                     break
 
+    def emit_event(self, event_type: str, data: dict, timestamp: float | None = None) -> None:
+        """Append an arbitrary event to the collector (thread-safe)."""
+        with self._lock:
+            self._events.append({
+                "type": event_type,
+                "data": data,
+                "timestamp": timestamp or time.time(),
+            })
+
     def force_end(self, token_estimate: int) -> None:
         with self._lock:
             self._force_end = True

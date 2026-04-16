@@ -146,9 +146,12 @@ def build_pipeline() -> Any:
     # Set entry point
     builder.set_entry_point("scenario")
 
-    # Cap the timing feedback loop at ~3 iterations
-    # scenario→audio→eval→refine→audio→eval = 6 node executions per loop
-    builder.set_max_node_executions(12)
+    # Cap the timing feedback loop at ~3 iterations.
+    # Initial path: scenario + audio + timing_eval = 3 executions
+    # Each refinement loop: refine + audio + timing_eval = 3 executions
+    # Final path after timing passes: video + assembly = 2 executions
+    # 3 loops: 3 + (3 × 3) + 2 = 14 minimum, set 20 for margin
+    builder.set_max_node_executions(20)
 
     # 2-hour total timeout for the pipeline
     builder.set_execution_timeout(7200)

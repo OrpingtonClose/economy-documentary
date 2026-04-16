@@ -21,8 +21,8 @@ _AUTO_APPROVE = _TEST_MODE or os.environ.get(
 ).strip().lower() in ("1", "true", "yes")
 
 _APPROVAL_FILE = os.path.join(
-    os.environ.get("PIPELINE_STATE_DIR", "/tmp/documentary-pipeline"),
-    "approval_state.json",
+    os.environ.get("PIPELINE_STATE_DIR", os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")),
+    ".approval_state.json",
 )
 
 

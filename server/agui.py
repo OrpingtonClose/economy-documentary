@@ -90,15 +90,10 @@ def emit_agui_event(event_type: str, data: dict[str, Any]) -> None:
 
         collector = get_active_collector()
         if collector:
-            # Append directly to the collector's event list
-            with collector._lock:
-                collector._events.append({
-                    "type": event_type,
-                    "data": data,
-                    "timestamp": time.time(),
-                })
-    except Exception:
-        pass
+            collector.emit_event(event_type, data)
+    except Exception as exc:
+        logger.warning("event_type=<%s> | emit_agui_event failed: %s", event_type, exc)
+        return
     logger.debug("event_type=<%s> | agui event emitted", event_type)
 
 
