@@ -1849,6 +1849,118 @@ def video_endpoint(req: VideoRequest):
     )
 
 
+@app.post("/assign-clip")
+def assign_clip_endpoint(req: dict):
+    """Fleet push endpoint — coordinator assigns a priority clip to this worker.
+
+    Used for priority retries when the pull model is too slow.
+    The coordinator POSTs a clip spec directly to this worker, which
+    generates it immediately and reports the result back.
+
+    Expected request body::
+        {
+            "clip_id": "scene_003_phrase_001",
+            "prompt": "...",
+            "negative_prompt": "...",
+            "duration": 7.5,
+            "lora_id": "documentary-realism",
+            "lora_weight": 0.7,
+            "width": 512,
+            "height": 320,
+            "num_frames": 105,
+            "callback_url": "http://backend:8000/fleet/report"
+        }
+    """
+    if _worker_mode == "tts":
+        raise HTTPException(503, "This worker is in TTS-only mode")
+
+    prompt = req.get("prompt", "")
+    if not prompt.strip():
+        raise HTTPException(400, "Prompt must not be empty")
+
+    clip_id = req.get("clip_id", "unknown")
+    callback_url = req.get("callback_url", "")
+
+    logger.info("Assigned clip %s (priority push)", clip_id)
+    t0 = time.time()
+
+    with _model_lock:
+        try:
+            mp4_bytes, qa_status = _generate_video(
+                prompt=prompt,
+                duration_sec=req.get("duration", 5.0),
+                width=req.get("width", 512),
+                height=req.get("height", 320),
+                num_frames=req.get("num_frames", 105),
+                seed=req.get("seed", -1),
+                num_inference_steps=req.get("num_inference_steps", 40),
+                guidance_scale=req.get("guidance_scale", 3.0),
+                negative_prompt=req.get("negative_prompt", ""),
+                visual_style=req.get("visual_style", ""),
+            )
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error("Assigned clip %s failed: %s", clip_id, e)
+            if _vm_agent:
+                _vm_agent.record_task(False, elapsed)
+            # Report failure back to coordinator if callback_url provided
+            if callback_url:
+                try:
+                    import requests as _req
+                    _req.post(callback_url, json={
+                        "clip_id": clip_id,
+                        "worker_id": f"{os.environ.get('VAST_CONTAINERLABEL', 'unknown')}",
+                        "success": False,
+                        "error": str(e),
+                        "error_category": "video_generation",
+                    }, timeout=10)
+                except Exception:
+                    pass
+            raise HTTPException(500, f"Clip generation failed: {e}")
+
+    elapsed = time.time() - t0
+    if _vm_agent:
+        _vm_agent.record_task(True, elapsed)
+
+    # Save the output
+    output_path = os.path.join(_output_dir, f"{clip_id}.mp4")
+    with open(output_path, "wb") as f:
+        f.write(mp4_bytes)
+
+    qa_quality = qa_status.get("quality", "unknown")
+    qa_reason = qa_status.get("qa_reason", "")
+
+    # Report success back to coordinator
+    if callback_url:
+        try:
+            import requests as _req
+            _req.post(callback_url, json={
+                "clip_id": clip_id,
+                "worker_id": f"{os.environ.get('VAST_CONTAINERLABEL', 'unknown')}",
+                "success": True,
+                "output_path": output_path,
+                "gen_time": round(elapsed, 2),
+                "qa_quality": qa_quality,
+                "qa_reason": qa_reason,
+            }, timeout=10)
+        except Exception as cb_err:
+            logger.warning("Failed to report clip %s to coordinator: %s", clip_id, cb_err)
+
+    logger.info(
+        "Assigned clip %s done: %.1fs, qa=%s", clip_id, elapsed, qa_quality,
+    )
+
+    return Response(
+        content=mp4_bytes,
+        media_type="video/mp4",
+        headers={
+            "X-Clip-Id": clip_id,
+            "X-Gen-Time": str(round(elapsed, 3)),
+            "X-QA-Quality": qa_quality,
+        },
+    )
+
+
 @app.get("/verify")
 async def verify_endpoint():
     """GAP 7.1: Return model identity info for bootstrap verification.

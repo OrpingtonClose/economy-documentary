@@ -230,6 +230,28 @@ def _init_pipeline_state(
             state["_pipeline_key"],
         )
 
+    # ── Trace capture for across-run learning ─────────────────────────
+    try:
+        from orchestrator.trace_capture import get_trace_capture
+        capture = get_trace_capture()
+        capture.start_run(
+            pipeline_key=state.get("_pipeline_key", "unknown"),
+            topic=state.get("topic", ""),
+            metadata={
+                "quick_test": state.get("quick_test", "false"),
+                "fleet_mode": os.environ.get("FLEET_MODE", "false"),
+            },
+        )
+    except Exception as tc_err:
+        logger.debug("Trace capture init skipped: %s", tc_err)
+
+    # ── OTel trace unification ────────────────────────────────────────
+    try:
+        from orchestrator.otel_bridge import instrument_production_agent
+        instrument_production_agent()
+    except Exception as otel_err:
+        logger.debug("OTel bridge init skipped: %s", otel_err)
+
     # Inject quick-test template variables from env if not already set.
     # run_pipeline.py sets these for the CLI path; this handles the AG-UI path.
     if os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes"):
@@ -279,6 +301,36 @@ def _init_pipeline_state(
                     "Background worker provisioning started — "
                     "VMs bootstrapping while scenario runs"
                 )
+
+                # Fleet mode: provision additional VMs via FleetScaler
+                # (rolling start — first VM already provisioned above,
+                # additional VMs boot in parallel and join as they come online)
+                fleet_mode = os.environ.get("FLEET_MODE", "").strip().lower() in ("1", "true")
+                if fleet_mode:
+                    try:
+                        from fleet.coordinator import get_fleet_coordinator
+                        coordinator = get_fleet_coordinator()
+                        if coordinator:
+                            # Estimate clip count from state (visual concepts not
+                            # generated yet, so use a reasonable default)
+                            budget = float(os.environ.get("PRODUCTION_BUDGET", "0"))
+                            est_clips = int(os.environ.get("ESTIMATED_CLIPS", "30"))
+                            n = coordinator.provision_fleet(
+                                num_clips=est_clips,
+                                budget_ceiling=budget,
+                            )
+                            logger.info(
+                                "Fleet mode: %d additional VMs provisioning "
+                                "(rolling start — first healthy VM pulls work "
+                                "immediately, others join as they boot)",
+                                max(0, n - 1),
+                            )
+                    except Exception as fleet_err:
+                        logger.warning(
+                            "Fleet provisioning failed (single-worker mode): %s",
+                            fleet_err,
+                        )
+
             except Exception as exc:
                 logger.error("Worker provisioning failed to start: %s", exc)
                 # Store the error on the provisioner so wait_for_worker()
@@ -319,6 +371,18 @@ def _cleanup_pipeline_state(
         state.get("_pipeline_key", "unknown"),
     )
 
+    # Save trace capture for across-run learning
+    try:
+        from orchestrator.trace_capture import get_trace_capture
+        capture = get_trace_capture()
+        capture.end_run(
+            summary=f"Pipeline completed: {state.get('_pipeline_key', 'unknown')}"
+        )
+        trace_path = capture.save()
+        logger.info("Production trace saved: %s", trace_path)
+    except Exception as tc_err:
+        logger.debug("Trace capture save skipped: %s", tc_err)
+
     # Cleanup worker provisioner (SSH tunnels, InfraAgent)
     try:
         from worker_provisioner import get_provisioner
@@ -326,6 +390,17 @@ def _cleanup_pipeline_state(
         provisioner.cleanup()
     except Exception as exc:
         logger.warning("Worker provisioner cleanup error: %s", exc)
+
+    # Cleanup fleet coordinator if running
+    try:
+        from fleet.coordinator import get_fleet_coordinator, reset_fleet_coordinator
+        coordinator = get_fleet_coordinator()
+        if coordinator:
+            coordinator.shutdown()
+            reset_fleet_coordinator()
+            logger.info("Fleet coordinator shut down during pipeline cleanup")
+    except Exception as fleet_err:
+        logger.debug("Fleet coordinator cleanup skipped: %s", fleet_err)
 
     # Reset provisioning flag so re-runs in the same session re-provision
     state["_workers_provisioned"] = False

@@ -395,7 +395,17 @@ def timeline_guardian_callback(
         error_msg = f"OTIO VIOLATION [{phase}]: timeline not found or unreadable"
         state["otio_violation"] = error_msg
         logger.error("Timeline Guardian FAIL [%s]: %s", phase, error_msg)
-        raise RuntimeError(error_msg)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name=f"timeline_guardian_{phase}",
+            error_msg=error_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=f"OTIO timeline missing or unreadable at {phase} phase.",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(error_msg)
+        return None  # human chose to skip — do NOT call validator with None timeline
 
     error = validator(timeline, state)
 
@@ -403,7 +413,17 @@ def timeline_guardian_callback(
         error_msg = f"OTIO VIOLATION [{phase}]: {error}"
         state["otio_violation"] = error_msg
         logger.error("Timeline Guardian FAIL [%s]: %s", phase, error)
-        raise RuntimeError(error_msg)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name=f"timeline_guardian_{phase}",
+            error_msg=error_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=f"OTIO timeline validation failed at {phase} phase: {error}",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(error_msg)
+        return None  # human chose to skip — leave otio_violation set, do NOT clear it
 
     # Validation passed -- clear any previous violation
     state["otio_violation"] = None

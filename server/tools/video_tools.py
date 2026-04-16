@@ -12,15 +12,12 @@ Rules:
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import logging
 import os
 import subprocess
 import threading
-import time
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from google.adk.tools import FunctionTool
@@ -39,14 +36,32 @@ _worker_index = 0
 
 
 def _get_next_worker_url() -> str:
-    """Get the next GPU worker URL using round-robin distribution.
+    """Get the next GPU worker URL using health-aware dispatch.
 
-    Reads VIDEO_WORKER_URLS (comma-separated) for multiple workers,
-    falls back to VIDEO_WORKER_URL or GPU_WORKER_URL for single worker.
+    Priority order:
+    1. InfraAgent healthy workers — health-aware, no queue side effects
+    2. Round-robin from VIDEO_WORKER_URLS — blind fallback
+    3. Single worker from VIDEO_WORKER_URL / GPU_WORKER_URL
     """
     global _worker_index
 
-    # Check for multiple workers first
+    # 1. Try InfraAgent healthy workers (health-aware, no queue side effects)
+    try:
+        from infra_agent import WorkerRole, get_infra_agent
+        agent = get_infra_agent()
+        if agent:
+            healthy = agent.get_healthy_workers(role=WorkerRole.VIDEO)
+            if healthy:
+                with _worker_lock:
+                    url = healthy[_worker_index % len(healthy)]
+                    _worker_index += 1
+                return url
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning("InfraAgent worker lookup failed, falling back to env vars: %s", e)
+
+    # 2. Round-robin from env vars (blind fallback)
     urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
     if urls_str:
         urls = [u.strip() for u in urls_str.split(",") if u.strip()]
@@ -56,7 +71,7 @@ def _get_next_worker_url() -> str:
                 _worker_index += 1
             return url
 
-    # Single worker fallback
+    # 3. Single worker fallback
     return os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
 
 
@@ -154,11 +169,25 @@ def generate_video_clip(
     # wastes all downstream assembly time and is unwatchable.
     gpu_worker_url = _get_next_worker_url()
     if not gpu_worker_url:
-        raise RuntimeError(
+        from recovery import escalate_pipeline_error
+        _no_worker_msg = (
             "No video worker URL configured. Set VIDEO_WORKER_URLS or "
             "GPU_WORKER_URL to at least one LTX-dedicated GPU VM. "
             "The pipeline MUST NOT fall back to placeholder video."
         )
+        response = escalate_pipeline_error(
+            operation_name="video_worker_missing",
+            error_msg=_no_worker_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="No GPU worker is provisioned or healthy.",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(_no_worker_msg)
+        return json.dumps({
+            "status": "error",
+            "error": "Video generation skipped — no GPU worker available",
+        })
 
     # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
     fps = 24
@@ -168,26 +197,7 @@ def generate_video_clip(
     # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
     seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
 
-    payload = json.dumps({
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "visual_style": visual_style,
-        "duration_sec": actual_duration,
-        "width": 512,
-        "height": 320,
-        "num_frames": num_frames,
-        "seed": seed,
-        # LTX-2.3 official parameters (from dg845/LTX-2.3-Diffusers example):
-        "num_inference_steps": 30,   # LTX-2.3 dev: 30 steps
-        "guidance_scale": 3.0,       # LTX-2.3 dev: CFG=3.0
-        "stg_scale": 1.0,            # spatio-temporal guidance
-        "modality_scale": 3.0,       # modality (video vs audio) guidance
-        "guidance_rescale": 0.7,     # guidance rescale factor
-        "stg_blocks": [28],          # STG block indices
-    }).encode("utf-8")
-
     video_url = f"{gpu_worker_url.rstrip('/')}/video"
-    req = Request(video_url, data=payload, headers={"Content-Type": "application/json"})
 
     # Use graduated recovery middleware instead of ad-hoc retry loops.
     # The middleware handles: retry → creative amendment → env assessment → human escalation.
@@ -309,6 +319,12 @@ def generate_video_clip(
                     # can catch. Include QA_HINTS so the creative amendment
                     # (_video_amend_prompt_with_qa_hints) can inject
                     # corrective guidance into the prompt for the next attempt.
+                    #
+                    # NOTE: Do NOT escalate here — execute_with_recovery
+                    # wraps _call_gpu_worker and will try creative amendments
+                    # (seed changes, prompt tweaks, step adjustments) first.
+                    # Human escalation happens at L4 of the recovery ladder
+                    # after all automated retries are exhausted.
                     raise RuntimeError(
                         f"QA {qa_quality.upper()}: visual quality below threshold. "
                         f"Clip saved at {output_path} for inspection. "
@@ -370,10 +386,20 @@ def generate_video_clip(
             output_path,
         )
         if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
-            raise RuntimeError(
+            from recovery import escalate_pipeline_error
+            _strict_msg = (
                 f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
                 f"STRICT_QA mode requires all clips to pass QA."
             )
+            response = escalate_pipeline_error(
+                operation_name="video_qa_unavailable",
+                error_msg=_strict_msg,
+                severity="warning",
+                default_action="abort",
+                diagnosis_hint="QA model could not evaluate clip quality.",
+            )
+            if response.get("action") != "skip":
+                raise RuntimeError(_strict_msg)
 
     # Probe the generated clip for actual duration (best-effort, never overwrites video)
     actual_dur = actual_duration

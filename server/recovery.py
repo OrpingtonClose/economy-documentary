@@ -982,3 +982,114 @@ def with_recovery(
             )
         return wrapper  # type: ignore[return-value]
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# Pipeline-level escalation helper (cross-cutting concern)
+# ---------------------------------------------------------------------------
+
+def escalate_pipeline_error(
+    operation_name: str,
+    error_msg: str,
+    severity: str = "critical",
+    proposed_actions: Optional[list[dict]] = None,
+    default_action: str = "abort",
+    diagnosis_hint: Optional[str] = None,
+    wait_timeout_sec: float = 600.0,
+) -> dict:
+    """Submit a pipeline error as an escalation and wait for human resolution.
+
+    This is the **cross-cutting concern** that every error site in the
+    pipeline should use instead of ``raise RuntimeError(...)``.  It:
+
+    1. Submits a ``HumanEscalationRequest`` (emits SSE event to dashboard).
+    2. In auto-approve mode (``DOCUMENTARY_AUTO_APPROVE=true``): returns
+       ``{"action": default_action}`` immediately — no waiting.
+    3. In manual mode: blocks until the human responds via the AG-UI
+       ``/agui/escalations/{id}/respond`` endpoint, or until timeout.
+
+    The **caller** decides what to do with the response:
+    - ``"skip"``  → continue the pipeline (accept degraded quality)
+    - ``"abort"`` → raise an error (with the full escalation trail)
+    - ``"retry_with_fix"`` → re-run the failing stage
+    - ``"amend"`` → use amended parameters from the human
+
+    Returns:
+        Response dict with at minimum ``{"action": "..."}``.
+    """
+    if proposed_actions is None:
+        proposed_actions = [
+            {
+                "action_id": "retry_with_fix",
+                "description": "Re-run the failing stage after addressing the root cause",
+                "risk_level": "low",
+            },
+            {
+                "action_id": "skip",
+                "description": f"Skip {operation_name} and continue the pipeline",
+                "risk_level": "medium",
+            },
+            {
+                "action_id": "abort",
+                "description": "Abort the pipeline",
+                "risk_level": "high",
+            },
+        ]
+
+    escalation_id = _next_escalation_id()
+    diag_dict = {
+        "root_cause": diagnosis_hint or error_msg[:300],
+        "confidence": "likely",
+        "proposed_fix": f"Review the {operation_name} failure and choose an action.",
+    }
+
+    req = HumanEscalationRequest(
+        id=escalation_id,
+        operation_name=operation_name,
+        error_chain=[{
+            "level": "PIPELINE",
+            "error": error_msg[:500],
+            "strategy": "escalate_pipeline_error",
+            "timestamp": time.time(),
+        }],
+        diagnosis=diag_dict,
+        proposed_actions=proposed_actions,
+        severity=severity,
+        timestamp=time.time(),
+    )
+    submit_escalation(req)
+
+    # In auto-approve mode, return the default action immediately.
+    # The escalation is still submitted (audit trail + dashboard visibility).
+    auto_approve = os.environ.get(
+        "DOCUMENTARY_AUTO_APPROVE", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if auto_approve:
+        logger.warning(
+            "Escalation %s auto-resolved (auto-approve mode): %s → %s",
+            escalation_id, operation_name, default_action,
+        )
+        resolve_escalation(escalation_id, {
+            "action": default_action,
+            "comment": "auto-resolved (DOCUMENTARY_AUTO_APPROVE)",
+            "timestamp": time.time(),
+        })
+        return {"action": default_action}
+
+    # Manual mode — wait for human response
+    logger.critical(
+        "ESCALATION %s: '%s' — waiting for human response (timeout %.0fs). "
+        "Error: %s",
+        escalation_id, operation_name, wait_timeout_sec, error_msg[:200],
+    )
+    human_response = _wait_for_human_response(escalation_id, wait_timeout_sec)
+
+    if human_response:
+        return human_response
+
+    # Timeout — no human response.  Default to abort.
+    logger.error(
+        "Escalation %s timed out — defaulting to abort for '%s'",
+        escalation_id, operation_name,
+    )
+    return {"action": "abort", "comment": "timeout — no human response"}
