@@ -363,6 +363,71 @@ def clean_scenes_after_scenario(
                 )
 
     if scenes:
+        # ── Duration budget: scale scene durations so total = target ──
+        # The scenario LLM generates scenes whose duration_sec values sum
+        # to the user's requested total (e.g. 420s for "7 minutes").  But
+        # the audio stage adds structural silence gaps (inter-voice pauses
+        # between V1→V2→V3 and inter-scene transitions).  These gaps are
+        # part of the movie runtime.  We scale scene durations DOWN so:
+        #   sum(scene_duration_sec) + total_gaps = original_target
+        #
+        # The gap constants MUST match those in deterministic_audio_callback.
+        _INTER_VOICE_PAUSE = 1.5
+        _INTER_SCENE_PAUSE = 2.5
+        original_total = sum(s.get("duration_sec", 0) for s in scenes)
+        if original_total > 0:
+            num_scenes = len(scenes)
+            # Compute total gap overhead that audio stage will insert
+            total_voice_gaps = 0.0
+            for s in scenes:
+                voices = s.get("voices", [])
+                active = sum(1 for v in voices if v.get("text", "").strip())
+                total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE
+            total_scene_gaps = max(0, num_scenes - 1) * _INTER_SCENE_PAUSE
+            total_gap_overhead = total_voice_gaps + total_scene_gaps
+
+            narration_budget = original_total - total_gap_overhead
+            if narration_budget > 0 and narration_budget < original_total:
+                scale = narration_budget / original_total
+                for s in scenes:
+                    old_dur = s.get("duration_sec", 0)
+                    s["duration_sec"] = round(old_dur * scale, 2)
+                new_total = sum(s.get("duration_sec", 0) for s in scenes)
+                logger.info(
+                    "Duration budget: scaled narration %.1fs → %.1fs "
+                    "(gaps=%.1fs, movie target=%.1fs)",
+                    original_total, new_total, total_gap_overhead,
+                    new_total + total_gap_overhead,
+                )
+            else:
+                logger.warning(
+                    "Duration budget: gap overhead %.1fs >= total %.1fs — "
+                    "skipping scaling (too many scenes/voices for target)",
+                    total_gap_overhead, original_total,
+                )
+
+        # Store per-voice narration budgets for the audio stage's QA loop.
+        # Each voice gets a budget proportional to its word count within
+        # the scene's (already-scaled) duration_sec.
+        voice_budgets: dict[str, float] = {}  # "scene_NNN_voice" → seconds
+        for s in scenes:
+            sn = s.get("scene_num", 0)
+            dur = s.get("duration_sec", 0)
+            voices = s.get("voices", [])
+            active = [v for v in voices if v.get("text", "").strip()]
+            total_words = sum(len(v.get("text", "").split()) for v in active)
+            if total_words <= 0:
+                total_words = 1
+            for v in active:
+                voice_name = v.get("voice", "V1")
+                words = len(v.get("text", "").split())
+                budget = dur * (words / total_words) if dur > 0 else 0
+                key = f"scene_{sn:03d}_{voice_name}"
+                voice_budgets[key] = round(budget, 2)
+        state["_voice_budgets"] = json.dumps(voice_budgets)
+        logger.info("Voice budgets: %d entries, total=%.1fs",
+                     len(voice_budgets), sum(voice_budgets.values()))
+
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
 
@@ -394,6 +459,61 @@ def clean_scenes_after_scenario(
     # Run timeline guardian after cleaning
     from callbacks.timeline_guardian import timeline_guardian_callback
     return timeline_guardian_callback(callback_context)
+
+
+# ---------------------------------------------------------------------------
+# Narration text trimming for duration budget enforcement
+# ---------------------------------------------------------------------------
+
+_MAX_TRIM_RETRIES = 2  # max re-generation attempts per voice
+
+def _trim_text_to_budget(text: str, actual_duration: float, budget: float) -> str:
+    """Trim narration text proportionally to fit within a duration budget.
+
+    Removes sentences from the end until the estimated word count fits
+    the budget.  At ~150 words/min (standard narration rate), we estimate
+    how many words the budget allows and trim accordingly.
+
+    Returns the trimmed text, or the original text if trimming would
+    remove more than 40% of the content (in that case, the scenario
+    should be adjusted instead — see the audio QA gate).
+    """
+    if actual_duration <= budget or budget <= 0:
+        return text
+
+    ratio = budget / actual_duration  # e.g. 0.85 means keep 85%
+    if ratio < 0.6:
+        # Would remove >40% — flag for scenario adjustment instead
+        logger.warning(
+            "Narration trimming would remove %.0f%% of text "
+            "(actual=%.1fs, budget=%.1fs) — too aggressive, skipping trim",
+            (1 - ratio) * 100, actual_duration, budget,
+        )
+        return text
+
+    words = text.split()
+    target_words = max(1, int(len(words) * ratio))
+
+    # Trim at sentence boundaries when possible
+    sentences = text.replace("! ", ".|").replace("? ", ".|").replace(". ", ".|").split("|")
+    trimmed_sentences = []
+    word_count = 0
+    for sentence in sentences:
+        s_words = len(sentence.split())
+        if word_count + s_words > target_words and trimmed_sentences:
+            break
+        trimmed_sentences.append(sentence)
+        word_count += s_words
+
+    result = " ".join(trimmed_sentences).strip()
+    if not result:
+        result = " ".join(words[:target_words])
+
+    logger.info(
+        "Trimmed narration: %d → %d words (ratio=%.2f, budget=%.1fs)",
+        len(words), len(result.split()), ratio, budget,
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +578,7 @@ def deterministic_audio_callback(
     # Import tool functions directly (not via FunctionTool wrappers)
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
-    from tools.otio_tools import add_narration_clip, add_narration_gap, add_video_gap
+    from tools.otio_tools import add_narration_clip, add_narration_gap
     from gatekeeper import check_narration_clip, has_rejects, format_audit_report
 
     # ── OTIO architecture constants ──────────────────────────────────
@@ -472,9 +592,19 @@ def deterministic_audio_callback(
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
     _feedback_store = get_feedback_store()
 
+    # Load per-voice narration budgets from scenario stage
+    _raw_budgets = state.get("_voice_budgets", "{}")
+    try:
+        voice_budgets: dict[str, float] = json.loads(str(_raw_budgets))
+    except (json.JSONDecodeError, TypeError):
+        voice_budgets = {}
+    logger.info("Voice budgets loaded: %d entries", len(voice_budgets))
+
     alignment_data = {}
     total_clips = 0
     errors = []
+    # Track actual durations per voice for scene-level and total QA
+    _actual_durations: dict[str, float] = {}  # "scene_NNN_voice" → actual seconds
     # Deferred gatekeeper: collect clip info for batch validation AFTER
     # all artifacts are uploaded to B2 and written to OTIO (audit trail).
     _deferred_gk_clips: list[dict] = []
@@ -549,13 +679,23 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # Track RU clip durations for scene/total QA
+                            # (EN clips are alternate and excluded from QA)
+                            if lang_code == "ru":
+                                budget_key = f"scene_{scene_num:03d}_{voice}"
+                                _actual_durations[budget_key] = duration
+
                             # B2 upload already happened inside generate_narration().
                             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                            voice_budget = voice_budgets.get(
+                                f"scene_{scene_num:03d}_{voice}", 0,
+                            )
                             _deferred_gk_clips.append({
                                 "wav_path": wav_path,
                                 "scene_num": scene_num,
                                 "voice": voice_suffix,
                                 "duration": duration,
+                                "budget": voice_budget if lang_code == "ru" else 0,
                             })
 
                             # AG-UI: update narration artifact
@@ -604,20 +744,62 @@ def deterministic_audio_callback(
                         errors.append(err_msg)
 
             else:
-                # Single language mode
+                # Single language mode — with duration budget enforcement
                 lang_code = language if language in ("ru", "en") else "en"
+                budget_key = f"scene_{scene_num:03d}_{voice}"
+                voice_budget = voice_budgets.get(budget_key, 0)
+                current_text = text
                 try:
-                    result_json = generate_narration(
-                        scene_num=scene_num,
-                        voice_role=voice,
-                        text=text,
-                        language=lang_code,
-                    )
-                    result = json.loads(result_json)
-                    wav_path = result.get("wav_path", "")
-                    duration = result.get("duration", 0)
+                    # Budget-aware TTS loop: generate, measure, trim if over
+                    wav_path = ""
+                    duration = 0.0
+                    for _trim_attempt in range(_MAX_TRIM_RETRIES + 1):
+                        result_json = generate_narration(
+                            scene_num=scene_num,
+                            voice_role=voice,
+                            text=current_text,
+                            language=lang_code,
+                        )
+                        result = json.loads(result_json)
+                        wav_path = result.get("wav_path", "")
+                        duration = result.get("duration", 0)
+
+                        if not wav_path or duration <= 0:
+                            break  # TTS failed — fall through to error handling
+
+                        # Check against budget (10% tolerance)
+                        if voice_budget > 0 and duration > voice_budget * 1.10:
+                            if _trim_attempt < _MAX_TRIM_RETRIES:
+                                logger.warning(
+                                    "Scene %d %s: narration %.1fs > budget %.1fs "
+                                    "(+%.0f%%), trimming text (attempt %d/%d)",
+                                    scene_num, voice, duration, voice_budget,
+                                    ((duration / voice_budget) - 1) * 100,
+                                    _trim_attempt + 1, _MAX_TRIM_RETRIES,
+                                )
+                                current_text = _trim_text_to_budget(
+                                    current_text, duration, voice_budget,
+                                )
+                                # Delete cached WAV so TTS regenerates
+                                if os.path.exists(wav_path):
+                                    os.remove(wav_path)
+                                sidecar = wav_path.replace(".wav", ".txt")
+                                if os.path.exists(sidecar):
+                                    os.remove(sidecar)
+                                continue
+                            else:
+                                logger.warning(
+                                    "Scene %d %s: still over budget after %d trims "
+                                    "(%.1fs > %.1fs) — accepting as-is",
+                                    scene_num, voice, _MAX_TRIM_RETRIES,
+                                    duration, voice_budget,
+                                )
+                        break  # Within budget or no budget — proceed
 
                     if wav_path and duration > 0:
+                        # Track actual duration for scene/total QA
+                        _actual_durations[budget_key] = duration
+
                         # B2 upload already happened inside generate_narration().
                         # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
                         _deferred_gk_clips.append({
@@ -625,6 +807,7 @@ def deterministic_audio_callback(
                             "scene_num": scene_num,
                             "voice": voice,
                             "duration": duration,
+                            "budget": voice_budget,
                         })
 
                         clip_result_json = add_narration_clip(
@@ -644,7 +827,7 @@ def deterministic_audio_callback(
 
                         align_result_json = align_narration(
                             wav_path=wav_path,
-                            text=text,
+                            text=current_text,
                             language=lang_code,
                         )
                         align_key = f"scene_{scene_num:03d}_{voice}"
@@ -658,19 +841,14 @@ def deterministic_audio_callback(
                     errors.append(err_msg)
 
             # ── OTIO: interleave inter-voice gap AFTER this voice ──────
-            # Insert immediately after each voice clip (except the last)
-            # so the OTIO track order is: V1, gap, V2, gap, V3.
+            # Silence gap on the NARRATION track only (except after the
+            # last voice).  The VIDEO track has NO gaps — video clips are
+            # generated long enough to cover narration + the following
+            # pause (see production callback / get_video_slot_durations).
             current_voice_idx += 1
             if current_voice_idx < active_voice_count:
                 _mock_ctx = _MockToolContext(state)
                 add_narration_gap(
-                    scene_num=scene_num,
-                    duration=INTER_VOICE_PAUSE_SEC,
-                    gap_type="inter_voice",
-                    gap_index=current_voice_idx,
-                    tool_context=_mock_ctx,
-                )
-                add_video_gap(
                     scene_num=scene_num,
                     duration=INTER_VOICE_PAUSE_SEC,
                     gap_type="inter_voice",
@@ -689,13 +867,6 @@ def deterministic_audio_callback(
         if scene_idx < len(scenes) - 1:
             _mock_ctx = _MockToolContext(state)
             add_narration_gap(
-                scene_num=scene_num,
-                duration=INTER_SCENE_PAUSE_SEC,
-                gap_type="inter_scene",
-                gap_index=scene_idx,
-                tool_context=_mock_ctx,
-            )
-            add_video_gap(
                 scene_num=scene_num,
                 duration=INTER_SCENE_PAUSE_SEC,
                 gap_type="inter_scene",
@@ -722,7 +893,20 @@ def deterministic_audio_callback(
     # GATEKEEPER: batch validation AFTER all artifacts are in B2.
     # Every narration clip is already uploaded (inside generate_narration)
     # and written to OTIO.  Now validate and upload the audit report.
+    #
+    # QA levels (same pattern as video production):
+    #   1. Individual clip QA  — file exists, duration > 0, size > 1KB
+    #   2. Individual budget QA — narration fits voice time budget
+    #   3. Scene-level QA      — scene narration + gaps ≤ scene duration_sec
+    #   4. Total QA            — full assembled narration ≈ target duration
+    from gatekeeper import (
+        check_narration_duration_budget,
+        check_scene_narration_total,
+        check_total_narration_duration,
+    )
     all_gk_checks = []
+
+    # Level 1 + 2: individual clip structural + budget checks
     for clip_info in _deferred_gk_clips:
         gk_checks = check_narration_clip(
             wav_path=clip_info["wav_path"],
@@ -732,6 +916,66 @@ def deterministic_audio_callback(
             stage="audio",
         )
         all_gk_checks.extend(gk_checks)
+
+        # Budget check per voice
+        budget_checks = check_narration_duration_budget(
+            scene_num=clip_info["scene_num"],
+            voice=clip_info["voice"],
+            actual_duration=clip_info["duration"],
+            budget=clip_info.get("budget", 0),
+            stage="audio",
+        )
+        all_gk_checks.extend(budget_checks)
+
+    # Level 3: scene-level QA
+    for scene in scenes:
+        sn = scene.get("scene_num", 0)
+        scene_budget = scene.get("duration_sec", 0)
+        scene_voices = scene.get("voices", [])
+        active = [v for v in scene_voices if v.get("text", "").strip()]
+        scene_voice_gaps = max(0, len(active) - 1) * INTER_VOICE_PAUSE_SEC
+
+        # Sum actual narration durations for this scene
+        scene_narr_total = 0.0
+        for v in active:
+            vname = v.get("voice", "V1")
+            key = f"scene_{sn:03d}_{vname}"
+            scene_narr_total += _actual_durations.get(key, 0)
+
+        scene_checks = check_scene_narration_total(
+            scene_num=sn,
+            actual_scene_total=scene_narr_total,
+            scene_budget=scene_budget,
+            gap_overhead=scene_voice_gaps,
+            stage="audio",
+        )
+        all_gk_checks.extend(scene_checks)
+
+    # Level 4: total assembled narration QA
+    total_narration = sum(_actual_durations.values())
+    total_voice_gaps = sum(
+        max(0, len([v for v in s.get("voices", []) if v.get("text", "").strip()]) - 1)
+        * INTER_VOICE_PAUSE_SEC
+        for s in scenes
+    )
+    total_scene_gaps = max(0, len(scenes) - 1) * INTER_SCENE_PAUSE_SEC
+    actual_movie_duration = total_narration + total_voice_gaps + total_scene_gaps
+    # The original target is what the scenario generated before scaling
+    # Reconstruct: scaled_total + gap_overhead = original_target
+    scaled_narration_total = sum(s.get("duration_sec", 0) for s in scenes)
+    target_movie_duration = scaled_narration_total + total_voice_gaps + total_scene_gaps
+    total_checks = check_total_narration_duration(
+        actual_total=actual_movie_duration,
+        target_total=target_movie_duration,
+        stage="audio",
+    )
+    all_gk_checks.extend(total_checks)
+    logger.info(
+        "Narration QA: total=%.1fs (narration=%.1fs + voice_gaps=%.1fs + "
+        "scene_gaps=%.1fs), target=%.1fs",
+        actual_movie_duration, total_narration, total_voice_gaps,
+        total_scene_gaps, target_movie_duration,
+    )
 
     # Upload gatekeeper audit report to B2 (audit trail)
     if all_gk_checks:
@@ -846,7 +1090,8 @@ def _normalize_concept_durations(
        narration phrases (V1, V2, V3) for that scene.  The gatekeeper
        enforces 1:1 mapping between concepts and phrases.
     2. The sum of video concept durations for a scene MUST equal the sum
-       of narration durations for that scene.
+       of VIDEO SLOT durations (narration + following gap) for that scene,
+       ensuring continuous video with no freeze-frames during pauses.
 
     The LLM visual director may generate more concepts than narration
     phrases (e.g. 7 concepts for 3 phrases).  This function:
@@ -858,7 +1103,9 @@ def _normalize_concept_durations(
 
     Args:
         concepts: List of visual concept dicts from the LLM.
-        narr_durations: Dict from get_narration_durations_by_scene().
+        narr_durations: Dict from get_video_slot_durations() — each voice's
+            full time slot (narration + following gap) so video clips cover
+            the entire timeline with no freeze-frames.
 
     Returns:
         New list of concepts with normalized durations and counts.
@@ -1042,18 +1289,19 @@ def write_visual_metadata_to_otio(
         from callbacks.timeline_guardian import timeline_guardian_callback
         return timeline_guardian_callback(callback_context)
 
-    # ── ARCHITECTURE: normalize concept durations to match narration ──
+    # ── ARCHITECTURE: normalize concept durations to match VIDEO slots ──
     # The LLM controls WHERE visual breaks happen.  This normalizer
-    # scales durations so they sum to the narration duration per scene.
-    from tools.otio_tools import get_narration_durations_by_scene
-    narr_durations = get_narration_durations_by_scene(
+    # scales durations so each concept covers the narration PLUS the
+    # following silence gap — ensuring continuous video with no freeze-frames.
+    from tools.otio_tools import get_video_slot_durations
+    slot_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
     )
-    if narr_durations:
-        concepts = _normalize_concept_durations(concepts, narr_durations)
+    if slot_durations:
+        concepts = _normalize_concept_durations(concepts, slot_durations)
         # Store normalized concepts back into state so production uses them
         state["visual_concepts"] = json.dumps(concepts)
-        logger.info("Normalized %d visual concepts to match narration timing", len(concepts))
+        logger.info("Normalized %d visual concepts to match video slot timing", len(concepts))
 
     # ── Expose WhisperX word-level data to visual concepts ──────────
     # The alignment data from the audio stage is stored in state.  We
@@ -1317,7 +1565,7 @@ def deterministic_production_callback(
         concepts = consolidated
 
     from tools.video_tools import generate_video_clip, probe_clip
-    from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
+    from tools.otio_tools import add_video_clip, get_video_slot_durations
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
     # GATEKEEPER: stage handoff check (visual_direction → production)
@@ -1331,8 +1579,10 @@ def deterministic_production_callback(
     if not intervention_window("production_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
-    # Read narration durations for gatekeeper cross-validation
-    narr_durations = get_narration_durations_by_scene(
+    # Read VIDEO SLOT durations (narration + following gap) for cross-validation.
+    # This is what each video clip must cover — continuous footage with no
+    # freeze-frames during narrator pauses.
+    narr_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
     )
 
