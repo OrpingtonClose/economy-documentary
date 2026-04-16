@@ -119,17 +119,18 @@ Each scene must have:
 - visual_style: {mood: str, palette: str, avoid: str}
 - lora_id (str) - from the LoRA catalog
 
-IMPORTANT WORKFLOW:
+CRITICAL WORKFLOW — follow these steps IN ORDER:
 1. Use read_corpus to load the source material
 2. Use query_production_capabilities, query_voice_profiles, query_gatekeeper_rules
    to discover constraints
-3. Design your scenes array
+3. Design your scenes as a JSON array
 4. Use create_timeline to initialize the OTIO timeline
-5. MANDATORY: Call save_scenario with the scenes JSON array and a visual_style
-   JSON object. This persists the plan to shared pipeline state so audio and
-   video agents can access it. If you skip this step, downstream agents will
-   have no scenes to work with and the pipeline will fail.
+5. **IMMEDIATELY call save_scenario** with your scenes JSON array as the first
+   argument and a visual_style JSON object as the second argument. Example:
+   save_scenario(scenes_json='[{"scene_num": 1, ...}]', visual_style_json='{"mood": "..."}')
+   This is the MOST IMPORTANT step. Without it, the entire pipeline fails.
 6. Call validate_deliverables("scenario") to verify scenes were persisted correctly.
+   If it reports failures with a "fix" field, follow those instructions exactly.
 
 SELF-HEALING:
 If validate_deliverables reports failures:

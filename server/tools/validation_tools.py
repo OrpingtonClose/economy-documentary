@@ -71,6 +71,15 @@ def _get_contract(stage_name: str) -> Any:
     return contracts.get(contract_name)
 
 
+_REMEDIATION_HINTS: dict[str, str] = {
+    "scenes": "Call save_scenario(scenes_json, visual_style_json) to persist your scenes array to pipeline state",
+    "visual_style": "Call save_scenario(scenes_json, visual_style_json) with a visual_style JSON object",
+    "visual_concepts": "Call save_visual_concepts(concepts_json) to persist visual concepts to pipeline state",
+    "whisperx_alignment": "The audio agent must generate narration and run WhisperX alignment",
+    "_timeline_path": "Call create_timeline(topic, num_scenes) to initialize the OTIO timeline",
+}
+
+
 def _check_state_keys(keys: list[str], state: dict) -> list[dict[str, str]]:
     """Check that state keys contain real data (not placeholder values)."""
     failures = []
@@ -78,11 +87,15 @@ def _check_state_keys(keys: list[str], state: dict) -> list[dict[str, str]]:
         val = state.get(key, "")
         val_str = str(val).strip() if val is not None else ""
         if val_str in _PLACEHOLDER_VALUES:
-            failures.append({
+            entry: dict[str, str] = {
                 "key": key,
                 "issue": "empty or placeholder",
                 "current_value": val_str[:100] if val_str else "(empty)",
-            })
+            }
+            hint = _REMEDIATION_HINTS.get(key, "")
+            if hint:
+                entry["fix"] = hint
+            failures.append(entry)
     return failures
 
 
