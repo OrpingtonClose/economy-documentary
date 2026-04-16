@@ -129,7 +129,8 @@ async def run_pipeline_endpoint(request: Request):
     quick_test = body.get("quick_test", False)
 
     if not topic:
-        return {"error": "topic is required"}
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "topic is required"}, status_code=400)
 
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     collector = PipelineCollector(run_id=run_id)
@@ -144,44 +145,33 @@ async def run_pipeline_endpoint(request: Request):
             from run_pipeline import run_pipeline
             loop = asyncio.get_event_loop()
 
-            # Set env vars in a scoped way — clean up in finally
-            _env_overrides: dict[str, str | None] = {}
-            if quick_test:
-                for key in ("DOCUMENTARY_TEST_MODE", "DOCUMENTARY_QUICK_TEST"):
-                    _env_overrides[key] = os.environ.get(key)
-                    os.environ[key] = "true"
+            # quick_test flag is passed directly to run_pipeline() which
+            # propagates it via initial_state["quick_test"]. We do NOT set
+            # process-global env vars here — that would race between
+            # concurrent requests.
+            pipeline_future = loop.run_in_executor(
+                None,
+                lambda: run_pipeline(
+                    topic=topic,
+                    corpus_path=corpus_path,
+                    language=language,
+                    quick_test=quick_test,
+                ),
+            )
 
-            try:
-                pipeline_future = loop.run_in_executor(
-                    None,
-                    lambda: run_pipeline(
-                        topic=topic,
-                        corpus_path=corpus_path,
-                        language=language,
-                        quick_test=quick_test,
-                    ),
-                )
-
-                # Send heartbeats while waiting so proxies/browsers
-                # don't drop the idle SSE connection during long runs.
-                while not pipeline_future.done():
-                    try:
-                        result = await asyncio.wait_for(
-                            asyncio.shield(pipeline_future),
-                            timeout=_HEARTBEAT_INTERVAL,
-                        )
-                        break
-                    except asyncio.TimeoutError:
-                        yield ": heartbeat\n\n"
-                else:
-                    result = pipeline_future.result()
-            finally:
-                # Restore env vars to prevent leaking across requests
-                for key, prev in _env_overrides.items():
-                    if prev is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = prev
+            # Send heartbeats while waiting so proxies/browsers
+            # don't drop the idle SSE connection during long runs.
+            while not pipeline_future.done():
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.shield(pipeline_future),
+                        timeout=_HEARTBEAT_INTERVAL,
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"
+            else:
+                result = pipeline_future.result()
 
             # Send result
             serializable = {}
