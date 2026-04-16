@@ -284,7 +284,7 @@ class SystemicDetector:
                 severity="warning",
                 evidence=[self._cost_tracker.summary()],
                 hypothesis=(
-                    f"Cost accumulating {self.BUDGET_BURN_THRESHOLD:.0%} "
+                    f"Cost accumulating {self.BUDGET_BURN_THRESHOLD - 1:.0%} "
                     f"faster than projected"
                 ),
                 recommended_action="reduce_fleet_or_alert",
