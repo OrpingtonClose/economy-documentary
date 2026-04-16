@@ -353,6 +353,7 @@ def calculate_weighted_budgets(
         )
         if response.get("action") != "skip":
             raise RuntimeError(_credit_msg)
+        return (0.0, 0.0)  # skip: return zero budgets so caller can handle gracefully
 
     total_hourly = usable / max(estimated_hours, 0.5)
 
@@ -401,6 +402,7 @@ def calculate_budget_per_worker(
         )
         if response.get("action") != "skip":
             raise RuntimeError(_credit_msg)
+        return 0.0  # skip: return zero budget so caller can handle gracefully
     budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
     capped = min(budget, _VIDEO_PRICE_CEILING)
     return capped
@@ -1365,6 +1367,16 @@ class WorkerProvisioner:
             selected_offer_id = provision_vm(
                 spec, excluded_offer_ids=_excluded_offers or None,
             )
+
+            # Handle skip sentinel: provisioning was skipped by human
+            if selected_offer_id == 0:
+                spec.status = "skipped"
+                logger.warning(
+                    "%s VM provisioning skipped (human chose skip) — "
+                    "no VM created for %s",
+                    spec.role, spec.role,
+                )
+                return
 
             # Step 2: Wait for VM to be running — use a shorter timeout
             # for image pull so we can retry on a faster host.  On the

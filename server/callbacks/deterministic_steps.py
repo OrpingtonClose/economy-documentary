@@ -1781,10 +1781,108 @@ def deterministic_production_callback(
                 _collect_result(r, dest)  # handle nested splits
         else:
             dest.append(result)
+            # Record to trace capture for across-run learning
+            if _trace_capture and isinstance(result, dict):
+                _trace_capture.record_clip_result(
+                    clip_id=result.get("clip_id", "unknown"),
+                    success=not result.get("error"),
+                    gen_time=result.get("gen_time", 0),
+                    qa_quality=result.get("qa_quality", ""),
+                    qa_reason=result.get("qa_reason", ""),
+                    worker_id=result.get("worker_id", "local"),
+                    attempt=result.get("qa_attempts", 1),
+                    prompt=result.get("prompt", ""),
+                    duration_target=result.get("duration_target", 0),
+                    duration_actual=result.get("duration_actual", 0),
+                )
 
-    # Generate clips in parallel across available GPU workers
+    # Generate clips — fleet-aware dispatch with work queue when available,
+    # falling back to the original ThreadPoolExecutor for single-worker mode.
     results: list[dict] = []
-    if num_workers > 1:
+
+    # Try fleet coordinator first (provides work queue, retry-on-different-worker,
+    # cost tracking, and systemic problem detection)
+    _fleet_coordinator = None
+    try:
+        from fleet.coordinator import get_fleet_coordinator
+        from fleet.work_queue import QueuedClip as _QueuedClip
+        _fleet_coordinator = get_fleet_coordinator()
+    except ImportError:
+        pass
+
+    # Trace capture for across-run learning
+    _trace_capture = None
+    try:
+        from orchestrator.trace_capture import get_trace_capture
+        _trace_capture = get_trace_capture()
+        _trace_capture.record_event("production_started", {
+            "num_clips": len(concepts),
+            "num_workers": num_workers,
+            "fleet_mode": _fleet_coordinator is not None,
+        })
+    except Exception:
+        pass
+
+    if _fleet_coordinator is not None:
+        # ── Fleet mode: enqueue all clips, generate via coordinator ──
+        logger.info(
+            "Fleet mode: enqueueing %d clips into work queue", len(concepts),
+        )
+        queued = []
+        for c in concepts:
+            queued.append(_QueuedClip(
+                clip_id=f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}",
+                scene_num=c.get("scene_num", 0),
+                phrase_idx=c.get("phrase_idx", 0),
+                prompt=c.get("prompt", ""),
+                negative_prompt=c.get("negative_prompt", ""),
+                duration=c.get("duration", 5.0),
+                lora_id=c.get("lora_id", "documentary-realism"),
+                lora_weight=c.get("lora_weight", 0.7),
+            ))
+        _fleet_coordinator.enqueue_clips(queued)
+
+        # Generate clips via ThreadPoolExecutor but report results to coordinator
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_concept = {
+                executor.submit(_generate_one_clip, c): c for c in concepts
+            }
+            for future in as_completed(future_to_concept):
+                c = future_to_concept[future]
+                clip_id = f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}"
+                try:
+                    result = future.result()
+                    _collect_result(result, results)
+                    # Report success to fleet coordinator
+                    _fleet_coordinator.report_completed(
+                        clip_id=clip_id,
+                        output_path=result.get("_output_path", "") if isinstance(result, dict) else "",
+                        gen_time=result.get("gen_time", 0) if isinstance(result, dict) else 0,
+                        qa_quality=result.get("qa_quality", "") if isinstance(result, dict) else "",
+                        qa_reason=result.get("qa_reason", "") if isinstance(result, dict) else "",
+                        worker_id="local",
+                    )
+                except RuntimeError:
+                    # Report failure to fleet coordinator
+                    _fleet_coordinator.report_failed(
+                        clip_id=clip_id,
+                        worker_id="local",
+                        error=str(future.exception()) if future.exception() else "RuntimeError",
+                        category="video_generation",
+                    )
+                    raise
+                except Exception as e:
+                    _fleet_coordinator.report_failed(
+                        clip_id=clip_id,
+                        worker_id="local",
+                        error=str(e),
+                        category="video_generation",
+                    )
+                    err_msg = f"Error producing scene {c.get('scene_num')} phrase {c.get('phrase_idx')}: {e}"
+                    logger.error(err_msg)
+                    errors.append(err_msg)
+    elif num_workers > 1:
+        # ── Legacy parallel mode (no fleet coordinator) ──
         logger.info("Parallel video generation: %d workers, %d clips", num_workers, len(concepts))
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             future_to_concept = {

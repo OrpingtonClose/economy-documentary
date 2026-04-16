@@ -319,21 +319,17 @@ def generate_video_clip(
                     # can catch. Include QA_HINTS so the creative amendment
                     # (_video_amend_prompt_with_qa_hints) can inject
                     # corrective guidance into the prompt for the next attempt.
-                    from recovery import escalate_pipeline_error
-                    _qa_msg = (
+                    #
+                    # NOTE: Do NOT escalate here — execute_with_recovery
+                    # wraps _call_gpu_worker and will try creative amendments
+                    # (seed changes, prompt tweaks, step adjustments) first.
+                    # Human escalation happens at L4 of the recovery ladder
+                    # after all automated retries are exhausted.
+                    raise RuntimeError(
                         f"QA {qa_quality.upper()}: visual quality below threshold. "
                         f"Clip saved at {output_path} for inspection. "
                         f"QA_HINTS: {_qa_reason}"
                     )
-                    response = escalate_pipeline_error(
-                        operation_name="video_qa_reject",
-                        error_msg=_qa_msg,
-                        severity="warning",
-                        default_action="abort",
-                        diagnosis_hint=f"Video QA rejected clip: {_qa_reason}",
-                    )
-                    if response.get("action") != "skip":
-                        raise RuntimeError(_qa_msg)
 
             result_meta = {
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),

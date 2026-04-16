@@ -253,24 +253,91 @@ class FleetCoordinator:
         logger.info("FleetCoordinator: monitoring stopped")
 
     def _handle_patterns(self, patterns: list) -> None:
-        """Respond to detected systemic patterns (Level 1 auto-response)."""
+        """Respond to detected systemic patterns.
+
+        Escalation ladder:
+        - Level 1: Auto-response (pause, scale-down, categorize)
+        - Level 2: AG-UI escalation event → dashboard → human picks action
+        - Level 3: Full diagnostic dump if Level 2 doesn't resolve
+        """
         for pattern in patterns:
             if pattern.pattern_type == "cascade_failure":
+                # Level 1: pause provisioning immediately
                 self._pause(
                     f"Cascade failure detected: {pattern.hypothesis}"
                 )
+                # Level 2: escalate to dashboard
+                self._escalate_pattern(pattern)
+
             elif pattern.pattern_type == "common_error":
                 logger.critical(
                     "FleetCoordinator: common error across fleet — %s",
                     pattern.hypothesis,
                 )
+                # Level 2: escalate — don't retry on new VMs, it'll fail the same
+                self._escalate_pattern(pattern)
+
             elif pattern.pattern_type == "budget_burn":
                 logger.warning(
                     "FleetCoordinator: budget burn anomaly — %s",
                     pattern.hypothesis,
                 )
-                # Aggressive scale-down
+                # Level 1: aggressive scale-down
                 self._scaler.check_and_scale_down()
+                # Level 2: escalate if burn continues
+                self._escalate_pattern(pattern)
+
+            elif pattern.pattern_type == "poison_clip":
+                # Level 2: escalate — prompt problem, not infra
+                self._escalate_pattern(pattern)
+
+            elif pattern.pattern_type == "performance_degradation":
+                logger.warning(
+                    "FleetCoordinator: performance degradation — %s",
+                    pattern.hypothesis,
+                )
+                # Only escalate if severe (>3× baseline)
+                if pattern.severity == "critical":
+                    self._escalate_pattern(pattern)
+
+    def _escalate_pattern(self, pattern) -> None:
+        """Level 2/3: Emit AG-UI escalation event for fleet-wide pattern."""
+        try:
+            from recovery import escalate_pipeline_error
+            response = escalate_pipeline_error(
+                operation_name=f"fleet_{pattern.pattern_type}",
+                error_msg=pattern.hypothesis,
+                severity=pattern.severity,
+                default_action="abort" if pattern.severity == "critical" else "skip",
+                diagnosis_hint=(
+                    f"Fleet-wide {pattern.pattern_type} detected. "
+                    f"Recommended action: {pattern.recommended_action}. "
+                    f"Evidence: {len(pattern.evidence)} data points."
+                ),
+            )
+            action = response.get("action", "abort")
+            if action == "skip":
+                logger.info(
+                    "FleetCoordinator: pattern %s — human chose skip",
+                    pattern.pattern_type,
+                )
+            elif action == "retry_with_fix":
+                logger.info(
+                    "FleetCoordinator: pattern %s — human chose retry",
+                    pattern.pattern_type,
+                )
+                self.resume()
+            elif action == "abort":
+                logger.critical(
+                    "FleetCoordinator: pattern %s — aborting production",
+                    pattern.pattern_type,
+                )
+                self._pause(f"Aborted: {pattern.hypothesis}")
+        except Exception as e:
+            logger.error(
+                "FleetCoordinator: failed to escalate pattern %s: %s",
+                pattern.pattern_type, e,
+            )
 
     def _pause(self, reason: str) -> None:
         """Pause the fleet (stop dispatching, stop provisioning)."""
