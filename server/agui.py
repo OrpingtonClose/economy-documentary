@@ -89,8 +89,10 @@ def emit_agui_event(event_type: str, data: dict[str, Any]) -> None:
         from dashboard import get_active_collector
 
         collector = get_active_collector()
-        if collector:
-            collector.emit_event(event_type, data)
+        if not collector:
+            logger.debug("event_type=<%s> | no active collector, event dropped", event_type)
+            return
+        collector.emit_event(event_type, data)
     except Exception as exc:
         logger.warning("event_type=<%s> | emit_agui_event failed: %s", event_type, exc)
         return

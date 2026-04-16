@@ -55,6 +55,8 @@ class ConcurrencyPlugin(Plugin):
     @hook
     def after_model_call(self, event: AfterModelCallEvent) -> None:
         """Release LLM semaphore and log token usage."""
+        if not getattr(self._local, "sem_held", False):
+            return
         start_time = getattr(self._local, "start_time", 0.0)
         self._local.start_time = 0.0
         self._local.sem_held = False
