@@ -243,8 +243,8 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
         errors.append("No video clips found on V1_Video after production")
 
     # FIX 5: Cross-validate audio vs video timing per scene.
-    # After production, every video clip's source_range should match
-    # its corresponding narration clip's source_range (same scene).
+    # Video clips cover the FULL TIME SLOT (narration + following gap),
+    # so we compare against slot totals, not narration-only totals.
     #
     # In dual_ru_en mode, both RU and EN narration clips live on
     # A1_Narration, but video clips are generated once and shared.
@@ -252,22 +252,33 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
     # video total should match ONE language's narration, not both.
     narration_track = _get_track(timeline, "A1_Narration")
     if narration_track is not None and video_by_scene:
-        # Group narration durations by (scene_num, language_suffix).
-        # voice metadata looks like "V1" (single lang) or "V1_RU"/"V1_EN" (dual).
-        audio_by_scene_lang: dict[tuple[int, str], float] = {}
-        for item in narration_track:
-            if isinstance(item, otio.schema.Clip) and item.source_range:
-                meta = item.metadata.get("documentary", {})
+        # Compute per-scene SLOT totals (narration + following gaps),
+        # grouped by language.  This mirrors get_video_slot_durations().
+        items_list = list(narration_track)
+        slot_by_scene_lang: dict[tuple[int, str], float] = {}
+        ni = 0
+        while ni < len(items_list):
+            nitem = items_list[ni]
+            if isinstance(nitem, otio.schema.Clip) and nitem.source_range:
+                meta = nitem.metadata.get("documentary", {})
                 sn = meta.get("scene_num", 0)
                 voice = meta.get("voice", "")
-                # Extract language suffix: "V1_RU" -> "RU", "V1" -> ""
                 lang = voice.rsplit("_", 1)[-1] if "_" in voice else ""
-                if sn:
+                clip_dur = nitem.source_range.duration.to_seconds()
+                if sn and not voice.endswith("_EN"):
+                    # Accumulate following Gap duration(s)
+                    gap_dur = 0.0
+                    nj = ni + 1
+                    while nj < len(items_list) and isinstance(items_list[nj], otio.schema.Gap):
+                        if items_list[nj].source_range:
+                            gap_dur += items_list[nj].source_range.duration.to_seconds()
+                        nj += 1
                     key = (sn, lang)
-                    audio_by_scene_lang[key] = (
-                        audio_by_scene_lang.get(key, 0.0)
-                        + item.source_range.duration.to_seconds()
+                    slot_by_scene_lang[key] = (
+                        slot_by_scene_lang.get(key, 0.0) + clip_dur + gap_dur
                     )
+            ni += 1
+        audio_by_scene_lang = slot_by_scene_lang
 
         # Collect unique languages present
         langs_present = {lang for (_, lang) in audio_by_scene_lang}
