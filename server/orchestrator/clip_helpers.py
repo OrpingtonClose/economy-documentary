@@ -23,10 +23,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class _MockToolContext:
-    """Minimal mock of ADK tool_context for direct function calls."""
+    """Minimal mock of tool_context for direct function calls.
+
+    Exposes both .state (legacy) and .invocation_state (Strands) so that
+    OTIO tools migrated to invocation_state still work when called from
+    deterministic callbacks.
+    """
 
     def __init__(self, state: dict):
         self.state = state
+        self.invocation_state = state
 
 
 # ---------------------------------------------------------------------------

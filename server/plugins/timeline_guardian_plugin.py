@@ -55,5 +55,7 @@ class TimelineGuardianPlugin(Plugin):
                     )
         except ImportError:
             logger.debug("timeline guardian validators not available, skipping")
+        except RuntimeError:
+            raise  # OTIO violations must propagate — never swallow
         except Exception:
             logger.exception("timeline guardian validation error")
