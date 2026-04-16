@@ -348,10 +348,3 @@ def list_active_vms(tool_context=None) -> str:
 
 
 vastai_tools = [provision_gpu_vm, check_vm_status, terminate_vm, list_active_vms]
-
-vastai_tools = [
-    provision_gpu_vm_tool,
-    check_vm_status_tool,
-    terminate_vm_tool,
-    list_active_vms_tool,
-]

@@ -485,5 +485,3 @@ def probe_clip(mp4_path: str, tool_context=None) -> str:
 
 
 video_tools = [generate_video_clip, probe_clip]
-
-video_tools = [generate_video_clip_tool, probe_clip_tool]

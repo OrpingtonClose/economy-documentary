@@ -165,5 +165,3 @@ def align_narration(
 
 
 whisperx_tools = [align_narration]
-
-whisperx_tools = [align_narration_tool]

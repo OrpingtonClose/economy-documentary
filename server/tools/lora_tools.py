@@ -150,5 +150,3 @@ def get_lora_details(lora_id: str, tool_context=None) -> str:
 
 
 lora_tools = [query_lora_catalog, get_lora_details]
-
-lora_tools = [query_lora_catalog_tool, get_lora_details_tool]

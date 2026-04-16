@@ -281,5 +281,3 @@ def trim_clip(
 
 
 assembly_tools = [mux_audio_video, concat_clips, trim_clip]
-
-assembly_tools = [mux_audio_video_tool, concat_clips_tool, trim_clip_tool]
