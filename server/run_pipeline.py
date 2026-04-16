@@ -310,10 +310,21 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     # so we can read the final pipeline state from it after execution.
     # Wrap with graph-level graduated recovery (RETRY → ENVIRONMENTAL → HUMAN)
     # so transient failures get retried before escalating.
+    #
+    # IMPORTANT: The graph mutates initial_state in place. On retry, we must
+    # reset to a clean snapshot so the new attempt doesn't inherit contaminated
+    # state from the failed run (e.g., stale scenes, partial timeline paths).
+    import copy
+
+    state_snapshot = copy.deepcopy(initial_state)
+
     try:
         from recovery import RecoveryPolicy, execute_with_recovery
 
         def _run_graph(**kwargs: Any) -> Any:
+            # Reset initial_state to clean snapshot before each attempt
+            initial_state.clear()
+            initial_state.update(copy.deepcopy(state_snapshot))
             return pipeline(user_message, invocation_state=initial_state)
 
         result = execute_with_recovery(

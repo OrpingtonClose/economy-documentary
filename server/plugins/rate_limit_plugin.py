@@ -1,6 +1,11 @@
 """Rate-limit plugin -- GPU / TTS / VastAI semaphores.
 
 Replaces server/callbacks/before_tool.py and server/callbacks/after_tool.py.
+
+Uses threading.local() for per-call state tracking (not thread IDs) because
+before/after hooks may dispatch on different threads in the Strands framework.
+Includes an after_invocation cleanup hook as a safety net against leaked
+semaphores.
 """
 
 from __future__ import annotations
@@ -11,7 +16,7 @@ import threading
 import time
 from typing import Any
 
-from strands.hooks.events import AfterToolCallEvent, BeforeToolCallEvent
+from strands.hooks.events import AfterInvocationEvent, AfterToolCallEvent, BeforeToolCallEvent
 from strands.plugins import Plugin, hook
 
 logger = logging.getLogger(__name__)
@@ -36,7 +41,12 @@ _DEFAULT_LIMITS: dict[str, int] = {
 
 
 class RateLimitPlugin(Plugin):
-    """Acquires/releases per-group semaphores around tool calls."""
+    """Acquires/releases per-group semaphores around tool calls.
+
+    Uses thread-local storage to track which semaphore was acquired,
+    avoiding the thread-ID mismatch issue where before/after hooks
+    may fire on different threads.
+    """
 
     name = "rate_limit"
 
@@ -45,8 +55,9 @@ class RateLimitPlugin(Plugin):
         self._semaphores: dict[str, threading.Semaphore] = {
             group: threading.Semaphore(count) for group, count in effective.items()
         }
-        self._active: dict[int, tuple[str, float]] = {}
+        self._local = threading.local()
         self._lock = threading.Lock()
+        self._active_count: dict[str, int] = {group: 0 for group in effective}
         super().__init__()
 
     def _group_for(self, tool_name: str) -> str | None:
@@ -63,9 +74,10 @@ class RateLimitPlugin(Plugin):
         sem = self._semaphores.get(group)
         if sem:
             sem.acquire()
-            tid = threading.get_ident()
+            self._local.acquired_group = group
+            self._local.start_time = time.monotonic()
             with self._lock:
-                self._active[tid] = (group, time.monotonic())
+                self._active_count[group] = self._active_count.get(group, 0) + 1
             logger.debug(
                 "tool=<%s>, group=<%s> | acquired rate-limit semaphore",
                 tool_name,
@@ -82,17 +94,39 @@ class RateLimitPlugin(Plugin):
 
         sem = self._semaphores.get(group)
         if sem:
-            tid = threading.get_ident()
-            start = 0.0
+            start_time = getattr(self._local, "start_time", 0.0)
+            self._local.start_time = 0.0
+            self._local.acquired_group = None
             with self._lock:
-                entry = self._active.pop(tid, None)
-                if entry:
-                    start = entry[1]
+                self._active_count[group] = max(0, self._active_count.get(group, 1) - 1)
             sem.release()
-            elapsed = time.monotonic() - start if start else 0.0
+            elapsed = time.monotonic() - start_time if start_time else 0.0
             logger.debug(
                 "tool=<%s>, group=<%s>, elapsed_ms=<%d> | released rate-limit semaphore",
                 tool_name,
                 group,
                 int(elapsed * 1000),
             )
+
+    @hook
+    def after_invocation(self, event: AfterInvocationEvent) -> None:
+        """Safety net: release any semaphore still held after invocation ends.
+
+        This catches edge cases where after_tool_call was somehow skipped
+        (framework bug, thread crash, etc.) to prevent permanent deadlocks.
+        """
+        acquired = getattr(self._local, "acquired_group", None)
+        if acquired:
+            sem = self._semaphores.get(acquired)
+            if sem:
+                logger.warning(
+                    "group=<%s> | releasing leaked semaphore in after_invocation safety net",
+                    acquired,
+                )
+                self._local.acquired_group = None
+                self._local.start_time = 0.0
+                with self._lock:
+                    self._active_count[acquired] = max(
+                        0, self._active_count.get(acquired, 1) - 1
+                    )
+                sem.release()
