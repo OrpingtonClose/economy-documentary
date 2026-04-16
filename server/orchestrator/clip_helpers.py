@@ -401,7 +401,7 @@ def run_post_production(
                 action,
             )
         except ImportError:
-            raise
+            raise e
 
     # INFRA: notify stage complete
     _infra = get_infra_agent()

@@ -1381,6 +1381,14 @@ def escalate_pipeline_error(
                 action,
             )
             return agent_decision
+        elif action == "abort":
+            logger.warning(
+                "Agent ladder decided to abort '%s' at L%s (agent=%s)",
+                operation_name,
+                agent_decision.get("level", "?"),
+                agent_decision.get("agent", "?"),
+            )
+            return {"action": "abort", **agent_decision}
 
     # ── Step 2: Agent ladder exhausted — fall back to human (L4) ─────
     if proposed_actions is None:

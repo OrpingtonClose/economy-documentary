@@ -1043,7 +1043,9 @@ def deterministic_audio_callback(
         upload_gatekeeper_report(audit_report, "audio")
 
     # NOW evaluate rejects — everything is safely in B2
+    _gk_rejected = False
     if has_rejects(all_gk_checks):
+        _gk_rejected = True
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
         from recovery import escalate_pipeline_error
@@ -1080,7 +1082,7 @@ def deterministic_audio_callback(
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
-    if _b2_ok:
+    if _b2_ok and not _gk_rejected:
         upload_stage_marker("audio")
 
     summary_parts = [
@@ -2124,7 +2126,9 @@ def deterministic_production_callback(
         upload_gatekeeper_report(audit_report, "production")
 
     # NOW evaluate rejects — everything is safely in B2
+    _gk_rejected = False
     if has_rejects(all_gk_checks):
+        _gk_rejected = True
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
         from recovery import escalate_pipeline_error
@@ -2156,7 +2160,7 @@ def deterministic_production_callback(
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
-    if _b2_ok:
+    if _b2_ok and not _gk_rejected:
         upload_stage_marker("production")
 
     summary_parts = [
