@@ -97,6 +97,15 @@ class StateDictProxy(dict):
     def setdefault(self, key: str, default: Any = None) -> Any:
         return object.__getattribute__(self, "_target").setdefault(key, default)
 
+    def __bool__(self) -> bool:
+        return bool(object.__getattribute__(self, "_target"))
+
+    def __eq__(self, other: object) -> bool:
+        return object.__getattribute__(self, "_target") == other
+
+    def copy(self) -> dict[str, Any]:
+        return object.__getattribute__(self, "_target").copy()
+
     def to_dict(self) -> dict[str, Any]:
         """Return a plain dict copy — ADK compatibility method."""
         return dict(object.__getattribute__(self, "_target"))

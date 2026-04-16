@@ -1438,6 +1438,7 @@ def deterministic_production_callback(
             output_path=output_path,
             negative_prompt=clip_negative,
             visual_style=visual_style_str,
+            tool_context=_MockToolContext(state),
         )
         gen_result = json.loads(gen_result_json)
         gen_result["scene_num"] = scene_num
