@@ -151,12 +151,46 @@ class FeedbackStore:
             ]
 
     def get_active_constraints(self) -> dict[str, Any]:
-        """Derive active generation constraints from accumulated feedback."""
+        """Derive active generation constraints from accumulated feedback.
+
+        Scans stored feedback to build negative/positive prompts, style
+        adjustments, and a regeneration queue that downstream generators
+        use to incorporate human guidance.
+        """
+        negative_prompts: list[str] = []
+        positive_prompts: list[str] = []
+        style_adjustments: list[dict[str, Any]] = []
+        regeneration_queue: list[dict[str, Any]] = []
+
+        with self._lock:
+            for fb in self._feedback:
+                fb_type = fb.get("type", "")
+                comment = fb.get("comment", "")
+                artifact_id = fb.get("artifact_id", "")
+                scene_num = fb.get("scene_num", 0)
+
+                if fb_type == "reject" and comment:
+                    negative_prompts.append(comment)
+                elif fb_type == "approve" and comment:
+                    positive_prompts.append(comment)
+                elif fb_type == "comment" and comment:
+                    # Treat free-text comments as style guidance
+                    style_adjustments.append({
+                        "scene_num": scene_num,
+                        "guidance": comment,
+                    })
+                elif fb_type == "regenerate":
+                    regeneration_queue.append({
+                        "artifact_id": artifact_id,
+                        "scene_num": scene_num,
+                        "level": fb.get("regeneration_level", "clip"),
+                    })
+
         return {
-            "negative_prompts": [],
-            "positive_prompts": [],
-            "style_adjustments": [],
-            "regeneration_queue": [],
+            "negative_prompts": negative_prompts,
+            "positive_prompts": positive_prompts,
+            "style_adjustments": style_adjustments,
+            "regeneration_queue": regeneration_queue,
         }
 
 

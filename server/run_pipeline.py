@@ -284,6 +284,10 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
         f"{language_instruction}"
     )
 
+    # Build pipeline graph BEFORE starting long-lived resources so that if
+    # build_pipeline() raises, we don't leak infra/reporter/heartbeat threads.
+    pipeline = build_pipeline()
+
     # Start infra agent for continuous health monitoring
     try:
         from infra_agent import start_infra_agent
@@ -300,11 +304,9 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     reporter.start()
     reporter.send("phase_start", phase="scenario")
 
-    # Build and run the pipeline graph
+    # Run the pipeline graph
     start_time = time.time()
     logger.info("Starting pipeline run...")
-
-    pipeline = build_pipeline()
 
     # Pass initial_state as invocation_state — the graph mutates it in place
     # so we can read the final pipeline state from it after execution.
