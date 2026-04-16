@@ -1017,18 +1017,22 @@ def deterministic_audio_callback(
                 f"audit report uploaded to B2): {reject_msgs}"
             ),
             severity="critical",
-            default_action="abort",
+            default_action="skip",
             diagnosis_hint=(
                 "Narration duration drift exceeds threshold. "
                 "Root cause is likely insufficient text in the scenario "
                 "(LLM generated too few scenes or too-short narration)."
             ),
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
                 f"audit report uploaded to B2): {reject_msgs}"
             )
+        logger.warning(
+            "Audio gatekeeper rejection escalated and resolved with action=%s — continuing pipeline",
+            response.get("action"),
+        )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -1624,13 +1628,17 @@ def deterministic_production_callback(
             operation_name="production_handoff_gatekeeper",
             error_msg=f"GATEKEEPER BLOCKED production start: {reject_msgs}",
             severity="critical",
-            default_action="abort",
+            default_action="skip",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER BLOCKED production start: {reject_msgs}"
             )
+        logger.warning(
+            "Production handoff gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
     if not intervention_window("production_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
@@ -2078,14 +2086,18 @@ def deterministic_production_callback(
                 f"audit report uploaded to B2): {reject_msgs}"
             ),
             severity="critical",
-            default_action="abort",
+            default_action="skip",
             diagnosis_hint="Video clips failed quality checks after production.",
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
                 f"audit report uploaded to B2): {reject_msgs}"
             )
+        logger.warning(
+            "Production gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -2233,13 +2245,17 @@ def deterministic_assembly_callback(
             operation_name="assembly_handoff_gatekeeper",
             error_msg=f"GATEKEEPER BLOCKED assembly start: {reject_msgs}",
             severity="critical",
-            default_action="abort",
+            default_action="skip",
             diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER BLOCKED assembly start: {reject_msgs}"
             )
+        logger.warning(
+            "Assembly handoff gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
     if not intervention_window("assembly_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 

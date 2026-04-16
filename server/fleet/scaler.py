@@ -204,10 +204,14 @@ class FleetScaler:
 
             spec = WorkerSpec(
                 role="video",
-                gpu_model=os.environ.get("VAST_GPU_MODEL", "RTX_4090"),
-                min_vram_gb=float(os.environ.get("VAST_MIN_VRAM", "24")),
-                docker_image=os.environ.get("VAST_DOCKER_IMAGE", ""),
+                env_var=f"VIDEO_WORKER_{index}_URL",
+                local_port=8100 + index,
+                remote_port=8000,
+                capability="ltx",
+                gpu_type=os.environ.get("VAST_GPU_MODEL", "RTX_4090"),
+                min_vram_gb=int(os.environ.get("VAST_MIN_VRAM", "24")),
                 disk_gb=int(os.environ.get("VAST_DISK_GB", "100")),
+                worker_mode="video",
             )
 
             provisioner = WorkerProvisioner()
