@@ -341,6 +341,17 @@ def _visual_concepter_after_model(callback_context, llm_response):
         pre_accumulated = []
 
     if not pre_accumulated:
+        # Even though there's nothing to merge, we must still restore
+        # the full content_analysis (which was overwritten with only the
+        # last chunk by the before_model callback) and clean up state.
+        full_ca = state.get("_vc_full_content_analysis")
+        if full_ca:
+            state["content_analysis"] = full_ca
+        for key in ("_vc_pre_accumulated", "_vc_full_content_analysis", "_vc_chunking_done"):
+            try:
+                del state[key]
+            except (KeyError, TypeError):
+                pass
         return result
 
     # Extract last chunk's concepts from llm_response
