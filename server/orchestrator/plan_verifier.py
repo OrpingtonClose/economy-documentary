@@ -9,6 +9,7 @@ fails, the plan goes back to the optimizer for refinement.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from orchestrator.production_models import (
@@ -58,7 +59,16 @@ class ProductionPlanVerifier:
         for concept in visual_concepts:
             sn = concept.get("scene_num", 0)
             pi = concept.get("phrase_idx", 0)
-            self.expected_clip_ids.add(f"s{sn:03d}_p{pi:03d}")
+            # scene_num/phrase_idx may be strings like "scene_001" from LLM JSON
+            try:
+                sn_int = int(re.sub(r'[^0-9]', '', str(sn)) or 0)
+            except (ValueError, TypeError):
+                sn_int = 0
+            try:
+                pi_int = int(re.sub(r'[^0-9]', '', str(pi)) or 0)
+            except (ValueError, TypeError):
+                pi_int = 0
+            self.expected_clip_ids.add(f"s{sn_int:03d}_p{pi_int:03d}")
 
     def verify(self, plan: ProductionPlan) -> PlanVerificationResult:
         """Run all verification checks and return the result."""

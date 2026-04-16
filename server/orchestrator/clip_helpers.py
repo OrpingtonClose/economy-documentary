@@ -378,7 +378,29 @@ def run_post_production(
         logger.info("Timeline Guardian passed after production")
     except RuntimeError as e:
         logger.error("Timeline Guardian FAILED after production: %s", e)
-        raise
+        # Route through escalation system instead of crashing
+        try:
+            from recovery import escalate_pipeline_error
+            _state_d = (
+                callback_context.state.to_dict()
+                if hasattr(callback_context.state, "to_dict")
+                else dict(callback_context.state)
+            )
+            action = escalate_pipeline_error(
+                operation_name="timeline_guardian_production",
+                error=e,
+                pipeline_state=_state_d,
+                agent_policy_type="otio",
+            )
+            if action == "abort":
+                raise
+            logger.warning(
+                "Timeline Guardian production failure escalated and resolved "
+                "with action=%s — continuing pipeline",
+                action,
+            )
+        except ImportError:
+            raise
 
     # INFRA: notify stage complete
     _infra = get_infra_agent()
