@@ -427,7 +427,6 @@ def clean_scenes_after_scenario(
         state["_voice_budgets"] = json.dumps(voice_budgets)
         logger.info("Voice budgets: %d entries, total=%.1fs",
                      len(voice_budgets), sum(voice_budgets.values()))
-
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
 
@@ -2313,8 +2312,10 @@ def deterministic_assembly_callback(
     # The assembler walks the A1_Narration and V1_Video tracks item
     # by item, rendering each OTIO item (Clip or Gap) faithfully:
     #
-    #   Clip  → trim media to source_range
-    #   Gap   → render as silence (audio) / freeze-frame (video)
+    #   Clip  → trim media to source_range (video clips absorb
+    #           following gaps using extra footage when available)
+    #   Gap   → render as silence (audio) / absorbed into preceding
+    #           clip (video) — freeze-frame only as last resort
     #
     # NO ad-hoc pauses, NO ad-hoc black frames, NO duration
     # calculations.  The OTIO is the immutable contract created
@@ -2401,16 +2402,76 @@ def deterministic_assembly_callback(
         """Render the V1_Video track into a single MP4 file.
 
         Walks every OTIO item in order:
-          - Clip → trim to source_range
-          - Gap  → render as freeze-frame (hold last frame of
-                   preceding clip) for a natural visual hold
+          - Clip → trim to source_range, extended to absorb any
+                   following Gap using the clip's extra footage
+                   (available_range > source_range).
+          - Gap  → absorbed into the preceding clip when possible.
+                   Falls back to freeze-frame only when the source
+                   clip has no extra footage.
+
+        This eliminates still-image freeze-frames that look like
+        production errors.  The video plays continuously while the
+        narration track carries the structural pauses as silence.
 
         Returns path to the combined video file.
         """
-        video_segments = []
-        last_clip_path = None  # for freeze-frame generation
+        # ── Pre-pass: compute effective trim duration for each clip ──
+        # For each Clip, look ahead and absorb subsequent Gap(s) into
+        # the clip's trim duration, up to the clip's available_range.
+        # Any gap time that can't be absorbed stays as a gap item.
+        items = list(video_track_items)
+        effective_durations: dict[int, float] = {}  # idx → extended trim dur
+        absorbed_gaps: set[int] = set()  # indices of fully absorbed gaps
 
-        for idx, item in enumerate(video_track_items):
+        for idx, item in enumerate(items):
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            if not item.source_range:
+                continue
+
+            src_dur = item.source_range.duration.to_seconds()
+            # How much extra footage does the source clip have?
+            avail_dur = src_dur
+            if (item.media_reference
+                    and hasattr(item.media_reference, "available_range")
+                    and item.media_reference.available_range):
+                avail_dur = item.media_reference.available_range.duration.to_seconds()
+
+            budget = max(0.0, avail_dur - src_dur)  # extra footage available
+            extended = src_dur
+
+            # Look ahead for consecutive gaps to absorb
+            for gap_idx in range(idx + 1, len(items)):
+                gap_item = items[gap_idx]
+                if not isinstance(gap_item, otio.schema.Gap):
+                    break
+                gap_dur = (gap_item.source_range.duration.to_seconds()
+                           if gap_item.source_range else 0)
+                if gap_dur <= 0:
+                    absorbed_gaps.add(gap_idx)
+                    continue
+                if budget >= gap_dur:
+                    # Absorb the entire gap into the clip's trim
+                    extended += gap_dur
+                    budget -= gap_dur
+                    absorbed_gaps.add(gap_idx)
+                    logger.info(
+                        "Gap %s (%.2fs) absorbed into clip %s "
+                        "(available=%.2f, extended trim=%.2f)",
+                        gap_item.name, gap_dur, item.name,
+                        avail_dur, extended,
+                    )
+                else:
+                    # Can't fully absorb — stop extending
+                    break
+
+            effective_durations[idx] = extended
+
+        # ── Main render pass ─────────────────────────────────────────
+        video_segments = []
+        last_clip_path = None
+
+        for idx, item in enumerate(items):
             if isinstance(item, otio.schema.Clip):
                 v_path = ""
                 if item.media_reference and hasattr(item.media_reference, "target_url"):
@@ -2427,7 +2488,7 @@ def deterministic_assembly_callback(
                     )
 
                 src_start = item.source_range.start_time.to_seconds()
-                src_dur = item.source_range.duration.to_seconds()
+                src_dur = effective_durations.get(idx, item.source_range.duration.to_seconds())
                 if src_dur <= 0:
                     _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} has "
@@ -2462,8 +2523,8 @@ def deterministic_assembly_callback(
                 if abs(actual_dur - src_dur) > 0.5:
                     _escalate_otio(
                         f"OTIO VIOLATION: trimmed clip {item.name} actual "
-                        f"duration ({actual_dur:.2f}s) deviates from OTIO "
-                        f"source_range ({src_dur:.2f}s) by "
+                        f"duration ({actual_dur:.2f}s) deviates from expected "
+                        f"({src_dur:.2f}s) by "
                         f"{abs(actual_dur - src_dur):.2f}s — trim failed"
                     )
 
@@ -2471,23 +2532,23 @@ def deterministic_assembly_callback(
                 last_clip_path = trimmed_path
 
             elif isinstance(item, otio.schema.Gap):
+                if idx in absorbed_gaps:
+                    # This gap was absorbed into the preceding clip
+                    continue
+
+                # Gap could NOT be absorbed — fall back to freeze-frame
                 gap_dur = item.source_range.duration.to_seconds() if item.source_range else 0
                 if gap_dur > 0:
-                    gap_meta = item.metadata.get("documentary", {})
-                    gap_render_type = gap_meta.get("type", "freeze_frame")
-
                     gap_video_path = os.path.join(
                         assembly_dir,
                         f"otio_vgap{lang_suffix}_{idx:03d}.mp4",
                     )
 
-                    if gap_render_type == "freeze_frame" and last_clip_path:
-                        # Hold the last frame of the preceding clip
+                    if last_clip_path:
                         freeze_path = _generate_freeze_frame_video(
                             last_clip_path, gap_dur, gap_video_path,
                         )
                         if not freeze_path:
-                            # Fallback to black if freeze-frame fails
                             freeze_path = _generate_black_video(
                                 gap_dur, gap_video_path,
                             )
@@ -2498,7 +2559,6 @@ def deterministic_assembly_callback(
                             )
                         video_segments.append(freeze_path)
                     else:
-                        # No preceding clip or explicit black type
                         black_path = _generate_black_video(
                             gap_dur, gap_video_path,
                         )
