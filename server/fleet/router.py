@@ -163,7 +163,7 @@ async def fleet_status() -> dict[str, Any]:
 
     summary = coordinator.get_summary()
     summary["active"] = True
-    summary["cost"] = coordinator.cost_tracker.summary
+    summary["cost"] = coordinator.cost_tracker.summary()
     return summary
 
 
