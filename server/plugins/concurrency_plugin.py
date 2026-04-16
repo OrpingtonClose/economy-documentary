@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from typing import Any
@@ -16,7 +17,7 @@ from strands.plugins import Plugin, hook
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MAX_CONCURRENT = 3
+_DEFAULT_MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_LLM", "2"))
 
 
 class ConcurrencyPlugin(Plugin):

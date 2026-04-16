@@ -62,14 +62,14 @@ def verify_production_plan(plan_json: str) -> str:
     import json
 
     try:
-        from orchestrator.plan_verifier import PlanVerifier
+        from orchestrator.plan_verifier import ProductionPlanVerifier
 
         plan = json.loads(plan_json)
-        verifier = PlanVerifier()
+        verifier = ProductionPlanVerifier()
         result = verifier.verify(plan)
         return json.dumps(result)
     except ImportError:
-        return json.dumps({"status": "ok", "message": "PlanVerifier not available, skipping"})
+        return json.dumps({"status": "skipped", "message": "PlanVerifier module not available, verification not performed"})
     except Exception as e:
         return json.dumps({"status": "error", "error": str(e)})
 
