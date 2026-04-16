@@ -380,6 +380,8 @@ class ProductionOrchestrator:
                     return healthy
         except ImportError:
             pass
+        except Exception as e:
+            logger.warning("Orchestrator: InfraAgent worker lookup failed, falling back to env vars: %s", e)
 
         # 2. Env var workers
         worker_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
@@ -1076,7 +1078,7 @@ def orchestrated_production_callback(
       - "1" or "true": use the new orchestrator
       - anything else: use the existing deterministic callback
     """
-    if not os.environ.get("PRODUCTION_ORCHESTRATOR", "").strip().lower() in (
+    if os.environ.get("PRODUCTION_ORCHESTRATOR", "").strip().lower() not in (
         "1", "true"
     ):
         # Fallback to existing deterministic callback
