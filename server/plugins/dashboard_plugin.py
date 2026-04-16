@@ -46,7 +46,7 @@ class DashboardPlugin(Plugin):
             return
 
         state = event.invocation_state
-        phase = state.get("_current_phase", "unknown")
+        phase = state.get("pipeline_phase", "unknown")
         collector.phase_start(phase)
 
     @hook
@@ -57,7 +57,7 @@ class DashboardPlugin(Plugin):
             return
 
         state = event.invocation_state
-        phase = state.get("_current_phase", "unknown")
+        phase = state.get("pipeline_phase", "unknown")
         collector.phase_end(phase, status="completed")
 
     @hook

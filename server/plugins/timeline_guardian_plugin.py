@@ -31,7 +31,7 @@ class TimelineGuardianPlugin(Plugin):
         try:
             from callbacks.timeline_guardian import _VALIDATORS, _load_timeline
 
-            pipeline_phase = state.get("_current_phase", "")
+            pipeline_phase = state.get("pipeline_phase", "")
             timeline = _load_timeline(state)
             if not timeline:
                 logger.warning("timeline_path=<%s> | timeline not found for validation", timeline_path)
