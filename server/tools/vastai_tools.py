@@ -108,7 +108,7 @@ def _vast_cmd(args: list[str]) -> dict | list:
         return {"error": "vastai command timed out"}
 
 
-@tool
+@tool(context=True)
 def provision_gpu_vm(
     gpu_type: str = "A100_SXM4",
     min_vram_gb: int = 48,
@@ -265,7 +265,7 @@ def provision_gpu_vm(
     )
 
 
-@tool
+@tool(context=True)
 def check_vm_status(vm_id: str, tool_context=None) -> str:
     """Check if a Vast.ai VM is ready.
 
@@ -288,7 +288,7 @@ def check_vm_status(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@tool
+@tool(context=True)
 def terminate_vm(vm_id: str, tool_context=None) -> str:
     """Stop and destroy a Vast.ai VM — ONLY if this pipeline created it.
 
@@ -327,7 +327,7 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@tool
+@tool(context=True)
 def list_active_vms(tool_context=None) -> str:
     """List all running Vast.ai VMs.
 

@@ -414,7 +414,7 @@ def generate_video_clip(
     )
 
 
-@tool
+@tool(context=True)
 def probe_clip(mp4_path: str, tool_context=None) -> str:
     """Probe an MP4 file for duration, resolution, and FPS using ffprobe.
 

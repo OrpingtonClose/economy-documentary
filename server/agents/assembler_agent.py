@@ -26,7 +26,7 @@ from tools.validation_tools import (
 logger = logging.getLogger(__name__)
 
 
-@tool
+@tool(context=True)
 def render_final_video(tool_context=None) -> str:
     """Run deterministic assembly to produce the final documentary video.
 

@@ -79,7 +79,7 @@ def verify_production_plan(plan_json: str) -> str:
         return json.dumps({"status": "error", "error": str(e)})
 
 
-@tool
+@tool(context=True)
 def save_visual_concepts(concepts_json: str, tool_context=None) -> str:
     """Persist visual concepts to shared pipeline state before production.
 
@@ -127,7 +127,7 @@ def save_visual_concepts(concepts_json: str, tool_context=None) -> str:
     return f"Saved {count} visual concepts to pipeline state. Ready for run_deterministic_production."
 
 
-@tool
+@tool(context=True)
 def run_deterministic_production(tool_context=None) -> str:
     """Run deterministic video production for all scenes.
 

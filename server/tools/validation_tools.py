@@ -52,13 +52,17 @@ _PLACEHOLDER_VALUES = frozenset(
 
 def _get_contract(stage_name: str) -> Any:
     """Look up the StageContract for a given stage name."""
-    from contracts import (
-        ASSEMBLY_CONTRACT,
-        AUDIO_CONTRACT,
-        PRODUCTION_CONTRACT,
-        SCENARIO_CONTRACT,
-        VISUAL_DIRECTION_CONTRACT,
-    )
+    try:
+        from contracts import (
+            ASSEMBLY_CONTRACT,
+            AUDIO_CONTRACT,
+            PRODUCTION_CONTRACT,
+            SCENARIO_CONTRACT,
+            VISUAL_DIRECTION_CONTRACT,
+        )
+    except ImportError:
+        logger.debug("contracts module not available")
+        return None
 
     contracts = {
         "SCENARIO_CONTRACT": SCENARIO_CONTRACT,
@@ -122,7 +126,7 @@ def _check_artifacts(patterns: list[str]) -> list[dict[str, str]]:
     return failures
 
 
-@tool
+@tool(context=True)
 def validate_deliverables(stage_name: str, tool_context: Any = None) -> str:
     """Validate that this agent produced all required outputs for the given stage.
 
@@ -185,7 +189,7 @@ def validate_deliverables(stage_name: str, tool_context: Any = None) -> str:
     return json.dumps(result, indent=2)
 
 
-@tool
+@tool(context=True)
 def validate_preconditions_tool(stage_name: str, tool_context: Any = None) -> str:
     """Check that all upstream deliverables exist before starting work.
 
@@ -358,7 +362,7 @@ def _otio_remediation_hint(error_str: str) -> str:
     )
 
 
-@tool
+@tool(context=True)
 def validate_otio_compliance(tool_context: Any = None) -> str:
     """Run OTIO timeline validation for the current pipeline phase.
 

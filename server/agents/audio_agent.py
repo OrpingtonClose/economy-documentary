@@ -28,7 +28,7 @@ from tools.validation_tools import (
 logger = logging.getLogger(__name__)
 
 
-@tool
+@tool(context=True)
 def generate_all_narration(tool_context=None) -> str:
     """Run deterministic TTS generation and WhisperX alignment for all scenes.
 

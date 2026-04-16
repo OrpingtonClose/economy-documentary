@@ -46,7 +46,7 @@ def _timeline_path(topic: str) -> str:
     return os.path.join(_TIMELINE_DIR, f"{safe_topic}.otio")
 
 
-@tool
+@tool(context=True)
 def create_timeline(
     topic: str,
     num_scenes: int,
@@ -391,7 +391,7 @@ def add_video_gap(
     })
 
 
-@tool
+@tool(context=True)
 def get_narration_durations_by_scene(tool_context=None) -> dict:
     """Read the OTIO timeline and return narration durations per scene.
 
@@ -668,7 +668,7 @@ def add_video_clip(
     )
 
 
-@tool
+@tool(context=True)
 def get_timeline_status(tool_context=None) -> str:
     """Get a summary of all tracks, clips, and gaps in the timeline.
 
@@ -725,7 +725,7 @@ def get_timeline_status(tool_context=None) -> str:
     )
 
 
-@tool
+@tool(context=True)
 def validate_timeline(phase: str, tool_context=None) -> str:
     """Run phase-specific validation checks on the timeline.
 

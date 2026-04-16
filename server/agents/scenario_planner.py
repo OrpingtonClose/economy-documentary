@@ -51,7 +51,7 @@ def read_corpus(corpus_path: str) -> str:
         return f.read()
 
 
-@tool
+@tool(context=True)
 def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=None) -> str:
     """Persist the documentary scenario to shared pipeline state.
 

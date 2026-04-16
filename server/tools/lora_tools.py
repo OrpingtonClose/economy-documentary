@@ -79,7 +79,7 @@ def _score_match(entry: dict, content_type: str, mood: str, tags: List[str]) -> 
     return score
 
 
-@tool
+@tool(context=True)
 def query_lora_catalog(
     content_type: str = "",
     mood: str = "",
@@ -125,7 +125,7 @@ def query_lora_catalog(
     return json.dumps({"matches": results, "total_in_catalog": len(catalog)})
 
 
-@tool
+@tool(context=True)
 def get_lora_details(lora_id: str, tool_context=None) -> str:
     """Get full details for a specific LoRA entry.
 

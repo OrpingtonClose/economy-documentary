@@ -20,7 +20,7 @@ from strands import tool
 logger = logging.getLogger(__name__)
 
 
-@tool
+@tool(context=True)
 def mux_audio_video(
     audio_path: str,
     video_path: str,
@@ -95,7 +95,7 @@ def mux_audio_video(
         return json.dumps({"error": "ffmpeg mux timed out"})
 
 
-@tool
+@tool(context=True)
 def concat_clips(
     clip_paths: str,
     output_path: str,

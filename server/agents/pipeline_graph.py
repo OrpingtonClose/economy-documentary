@@ -85,6 +85,9 @@ def _timing_passed(state: GraphState) -> bool:
     if verdict is not None:
         # Handle string "false" from LLMs — bool("false") is truthy in Python
         passed_val = verdict.get("passed", verdict.get("pass"))
+        if passed_val is None:
+            logger.warning("timing verdict JSON has no 'passed'/'pass' key: %s", verdict)
+            return True
         if isinstance(passed_val, str):
             return passed_val.strip().lower() in ("true", "1", "yes")
         return bool(passed_val)

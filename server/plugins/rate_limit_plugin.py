@@ -2,7 +2,7 @@
 
 Replaces server/callbacks/before_tool.py and server/callbacks/after_tool.py.
 
-Uses threading.local() for per-call state tracking (not thread IDs) because
+Uses per-invocation tracking keyed by toolUseId (not thread-local) because
 before/after hooks may dispatch on different threads in the Strands framework.
 Includes an after_invocation cleanup hook as a safety net against leaked
 semaphores.
@@ -39,13 +39,15 @@ _DEFAULT_LIMITS: dict[str, int] = {
     "vastai": int(os.environ.get("VASTAI_CONCURRENCY", "3")),
 }
 
+_ACQUIRE_TIMEOUT = 120  # seconds — matches the old before_tool.py timeout
+
 
 class RateLimitPlugin(Plugin):
     """Acquires/releases per-group semaphores around tool calls.
 
-    Uses thread-local storage to track which semaphore was acquired,
-    avoiding the thread-ID mismatch issue where before/after hooks
-    may fire on different threads.
+    Uses per-invocation dict keyed by toolUseId to track which semaphores
+    are held, avoiding thread-local issues where before/after hooks may
+    fire on different threads.
     """
 
     name = "rate_limit"
@@ -55,8 +57,9 @@ class RateLimitPlugin(Plugin):
         self._semaphores: dict[str, threading.Semaphore] = {
             group: threading.Semaphore(count) for group, count in effective.items()
         }
-        self._local = threading.local()
         self._lock = threading.Lock()
+        # Track acquired semaphores by toolUseId → (group, start_time)
+        self._active: dict[str, tuple[str, float]] = {}
         self._active_count: dict[str, int] = {group: 0 for group in effective}
         super().__init__()
 
@@ -65,7 +68,7 @@ class RateLimitPlugin(Plugin):
 
     @hook
     def before_tool_call(self, event: BeforeToolCallEvent) -> None:
-        """Acquire semaphore for the tool's resource group."""
+        """Acquire semaphore for the tool's resource group with timeout."""
         tool_name = event.tool_use.get("name", "")
         group = self._group_for(tool_name)
         if not group:
@@ -73,15 +76,30 @@ class RateLimitPlugin(Plugin):
 
         sem = self._semaphores.get(group)
         if sem:
-            sem.acquire()
-            self._local.acquired_group = group
-            self._local.start_time = time.monotonic()
+            acquired = sem.acquire(blocking=True, timeout=_ACQUIRE_TIMEOUT)
+            if not acquired:
+                error_msg = (
+                    f"Rate limit timeout: could not acquire {group} semaphore "
+                    f"after {_ACQUIRE_TIMEOUT}s. Resource group is saturated."
+                )
+                logger.error(
+                    "tool=<%s>, group=<%s> | rate-limit acquire timed out after %ds",
+                    tool_name,
+                    group,
+                    _ACQUIRE_TIMEOUT,
+                )
+                raise RuntimeError(error_msg)
+
+            tool_use_id = event.tool_use.get("toolUseId", "")
             with self._lock:
+                if tool_use_id:
+                    self._active[tool_use_id] = (group, time.monotonic())
                 self._active_count[group] = self._active_count.get(group, 0) + 1
             logger.debug(
-                "tool=<%s>, group=<%s> | acquired rate-limit semaphore",
+                "tool=<%s>, group=<%s>, tool_use_id=<%s> | acquired rate-limit semaphore",
                 tool_name,
                 group,
+                tool_use_id,
             )
 
     @hook
@@ -92,41 +110,53 @@ class RateLimitPlugin(Plugin):
         if not group:
             return
 
+        tool_use_id = event.tool_use.get("toolUseId", "")
         sem = self._semaphores.get(group)
-        if sem:
-            start_time = getattr(self._local, "start_time", 0.0)
-            self._local.start_time = 0.0
-            self._local.acquired_group = None
-            with self._lock:
-                self._active_count[group] = max(0, self._active_count.get(group, 1) - 1)
-            sem.release()
-            elapsed = time.monotonic() - start_time if start_time else 0.0
-            logger.debug(
-                "tool=<%s>, group=<%s>, elapsed_ms=<%d> | released rate-limit semaphore",
-                tool_name,
-                group,
-                int(elapsed * 1000),
-            )
+        if not sem:
+            return
+
+        # Only release if we actually acquired for this tool_use_id
+        with self._lock:
+            if tool_use_id and tool_use_id in self._active:
+                acquired_group, start_time = self._active.pop(tool_use_id)
+                self._active_count[acquired_group] = max(
+                    0, self._active_count.get(acquired_group, 1) - 1
+                )
+                sem.release()
+                elapsed = time.monotonic() - start_time
+                logger.debug(
+                    "tool=<%s>, group=<%s>, elapsed_ms=<%d> | released rate-limit semaphore",
+                    tool_name,
+                    acquired_group,
+                    int(elapsed * 1000),
+                )
+            elif not tool_use_id:
+                # Fallback for missing toolUseId — release based on group name
+                self._active_count[group] = max(
+                    0, self._active_count.get(group, 1) - 1
+                )
+                sem.release()
+                logger.debug(
+                    "tool=<%s>, group=<%s> | released rate-limit semaphore (no toolUseId)",
+                    tool_name,
+                    group,
+                )
 
     @hook
     def after_invocation(self, event: AfterInvocationEvent) -> None:
-        """Safety net: release any semaphore still held after invocation ends.
-
-        This catches edge cases where after_tool_call was somehow skipped
-        (framework bug, thread crash, etc.) to prevent permanent deadlocks.
-        """
-        acquired = getattr(self._local, "acquired_group", None)
-        if acquired:
-            sem = self._semaphores.get(acquired)
-            if sem:
-                logger.warning(
-                    "group=<%s> | releasing leaked semaphore in after_invocation safety net",
-                    acquired,
-                )
-                self._local.acquired_group = None
-                self._local.start_time = 0.0
-                with self._lock:
-                    self._active_count[acquired] = max(
-                        0, self._active_count.get(acquired, 1) - 1
+        """Safety net: release any semaphores still held after invocation ends."""
+        with self._lock:
+            leaked = list(self._active.items())
+            for tool_use_id, (group, _start) in leaked:
+                sem = self._semaphores.get(group)
+                if sem:
+                    logger.warning(
+                        "tool_use_id=<%s>, group=<%s> | releasing leaked semaphore in after_invocation",
+                        tool_use_id,
+                        group,
                     )
-                sem.release()
+                    self._active_count[group] = max(
+                        0, self._active_count.get(group, 1) - 1
+                    )
+                    sem.release()
+            self._active.clear()

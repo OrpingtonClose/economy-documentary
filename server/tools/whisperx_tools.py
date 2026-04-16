@@ -48,7 +48,7 @@ def _generate_synthetic_alignment(text: str) -> dict:
     }
 
 
-@tool
+@tool(context=True)
 def align_narration(
     wav_path: str,
     text: str,
