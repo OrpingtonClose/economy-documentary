@@ -3,7 +3,7 @@
 Replaces server/agents/pipeline.py. Defines the outer graph with:
   scenario → audio → timing_eval → [conditional refine → audio] → video → assembly
 
-The timing feedback loop is capped at ~3 iterations via max_node_executions=12.
+The timing feedback loop is capped at ~3 iterations via max_node_executions=20.
 """
 
 from __future__ import annotations

@@ -203,14 +203,16 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     Returns:
         Final pipeline state dict.
     """
+    # Import and build pipeline graph FIRST — before starting any threads.
+    # If build_pipeline() raises (e.g. import error in agent module), no
+    # heartbeat/infra/reporter threads are leaked.
+    from agents.pipeline_graph import build_pipeline
+
     heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))
     heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
     _heartbeat_local.heartbeat = heartbeat
     heartbeat.start()
     heartbeat.update(phase="init", detail=f"topic={topic}")
-
-    # Import pipeline graph (triggers model_config resolution)
-    from agents.pipeline_graph import build_pipeline
 
     # Build initial state
     initial_state: dict[str, Any] = {}

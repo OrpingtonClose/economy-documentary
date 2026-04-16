@@ -204,8 +204,8 @@ Check your available_skills for technique guidance on ltx-prompt-craft,
 cinematography, batch-optimization, and recovery-strategies.
 
 IMPORTANT WORKFLOW:
-1. Call validate_preconditions_tool("video") to verify scenes, whisperx_alignment,
-   and visual_concepts are available. If any are missing, STOP and report the error.
+1. Call validate_preconditions_tool("video") to verify scenes and whisperx_alignment
+   are available. If any are missing, STOP and report the error.
 2. Analyze narration content and timing with content_analyst
 3. Generate visual concepts with visual_concepter (output a JSON array of concepts,
    each with scene_num, phrase_idx, prompt, duration, lora_id, negative_prompt)
