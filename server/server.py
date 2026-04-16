@@ -1,15 +1,20 @@
-"""
-FastAPI + AG-UI server for the documentary pipeline.
+"""FastAPI + AG-UI server for the documentary pipeline.
 
-Ported from MiroThinker. Provides:
-- POST / -- AG-UI endpoint for CopilotKit frontend
-- /dashboard/* -- real-time pipeline dashboard endpoints
+Provides:
+- POST / -- AG-UI endpoint for CopilotKit frontend (unified SSE stream)
+- /dashboard/* -- pipeline REST endpoints (snapshots, runs, reports)
+- /agui/* -- artifact, escalation, and feedback REST endpoints
 - Request logging middleware
 - Pipeline collector middleware for dashboard integration
+
+All real-time events (pipeline progress, artifacts, gatekeeper, escalations)
+flow through the single CopilotKit SSE stream at POST /.  There are no
+separate SSE channels — the chat connection IS the pipeline connection.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -20,11 +25,13 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
 
 load_dotenv()
 
-from ag_ui_adk import ADKAgent, add_adk_fastapi_endpoint
+from ag_ui.core import CustomEvent, EventType, RunAgentInput
+from ag_ui.encoder import EventEncoder
+from ag_ui_adk import ADKAgent
 from google.adk.apps import App
 
 from agents.model_config import ADK_MODEL_NAME
@@ -35,8 +42,8 @@ from agents.pipeline import pipeline_agent
 from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
+from agui import router as agui_router, subscribe_agui_events, unsubscribe_agui_events
 from dashboard.sse import router as dashboard_router
-from agui import router as agui_router
 from plugins import build_plugins, setup_otel
 
 logger = logging.getLogger(__name__)
@@ -163,7 +170,8 @@ app.include_router(dashboard_router)
 app.include_router(agui_router)
 
 
-# AG-UI endpoint -- uses App + ADKAgent.from_app() to preserve plugins
+# AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
+# into the CopilotKit SSE stream so the connection never goes idle.
 _adk_app = App(
     name="documentary_pipeline",
     root_agent=pipeline_agent,
@@ -172,7 +180,123 @@ _adk_app = App(
 adk_agent = ADKAgent.from_app(
     app=_adk_app,
 )
-add_adk_fastapi_endpoint(app, adk_agent, path="/")
+
+_HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
+
+
+@app.post("/")
+async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
+    """AG-UI endpoint with unified SSE stream.
+
+    Merges three event sources into one SSE connection:
+    1. AG-UI protocol events from the ADK agent (text, tool calls, state)
+    2. Pipeline events from emit_agui_event() (artifacts, gatekeeper, escalations)
+    3. Heartbeat comments every few seconds to keep the connection alive
+
+    This prevents the browser/proxy from closing the connection during long
+    deterministic operations (TTS generation, video rendering) that can take
+    10+ minutes per stage.
+    """
+    accept_header = request.headers.get("accept")
+    encoder = EventEncoder(accept=accept_header)
+
+    # Subscribe to pipeline events (artifacts, gatekeeper, escalations)
+    pipeline_queue = subscribe_agui_events()
+
+    async def event_generator():
+        merged: asyncio.Queue = asyncio.Queue()
+
+        async def agent_reader():
+            """Read AG-UI events from the ADK agent and forward to merged queue."""
+            try:
+                async for event in adk_agent.run(input_data):
+                    await merged.put(("agent", event))
+            except Exception as exc:
+                await merged.put(("agent_error", exc))
+            finally:
+                await merged.put(("agent_done", None))
+
+        async def pipeline_reader():
+            """Poll the thread-safe deque for pipeline events."""
+            try:
+                while True:
+                    if pipeline_queue:
+                        event = pipeline_queue.popleft()
+                        await merged.put(("pipeline", event))
+                    else:
+                        await asyncio.sleep(0.2)
+            except asyncio.CancelledError:
+                pass
+
+        agent_task = asyncio.create_task(agent_reader())
+        pipe_task = asyncio.create_task(pipeline_reader())
+
+        try:
+            while True:
+                try:
+                    kind, payload = await asyncio.wait_for(
+                        merged.get(), timeout=_HEARTBEAT_INTERVAL
+                    )
+                except asyncio.TimeoutError:
+                    # No events for a while — send SSE comment to keep alive
+                    yield ": heartbeat\n\n"
+                    continue
+
+                if kind == "agent_done":
+                    break
+                elif kind == "agent_error":
+                    logger.error("ADK agent error in unified stream: %s", payload)
+                    from ag_ui.core import RunErrorEvent
+                    err_event = RunErrorEvent(
+                        type=EventType.RUN_ERROR,
+                        message=f"Agent execution failed: {payload}",
+                        code="AGENT_ERROR",
+                    )
+                    try:
+                        yield encoder.encode(err_event)
+                    except Exception:
+                        yield 'event: error\ndata: {"error": "Agent execution failed"}\n\n'
+                    break
+                elif kind == "agent":
+                    try:
+                        yield encoder.encode(payload)
+                    except Exception as enc_err:
+                        logger.error("Event encoding error: %s", enc_err)
+                elif kind == "pipeline":
+                    # Forward pipeline events as AG-UI CustomEvents
+                    custom = CustomEvent(
+                        type=EventType.CUSTOM,
+                        name="pipeline_event",
+                        value=payload,
+                    )
+                    try:
+                        yield encoder.encode(custom)
+                    except Exception as enc_err:
+                        logger.error("Pipeline event encoding error: %s", enc_err)
+
+            # Drain remaining pipeline events after agent finishes
+            while pipeline_queue:
+                event = pipeline_queue.popleft()
+                custom = CustomEvent(
+                    type=EventType.CUSTOM,
+                    name="pipeline_event",
+                    value=event,
+                )
+                try:
+                    yield encoder.encode(custom)
+                except Exception:
+                    pass
+
+        finally:
+            pipe_task.cancel()
+            if not agent_task.done():
+                agent_task.cancel()
+            unsubscribe_agui_events(pipeline_queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type=encoder.get_content_type(),
+    )
 
 
 @app.get("/health")

@@ -13,47 +13,44 @@ export function PipelineDashboard() {
   const [escalations, setEscalations] = useState<Escalation[]>([]);
   const [activeTab, setActiveTab] = useState<"pipeline" | "artifacts" | "escalations">("pipeline");
 
-  // Pipeline SSE stream
+  // Poll dashboard and agui REST endpoints for updates.
+  // All real-time events flow through the CopilotKit chat SSE stream;
+  // the dashboard simply polls REST snapshots to stay in sync.
   useEffect(() => {
-    const eventSource = new EventSource(`${DASHBOARD_URL}/dashboard/stream`);
+    let cancelled = false;
 
-    eventSource.onopen = () => setConnected(true);
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.run_id) {
-          setSnapshot(data as PipelineSnapshot);
-        } else if (data.status === "idle") {
-          setSnapshot(null);
-          setConnected(true);
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const res = await fetch(`${DASHBOARD_URL}/dashboard/latest`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.run_id) {
+              setSnapshot(data as PipelineSnapshot);
+              setConnected(true);
+            } else if (data.status === "idle") {
+              setSnapshot(null);
+              setConnected(true);
+            }
+          }
+        } catch {
+          setConnected(false);
         }
-      } catch {
-        // ignore parse errors
-      }
-    };
-    eventSource.onerror = () => setConnected(false);
 
-    return () => eventSource.close();
-  }, []);
-
-  // AG-UI SSE stream for artifacts and escalations
-  useEffect(() => {
-    const aguiSource = new EventSource(`${DASHBOARD_URL}/agui/stream`);
-
-    aguiSource.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === "artifact" || msg.type === "artifact_update") {
-          fetchArtifacts();
-        } else if (msg.type === "escalation") {
-          fetchEscalations();
+        try {
+          await fetchArtifacts();
+          await fetchEscalations();
+        } catch {
+          // ignore fetch errors
         }
-      } catch {
-        // ignore
+
+        // Wait 2 seconds before next poll
+        await new Promise((r) => setTimeout(r, 2000));
       }
     };
 
-    return () => aguiSource.close();
+    poll();
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
