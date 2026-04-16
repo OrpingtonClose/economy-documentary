@@ -336,6 +336,8 @@ class WorkQueue:
     def is_complete(self) -> bool:
         """True when all clips are completed or dead-lettered (no more work)."""
         with self._lock:
+            if not self._clips:
+                return False  # empty queue is not "complete"
             return all(
                 c.status in (ClipStatus.COMPLETED, ClipStatus.DEAD_LETTER)
                 for c in self._clips.values()

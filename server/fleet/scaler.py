@@ -117,7 +117,7 @@ class FleetScaler:
         self._work_queue = work_queue
         self._lock = threading.Lock()
         self._active_vms: dict[str, dict] = {}  # vm_id → {url, role, ...}
-        self._provisioning = False
+        self._provisioning_remaining = 0  # threads still running
 
     # ------------------------------------------------------------------
     # Provisioning
@@ -155,11 +155,7 @@ class FleetScaler:
         self._cost_tracker.set_projection(projected)
 
         # Use existing WorkerProvisioner for each VM
-        self._provisioning = True
-        try:
-            self._provision_n_vms(optimal)
-        finally:
-            self._provisioning = False
+        self._provision_n_vms(optimal)
 
         return optimal
 
@@ -178,6 +174,9 @@ class FleetScaler:
                 "falling back to env-var workers"
             )
             return
+
+        with self._lock:
+            self._provisioning_remaining = count
 
         threads: list[threading.Thread] = []
         for i in range(count):
@@ -243,6 +242,9 @@ class FleetScaler:
 
         except Exception as e:
             logger.error("FleetScaler: failed to provision VM %s: %s", vm_id, e)
+        finally:
+            with self._lock:
+                self._provisioning_remaining = max(0, self._provisioning_remaining - 1)
 
     # ------------------------------------------------------------------
     # Scale-down
@@ -355,6 +357,7 @@ class FleetScaler:
         return {
             "active_vms": len(vms),
             "vm_ids": list(vms.keys()),
-            "provisioning": self._provisioning,
+            "provisioning": self._provisioning_remaining > 0,
+            "provisioning_remaining": self._provisioning_remaining,
             "cost": self._cost_tracker.summary(),
         }
