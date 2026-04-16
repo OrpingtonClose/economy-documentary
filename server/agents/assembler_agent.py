@@ -36,9 +36,11 @@ def render_final_video(tool_context=None) -> str:
 
     state = tool_context.invocation_state if tool_context else {}
 
+    from callbacks._compat import StateDict
+
     class _StateAdapter:
         def __init__(self, s: dict) -> None:
-            self.state = s
+            self.state = StateDict(s) if not isinstance(s, StateDict) else s
 
     adapter = _StateAdapter(state)
 

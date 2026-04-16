@@ -36,6 +36,19 @@ class _GenaiTypes:
 genai_types = _GenaiTypes()
 
 
+class StateDict(dict):
+    """Dict subclass with to_dict() for ADK compatibility.
+
+    The old ADK state object had a .to_dict() method that deterministic_steps.py
+    calls in 10 places (e.g. upload_pipeline_state(state.to_dict())).
+    This subclass ensures those calls work on plain dicts.
+    """
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain dict copy of the state."""
+        return dict(self)
+
+
 class CallbackContext:
     """Minimal replacement for google.adk.agents.callback_context.CallbackContext.
 
@@ -43,4 +56,4 @@ class CallbackContext:
     """
 
     def __init__(self, state: dict[str, Any] | None = None) -> None:
-        self.state: dict[str, Any] = state if state is not None else {}
+        self.state: StateDict = StateDict(state) if state is not None else StateDict()
