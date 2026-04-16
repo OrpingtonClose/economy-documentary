@@ -339,12 +339,16 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
         from recovery import RecoveryPolicy, execute_with_recovery
 
         def _run_graph(**kwargs: Any) -> Any:
-            # Save reference to last attempt's state before resetting
-            last_attempt_state.update(initial_state)
             # Reset initial_state to clean snapshot before each attempt
             initial_state.clear()
             initial_state.update(copy.deepcopy(state_snapshot))
-            return pipeline(user_message, invocation_state=initial_state)
+            try:
+                return pipeline(user_message, invocation_state=initial_state)
+            finally:
+                # Always capture the latest attempt's state (even on failure)
+                # so the caller gets the most recent partial progress.
+                last_attempt_state.clear()
+                last_attempt_state.update(initial_state)
 
         result = execute_with_recovery(
             operation=_run_graph,
