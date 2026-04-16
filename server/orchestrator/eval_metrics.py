@@ -109,17 +109,26 @@ def plan_quality(session_events: list[dict[str, Any]]) -> float:
     Score: 1.0 = EXCELLENT on first attempt, scales down with attempts.
     """
     achieved_excellent = False
+    best_rating = ""
 
     for event in session_events:
         data = _parse_event(event)
         if not data:
             continue
 
-        if data.get("event") == "plan_finalized":
-            achieved_excellent = True
+        # Check plan_evaluated events for actual quality rating
+        if data.get("event") == "plan_evaluated":
+            rating = data.get("rating", "").upper()
+            if rating == "EXCELLENT":
+                achieved_excellent = True
+            if rating:
+                best_rating = rating
 
-        if data.get("event") == "planning_started":
-            pass
+        # Also check plan_finalized with embedded rating
+        if data.get("event") == "plan_finalized":
+            rating = data.get("rating", "").upper()
+            if rating == "EXCELLENT":
+                achieved_excellent = True
 
     # If we have plan_attempt events, count them
     plan_attempts = sum(
@@ -131,7 +140,10 @@ def plan_quality(session_events: list[dict[str, Any]]) -> float:
         plan_attempts = 1
 
     if not achieved_excellent:
-        return 0.5  # plan was produced but may not be excellent
+        # Plan completed but didn't reach EXCELLENT
+        if best_rating in ("GOOD",):
+            return 0.6
+        return 0.4  # FAIR or unknown
 
     # Score: 1.0 for 1 attempt, 0.75 for 2, 0.5 for 3, 0.25 for 4
     return max(0.25, 1.0 - (plan_attempts - 1) * 0.25)

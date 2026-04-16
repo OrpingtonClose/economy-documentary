@@ -170,6 +170,13 @@ class WorkQueue:
             clip = self._clips.get(clip_id)
             if not clip:
                 return
+            # Guard: ignore late completions for clips already terminal
+            if clip.status in (ClipStatus.COMPLETED, ClipStatus.DEAD_LETTER):
+                logger.debug(
+                    "WorkQueue: ignoring duplicate completion for %s (already %s)",
+                    clip_id, clip.status.value,
+                )
+                return
             clip.status = ClipStatus.COMPLETED
             clip.completed_at = time.time()
             clip.output_path = output_path
