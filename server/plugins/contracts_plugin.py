@@ -88,10 +88,10 @@ class ContractsPlugin(Plugin):
                 "pipeline_phase=<%s>, contract=<%s> | postcondition validation failed: %s",
                 pipeline_phase,
                 contract_name,
-                cv.message,
+                str(cv),
             )
             existing = state.get("_contract_violations", [])
-            details = cv.details.get("errors", []) if cv.details else [cv.message]
+            details = cv.details.get("errors", []) if cv.details else [str(cv)]
             state["_contract_violations"] = existing + details
         except Exception:
             logger.exception(
