@@ -86,12 +86,18 @@ class ArtifactEvent:
 def emit_agui_event(event_type: str, data: dict[str, Any]) -> None:
     """Emit an artifact/feedback event to the dashboard collector."""
     try:
-        from dashboard.collector import get_active_collector
+        from dashboard import get_active_collector
 
         collector = get_active_collector()
         if collector:
-            collector.record_custom_event(event_type, data)
-    except ImportError:
+            # Append directly to the collector's event list
+            with collector._lock:
+                collector._events.append({
+                    "type": event_type,
+                    "data": data,
+                    "timestamp": time.time(),
+                })
+    except Exception:
         pass
     logger.debug("event_type=<%s> | agui event emitted", event_type)
 

@@ -26,20 +26,17 @@ class DashboardPlugin(Plugin):
     name = "dashboard"
 
     def __init__(self) -> None:
-        self._collector = None
         self._tool_starts: dict[str, float] = {}
         super().__init__()
 
     def _get_collector(self) -> Any:
-        """Lazy-load PipelineCollector to avoid import cycles."""
-        if self._collector is None:
-            try:
-                from dashboard.collector import PipelineCollector
+        """Get the active PipelineCollector for the current context."""
+        try:
+            from dashboard import get_active_collector
 
-                self._collector = PipelineCollector.get_instance()
-            except ImportError:
-                logger.debug("dashboard collector not available")
-        return self._collector
+            return get_active_collector()
+        except Exception:
+            return None
 
     @hook
     def before_invocation(self, event: BeforeInvocationEvent) -> None:
@@ -49,12 +46,8 @@ class DashboardPlugin(Plugin):
             return
 
         state = event.invocation_state
-        collector.emit({
-            "type": "invocation_start",
-            "agent": state.get("_current_agent", "unknown"),
-            "phase": state.get("_current_phase", "unknown"),
-            "timestamp": time.time(),
-        })
+        phase = state.get("_current_phase", "unknown")
+        collector.phase_start(phase)
 
     @hook
     def after_invocation(self, event: AfterInvocationEvent) -> None:
@@ -64,12 +57,8 @@ class DashboardPlugin(Plugin):
             return
 
         state = event.invocation_state
-        collector.emit({
-            "type": "invocation_end",
-            "agent": state.get("_current_agent", "unknown"),
-            "phase": state.get("_current_phase", "unknown"),
-            "timestamp": time.time(),
-        })
+        phase = state.get("_current_phase", "unknown")
+        collector.phase_end(phase, status="completed")
 
     @hook
     def before_tool_call(self, event: BeforeToolCallEvent) -> None:
@@ -82,12 +71,12 @@ class DashboardPlugin(Plugin):
         if not collector:
             return
 
-        collector.emit({
-            "type": "tool_start",
-            "tool": tool_name,
-            "tool_id": tool_id,
-            "timestamp": time.time(),
-        })
+        agent = "agent"
+        collector.tool_start(
+            tool_name=tool_name,
+            agent=agent,
+            args_summary=str(event.tool_use.get("input", {}))[:200],
+        )
 
     @hook
     def after_tool_call(self, event: AfterToolCallEvent) -> None:
@@ -101,10 +90,10 @@ class DashboardPlugin(Plugin):
         if not collector:
             return
 
-        collector.emit({
-            "type": "tool_end",
-            "tool": tool_name,
-            "tool_id": tool_id,
-            "elapsed_ms": int(elapsed * 1000),
-            "timestamp": time.time(),
-        })
+        result_text = str(event.tool_result) if event.tool_result else ""
+        collector.tool_end(
+            tool_name=tool_name,
+            agent="agent",
+            duration=elapsed,
+            result_chars=len(result_text),
+        )
