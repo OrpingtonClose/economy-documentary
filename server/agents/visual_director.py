@@ -251,7 +251,10 @@ def _visual_concepter_before_model(callback_context, llm_request):
 
             resp = litellm.completion(
                 model=_model,
-                messages=[{"role": "user", "content": chunk_prompt}],
+                messages=[
+                    {"role": "system", "content": _VISUAL_CONCEPTER_INSTRUCTION},
+                    {"role": "user", "content": chunk_prompt},
+                ],
                 temperature=0.7,
             )
             raw_text = resp.choices[0].message.content or ""
