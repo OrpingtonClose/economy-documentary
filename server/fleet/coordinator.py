@@ -163,6 +163,7 @@ class FleetCoordinator:
         """Report a clip as successfully completed."""
         self._queue.mark_completed(
             clip_id=clip_id,
+            worker_id=worker_id,
             output_path=output_path,
             gen_time=gen_time,
             qa_quality=qa_quality,

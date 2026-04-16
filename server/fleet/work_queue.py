@@ -160,6 +160,7 @@ class WorkQueue:
     def mark_completed(
         self,
         clip_id: str,
+        worker_id: str = "",
         output_path: str = "",
         gen_time: float = 0.0,
         qa_quality: str = "",
@@ -170,11 +171,20 @@ class WorkQueue:
             clip = self._clips.get(clip_id)
             if not clip:
                 return
-            # Guard: ignore late completions for clips already terminal
+            # Guard 1: ignore late completions for clips already terminal
             if clip.status in (ClipStatus.COMPLETED, ClipStatus.DEAD_LETTER):
                 logger.debug(
                     "WorkQueue: ignoring duplicate completion for %s (already %s)",
                     clip_id, clip.status.value,
+                )
+                return
+            # Guard 2: ignore late completions from a previous worker
+            # after timeout reclamation and reassignment.
+            if worker_id and clip.assigned_to and clip.assigned_to != worker_id:
+                logger.debug(
+                    "WorkQueue: ignoring late completion for %s from %s "
+                    "(now assigned to %s)",
+                    clip_id, worker_id, clip.assigned_to,
                 )
                 return
             clip.status = ClipStatus.COMPLETED
