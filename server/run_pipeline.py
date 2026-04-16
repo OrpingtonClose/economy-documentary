@@ -278,10 +278,19 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
             "Both versions will be used for the documentary."
         )
 
+    quick_test_instruction = ""
+    if quick_test:
+        quick_test_instruction = (
+            "\n\nQUICK TEST MODE: Generate EXACTLY 2 scenes only. "
+            "Each scene should be ~15 seconds of narration (~37 words per voice block). "
+            "Total video target: ~1 minute."
+        )
+
     user_message = (
         f"Create an ADHD-friendly documentary about: {topic}\n\n"
         f"Here is the research corpus:\n\n{corpus_content}"
         f"{language_instruction}"
+        f"{quick_test_instruction}"
     )
 
     # Build pipeline graph BEFORE starting long-lived resources so that if
