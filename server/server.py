@@ -206,6 +206,12 @@ _adk_app = App(
 )
 adk_agent = ADKAgent.from_app(
     app=_adk_app,
+    # Production pipelines can take 30-90 minutes (TTS + video generation).
+    # Default timeouts (execution=600s, session=1200s, tool=300s) are far too
+    # short — they kill the pipeline mid-audio-stage.
+    execution_timeout_seconds=7200,   # 2 hours
+    session_timeout_seconds=7200,     # 2 hours
+    tool_timeout_seconds=3600,        # 1 hour (single TTS/video tool call)
 )
 
 _HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
