@@ -388,11 +388,12 @@ def run_post_production(
             )
             action = escalate_pipeline_error(
                 operation_name="timeline_guardian_production",
-                error=e,
+                error_msg=str(e),
+                severity="critical",
                 pipeline_state=_state_d,
                 agent_policy_type="otio",
             )
-            if action == "abort":
+            if isinstance(action, dict) and action.get("action") == "abort":
                 raise
             logger.warning(
                 "Timeline Guardian production failure escalated and resolved "
