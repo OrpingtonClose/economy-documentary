@@ -433,6 +433,70 @@ def get_narration_durations_by_scene(tool_context=None) -> dict:
     return result
 
 
+def get_video_slot_durations(tool_context=None) -> dict:
+    """Read the OTIO narration track and return VIDEO durations per scene.
+
+    Unlike get_narration_durations_by_scene (which returns narration-only
+    durations), this returns each voice's FULL TIME SLOT: the narration
+    clip duration PLUS any Gap that follows it on the narration track.
+
+    This is the AUTHORITATIVE source for how long each video clip must be.
+    The video track has NO gaps — each video clip must cover the narration
+    plus the following silence so the viewer sees continuous footage while
+    the narrator pauses.
+
+    Returns a dict mapping scene_num -> list of (voice, slot_duration_sec)
+    tuples, ordered as they appear on the A1_Narration track.
+    """
+    state = tool_context.state if tool_context else {}
+    timeline_path = state.get("_timeline_path", "")
+    if not timeline_path or not os.path.exists(timeline_path):
+        return {}
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+
+    narration_track = None
+    for track in timeline.tracks:
+        if track.name == TRACK_A1:
+            narration_track = track
+            break
+
+    if narration_track is None:
+        return {}
+
+    # Walk the narration track: for each Clip, accumulate its duration
+    # plus any immediately following Gap(s) to get the full time slot.
+    items = list(narration_track)
+    result: dict[int, list[tuple[str, float]]] = {}
+
+    i = 0
+    while i < len(items):
+        item = items[i]
+        if isinstance(item, otio.schema.Clip) and item.source_range:
+            meta = item.metadata.get("documentary", {})
+            sn = meta.get("scene_num", 0)
+            voice = meta.get("voice", "")
+            clip_dur = item.source_range.duration.to_seconds()
+
+            # Skip alternate language clips (e.g. V1_EN in dual mode)
+            if sn > 0 and clip_dur > 0 and not voice.endswith("_EN"):
+                # Accumulate following Gap duration(s)
+                gap_dur = 0.0
+                j = i + 1
+                while j < len(items) and isinstance(items[j], otio.schema.Gap):
+                    gap_item = items[j]
+                    if gap_item.source_range:
+                        gap_dur += gap_item.source_range.duration.to_seconds()
+                    j += 1
+
+                slot_dur = clip_dur + gap_dur
+                result.setdefault(sn, []).append((voice, round(slot_dur, 3)))
+        i += 1
+
+    return result
+
+
 def _gatekeeper_check_video_clip(
     timeline,
     scene_num: int,

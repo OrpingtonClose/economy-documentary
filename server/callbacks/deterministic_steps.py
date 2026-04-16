@@ -362,6 +362,71 @@ def clean_scenes_after_scenario(
                 )
 
     if scenes:
+        # ── Duration budget: scale scene durations so total = target ──
+        # The scenario LLM generates scenes whose duration_sec values sum
+        # to the user's requested total (e.g. 420s for "7 minutes").  But
+        # the audio stage adds structural silence gaps (inter-voice pauses
+        # between V1→V2→V3 and inter-scene transitions).  These gaps are
+        # part of the movie runtime.  We scale scene durations DOWN so:
+        #   sum(scene_duration_sec) + total_gaps = original_target
+        #
+        # The gap constants MUST match those in deterministic_audio_callback.
+        _INTER_VOICE_PAUSE = 1.5
+        _INTER_SCENE_PAUSE = 2.5
+        original_total = sum(s.get("duration_sec", 0) for s in scenes)
+        if original_total > 0:
+            num_scenes = len(scenes)
+            # Compute total gap overhead that audio stage will insert
+            total_voice_gaps = 0.0
+            for s in scenes:
+                voices = s.get("voices", [])
+                active = sum(1 for v in voices if v.get("text", "").strip())
+                total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE
+            total_scene_gaps = max(0, num_scenes - 1) * _INTER_SCENE_PAUSE
+            total_gap_overhead = total_voice_gaps + total_scene_gaps
+
+            narration_budget = original_total - total_gap_overhead
+            if narration_budget > 0 and narration_budget < original_total:
+                scale = narration_budget / original_total
+                for s in scenes:
+                    old_dur = s.get("duration_sec", 0)
+                    s["duration_sec"] = round(old_dur * scale, 2)
+                new_total = sum(s.get("duration_sec", 0) for s in scenes)
+                logger.info(
+                    "Duration budget: scaled narration %.1fs → %.1fs "
+                    "(gaps=%.1fs, movie target=%.1fs)",
+                    original_total, new_total, total_gap_overhead,
+                    new_total + total_gap_overhead,
+                )
+            else:
+                logger.warning(
+                    "Duration budget: gap overhead %.1fs >= total %.1fs — "
+                    "skipping scaling (too many scenes/voices for target)",
+                    total_gap_overhead, original_total,
+                )
+
+        # Store per-voice narration budgets for the audio stage's QA loop.
+        # Each voice gets a budget proportional to its word count within
+        # the scene's (already-scaled) duration_sec.
+        voice_budgets: dict[str, float] = {}  # "scene_NNN_voice" → seconds
+        for s in scenes:
+            sn = s.get("scene_num", 0)
+            dur = s.get("duration_sec", 0)
+            voices = s.get("voices", [])
+            active = [v for v in voices if v.get("text", "").strip()]
+            total_words = sum(len(v.get("text", "").split()) for v in active)
+            if total_words <= 0:
+                total_words = 1
+            for v in active:
+                voice_name = v.get("voice", "V1")
+                words = len(v.get("text", "").split())
+                budget = dur * (words / total_words) if dur > 0 else 0
+                key = f"scene_{sn:03d}_{voice_name}"
+                voice_budgets[key] = round(budget, 2)
+        state["_voice_budgets"] = json.dumps(voice_budgets)
+        logger.info("Voice budgets: %d entries, total=%.1fs",
+                     len(voice_budgets), sum(voice_budgets.values()))
+
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
 
@@ -396,6 +461,61 @@ def clean_scenes_after_scenario(
 
 
 # ---------------------------------------------------------------------------
+# Narration text trimming for duration budget enforcement
+# ---------------------------------------------------------------------------
+
+_MAX_TRIM_RETRIES = 2  # max re-generation attempts per voice
+
+def _trim_text_to_budget(text: str, actual_duration: float, budget: float) -> str:
+    """Trim narration text proportionally to fit within a duration budget.
+
+    Removes sentences from the end until the estimated word count fits
+    the budget.  At ~150 words/min (standard narration rate), we estimate
+    how many words the budget allows and trim accordingly.
+
+    Returns the trimmed text, or the original text if trimming would
+    remove more than 40% of the content (in that case, the scenario
+    should be adjusted instead — see the audio QA gate).
+    """
+    if actual_duration <= budget or budget <= 0:
+        return text
+
+    ratio = budget / actual_duration  # e.g. 0.85 means keep 85%
+    if ratio < 0.6:
+        # Would remove >40% — flag for scenario adjustment instead
+        logger.warning(
+            "Narration trimming would remove %.0f%% of text "
+            "(actual=%.1fs, budget=%.1fs) — too aggressive, skipping trim",
+            (1 - ratio) * 100, actual_duration, budget,
+        )
+        return text
+
+    words = text.split()
+    target_words = max(1, int(len(words) * ratio))
+
+    # Trim at sentence boundaries when possible
+    sentences = text.replace("! ", ".|").replace("? ", ".|").replace(". ", ".|").split("|")
+    trimmed_sentences = []
+    word_count = 0
+    for sentence in sentences:
+        s_words = len(sentence.split())
+        if word_count + s_words > target_words and trimmed_sentences:
+            break
+        trimmed_sentences.append(sentence)
+        word_count += s_words
+
+    result = " ".join(trimmed_sentences).strip()
+    if not result:
+        result = " ".join(words[:target_words])
+
+    logger.info(
+        "Trimmed narration: %d → %d words (ratio=%.2f, budget=%.1fs)",
+        len(words), len(result.split()), ratio, budget,
+    )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Deterministic audio generation
 # ---------------------------------------------------------------------------
 
@@ -421,9 +541,16 @@ def deterministic_audio_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="audio_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
@@ -457,7 +584,7 @@ def deterministic_audio_callback(
     # Import tool functions directly (not via FunctionTool wrappers)
     from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
-    from tools.otio_tools import add_narration_clip, add_narration_gap, add_video_gap
+    from tools.otio_tools import add_narration_clip, add_narration_gap
     from gatekeeper import check_narration_clip, has_rejects, format_audit_report
 
     # ── OTIO architecture constants ──────────────────────────────────
@@ -471,9 +598,19 @@ def deterministic_audio_callback(
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
     _feedback_store = get_feedback_store()
 
+    # Load per-voice narration budgets from scenario stage
+    _raw_budgets = state.get("_voice_budgets", "{}")
+    try:
+        voice_budgets: dict[str, float] = json.loads(str(_raw_budgets))
+    except (json.JSONDecodeError, TypeError):
+        voice_budgets = {}
+    logger.info("Voice budgets loaded: %d entries", len(voice_budgets))
+
     alignment_data = {}
     total_clips = 0
     errors = []
+    # Track actual durations per voice for scene-level and total QA
+    _actual_durations: dict[str, float] = {}  # "scene_NNN_voice" → actual seconds
     # Deferred gatekeeper: collect clip info for batch validation AFTER
     # all artifacts are uploaded to B2 and written to OTIO (audit trail).
     _deferred_gk_clips: list[dict] = []
@@ -548,13 +685,23 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # Track RU clip durations for scene/total QA
+                            # (EN clips are alternate and excluded from QA)
+                            if lang_code == "ru":
+                                budget_key = f"scene_{scene_num:03d}_{voice}"
+                                _actual_durations[budget_key] = duration
+
                             # B2 upload already happened inside generate_narration().
                             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                            voice_budget = voice_budgets.get(
+                                f"scene_{scene_num:03d}_{voice}", 0,
+                            )
                             _deferred_gk_clips.append({
                                 "wav_path": wav_path,
                                 "scene_num": scene_num,
                                 "voice": voice_suffix,
                                 "duration": duration,
+                                "budget": voice_budget if lang_code == "ru" else 0,
                             })
 
                             # AG-UI: update narration artifact
@@ -580,10 +727,18 @@ def deterministic_audio_callback(
                             )
                             clip_result = json.loads(clip_result_json)
                             if "error" in clip_result:
-                                raise RuntimeError(
+                                from recovery import escalate_pipeline_error
+                                _clip_msg = (
                                     f"OTIO VIOLATION: failed to add narration clip "
                                     f"scene {scene_num} {voice_suffix}: {clip_result['error']}"
                                 )
+                                escalate_pipeline_error(
+                                    operation_name="audio_narration_clip",
+                                    error_msg=_clip_msg,
+                                    severity="critical",
+                                    default_action="abort",
+                                )
+                                raise RuntimeError(_clip_msg)
                             total_clips += 1
 
                             # Run alignment
@@ -603,20 +758,62 @@ def deterministic_audio_callback(
                         errors.append(err_msg)
 
             else:
-                # Single language mode
+                # Single language mode — with duration budget enforcement
                 lang_code = language if language in ("ru", "en") else "en"
+                budget_key = f"scene_{scene_num:03d}_{voice}"
+                voice_budget = voice_budgets.get(budget_key, 0)
+                current_text = text
                 try:
-                    result_json = generate_narration(
-                        scene_num=scene_num,
-                        voice_role=voice,
-                        text=text,
-                        language=lang_code,
-                    )
-                    result = json.loads(result_json)
-                    wav_path = result.get("wav_path", "")
-                    duration = result.get("duration", 0)
+                    # Budget-aware TTS loop: generate, measure, trim if over
+                    wav_path = ""
+                    duration = 0.0
+                    for _trim_attempt in range(_MAX_TRIM_RETRIES + 1):
+                        result_json = generate_narration(
+                            scene_num=scene_num,
+                            voice_role=voice,
+                            text=current_text,
+                            language=lang_code,
+                        )
+                        result = json.loads(result_json)
+                        wav_path = result.get("wav_path", "")
+                        duration = result.get("duration", 0)
+
+                        if not wav_path or duration <= 0:
+                            break  # TTS failed — fall through to error handling
+
+                        # Check against budget (10% tolerance)
+                        if voice_budget > 0 and duration > voice_budget * 1.10:
+                            if _trim_attempt < _MAX_TRIM_RETRIES:
+                                logger.warning(
+                                    "Scene %d %s: narration %.1fs > budget %.1fs "
+                                    "(+%.0f%%), trimming text (attempt %d/%d)",
+                                    scene_num, voice, duration, voice_budget,
+                                    ((duration / voice_budget) - 1) * 100,
+                                    _trim_attempt + 1, _MAX_TRIM_RETRIES,
+                                )
+                                current_text = _trim_text_to_budget(
+                                    current_text, duration, voice_budget,
+                                )
+                                # Delete cached WAV so TTS regenerates
+                                if os.path.exists(wav_path):
+                                    os.remove(wav_path)
+                                sidecar = wav_path.replace(".wav", ".txt")
+                                if os.path.exists(sidecar):
+                                    os.remove(sidecar)
+                                continue
+                            else:
+                                logger.warning(
+                                    "Scene %d %s: still over budget after %d trims "
+                                    "(%.1fs > %.1fs) — accepting as-is",
+                                    scene_num, voice, _MAX_TRIM_RETRIES,
+                                    duration, voice_budget,
+                                )
+                        break  # Within budget or no budget — proceed
 
                     if wav_path and duration > 0:
+                        # Track actual duration for scene/total QA
+                        _actual_durations[budget_key] = duration
+
                         # B2 upload already happened inside generate_narration().
                         # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
                         _deferred_gk_clips.append({
@@ -624,6 +821,7 @@ def deterministic_audio_callback(
                             "scene_num": scene_num,
                             "voice": voice,
                             "duration": duration,
+                            "budget": voice_budget,
                         })
 
                         clip_result_json = add_narration_clip(
@@ -635,15 +833,23 @@ def deterministic_audio_callback(
                         )
                         clip_result = json.loads(clip_result_json)
                         if "error" in clip_result:
-                            raise RuntimeError(
+                            from recovery import escalate_pipeline_error
+                            _clip_msg = (
                                 f"OTIO VIOLATION: failed to add narration clip "
                                 f"scene {scene_num} {voice}: {clip_result['error']}"
                             )
+                            escalate_pipeline_error(
+                                operation_name="audio_narration_clip",
+                                error_msg=_clip_msg,
+                                severity="critical",
+                                default_action="abort",
+                            )
+                            raise RuntimeError(_clip_msg)
                         total_clips += 1
 
                         align_result_json = align_narration(
                             wav_path=wav_path,
-                            text=text,
+                            text=current_text,
                             language=lang_code,
                         )
                         align_key = f"scene_{scene_num:03d}_{voice}"
@@ -657,19 +863,14 @@ def deterministic_audio_callback(
                     errors.append(err_msg)
 
             # ── OTIO: interleave inter-voice gap AFTER this voice ──────
-            # Insert immediately after each voice clip (except the last)
-            # so the OTIO track order is: V1, gap, V2, gap, V3.
+            # Silence gap on the NARRATION track only (except after the
+            # last voice).  The VIDEO track has NO gaps — video clips are
+            # generated long enough to cover narration + the following
+            # pause (see production callback / get_video_slot_durations).
             current_voice_idx += 1
             if current_voice_idx < active_voice_count:
                 _mock_ctx = _MockToolContext(state)
                 add_narration_gap(
-                    scene_num=scene_num,
-                    duration=INTER_VOICE_PAUSE_SEC,
-                    gap_type="inter_voice",
-                    gap_index=current_voice_idx,
-                    tool_context=_mock_ctx,
-                )
-                add_video_gap(
                     scene_num=scene_num,
                     duration=INTER_VOICE_PAUSE_SEC,
                     gap_type="inter_voice",
@@ -688,13 +889,6 @@ def deterministic_audio_callback(
         if scene_idx < len(scenes) - 1:
             _mock_ctx = _MockToolContext(state)
             add_narration_gap(
-                scene_num=scene_num,
-                duration=INTER_SCENE_PAUSE_SEC,
-                gap_type="inter_scene",
-                gap_index=scene_idx,
-                tool_context=_mock_ctx,
-            )
-            add_video_gap(
                 scene_num=scene_num,
                 duration=INTER_SCENE_PAUSE_SEC,
                 gap_type="inter_scene",
@@ -721,7 +915,20 @@ def deterministic_audio_callback(
     # GATEKEEPER: batch validation AFTER all artifacts are in B2.
     # Every narration clip is already uploaded (inside generate_narration)
     # and written to OTIO.  Now validate and upload the audit report.
+    #
+    # QA levels (same pattern as video production):
+    #   1. Individual clip QA  — file exists, duration > 0, size > 1KB
+    #   2. Individual budget QA — narration fits voice time budget
+    #   3. Scene-level QA      — scene narration + gaps ≤ scene duration_sec
+    #   4. Total QA            — full assembled narration ≈ target duration
+    from gatekeeper import (
+        check_narration_duration_budget,
+        check_scene_narration_total,
+        check_total_narration_duration,
+    )
     all_gk_checks = []
+
+    # Level 1 + 2: individual clip structural + budget checks
     for clip_info in _deferred_gk_clips:
         gk_checks = check_narration_clip(
             wav_path=clip_info["wav_path"],
@@ -732,6 +939,66 @@ def deterministic_audio_callback(
         )
         all_gk_checks.extend(gk_checks)
 
+        # Budget check per voice
+        budget_checks = check_narration_duration_budget(
+            scene_num=clip_info["scene_num"],
+            voice=clip_info["voice"],
+            actual_duration=clip_info["duration"],
+            budget=clip_info.get("budget", 0),
+            stage="audio",
+        )
+        all_gk_checks.extend(budget_checks)
+
+    # Level 3: scene-level QA
+    for scene in scenes:
+        sn = scene.get("scene_num", 0)
+        scene_budget = scene.get("duration_sec", 0)
+        scene_voices = scene.get("voices", [])
+        active = [v for v in scene_voices if v.get("text", "").strip()]
+        scene_voice_gaps = max(0, len(active) - 1) * INTER_VOICE_PAUSE_SEC
+
+        # Sum actual narration durations for this scene
+        scene_narr_total = 0.0
+        for v in active:
+            vname = v.get("voice", "V1")
+            key = f"scene_{sn:03d}_{vname}"
+            scene_narr_total += _actual_durations.get(key, 0)
+
+        scene_checks = check_scene_narration_total(
+            scene_num=sn,
+            actual_scene_total=scene_narr_total,
+            scene_budget=scene_budget,
+            gap_overhead=scene_voice_gaps,
+            stage="audio",
+        )
+        all_gk_checks.extend(scene_checks)
+
+    # Level 4: total assembled narration QA
+    total_narration = sum(_actual_durations.values())
+    total_voice_gaps = sum(
+        max(0, len([v for v in s.get("voices", []) if v.get("text", "").strip()]) - 1)
+        * INTER_VOICE_PAUSE_SEC
+        for s in scenes
+    )
+    total_scene_gaps = max(0, len(scenes) - 1) * INTER_SCENE_PAUSE_SEC
+    actual_movie_duration = total_narration + total_voice_gaps + total_scene_gaps
+    # The original target is what the scenario generated before scaling
+    # Reconstruct: scaled_total + gap_overhead = original_target
+    scaled_narration_total = sum(s.get("duration_sec", 0) for s in scenes)
+    target_movie_duration = scaled_narration_total + total_voice_gaps + total_scene_gaps
+    total_checks = check_total_narration_duration(
+        actual_total=actual_movie_duration,
+        target_total=target_movie_duration,
+        stage="audio",
+    )
+    all_gk_checks.extend(total_checks)
+    logger.info(
+        "Narration QA: total=%.1fs (narration=%.1fs + voice_gaps=%.1fs + "
+        "scene_gaps=%.1fs), target=%.1fs",
+        actual_movie_duration, total_narration, total_voice_gaps,
+        total_scene_gaps, target_movie_duration,
+    )
+
     # Upload gatekeeper audit report to B2 (audit trail)
     if all_gk_checks:
         audit_report = format_audit_report(all_gk_checks, "audio")
@@ -741,10 +1008,26 @@ def deterministic_audio_callback(
     if has_rejects(all_gk_checks):
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
-        raise RuntimeError(
-            f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
-            f"audit report uploaded to B2): {reject_msgs}"
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="audio_gatekeeper",
+            error_msg=(
+                f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            ),
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=(
+                "Narration duration drift exceeds threshold. "
+                "Root cause is likely insufficient text in the scenario "
+                "(LLM generated too few scenes or too-short narration)."
+            ),
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -845,7 +1128,8 @@ def _normalize_concept_durations(
        narration phrases (V1, V2, V3) for that scene.  The gatekeeper
        enforces 1:1 mapping between concepts and phrases.
     2. The sum of video concept durations for a scene MUST equal the sum
-       of narration durations for that scene.
+       of VIDEO SLOT durations (narration + following gap) for that scene,
+       ensuring continuous video with no freeze-frames during pauses.
 
     The LLM visual director may generate more concepts than narration
     phrases (e.g. 7 concepts for 3 phrases).  This function:
@@ -857,7 +1141,9 @@ def _normalize_concept_durations(
 
     Args:
         concepts: List of visual concept dicts from the LLM.
-        narr_durations: Dict from get_narration_durations_by_scene().
+        narr_durations: Dict from get_video_slot_durations() — each voice's
+            full time slot (narration + following gap) so video clips cover
+            the entire timeline with no freeze-frames.
 
     Returns:
         New list of concepts with normalized durations and counts.
@@ -1041,18 +1327,19 @@ def write_visual_metadata_to_otio(
         from callbacks.timeline_guardian import timeline_guardian_callback
         return timeline_guardian_callback(callback_context)
 
-    # ── ARCHITECTURE: normalize concept durations to match narration ──
+    # ── ARCHITECTURE: normalize concept durations to match VIDEO slots ──
     # The LLM controls WHERE visual breaks happen.  This normalizer
-    # scales durations so they sum to the narration duration per scene.
-    from tools.otio_tools import get_narration_durations_by_scene
-    narr_durations = get_narration_durations_by_scene(
+    # scales durations so each concept covers the narration PLUS the
+    # following silence gap — ensuring continuous video with no freeze-frames.
+    from tools.otio_tools import get_video_slot_durations
+    slot_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
     )
-    if narr_durations:
-        concepts = _normalize_concept_durations(concepts, narr_durations)
+    if slot_durations:
+        concepts = _normalize_concept_durations(concepts, slot_durations)
         # Store normalized concepts back into state so production uses them
         state["visual_concepts"] = json.dumps(concepts)
-        logger.info("Normalized %d visual concepts to match narration timing", len(concepts))
+        logger.info("Normalized %d visual concepts to match video slot timing", len(concepts))
 
     # ── Expose WhisperX word-level data to visual concepts ──────────
     # The alignment data from the audio stage is stored in state.  We
@@ -1186,9 +1473,16 @@ def deterministic_production_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="production_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
@@ -1316,22 +1610,33 @@ def deterministic_production_callback(
         concepts = consolidated
 
     from tools.video_tools import generate_video_clip, probe_clip
-    from tools.otio_tools import add_video_clip, get_narration_durations_by_scene
+    from tools.otio_tools import add_video_clip, get_video_slot_durations
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
     # GATEKEEPER: stage handoff check (visual_direction → production)
     handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-        raise RuntimeError(
-            f"GATEKEEPER BLOCKED production start: "
-            + "; ".join(c.message for c in rejects)
+        reject_msgs = "; ".join(c.message for c in rejects)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="production_handoff_gatekeeper",
+            error_msg=f"GATEKEEPER BLOCKED production start: {reject_msgs}",
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER BLOCKED production start: {reject_msgs}"
+            )
     if not intervention_window("production_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
-    # Read narration durations for gatekeeper cross-validation
-    narr_durations = get_narration_durations_by_scene(
+    # Read VIDEO SLOT durations (narration + following gap) for cross-validation.
+    # This is what each video clip must cover — continuous footage with no
+    # freeze-frames during narrator pauses.
+    narr_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
     )
 
@@ -1476,10 +1781,108 @@ def deterministic_production_callback(
                 _collect_result(r, dest)  # handle nested splits
         else:
             dest.append(result)
+            # Record to trace capture for across-run learning
+            if _trace_capture and isinstance(result, dict):
+                _trace_capture.record_clip_result(
+                    clip_id=result.get("clip_id", "unknown"),
+                    success=not result.get("error"),
+                    gen_time=result.get("gen_time", 0),
+                    qa_quality=result.get("qa_quality", ""),
+                    qa_reason=result.get("qa_reason", ""),
+                    worker_id=result.get("worker_id", "local"),
+                    attempt=result.get("qa_attempts", 1),
+                    prompt=result.get("prompt", ""),
+                    duration_target=result.get("duration_target", 0),
+                    duration_actual=result.get("duration_actual", 0),
+                )
 
-    # Generate clips in parallel across available GPU workers
+    # Generate clips — fleet-aware dispatch with work queue when available,
+    # falling back to the original ThreadPoolExecutor for single-worker mode.
     results: list[dict] = []
-    if num_workers > 1:
+
+    # Try fleet coordinator first (provides work queue, retry-on-different-worker,
+    # cost tracking, and systemic problem detection)
+    _fleet_coordinator = None
+    try:
+        from fleet.coordinator import get_fleet_coordinator
+        from fleet.work_queue import QueuedClip as _QueuedClip
+        _fleet_coordinator = get_fleet_coordinator()
+    except ImportError:
+        pass
+
+    # Trace capture for across-run learning
+    _trace_capture = None
+    try:
+        from orchestrator.trace_capture import get_trace_capture
+        _trace_capture = get_trace_capture()
+        _trace_capture.record_event("production_started", {
+            "num_clips": len(concepts),
+            "num_workers": num_workers,
+            "fleet_mode": _fleet_coordinator is not None,
+        })
+    except Exception:
+        pass
+
+    if _fleet_coordinator is not None:
+        # ── Fleet mode: enqueue all clips, generate via coordinator ──
+        logger.info(
+            "Fleet mode: enqueueing %d clips into work queue", len(concepts),
+        )
+        queued = []
+        for c in concepts:
+            queued.append(_QueuedClip(
+                clip_id=f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}",
+                scene_num=c.get("scene_num", 0),
+                phrase_idx=c.get("phrase_idx", 0),
+                prompt=c.get("prompt", ""),
+                negative_prompt=c.get("negative_prompt", ""),
+                duration=c.get("duration", 5.0),
+                lora_id=c.get("lora_id", "documentary-realism"),
+                lora_weight=c.get("lora_weight", 0.7),
+            ))
+        _fleet_coordinator.enqueue_clips(queued)
+
+        # Generate clips via ThreadPoolExecutor but report results to coordinator
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_concept = {
+                executor.submit(_generate_one_clip, c): c for c in concepts
+            }
+            for future in as_completed(future_to_concept):
+                c = future_to_concept[future]
+                clip_id = f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}"
+                try:
+                    result = future.result()
+                    _collect_result(result, results)
+                    # Report success to fleet coordinator
+                    _fleet_coordinator.report_completed(
+                        clip_id=clip_id,
+                        output_path=result.get("_output_path", "") if isinstance(result, dict) else "",
+                        gen_time=result.get("gen_time", 0) if isinstance(result, dict) else 0,
+                        qa_quality=result.get("qa_quality", "") if isinstance(result, dict) else "",
+                        qa_reason=result.get("qa_reason", "") if isinstance(result, dict) else "",
+                        worker_id="local",
+                    )
+                except RuntimeError:
+                    # Report failure to fleet coordinator
+                    _fleet_coordinator.report_failed(
+                        clip_id=clip_id,
+                        worker_id="local",
+                        error=str(future.exception()) if future.exception() else "RuntimeError",
+                        category="video_generation",
+                    )
+                    raise
+                except Exception as e:
+                    _fleet_coordinator.report_failed(
+                        clip_id=clip_id,
+                        worker_id="local",
+                        error=str(e),
+                        category="video_generation",
+                    )
+                    err_msg = f"Error producing scene {c.get('scene_num')} phrase {c.get('phrase_idx')}: {e}"
+                    logger.error(err_msg)
+                    errors.append(err_msg)
+    elif num_workers > 1:
+        # ── Legacy parallel mode (no fleet coordinator) ──
         logger.info("Parallel video generation: %d workers, %d clips", num_workers, len(concepts))
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             future_to_concept = {
@@ -1535,10 +1938,18 @@ def deterministic_production_callback(
                 )
                 clip_result = json.loads(clip_result_json)
                 if "error" in clip_result:
-                    raise RuntimeError(
+                    from recovery import escalate_pipeline_error
+                    _clip_msg = (
                         f"OTIO VIOLATION: failed to add video clip "
                         f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
                     )
+                    escalate_pipeline_error(
+                        operation_name="production_video_clip",
+                        error_msg=_clip_msg,
+                        severity="critical",
+                        default_action="abort",
+                    )
+                    raise RuntimeError(_clip_msg)
                 skipped_clips += 1
                 total_clips += 1
             except RuntimeError:
@@ -1606,10 +2017,18 @@ def deterministic_production_callback(
             )
             clip_result = json.loads(clip_result_json)
             if "error" in clip_result:
-                raise RuntimeError(
+                from recovery import escalate_pipeline_error
+                _clip_msg = (
                     f"OTIO VIOLATION: failed to add video clip "
                     f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
                 )
+                escalate_pipeline_error(
+                    operation_name="production_video_clip",
+                    error_msg=_clip_msg,
+                    severity="critical",
+                    default_action="abort",
+                )
+                raise RuntimeError(_clip_msg)
             total_clips += 1
         except RuntimeError:
             raise  # OTIO violations are fatal — never swallow
@@ -1651,10 +2070,22 @@ def deterministic_production_callback(
     if has_rejects(all_gk_checks):
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
-        raise RuntimeError(
-            f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
-            f"audit report uploaded to B2): {reject_msgs}"
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="production_gatekeeper",
+            error_msg=(
+                f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            ),
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Video clips failed quality checks after production.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -1732,9 +2163,16 @@ def deterministic_assembly_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="assembly_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
@@ -1751,10 +2189,19 @@ def deterministic_assembly_callback(
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
-        raise RuntimeError(
+        _otio_msg = (
             f"OTIO VIOLATION: timeline not found at '{timeline_path}' "
             f"— cannot assemble without OTIO timeline"
         )
+        from recovery import escalate_pipeline_error
+        escalate_pipeline_error(
+            operation_name="assembly_otio_violation",
+            error_msg=_otio_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Timeline file missing — assembly cannot proceed.",
+        )
+        raise RuntimeError(_otio_msg)
 
     import opentimelineio as otio
     from tools.otio_tools import _otio_lock
@@ -1762,14 +2209,37 @@ def deterministic_assembly_callback(
     from tools.video_tools import probe_clip
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
 
+    # --- Local helper for assembly OTIO violations -----------------------
+    # These are structural integrity errors — "skip" is never safe.
+    # The escalation is for dashboard visibility and audit trail only.
+    def _escalate_otio(msg: str) -> None:
+        from recovery import escalate_pipeline_error as _esc
+        _esc(
+            operation_name="assembly_otio_violation",
+            error_msg=msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=msg[:300],
+        )
+        raise RuntimeError(msg)
+
     # GATEKEEPER: stage handoff check (production → assembly)
     handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-        raise RuntimeError(
-            f"GATEKEEPER BLOCKED assembly start: "
-            + "; ".join(c.message for c in rejects)
+        reject_msgs = "; ".join(c.message for c in rejects)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="assembly_handoff_gatekeeper",
+            error_msg=f"GATEKEEPER BLOCKED assembly start: {reject_msgs}",
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER BLOCKED assembly start: {reject_msgs}"
+            )
     if not intervention_window("assembly_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 
@@ -1796,7 +2266,7 @@ def deterministic_assembly_callback(
             missing.append("V1_Video")
         if narration_track is None:
             missing.append("A1_Narration")
-        raise RuntimeError(
+        _escalate_otio(
             f"OTIO VIOLATION: required track(s) missing: {', '.join(missing)} "
             f"— timeline is damaged"
         )
@@ -1871,12 +2341,12 @@ def deterministic_assembly_callback(
                     a_path = item.media_reference.target_url
 
                 if not a_path or not os.path.exists(a_path):
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: narration clip {item.name} references "
                         f"missing file: {a_path}"
                     )
                 if not item.source_range:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: narration clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
@@ -1893,14 +2363,14 @@ def deterministic_assembly_callback(
                         ),
                     )
                     if not silence_path:
-                        raise RuntimeError(
+                        _escalate_otio(
                             f"OTIO VIOLATION: failed to generate silence for "
                             f"gap {item.name} ({gap_dur:.2f}s)"
                         )
                     audio_segments.append(silence_path)
 
         if not audio_segments:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: narration track{lang_suffix} has no renderable items"
             )
 
@@ -1915,7 +2385,7 @@ def deterministic_assembly_callback(
             output_path=combined_audio,
         ))
         if "error" in concat_result:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: audio concat failed: {concat_result['error']}"
             )
         logger.info(
@@ -1946,12 +2416,12 @@ def deterministic_assembly_callback(
                 if item.media_reference and hasattr(item.media_reference, "target_url"):
                     v_path = item.media_reference.target_url
                 if not v_path or not os.path.exists(v_path):
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} references "
                         f"missing file: {v_path}"
                     )
                 if not item.source_range:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
@@ -1959,7 +2429,7 @@ def deterministic_assembly_callback(
                 src_start = item.source_range.start_time.to_seconds()
                 src_dur = item.source_range.duration.to_seconds()
                 if src_dur <= 0:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} has "
                         f"source_range duration={src_dur:.3f}s — must be >0"
                     )
@@ -1975,7 +2445,7 @@ def deterministic_assembly_callback(
                     output_path=trimmed_path,
                 ))
                 if "error" in trim_res:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: failed to trim {item.name} to "
                         f"source_range (start={src_start:.2f}, dur={src_dur:.2f}): "
                         f"{trim_res['error']}"
@@ -1985,12 +2455,12 @@ def deterministic_assembly_callback(
                 verify_res = json.loads(probe_clip(mp4_path=trimmed_path))
                 actual_dur = verify_res.get("duration", 0)
                 if actual_dur <= 0:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: trimmed clip {trimmed_path} "
                         f"has zero duration after ffprobe verification"
                     )
                 if abs(actual_dur - src_dur) > 0.5:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: trimmed clip {item.name} actual "
                         f"duration ({actual_dur:.2f}s) deviates from OTIO "
                         f"source_range ({src_dur:.2f}s) by "
@@ -2022,7 +2492,7 @@ def deterministic_assembly_callback(
                                 gap_dur, gap_video_path,
                             )
                         if not freeze_path:
-                            raise RuntimeError(
+                            _escalate_otio(
                                 f"OTIO VIOLATION: failed to generate video gap "
                                 f"{item.name} ({gap_dur:.2f}s)"
                             )
@@ -2033,14 +2503,14 @@ def deterministic_assembly_callback(
                             gap_dur, gap_video_path,
                         )
                         if not black_path:
-                            raise RuntimeError(
+                            _escalate_otio(
                                 f"OTIO VIOLATION: failed to generate black video "
                                 f"gap {item.name} ({gap_dur:.2f}s)"
                             )
                         video_segments.append(black_path)
 
         if not video_segments:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: video track{lang_suffix} has no renderable items"
             )
 
@@ -2055,7 +2525,7 @@ def deterministic_assembly_callback(
             output_path=combined_video,
         ))
         if "error" in concat_result:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: video concat failed: {concat_result['error']}"
             )
         logger.info(
@@ -2121,7 +2591,7 @@ def deterministic_assembly_callback(
                 output_path=muxed_path,
             ))
             if "error" in mux_result:
-                raise RuntimeError(
+                _escalate_otio(
                     f"OTIO VIOLATION: mux failed: {mux_result['error']}"
                 )
 

@@ -338,11 +338,22 @@ def calculate_weighted_budgets(
     credits = get_account_credits()
     usable = credits - _CREDIT_RESERVE
     if usable <= 0:
-        raise RuntimeError(
+        from recovery import escalate_pipeline_error
+        _credit_msg = (
             f"Insufficient Vast.ai credits: ${credits:.2f} "
             f"(reserve=${_CREDIT_RESERVE:.2f}). "
             f"Top up at https://cloud.vast.ai/billing/"
         )
+        response = escalate_pipeline_error(
+            operation_name="vast_credits_insufficient",
+            error_msg=_credit_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Vast.ai account has insufficient credits for provisioning.",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(_credit_msg)
+        return (0.0, 0.0)  # skip: return zero budgets so caller can handle gracefully
 
     total_hourly = usable / max(estimated_hours, 0.5)
 
@@ -376,11 +387,22 @@ def calculate_budget_per_worker(
     credits = get_account_credits()
     usable = credits - _CREDIT_RESERVE
     if usable <= 0:
-        raise RuntimeError(
+        from recovery import escalate_pipeline_error
+        _credit_msg = (
             f"Insufficient Vast.ai credits: ${credits:.2f} "
             f"(reserve=${_CREDIT_RESERVE:.2f}). "
             f"Top up at https://cloud.vast.ai/billing/"
         )
+        response = escalate_pipeline_error(
+            operation_name="vast_credits_insufficient",
+            error_msg=_credit_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Vast.ai account has insufficient credits for provisioning.",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(_credit_msg)
+        return 0.0  # skip: return zero budget so caller can handle gracefully
     budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
     capped = min(budget, _VIDEO_PRICE_CEILING)
     return capped
@@ -514,13 +536,27 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             )
 
     if not offers:
-        raise RuntimeError(
+        from recovery import escalate_pipeline_error
+        _no_gpu_msg = (
             f"No GPU offers found for {spec.role} worker "
             f"(min {spec.min_vram_gb}GB VRAM, max ${spec.max_price:.2f}/hr, "
             f"min disk {spec.min_disk_gb}GB). "
             f"VRAM floor is non-negotiable (no quantisation). "
             f"Current account budget allows up to ${spec.max_price:.2f}/hr."
         )
+        response = escalate_pipeline_error(
+            operation_name="vast_no_gpu_offers",
+            error_msg=_no_gpu_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=(
+                f"No Vast.ai GPUs available matching requirements for {spec.role}. "
+                "Try increasing budget ceiling or waiting for availability."
+            ),
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(_no_gpu_msg)
+        return 0  # sentinel: no VM provisioned (callers must handle 0)
 
     # Sort by download speed (fastest first) with price as tiebreaker.
     # This preserves the --order inet_down- intent from the CLI search
@@ -1331,6 +1367,16 @@ class WorkerProvisioner:
             selected_offer_id = provision_vm(
                 spec, excluded_offer_ids=_excluded_offers or None,
             )
+
+            # Handle skip sentinel: provisioning was skipped by human
+            if selected_offer_id == 0:
+                spec.status = "skipped"
+                logger.warning(
+                    "%s VM provisioning skipped (human chose skip) — "
+                    "no VM created for %s",
+                    spec.role, spec.role,
+                )
+                return
 
             # Step 2: Wait for VM to be running — use a shorter timeout
             # for image pull so we can retry on a faster host.  On the

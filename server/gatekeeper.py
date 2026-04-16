@@ -932,6 +932,194 @@ def check_narration_clip(
     return checks
 
 
+def check_narration_duration_budget(
+    scene_num: int,
+    voice: str,
+    actual_duration: float,
+    budget: float,
+    stage: str = "audio",
+) -> list[GatekeeperCheck]:
+    """Check if a narration clip fits within its voice time budget.
+
+    WARN if >10% over budget, REJECT if >25% over budget.
+    """
+    checks: list[GatekeeperCheck] = []
+    if budget <= 0:
+        # No budget set — pass (legacy/fallback)
+        checks.append(GatekeeperCheck(
+            name="narration_duration_budget",
+            category="cross_track",
+            verdict=GatekeeperVerdict.PASS,
+            message="No voice budget set — skipping duration check",
+            stage=stage,
+            scene_num=scene_num,
+            metadata={"voice": voice, "actual": actual_duration},
+        ))
+    elif actual_duration > budget * 1.25:
+        checks.append(GatekeeperCheck(
+            name="narration_duration_budget",
+            category="cross_track",
+            verdict=GatekeeperVerdict.REJECT,
+            message=(
+                f"Narration {voice} is {actual_duration:.1f}s but budget is "
+                f"{budget:.1f}s (+{((actual_duration / budget) - 1) * 100:.0f}% over) — "
+                f"text must be shortened or scenario adjusted"
+            ),
+            stage=stage,
+            scene_num=scene_num,
+            metadata={"voice": voice, "actual": actual_duration, "budget": budget},
+        ))
+    elif actual_duration > budget * 1.10:
+        checks.append(GatekeeperCheck(
+            name="narration_duration_budget",
+            category="cross_track",
+            verdict=GatekeeperVerdict.WARN,
+            message=(
+                f"Narration {voice} is {actual_duration:.1f}s, slightly over "
+                f"budget {budget:.1f}s (+{((actual_duration / budget) - 1) * 100:.0f}%)"
+            ),
+            stage=stage,
+            scene_num=scene_num,
+            metadata={"voice": voice, "actual": actual_duration, "budget": budget},
+        ))
+    else:
+        checks.append(GatekeeperCheck(
+            name="narration_duration_budget",
+            category="cross_track",
+            verdict=GatekeeperVerdict.PASS,
+            stage=stage,
+            scene_num=scene_num,
+            metadata={"voice": voice, "actual": actual_duration, "budget": budget},
+        ))
+
+    for c in checks:
+        _store.record_check(c)
+    return checks
+
+
+def check_scene_narration_total(
+    scene_num: int,
+    actual_scene_total: float,
+    scene_budget: float,
+    gap_overhead: float,
+    stage: str = "audio",
+) -> list[GatekeeperCheck]:
+    """Check if total narration for a scene fits within its time slot.
+
+    actual_scene_total = sum of narration clip durations for this scene.
+    scene_budget = scene's duration_sec (already scaled for gap overhead).
+    gap_overhead = inter-voice gap time within this scene.
+    """
+    checks: list[GatekeeperCheck] = []
+    scene_runtime = actual_scene_total + gap_overhead
+    # scene_budget is the NARRATION-ONLY budget (already scaled down).
+    # The fair comparison is runtime vs budget+gaps (the full scene slot).
+    scene_budget_with_gaps = scene_budget + gap_overhead
+    if scene_budget <= 0:
+        checks.append(GatekeeperCheck(
+            name="scene_narration_total",
+            category="cross_track",
+            verdict=GatekeeperVerdict.PASS,
+            message="No scene budget — skipping",
+            stage=stage,
+            scene_num=scene_num,
+        ))
+    elif scene_runtime > scene_budget_with_gaps * 1.15:
+        checks.append(GatekeeperCheck(
+            name="scene_narration_total",
+            category="cross_track",
+            verdict=GatekeeperVerdict.REJECT,
+            message=(
+                f"Scene {scene_num} runtime {scene_runtime:.1f}s "
+                f"(narration={actual_scene_total:.1f}s + gaps={gap_overhead:.1f}s) "
+                f"exceeds slot {scene_budget_with_gaps:.1f}s by "
+                f"{((scene_runtime / scene_budget_with_gaps) - 1) * 100:.0f}%"
+            ),
+            stage=stage,
+            scene_num=scene_num,
+            metadata={
+                "actual_narration": actual_scene_total,
+                "gap_overhead": gap_overhead,
+                "scene_runtime": scene_runtime,
+                "budget_with_gaps": scene_budget_with_gaps,
+            },
+        ))
+    else:
+        checks.append(GatekeeperCheck(
+            name="scene_narration_total",
+            category="cross_track",
+            verdict=GatekeeperVerdict.PASS,
+            stage=stage,
+            scene_num=scene_num,
+            metadata={
+                "scene_runtime": scene_runtime,
+                "budget": scene_budget,
+            },
+        ))
+
+    for c in checks:
+        _store.record_check(c)
+    return checks
+
+
+def check_total_narration_duration(
+    actual_total: float,
+    target_total: float,
+    stage: str = "audio",
+) -> list[GatekeeperCheck]:
+    """Check if the full assembled narration (all scenes + gaps) matches target.
+
+    WARN if >5% drift, REJECT if >15% drift.
+    """
+    checks: list[GatekeeperCheck] = []
+    if target_total <= 0:
+        checks.append(GatekeeperCheck(
+            name="total_narration_duration",
+            category="cross_track",
+            verdict=GatekeeperVerdict.PASS,
+            message="No target total — skipping",
+            stage=stage,
+        ))
+    else:
+        drift_pct = abs(actual_total - target_total) / target_total * 100
+        if drift_pct > 15:
+            checks.append(GatekeeperCheck(
+                name="total_narration_duration",
+                category="cross_track",
+                verdict=GatekeeperVerdict.REJECT,
+                message=(
+                    f"Total narration runtime {actual_total:.1f}s vs "
+                    f"target {target_total:.1f}s — drift {drift_pct:.0f}% > 15%"
+                ),
+                stage=stage,
+                metadata={"actual": actual_total, "target": target_total},
+            ))
+        elif drift_pct > 5:
+            checks.append(GatekeeperCheck(
+                name="total_narration_duration",
+                category="cross_track",
+                verdict=GatekeeperVerdict.WARN,
+                message=(
+                    f"Total narration runtime {actual_total:.1f}s vs "
+                    f"target {target_total:.1f}s — drift {drift_pct:.0f}%"
+                ),
+                stage=stage,
+                metadata={"actual": actual_total, "target": target_total},
+            ))
+        else:
+            checks.append(GatekeeperCheck(
+                name="total_narration_duration",
+                category="cross_track",
+                verdict=GatekeeperVerdict.PASS,
+                stage=stage,
+                metadata={"actual": actual_total, "target": target_total},
+            ))
+
+    for c in checks:
+        _store.record_check(c)
+    return checks
+
+
 def check_stage_handoff(
     from_stage: str,
     to_stage: str,

@@ -32,6 +32,7 @@ from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
 from dashboard.sse import router as dashboard_router
+from fleet.router import router as fleet_router
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -77,11 +78,34 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: validate env, init DB."""
+    """Application lifespan: validate env, init DB, fleet coordinator."""
     _validate_env()
     init_db()
+
+    # Start fleet coordinator if FLEET_MODE is enabled
+    _fleet_coordinator = None
+    fleet_mode = os.environ.get("FLEET_MODE", "").strip().lower() in ("1", "true")
+    if fleet_mode:
+        try:
+            from fleet.coordinator import create_fleet_coordinator
+            budget = float(os.environ.get("PRODUCTION_BUDGET", "0"))
+            _fleet_coordinator = create_fleet_coordinator(budget_ceiling=budget)
+            _fleet_coordinator.start()
+            logger.info(
+                "Fleet coordinator started at server level (budget=$%.2f)",
+                budget,
+            )
+        except Exception as e:
+            logger.warning("Fleet coordinator failed to start: %s", e)
+
     logger.info("Documentary pipeline server started (Strands SDK)")
     yield
+
+    # Shutdown fleet coordinator
+    if _fleet_coordinator:
+        _fleet_coordinator.shutdown()
+        from fleet.coordinator import reset_fleet_coordinator
+        reset_fleet_coordinator()
     logger.info("Documentary pipeline server shutting down")
 
 
@@ -108,6 +132,9 @@ app.add_middleware(RequestLoggingMiddleware)
 app.include_router(dashboard_router)
 
 _HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats
+
+# Fleet coordination routes (pull-work, report, queue status)
+app.include_router(fleet_router)
 
 
 @app.post("/run")
