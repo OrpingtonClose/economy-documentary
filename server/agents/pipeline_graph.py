@@ -82,8 +82,11 @@ def _timing_passed(state: GraphState) -> bool:
     result_text = str(timing_result)
     verdict = _extract_json(result_text)
     if verdict is not None:
-        # Check for "passed", "pass", or truthy boolean variant
-        return bool(verdict.get("passed") or verdict.get("pass"))
+        # Handle string "false" from LLMs — bool("false") is truthy in Python
+        passed_val = verdict.get("passed", verdict.get("pass"))
+        if isinstance(passed_val, str):
+            return passed_val.strip().lower() in ("true", "1", "yes")
+        return bool(passed_val)
 
     # Fallback: if JSON parsing fails entirely, be conservative and pass
     # to avoid trapping the pipeline in an infinite refinement loop
