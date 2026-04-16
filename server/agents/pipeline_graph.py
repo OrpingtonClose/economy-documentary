@@ -50,7 +50,7 @@ def _extract_json(text: str) -> dict[str, Any] | None:
         if escape:
             escape = False
             continue
-        if ch == "\\":
+        if in_string and ch == "\\":
             escape = True
             continue
         if ch == '"':
