@@ -553,6 +553,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
                 f"No Vast.ai GPUs available matching requirements for {spec.role}. "
                 "Try increasing budget ceiling or waiting for availability."
             ),
+            agent_policy_type="production",
         )
         if response.get("action") != "skip":
             raise RuntimeError(_no_gpu_msg)

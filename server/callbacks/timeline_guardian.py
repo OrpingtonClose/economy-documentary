@@ -402,6 +402,7 @@ def timeline_guardian_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=f"OTIO timeline missing or unreadable at {phase} phase.",
+            agent_policy_type="otio",
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)
@@ -420,6 +421,7 @@ def timeline_guardian_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=f"OTIO timeline validation failed at {phase} phase: {error}",
+            agent_policy_type="otio",
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)

@@ -550,6 +550,7 @@ def deterministic_audio_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="A previous stage flagged an OTIO violation.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_gate_msg)
 
@@ -738,6 +739,7 @@ def deterministic_audio_callback(
                                     error_msg=_clip_msg,
                                     severity="critical",
                                     default_action="abort",
+                                    agent_policy_type="otio",
                                 )
                                 raise RuntimeError(_clip_msg)
                             total_clips += 1
@@ -1023,6 +1025,13 @@ def deterministic_audio_callback(
                 "Root cause is likely insufficient text in the scenario "
                 "(LLM generated too few scenes or too-short narration)."
             ),
+            agent_policy_type="audio",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            diagnostic_data={
+                "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
+                "total_checks": len(all_gk_checks),
+                "scenes": state.get("scenes", []),
+            },
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
@@ -1630,6 +1639,8 @@ def deterministic_production_callback(
             severity="critical",
             default_action="skip",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
+            agent_policy_type="video",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
@@ -1956,6 +1967,7 @@ def deterministic_production_callback(
                         error_msg=_clip_msg,
                         severity="critical",
                         default_action="abort",
+                        agent_policy_type="otio",
                     )
                     raise RuntimeError(_clip_msg)
                 skipped_clips += 1
@@ -2088,6 +2100,12 @@ def deterministic_production_callback(
             severity="critical",
             default_action="skip",
             diagnosis_hint="Video clips failed quality checks after production.",
+            agent_policy_type="production",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            diagnostic_data={
+                "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
+                "total_checks": len(all_gk_checks),
+            },
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
@@ -2183,6 +2201,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="A previous stage flagged an OTIO violation.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_gate_msg)
 
@@ -2212,6 +2231,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="Timeline file missing — assembly cannot proceed.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_msg)
 
@@ -2232,6 +2252,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=msg[:300],
+            agent_policy_type="otio",
         )
         raise RuntimeError(msg)
 
@@ -2247,6 +2268,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="skip",
             diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
+            agent_policy_type="production",
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(

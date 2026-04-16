@@ -183,6 +183,7 @@ class ProductionOrchestrator:
                 severity="critical",
                 default_action="abort",
                 diagnosis_hint="A previous stage flagged an OTIO violation.",
+                agent_policy_type="otio",
             )
             raise RuntimeError(_otio_gate_msg)
 
@@ -295,6 +296,7 @@ class ProductionOrchestrator:
                 severity="critical",
                 default_action="abort",
                 diagnosis_hint="Visual direction output failed gatekeeper checks.",
+                agent_policy_type="video",
             )
             if response.get("action") != "skip":
                 raise RuntimeError(
