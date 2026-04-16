@@ -138,8 +138,8 @@ async def enqueue_clips(req: EnqueueRequest) -> dict[str, Any]:
     for c in req.clips:
         queued_clips.append(QueuedClip(
             clip_id=c.get("clip_id", f"scene_{int(re.sub(r'[^0-9]', '', str(c.get('scene_num', 0))) or 0):03d}_phrase_{int(re.sub(r'[^0-9]', '', str(c.get('phrase_idx', 0))) or 0):03d}"),
-            scene_num=c.get("scene_num", 0),
-            phrase_idx=c.get("phrase_idx", 0),
+            scene_num=int(re.sub(r'[^0-9]', '', str(c.get('scene_num', 0))) or 0),
+            phrase_idx=int(re.sub(r'[^0-9]', '', str(c.get('phrase_idx', 0))) or 0),
             prompt=c.get("prompt", ""),
             negative_prompt=c.get("negative_prompt", ""),
             duration=c.get("duration", 5.0),
