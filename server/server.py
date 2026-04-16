@@ -133,7 +133,7 @@ async def run_pipeline_endpoint(request: Request):
         return JSONResponse({"error": "topic is required"}, status_code=400)
 
     run_id = f"run_{uuid.uuid4().hex[:8]}"
-    collector = PipelineCollector(run_id=run_id)
+    collector = PipelineCollector(run_id=run_id, topic=topic)
     set_active_collector(collector)
     insert_run(run_id)
 
