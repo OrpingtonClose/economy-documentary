@@ -49,6 +49,7 @@ class SystemicDetector:
     CASCADE_WINDOW_SEC = 300.0   # 5 min window for cascade detection
     CASCADE_MIN_VMS = 3          # 3+ distinct VMs failing = cascade
     COMMON_ERROR_MIN_VMS = 2     # error on 2+ VMs = common error
+    COMMON_ERROR_WINDOW_SEC = 600.0  # 10 min window for common error detection
     PERF_DEGRADATION_FACTOR = 2.0  # 2× slower than baseline = degradation
     BUDGET_BURN_THRESHOLD = 1.3  # 30% over projection
 
@@ -190,9 +191,16 @@ class SystemicDetector:
         self, failure_log: list[dict]
     ) -> Optional[SystemicPattern]:
         """Find error substrings common across multiple VMs."""
+        # Only consider recent failures to avoid persistent false alerts
+        now = time.time()
+        recent = [
+            f for f in failure_log
+            if now - f["timestamp"] < self.COMMON_ERROR_WINDOW_SEC
+        ]
+
         # Group errors by VM
         vm_errors: dict[str, list[str]] = {}
-        for f in failure_log:
+        for f in recent:
             vm_id = f.get("worker_id", "")
             err = f.get("error", "")
             vm_errors.setdefault(vm_id, []).append(err)
