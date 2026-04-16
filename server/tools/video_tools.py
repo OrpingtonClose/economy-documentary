@@ -275,9 +275,13 @@ def generate_video_clip(
 
             # ── QA GATE ── raise INSIDE recovery context so
             # non_retryable_patterns routes to human escalation (L4).
+            # Check both env var (CLI) and invocation_state (server endpoint)
             _is_quick_test = os.environ.get(
                 "DOCUMENTARY_QUICK_TEST", ""
             ).strip().lower() in ("1", "true", "yes")
+            if not _is_quick_test and tool_context is not None:
+                _state = getattr(tool_context, "invocation_state", None) or {}
+                _is_quick_test = str(_state.get("quick_test", "")).strip().lower() in ("1", "true", "yes")
 
             _is_auto_approve = os.environ.get(
                 "DOCUMENTARY_AUTO_APPROVE", ""
