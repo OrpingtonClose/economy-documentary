@@ -211,7 +211,7 @@ class FleetScaler:
                 gpu_type=os.environ.get("VAST_GPU_MODEL", "RTX_4090"),
                 min_vram_gb=int(os.environ.get("VAST_MIN_VRAM", "24")),
                 disk_gb=int(os.environ.get("VAST_DISK_GB", "100")),
-                worker_mode="video",
+                worker_mode="ltx",
             )
 
             provisioner = WorkerProvisioner()
