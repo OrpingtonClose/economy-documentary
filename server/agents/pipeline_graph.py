@@ -16,6 +16,7 @@ from typing import Any
 from strands.multiagent.graph import GraphBuilder, GraphState
 
 from agents.assembler_agent import build_assembler_agent
+from plugins.node_recovery_plugin import NodeRecoveryPlugin
 from agents.audio_agent import build_audio_agent
 from agents.scenario_planner import build_scenario_planner
 from agents.scenario_refiner import build_scenario_refiner
@@ -152,6 +153,12 @@ def build_pipeline() -> Any:
     # Reset node state on revisit so the feedback loop starts fresh
     builder.reset_on_revisit(True)
 
+    # Register graph-level hooks for precondition/postcondition enforcement.
+    # This is defense-in-depth — agents also validate their own output via
+    # validate_deliverables tool. The plugin catches cases where the agent
+    # fails to self-heal.
+    builder.set_hook_providers([NodeRecoveryPlugin()])
+
     pipeline = builder.build()
-    logger.info("pipeline built with 6 nodes, timing feedback loop enabled")
+    logger.info("pipeline built with 6 nodes, timing feedback loop enabled, node recovery active")
     return pipeline

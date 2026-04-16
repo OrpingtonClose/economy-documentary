@@ -19,6 +19,11 @@ from agents.model_config import build_model
 from plugins.concurrency_plugin import ConcurrencyPlugin
 from plugins.dashboard_plugin import DashboardPlugin
 from plugins.timeline_guardian_plugin import TimelineGuardianPlugin
+from tools.validation_tools import (
+    validate_deliverables,
+    validate_otio_compliance,
+    validate_preconditions_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +70,25 @@ def generate_all_narration(tool_context=None) -> str:
 
 _INSTRUCTION = """\
 You are the Audio Agent for a documentary pipeline.
-Call generate_all_narration to run TTS generation and WhisperX alignment
-for all scenes. Report completion with a summary of generated audio files.
+
+WORKFLOW:
+1. Call validate_preconditions_tool("audio") to verify scenes exist in pipeline state.
+   If preconditions fail, STOP and report the specific missing data — do NOT proceed.
+2. Call generate_all_narration to run TTS generation and WhisperX alignment.
+3. Call validate_otio_compliance to verify the OTIO timeline is structurally valid.
+4. Call validate_deliverables("audio") to verify whisperx_alignment was produced
+   and audio files exist on disk.
+
+SELF-HEALING:
+If validate_otio_compliance or validate_deliverables reports failures:
+  a. Read the failure details — each error includes remediation hints
+  b. For OTIO violations (gaps, drift): the audio durations may not match the
+     timeline slots. Call generate_all_narration again to re-generate.
+  c. For missing audio files: specific scenes may have failed TTS generation.
+     Call generate_all_narration again — it supports incremental re-generation
+     for scenes with missing audio.
+  d. Re-validate after each fix attempt
+  e. You may retry up to 3 times. If still failing, report ALL error details.
 """
 
 
@@ -76,7 +98,12 @@ def build_audio_agent() -> Agent:
         name="audio_agent",
         system_prompt=_INSTRUCTION,
         model=build_model(),
-        tools=[generate_all_narration],
+        tools=[
+            generate_all_narration,
+            validate_deliverables,
+            validate_otio_compliance,
+            validate_preconditions_tool,
+        ],
         plugins=[
             ConcurrencyPlugin(),
             DashboardPlugin(),

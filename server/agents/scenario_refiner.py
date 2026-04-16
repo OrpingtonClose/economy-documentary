@@ -17,6 +17,7 @@ from plugins.concurrency_plugin import ConcurrencyPlugin
 from plugins.dashboard_plugin import DashboardPlugin
 from tools.environment_tools import estimate_tts_duration, validate_plan
 from tools.otio_tools import get_narration_durations_by_scene
+from tools.validation_tools import validate_deliverables
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,10 @@ MANDATORY: After revising scenes, call save_scenario with the complete revised
 scenes JSON array. This updates the shared pipeline state so the audio agent
 re-generates only the changed scenes on the next loop iteration. If you skip
 this step, the audio agent will use the old scenes and the revisions will be lost.
+
+SELF-HEALING: After calling save_scenario, call validate_deliverables("scenario")
+to verify the revised scenes were correctly persisted. If validation fails,
+fix the JSON and call save_scenario again.
 """
 
 
@@ -51,6 +56,7 @@ def build_scenario_refiner() -> Agent:
             estimate_tts_duration,
             validate_plan,
             get_narration_durations_by_scene,
+            validate_deliverables,
         ],
         plugins=[ConcurrencyPlugin(), DashboardPlugin()],
         conversation_manager=SummarizingConversationManager(

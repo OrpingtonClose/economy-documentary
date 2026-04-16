@@ -28,6 +28,7 @@ from tools.environment_tools import (
 )
 from tools.lora_tools import query_lora_catalog
 from tools.otio_tools import create_timeline, get_timeline_status
+from tools.validation_tools import validate_deliverables, validate_preconditions_tool
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,15 @@ IMPORTANT WORKFLOW:
    JSON object. This persists the plan to shared pipeline state so audio and
    video agents can access it. If you skip this step, downstream agents will
    have no scenes to work with and the pipeline will fail.
+6. Call validate_deliverables("scenario") to verify scenes were persisted correctly.
+
+SELF-HEALING:
+If validate_deliverables reports failures:
+  a. Read the failure details — typically scenes JSON was malformed or empty
+  b. Re-generate scenes with corrected JSON structure
+  c. Call save_scenario again with the fixed data
+  d. Call validate_deliverables("scenario") again to confirm
+  e. You may retry up to 3 times. If still failing, report ALL error details.
 """
 
 
@@ -151,6 +161,8 @@ def build_scenario_planner() -> Agent:
             create_timeline,
             get_timeline_status,
             query_lora_catalog,
+            validate_deliverables,
+            validate_preconditions_tool,
         ],
         plugins=[technique_skills, ConcurrencyPlugin(), DashboardPlugin()],
         conversation_manager=SummarizingConversationManager(

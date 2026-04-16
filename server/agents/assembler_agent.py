@@ -17,6 +17,11 @@ from agents.model_config import build_model
 from plugins.concurrency_plugin import ConcurrencyPlugin
 from plugins.dashboard_plugin import DashboardPlugin
 from plugins.timeline_guardian_plugin import TimelineGuardianPlugin
+from tools.validation_tools import (
+    validate_deliverables,
+    validate_otio_compliance,
+    validate_preconditions_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +63,22 @@ def render_final_video(tool_context=None) -> str:
 
 _INSTRUCTION = """\
 You are the Assembler Agent for a documentary pipeline.
-Call render_final_video to assemble the final documentary from generated
-audio and video clips. Report completion with a summary.
+
+WORKFLOW:
+1. Call validate_preconditions_tool("assembly") to verify all inputs exist
+   (scenes, whisperx_alignment, visual_concepts). If any are missing, STOP
+   and report the specific missing data.
+2. Call render_final_video to assemble the final documentary.
+3. Call validate_otio_compliance to verify the final OTIO timeline.
+4. Call validate_deliverables("assembly") to verify the output file exists.
+
+SELF-HEALING:
+If validate_otio_compliance or validate_deliverables reports failures:
+  a. Read the failure details — each error includes remediation hints
+  b. Assembly OTIO violations typically indicate upstream issues — report
+     detailed errors so the system can escalate appropriately
+  c. If the output file is missing or empty, retry render_final_video once
+  d. You may retry up to 2 times. Report ALL errors if still failing.
 """
 
 
@@ -69,7 +88,12 @@ def build_assembler_agent() -> Agent:
         name="assembler_agent",
         system_prompt=_INSTRUCTION,
         model=build_model(),
-        tools=[render_final_video],
+        tools=[
+            render_final_video,
+            validate_deliverables,
+            validate_otio_compliance,
+            validate_preconditions_tool,
+        ],
         plugins=[
             ConcurrencyPlugin(),
             DashboardPlugin(),

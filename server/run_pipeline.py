@@ -181,13 +181,14 @@ class ProgressHeartbeat:
                 )
 
 
-# Module-level heartbeat instance for use by callbacks
-_heartbeat: ProgressHeartbeat | None = None
+# Thread-local heartbeat storage — each concurrent run_pipeline() call gets
+# its own ProgressHeartbeat, preventing cross-request overwrites.
+_heartbeat_local = threading.local()
 
 
 def get_heartbeat() -> ProgressHeartbeat | None:
-    """Return the active heartbeat instance (if any)."""
-    return _heartbeat
+    """Return the active heartbeat instance for the current thread (if any)."""
+    return getattr(_heartbeat_local, "heartbeat", None)
 
 
 def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
@@ -202,11 +203,11 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
     Returns:
         Final pipeline state dict.
     """
-    global _heartbeat
     heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))
-    _heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
-    _heartbeat.start()
-    _heartbeat.update(phase="init", detail=f"topic={topic}")
+    heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
+    _heartbeat_local.heartbeat = heartbeat
+    heartbeat.start()
+    heartbeat.update(phase="init", detail=f"topic={topic}")
 
     # Import pipeline graph (triggers model_config resolution)
     from agents.pipeline_graph import build_pipeline
@@ -307,19 +308,45 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
 
     # Pass initial_state as invocation_state — the graph mutates it in place
     # so we can read the final pipeline state from it after execution.
+    # Wrap with graph-level graduated recovery (RETRY → ENVIRONMENTAL → HUMAN)
+    # so transient failures get retried before escalating.
     try:
-        result = pipeline(user_message, invocation_state=initial_state)
+        from recovery import RecoveryPolicy, execute_with_recovery
+
+        def _run_graph(**kwargs: Any) -> Any:
+            return pipeline(user_message, invocation_state=initial_state)
+
+        result = execute_with_recovery(
+            operation=_run_graph,
+            operation_name="documentary_pipeline",
+            kwargs={},
+            policy=RecoveryPolicy(
+                max_retries=1,
+                creative_budget=0,
+                enable_env_assessment=True,
+                escalate_to_human=True,
+            ),
+        )
         logger.info("Pipeline graph execution completed")
+    except ImportError:
+        logger.warning("recovery module not available, running pipeline without graph-level recovery")
+        try:
+            result = pipeline(user_message, invocation_state=initial_state)
+            logger.info("Pipeline graph execution completed")
+        except Exception as exc:
+            logger.exception("Pipeline execution failed")
+            result = None
     except Exception as exc:
-        logger.exception("Pipeline execution failed")
+        logger.exception("Pipeline execution failed after recovery attempts")
         result = None
     finally:
         reporter.send("phase_end", phase="assembly", status="completed")
         reporter.send("finalize", status="completed")
         reporter.stop()
-        if _heartbeat:
-            _heartbeat.update(phase="complete")
-            _heartbeat.stop()
+        if heartbeat:
+            heartbeat.update(phase="complete")
+            heartbeat.stop()
+            _heartbeat_local.heartbeat = None
         if infra:
             infra.shutdown()
             logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())

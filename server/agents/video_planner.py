@@ -22,6 +22,11 @@ from plugins.dashboard_plugin import DashboardPlugin
 from plugins.rate_limit_plugin import RateLimitPlugin
 import tools.b2_checkpoint as b2
 from tools.otio_tools import add_video_clip, get_timeline_status
+from tools.validation_tools import (
+    validate_deliverables,
+    validate_otio_compliance,
+    validate_preconditions_tool,
+)
 from tools.video_tools import generate_video_clip, probe_clip
 
 logger = logging.getLogger(__name__)
@@ -108,6 +113,8 @@ def save_visual_concepts(concepts_json: str, tool_context=None) -> str:
     adapter = _Adapter(state)
     try:
         write_visual_metadata_to_otio(adapter)
+    except RuntimeError:
+        raise  # OTIO violations are fatal — never swallow
     except Exception as exc:
         logger.warning("visual metadata OTIO write failed: %s", exc)
 
@@ -197,16 +204,39 @@ Check your available_skills for technique guidance on ltx-prompt-craft,
 cinematography, batch-optimization, and recovery-strategies.
 
 IMPORTANT WORKFLOW:
-1. Analyze narration content and timing with content_analyst
-2. Generate visual concepts with visual_concepter (output a JSON array of concepts,
+1. Call validate_preconditions_tool("video") to verify scenes, whisperx_alignment,
+   and visual_concepts are available. If any are missing, STOP and report the error.
+2. Analyze narration content and timing with content_analyst
+3. Generate visual concepts with visual_concepter (output a JSON array of concepts,
    each with scene_num, phrase_idx, prompt, duration, lora_id, negative_prompt)
-3. Evaluate coherence with coherence_evaluator
-4. MANDATORY: Call save_visual_concepts with the concepts JSON array. This persists
+4. Evaluate coherence with coherence_evaluator
+5. MANDATORY: Call save_visual_concepts with the concepts JSON array. This persists
    concepts to pipeline state and normalizes durations against narration timing.
    If you skip this step, run_deterministic_production will have no concepts to
    generate video for and the pipeline will fail.
-5. Run production with run_deterministic_production
-6. Verify results with get_timeline_status
+6. Run production with run_deterministic_production
+7. Verify OTIO timeline with validate_otio_compliance
+8. Verify all deliverables with validate_deliverables("production")
+
+SELF-HEALING (CRITICAL — video production is the apex of the pipeline):
+If validate_otio_compliance or validate_deliverables reports failures:
+  a. Read the failure details carefully — each error includes remediation hints
+  b. For OTIO violations (gaps, overlaps, drift):
+     - Identify which clips caused the violation from the error details
+     - Check the recovery-strategies skill for guidance
+     - Re-generate affected clips with corrected durations/parameters
+     - Call save_visual_concepts and run_deterministic_production again for those clips
+  c. For missing/empty video artifacts:
+     - Determine which scenes failed generation
+     - Use probe_clip to inspect any partial output
+     - Re-attempt generation with amended prompts (simpler subject matter,
+       adjusted duration, different seed)
+  d. For media quality issues:
+     - Use the coherence_evaluator sub-agent to diagnose visual problems
+     - Amend prompts based on the evaluator's feedback
+  e. After fixing, call validate_otio_compliance and validate_deliverables again
+  f. You may retry up to 3 times. If still failing, report ALL error details clearly
+     so the recovery system can escalate to environmental diagnosis or human review.
 """
 
 
@@ -260,6 +290,9 @@ def build_video_planner() -> Agent:
             add_video_clip,
             get_timeline_status,
             upload_checkpoint,
+            validate_deliverables,
+            validate_otio_compliance,
+            validate_preconditions_tool,
         ],
         plugins=[
             technique_skills,
