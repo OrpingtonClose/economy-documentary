@@ -1367,11 +1367,17 @@ def escalate_pipeline_error(
     if agent_decision is not None:
         action = agent_decision.get("action", "escalate")
         if action in ("fix", "retry", "skip"):
-            # Agent resolved it — return the decision to the caller
+            # Map agent vocabulary to caller vocabulary so pipeline callers
+            # (which check for "skip", "retry_with_fix", "amend") recognise
+            # the agent's decision without raising RuntimeError.
+            _AGENT_TO_CALLER = {"fix": "retry_with_fix", "retry": "retry_with_fix"}
+            mapped = _AGENT_TO_CALLER.get(action, action)
+            agent_decision["action"] = mapped
             logger.info(
-                "Agent ladder resolved '%s' at L%s: action=%s",
+                "Agent ladder resolved '%s' at L%s: action=%s (agent=%s)",
                 operation_name,
                 agent_decision.get("level", "?"),
+                mapped,
                 action,
             )
             return agent_decision
