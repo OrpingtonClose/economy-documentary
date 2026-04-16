@@ -7,16 +7,19 @@ catches cases where the agent fails to self-heal.
 
 If preconditions fail, the node is cancelled with a clear error message rather
 than running with missing inputs.
+
+Implements HookProvider protocol (not Plugin) so it can be passed to
+GraphBuilder.set_hook_providers() which expects HookProvider objects.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import os
 from typing import Any
 
 from strands.hooks.events import AfterNodeCallEvent, BeforeNodeCallEvent
-from strands.plugins import Plugin, hook
+from strands.hooks.registry import HookRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +60,21 @@ def _get_contract(node_id: str) -> Any:
         return None
 
 
-class NodeRecoveryPlugin(Plugin):
+class NodeRecoveryPlugin:
     """Graph-level precondition/postcondition enforcement.
+
+    Implements HookProvider protocol for use with GraphBuilder.set_hook_providers().
 
     BeforeNodeCallEvent: validates preconditions, cancels node if inputs missing.
     AfterNodeCallEvent: validates postconditions, logs warnings for defense-in-depth.
     """
 
-    name = "node_recovery"
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        """Register before/after node call hooks with the graph's hook registry."""
+        registry.add_callback(BeforeNodeCallEvent, self._before_node_call)
+        registry.add_callback(AfterNodeCallEvent, self._after_node_call)
 
-    @hook
-    def before_node_call(self, event: BeforeNodeCallEvent) -> None:
+    def _before_node_call(self, event: BeforeNodeCallEvent) -> None:
         """Validate preconditions before node starts.
 
         If preconditions fail, cancel the node with a clear error message
@@ -103,14 +110,22 @@ class NodeRecoveryPlugin(Plugin):
             )
             event.cancel_node = error_msg
 
-        # Check required services (non-blocking — log warnings only)
+        # Check required services — skip in test mode (synthetic data)
+        _test_mode = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
         try:
             from contracts import _check_service_health
 
             for svc in contract.required_services:
                 err = _check_service_health(svc)
                 if err:
-                    if svc.required:
+                    if _test_mode:
+                        logger.warning(
+                            "node_id=<%s>, service=<%s> | service unhealthy (test mode — skipping): %s",
+                            node_id,
+                            svc.name,
+                            err,
+                        )
+                    elif svc.required:
                         logger.error(
                             "node_id=<%s>, service=<%s> | required service unhealthy: %s",
                             node_id,
@@ -140,8 +155,7 @@ class NodeRecoveryPlugin(Plugin):
                 len(contract.required_services),
             )
 
-    @hook
-    def after_node_call(self, event: AfterNodeCallEvent) -> None:
+    def _after_node_call(self, event: AfterNodeCallEvent) -> None:
         """Log postcondition status after node completes.
 
         The primary postcondition enforcement happens inside the agent
