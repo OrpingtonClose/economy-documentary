@@ -48,7 +48,7 @@ def _generate_silent_wav(output_path: str, duration: float) -> None:
         wf.writeframes(silent_data)
 
 
-@tool
+@tool(context=True)
 def generate_narration(
     scene_num: int,
     voice_role: str,

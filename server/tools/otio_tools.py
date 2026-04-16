@@ -133,7 +133,7 @@ def create_timeline(
     )
 
 
-@tool
+@tool(context=True)
 def add_narration_clip(
     scene_num: int,
     voice: str,
@@ -212,7 +212,7 @@ def add_narration_clip(
     )
 
 
-@tool
+@tool(context=True)
 def add_narration_gap(
     scene_num: int,
     duration: float,
@@ -288,7 +288,7 @@ def add_narration_gap(
     })
 
 
-@tool
+@tool(context=True)
 def add_video_gap(
     scene_num: int,
     duration: float,
@@ -520,7 +520,7 @@ def _gatekeeper_check_video_clip(
     return None
 
 
-@tool
+@tool(context=True)
 def add_video_clip(
     scene_num: int,
     phrase_idx: int,

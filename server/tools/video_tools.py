@@ -93,7 +93,7 @@ def _generate_solid_color_mp4(
         return False
 
 
-@tool
+@tool(context=True)
 def generate_video_clip(
     prompt: str,
     duration_sec: float,

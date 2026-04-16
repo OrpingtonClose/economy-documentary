@@ -210,7 +210,7 @@ def concat_clips(
             pass
 
 
-@tool
+@tool(context=True)
 def trim_clip(
     input_path: str,
     start_sec: float,
