@@ -41,13 +41,15 @@ def generate_all_narration(tool_context=None) -> str:
     # We adapt the invocation_state to work with it.
     state = tool_context.invocation_state if tool_context else {}
 
-    # Create a minimal adapter that the callback can use.
-    # StateDict adds .to_dict() which deterministic_steps.py calls in 10 places.
-    from callbacks._compat import StateDict
+    # The deterministic callbacks call state.to_dict() in 10 places.
+    # We must NOT copy the dict (StateDict(s) would shallow-copy), so we
+    # attach to_dict directly to the original dict to preserve identity.
+    if not hasattr(state, "to_dict"):
+        state.to_dict = lambda: dict(state)  # type: ignore[attr-defined]
 
     class _StateAdapter:
         def __init__(self, s: dict) -> None:
-            self.state = StateDict(s) if not isinstance(s, StateDict) else s
+            self.state = s
 
     adapter = _StateAdapter(state)
 

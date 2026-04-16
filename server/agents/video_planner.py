@@ -89,11 +89,12 @@ def run_deterministic_production(tool_context=None) -> str:
 
     state = tool_context.invocation_state if tool_context else {}
 
-    from callbacks._compat import StateDict
+    if not hasattr(state, "to_dict"):
+        state.to_dict = lambda: dict(state)  # type: ignore[attr-defined]
 
     class _StateAdapter:
         def __init__(self, s: dict) -> None:
-            self.state = StateDict(s) if not isinstance(s, StateDict) else s
+            self.state = s
 
     adapter = _StateAdapter(state)
 
