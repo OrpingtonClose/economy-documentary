@@ -36,15 +36,39 @@ def _extract_json(text: str) -> dict[str, Any] | None:
             return obj
     except (json.JSONDecodeError, ValueError):
         pass
-    # Try to find a JSON object substring
-    match = re.search(r"\{[^{}]*\}", cleaned)
-    if match:
-        try:
-            obj = json.loads(match.group())
-            if isinstance(obj, dict):
-                return obj
-        except (json.JSONDecodeError, ValueError):
-            pass
+    # Use brace-depth tracking to find the outermost { ... } pair,
+    # which handles nested objects like {"passed": true, "violations": [{"scene": 1}]}
+    start = cleaned.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(cleaned)):
+        ch = cleaned[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(cleaned[start : i + 1])
+                    if isinstance(obj, dict):
+                        return obj
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                break
     return None
 
 
