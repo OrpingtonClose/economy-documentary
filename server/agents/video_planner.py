@@ -242,13 +242,13 @@ def build_video_planner() -> Agent:
         model=build_model(),
         tools=[
             content_analyst.as_tool(
-                "Analyze narration content and timing to create a semantic map"
+                description="Analyze narration content and timing to create a semantic map"
             ),
             visual_concepter.as_tool(
-                "Generate video prompts from semantic analysis"
+                description="Generate video prompts from semantic analysis"
             ),
             coherence_evaluator.as_tool(
-                "Evaluate visual coherence across all generated concepts"
+                description="Evaluate visual coherence across all generated concepts"
             ),
             save_visual_concepts,
             run_deterministic_production,
