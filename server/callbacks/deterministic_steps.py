@@ -1056,7 +1056,7 @@ def deterministic_audio_callback(
                 f"audit report uploaded to B2): {reject_msgs}"
             ),
             severity="critical",
-            default_action="skip",
+            default_action="abort",
             diagnosis_hint=(
                 "Narration duration drift exceeds threshold. "
                 "Root cause is likely insufficient text in the scenario "
@@ -1676,7 +1676,7 @@ def deterministic_production_callback(
             operation_name="production_handoff_gatekeeper",
             error_msg=f"GATEKEEPER BLOCKED production start: {reject_msgs}",
             severity="critical",
-            default_action="skip",
+            default_action="abort",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
             agent_policy_type="video",
             pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
@@ -2139,7 +2139,7 @@ def deterministic_production_callback(
                 f"audit report uploaded to B2): {reject_msgs}"
             ),
             severity="critical",
-            default_action="skip",
+            default_action="abort",
             diagnosis_hint="Video clips failed quality checks after production.",
             agent_policy_type="production",
             pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
@@ -2307,7 +2307,7 @@ def deterministic_assembly_callback(
             operation_name="assembly_handoff_gatekeeper",
             error_msg=f"GATEKEEPER BLOCKED assembly start: {reject_msgs}",
             severity="critical",
-            default_action="skip",
+            default_action="abort",
             diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
             agent_policy_type="production",
         )

@@ -241,7 +241,7 @@ def _visual_concepter_after_model(callback_context, llm_response):
     After each chunk, merge the new concepts into the accumulated list.
     If more chunks remain, advance the chunk pointer.
     When all chunks are done, restore the full content_analysis and
-    set visual_concepts to the complete accumulated list.
+    modify llm_response so output_key stores the complete accumulated list.
     """
     import json as _json
 
@@ -264,15 +264,40 @@ def _visual_concepter_after_model(callback_context, llm_response):
     if not isinstance(scenes_data, list) or len(scenes_data) <= 3:
         return result
 
-    # Parse newly generated concepts from this chunk
-    raw_concepts = state.get("visual_concepts", "[]")
+    # Extract current chunk's concepts from llm_response (NOT from state,
+    # because state["visual_concepts"] still holds the previous iteration's
+    # output_key value at this point).
+    raw_llm_text = ""
     try:
-        new_concepts = _json.loads(str(raw_concepts)) if raw_concepts else []
-    except (_json.JSONDecodeError, TypeError):
-        new_concepts = []
+        if hasattr(llm_response, "content") and llm_response.content:
+            if hasattr(llm_response.content, "parts"):
+                raw_llm_text = "".join(
+                    getattr(p, "text", "") for p in llm_response.content.parts
+                )
+            elif isinstance(llm_response.content, str):
+                raw_llm_text = llm_response.content
+    except Exception:
+        raw_llm_text = ""
 
-    if not isinstance(new_concepts, list):
-        new_concepts = []
+    # Try to parse the JSON array of concepts from the LLM output
+    new_concepts = []
+    if raw_llm_text.strip():
+        # Strip markdown code fences if present
+        text = raw_llm_text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = lines[1:]  # skip opening fence
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
+        try:
+            parsed = _json.loads(text)
+            if isinstance(parsed, list):
+                new_concepts = parsed
+            elif isinstance(parsed, dict) and "concepts" in parsed:
+                new_concepts = parsed["concepts"]
+        except (_json.JSONDecodeError, TypeError):
+            pass
 
     # Merge with accumulated concepts
     raw_accumulated = state.get("_vc_accumulated_concepts", "[]")
@@ -292,9 +317,21 @@ def _visual_concepter_after_model(callback_context, llm_response):
 
     total_chunks = (total_scenes + chunk_size - 1) // chunk_size
     if chunk_idx >= total_chunks:
-        # All chunks done — restore full content_analysis and set final concepts
+        # All chunks done — restore full content_analysis
         state["content_analysis"] = raw_ca
-        state["visual_concepts"] = _json.dumps(accumulated, ensure_ascii=False)
+        accumulated_json = _json.dumps(accumulated, ensure_ascii=False)
+        # Modify llm_response content so output_key stores the complete
+        # accumulated result (not just the last chunk's output).
+        try:
+            if hasattr(llm_response, "content") and hasattr(llm_response.content, "parts"):
+                for part in llm_response.content.parts:
+                    if hasattr(part, "text"):
+                        part.text = accumulated_json
+                        break
+        except Exception:
+            pass
+        # Also set state directly as a safety net
+        state["visual_concepts"] = accumulated_json
         logger.info(
             "Visual concepter: all %d chunks complete, %d total concepts accumulated",
             total_chunks, len(accumulated),
@@ -307,8 +344,17 @@ def _visual_concepter_after_model(callback_context, llm_response):
                 pass
     else:
         # More chunks remain — set visual_concepts to accumulated so far
-        # (the LoopAgent evaluator will see partial results and loop again)
-        state["visual_concepts"] = _json.dumps(accumulated, ensure_ascii=False)
+        # Also modify llm_response so output_key stores accumulated (not just this chunk)
+        accumulated_json = _json.dumps(accumulated, ensure_ascii=False)
+        try:
+            if hasattr(llm_response, "content") and hasattr(llm_response.content, "parts"):
+                for part in llm_response.content.parts:
+                    if hasattr(part, "text"):
+                        part.text = accumulated_json
+                        break
+        except Exception:
+            pass
+        state["visual_concepts"] = accumulated_json
         logger.info(
             "Visual concepter: chunk %d/%d done, %d concepts so far, %d more chunks",
             chunk_idx, total_chunks, len(accumulated),
@@ -401,6 +447,25 @@ def _check_coherence_approval(callback_context):
     return None
 
 
+def _evaluator_before_tool(callback_context, tool_name, tool_input):
+    """Block exit_loop when visual concepter chunks remain unprocessed.
+
+    This prevents the coherence evaluator from approving partial results
+    when the visual concepter is still chunking through scenes.
+    """
+    if tool_name == "exit_loop" and "_vc_chunk_idx" in callback_context.state:
+        logger.info(
+            "Coherence evaluator tried to exit_loop but chunks remain "
+            "(chunk %s) — blocking exit to continue chunking",
+            callback_context.state.get("_vc_chunk_idx"),
+        )
+        # Return a message telling the evaluator to wait
+        return "Cannot exit yet — visual concepts are still being generated for remaining scenes. " \
+               "Please rate as FAIR and wait for the next iteration."
+    # Delegate to standard before_tool_callback for all other cases
+    return before_tool_callback(callback_context, tool_name, tool_input)
+
+
 coherence_evaluator = Agent(
     name="coherence_evaluator",
     model=build_model(vision=True),
@@ -410,7 +475,7 @@ coherence_evaluator = Agent(
     after_agent_callback=_check_coherence_approval,
     before_model_callback=before_model_callback,
     after_model_callback=after_model_callback,
-    before_tool_callback=before_tool_callback,
+    before_tool_callback=_evaluator_before_tool,
     after_tool_callback=after_tool_callback,
 )
 
