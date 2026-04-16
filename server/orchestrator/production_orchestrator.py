@@ -175,9 +175,16 @@ class ProductionOrchestrator:
 
         # OTIO GATE: refuse to proceed if a previous stage flagged a violation
         if state.get("otio_violation"):
-            raise RuntimeError(
-                f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+            from recovery import escalate_pipeline_error
+            _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+            escalate_pipeline_error(
+                operation_name="orchestrator_otio_gate",
+                error_msg=_otio_gate_msg,
+                severity="critical",
+                default_action="abort",
+                diagnosis_hint="A previous stage flagged an OTIO violation.",
             )
+            raise RuntimeError(_otio_gate_msg)
 
         # CONTRACT: validate preconditions before starting production stage
         from contracts import PRODUCTION_CONTRACT, validate_preconditions
@@ -280,10 +287,19 @@ class ProductionOrchestrator:
         )
         if has_rejects(handoff_checks):
             rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-            raise RuntimeError(
-                "GATEKEEPER BLOCKED production start: "
-                + "; ".join(c.message for c in rejects)
+            reject_msgs = "; ".join(c.message for c in rejects)
+            from recovery import escalate_pipeline_error
+            response = escalate_pipeline_error(
+                operation_name="orchestrator_production_handoff",
+                error_msg=f"GATEKEEPER BLOCKED production start: {reject_msgs}",
+                severity="critical",
+                default_action="abort",
+                diagnosis_hint="Visual direction output failed gatekeeper checks.",
             )
+            if response.get("action") != "skip":
+                raise RuntimeError(
+                    f"GATEKEEPER BLOCKED production start: {reject_msgs}"
+                )
         if not intervention_window("production_start", handoff_checks):
             raise RuntimeError(
                 "GATEKEEPER: user halted pipeline at production start"

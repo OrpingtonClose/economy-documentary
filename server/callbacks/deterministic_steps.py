@@ -542,9 +542,16 @@ def deterministic_audio_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="audio_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
@@ -721,10 +728,18 @@ def deterministic_audio_callback(
                             )
                             clip_result = json.loads(clip_result_json)
                             if "error" in clip_result:
-                                raise RuntimeError(
+                                from recovery import escalate_pipeline_error
+                                _clip_msg = (
                                     f"OTIO VIOLATION: failed to add narration clip "
                                     f"scene {scene_num} {voice_suffix}: {clip_result['error']}"
                                 )
+                                escalate_pipeline_error(
+                                    operation_name="audio_narration_clip",
+                                    error_msg=_clip_msg,
+                                    severity="critical",
+                                    default_action="abort",
+                                )
+                                raise RuntimeError(_clip_msg)
                             total_clips += 1
 
                             # Run alignment
@@ -819,10 +834,18 @@ def deterministic_audio_callback(
                         )
                         clip_result = json.loads(clip_result_json)
                         if "error" in clip_result:
-                            raise RuntimeError(
+                            from recovery import escalate_pipeline_error
+                            _clip_msg = (
                                 f"OTIO VIOLATION: failed to add narration clip "
                                 f"scene {scene_num} {voice}: {clip_result['error']}"
                             )
+                            escalate_pipeline_error(
+                                operation_name="audio_narration_clip",
+                                error_msg=_clip_msg,
+                                severity="critical",
+                                default_action="abort",
+                            )
+                            raise RuntimeError(_clip_msg)
                         total_clips += 1
 
                         align_result_json = align_narration(
@@ -986,10 +1009,26 @@ def deterministic_audio_callback(
     if has_rejects(all_gk_checks):
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
-        raise RuntimeError(
-            f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
-            f"audit report uploaded to B2): {reject_msgs}"
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="audio_gatekeeper",
+            error_msg=(
+                f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            ),
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=(
+                "Narration duration drift exceeds threshold. "
+                "Root cause is likely insufficient text in the scenario "
+                "(LLM generated too few scenes or too-short narration)."
+            ),
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -1435,9 +1474,16 @@ def deterministic_production_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="production_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
@@ -1572,10 +1618,19 @@ def deterministic_production_callback(
     handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-        raise RuntimeError(
-            f"GATEKEEPER BLOCKED production start: "
-            + "; ".join(c.message for c in rejects)
+        reject_msgs = "; ".join(c.message for c in rejects)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="production_handoff_gatekeeper",
+            error_msg=f"GATEKEEPER BLOCKED production start: {reject_msgs}",
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER BLOCKED production start: {reject_msgs}"
+            )
     if not intervention_window("production_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
@@ -1785,10 +1840,18 @@ def deterministic_production_callback(
                 )
                 clip_result = json.loads(clip_result_json)
                 if "error" in clip_result:
-                    raise RuntimeError(
+                    from recovery import escalate_pipeline_error
+                    _clip_msg = (
                         f"OTIO VIOLATION: failed to add video clip "
                         f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
                     )
+                    escalate_pipeline_error(
+                        operation_name="production_video_clip",
+                        error_msg=_clip_msg,
+                        severity="critical",
+                        default_action="abort",
+                    )
+                    raise RuntimeError(_clip_msg)
                 skipped_clips += 1
                 total_clips += 1
             except RuntimeError:
@@ -1856,10 +1919,18 @@ def deterministic_production_callback(
             )
             clip_result = json.loads(clip_result_json)
             if "error" in clip_result:
-                raise RuntimeError(
+                from recovery import escalate_pipeline_error
+                _clip_msg = (
                     f"OTIO VIOLATION: failed to add video clip "
                     f"scene {scene_num} phrase {phrase_idx}: {clip_result['error']}"
                 )
+                escalate_pipeline_error(
+                    operation_name="production_video_clip",
+                    error_msg=_clip_msg,
+                    severity="critical",
+                    default_action="abort",
+                )
+                raise RuntimeError(_clip_msg)
             total_clips += 1
         except RuntimeError:
             raise  # OTIO violations are fatal — never swallow
@@ -1901,10 +1972,22 @@ def deterministic_production_callback(
     if has_rejects(all_gk_checks):
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
-        raise RuntimeError(
-            f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
-            f"audit report uploaded to B2): {reject_msgs}"
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="production_gatekeeper",
+            error_msg=(
+                f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            ),
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Video clips failed quality checks after production.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
+                f"audit report uploaded to B2): {reject_msgs}"
+            )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
@@ -1982,9 +2065,16 @@ def deterministic_assembly_callback(
 
     # OTIO GATE: refuse to proceed if a previous stage flagged a violation
     if state.get("otio_violation"):
-        raise RuntimeError(
-            f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        from recovery import escalate_pipeline_error
+        _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
+        escalate_pipeline_error(
+            operation_name="assembly_otio_gate",
+            error_msg=_otio_gate_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="A previous stage flagged an OTIO violation.",
         )
+        raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
@@ -2001,10 +2091,19 @@ def deterministic_assembly_callback(
 
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
-        raise RuntimeError(
+        _otio_msg = (
             f"OTIO VIOLATION: timeline not found at '{timeline_path}' "
             f"— cannot assemble without OTIO timeline"
         )
+        from recovery import escalate_pipeline_error
+        escalate_pipeline_error(
+            operation_name="assembly_otio_violation",
+            error_msg=_otio_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Timeline file missing — assembly cannot proceed.",
+        )
+        raise RuntimeError(_otio_msg)
 
     import opentimelineio as otio
     from tools.otio_tools import _otio_lock
@@ -2012,14 +2111,37 @@ def deterministic_assembly_callback(
     from tools.video_tools import probe_clip
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
 
+    # --- Local helper for assembly OTIO violations -----------------------
+    # These are structural integrity errors — "skip" is never safe.
+    # The escalation is for dashboard visibility and audit trail only.
+    def _escalate_otio(msg: str) -> None:
+        from recovery import escalate_pipeline_error as _esc
+        _esc(
+            operation_name="assembly_otio_violation",
+            error_msg=msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint=msg[:300],
+        )
+        raise RuntimeError(msg)
+
     # GATEKEEPER: stage handoff check (production → assembly)
     handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
-        raise RuntimeError(
-            f"GATEKEEPER BLOCKED assembly start: "
-            + "; ".join(c.message for c in rejects)
+        reject_msgs = "; ".join(c.message for c in rejects)
+        from recovery import escalate_pipeline_error
+        response = escalate_pipeline_error(
+            operation_name="assembly_handoff_gatekeeper",
+            error_msg=f"GATEKEEPER BLOCKED assembly start: {reject_msgs}",
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
         )
+        if response.get("action") != "skip":
+            raise RuntimeError(
+                f"GATEKEEPER BLOCKED assembly start: {reject_msgs}"
+            )
     if not intervention_window("assembly_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 
@@ -2046,7 +2168,7 @@ def deterministic_assembly_callback(
             missing.append("V1_Video")
         if narration_track is None:
             missing.append("A1_Narration")
-        raise RuntimeError(
+        _escalate_otio(
             f"OTIO VIOLATION: required track(s) missing: {', '.join(missing)} "
             f"— timeline is damaged"
         )
@@ -2121,12 +2243,12 @@ def deterministic_assembly_callback(
                     a_path = item.media_reference.target_url
 
                 if not a_path or not os.path.exists(a_path):
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: narration clip {item.name} references "
                         f"missing file: {a_path}"
                     )
                 if not item.source_range:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: narration clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
@@ -2143,14 +2265,14 @@ def deterministic_assembly_callback(
                         ),
                     )
                     if not silence_path:
-                        raise RuntimeError(
+                        _escalate_otio(
                             f"OTIO VIOLATION: failed to generate silence for "
                             f"gap {item.name} ({gap_dur:.2f}s)"
                         )
                     audio_segments.append(silence_path)
 
         if not audio_segments:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: narration track{lang_suffix} has no renderable items"
             )
 
@@ -2165,7 +2287,7 @@ def deterministic_assembly_callback(
             output_path=combined_audio,
         ))
         if "error" in concat_result:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: audio concat failed: {concat_result['error']}"
             )
         logger.info(
@@ -2196,12 +2318,12 @@ def deterministic_assembly_callback(
                 if item.media_reference and hasattr(item.media_reference, "target_url"):
                     v_path = item.media_reference.target_url
                 if not v_path or not os.path.exists(v_path):
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} references "
                         f"missing file: {v_path}"
                     )
                 if not item.source_range:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} has no "
                         f"source_range — timeline is damaged"
                     )
@@ -2209,7 +2331,7 @@ def deterministic_assembly_callback(
                 src_start = item.source_range.start_time.to_seconds()
                 src_dur = item.source_range.duration.to_seconds()
                 if src_dur <= 0:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: video clip {item.name} has "
                         f"source_range duration={src_dur:.3f}s — must be >0"
                     )
@@ -2225,7 +2347,7 @@ def deterministic_assembly_callback(
                     output_path=trimmed_path,
                 ))
                 if "error" in trim_res:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: failed to trim {item.name} to "
                         f"source_range (start={src_start:.2f}, dur={src_dur:.2f}): "
                         f"{trim_res['error']}"
@@ -2235,12 +2357,12 @@ def deterministic_assembly_callback(
                 verify_res = json.loads(probe_clip(mp4_path=trimmed_path))
                 actual_dur = verify_res.get("duration", 0)
                 if actual_dur <= 0:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: trimmed clip {trimmed_path} "
                         f"has zero duration after ffprobe verification"
                     )
                 if abs(actual_dur - src_dur) > 0.5:
-                    raise RuntimeError(
+                    _escalate_otio(
                         f"OTIO VIOLATION: trimmed clip {item.name} actual "
                         f"duration ({actual_dur:.2f}s) deviates from OTIO "
                         f"source_range ({src_dur:.2f}s) by "
@@ -2272,7 +2394,7 @@ def deterministic_assembly_callback(
                                 gap_dur, gap_video_path,
                             )
                         if not freeze_path:
-                            raise RuntimeError(
+                            _escalate_otio(
                                 f"OTIO VIOLATION: failed to generate video gap "
                                 f"{item.name} ({gap_dur:.2f}s)"
                             )
@@ -2283,14 +2405,14 @@ def deterministic_assembly_callback(
                             gap_dur, gap_video_path,
                         )
                         if not black_path:
-                            raise RuntimeError(
+                            _escalate_otio(
                                 f"OTIO VIOLATION: failed to generate black video "
                                 f"gap {item.name} ({gap_dur:.2f}s)"
                             )
                         video_segments.append(black_path)
 
         if not video_segments:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: video track{lang_suffix} has no renderable items"
             )
 
@@ -2305,7 +2427,7 @@ def deterministic_assembly_callback(
             output_path=combined_video,
         ))
         if "error" in concat_result:
-            raise RuntimeError(
+            _escalate_otio(
                 f"OTIO VIOLATION: video concat failed: {concat_result['error']}"
             )
         logger.info(
@@ -2371,7 +2493,7 @@ def deterministic_assembly_callback(
                 output_path=muxed_path,
             ))
             if "error" in mux_result:
-                raise RuntimeError(
+                _escalate_otio(
                     f"OTIO VIOLATION: mux failed: {mux_result['error']}"
                 )
 

@@ -73,10 +73,18 @@ You must output TWO things:
 
 2. A SCENARIO document as a JSON array of scenes in state["scenes"].
 
+CRITICAL — TOTAL DURATION TARGET:
+The user's message specifies how long the documentary should be.  You MUST
+generate enough scenes so that the SUM of all duration_sec values equals the
+requested total (e.g. "5 minute documentary" → scenes summing to ~300 seconds).
+Calculate: number_of_scenes = ceil(target_seconds / 35).  Each scene should
+be 30-45 seconds.  Do NOT generate fewer scenes than needed — the gatekeeper
+will reject the scenario if total duration falls short.
+
 Each scene MUST have:
 - scene_num: integer (1-based)
 - title: short descriptive title
-- duration_sec: target duration (MAX 45 seconds per scene)
+- duration_sec: target duration (30-45 seconds per scene, MAX {max_scene_duration}s)
 - voices: array of exactly 3 voice blocks:
   - V1: "The Hook" — provocative opener, challenges assumptions
   - V2: "The Expert" — provides data, evidence, nuance

@@ -169,11 +169,21 @@ def generate_video_clip(
     # wastes all downstream assembly time and is unwatchable.
     gpu_worker_url = _get_next_worker_url()
     if not gpu_worker_url:
-        raise RuntimeError(
+        from recovery import escalate_pipeline_error
+        _no_worker_msg = (
             "No video worker URL configured. Set VIDEO_WORKER_URLS or "
             "GPU_WORKER_URL to at least one LTX-dedicated GPU VM. "
             "The pipeline MUST NOT fall back to placeholder video."
         )
+        response = escalate_pipeline_error(
+            operation_name="video_worker_missing",
+            error_msg=_no_worker_msg,
+            severity="critical",
+            default_action="abort",
+            diagnosis_hint="No GPU worker is provisioned or healthy.",
+        )
+        if response.get("action") != "skip":
+            raise RuntimeError(_no_worker_msg)
 
     # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
     fps = 24
@@ -305,11 +315,21 @@ def generate_video_clip(
                     # can catch. Include QA_HINTS so the creative amendment
                     # (_video_amend_prompt_with_qa_hints) can inject
                     # corrective guidance into the prompt for the next attempt.
-                    raise RuntimeError(
+                    from recovery import escalate_pipeline_error
+                    _qa_msg = (
                         f"QA {qa_quality.upper()}: visual quality below threshold. "
                         f"Clip saved at {output_path} for inspection. "
                         f"QA_HINTS: {_qa_reason}"
                     )
+                    response = escalate_pipeline_error(
+                        operation_name="video_qa_reject",
+                        error_msg=_qa_msg,
+                        severity="warning",
+                        default_action="abort",
+                        diagnosis_hint=f"Video QA rejected clip: {_qa_reason}",
+                    )
+                    if response.get("action") != "skip":
+                        raise RuntimeError(_qa_msg)
 
             result_meta = {
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
@@ -366,10 +386,20 @@ def generate_video_clip(
             output_path,
         )
         if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
-            raise RuntimeError(
+            from recovery import escalate_pipeline_error
+            _strict_msg = (
                 f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
                 f"STRICT_QA mode requires all clips to pass QA."
             )
+            response = escalate_pipeline_error(
+                operation_name="video_qa_unavailable",
+                error_msg=_strict_msg,
+                severity="warning",
+                default_action="abort",
+                diagnosis_hint="QA model could not evaluate clip quality.",
+            )
+            if response.get("action") != "skip":
+                raise RuntimeError(_strict_msg)
 
     # Probe the generated clip for actual duration (best-effort, never overwrites video)
     actual_dur = actual_duration
