@@ -75,12 +75,61 @@ def verify_production_plan(plan_json: str) -> str:
 
 
 @tool
+def save_visual_concepts(concepts_json: str, tool_context=None) -> str:
+    """Persist visual concepts to shared pipeline state before production.
+
+    MUST be called after generating visual concepts and before calling
+    run_deterministic_production. Writes concepts to invocation_state
+    and triggers duration normalization against actual narration timing.
+
+    Args:
+        concepts_json: JSON array of visual concept objects. Each concept
+            should have scene_num, phrase_idx, prompt, duration, lora_id.
+
+    Returns:
+        Confirmation message with concept count.
+    """
+    import json
+
+    if tool_context is None:
+        return "Error: tool_context not available, cannot persist visual concepts"
+
+    state = tool_context.invocation_state
+    state["visual_concepts"] = concepts_json
+
+    # Trigger duration normalization via write_visual_metadata_to_otio
+    from callbacks._compat import StateDictProxy
+    from callbacks.deterministic_steps import write_visual_metadata_to_otio
+
+    class _Adapter:
+        def __init__(self, s: dict) -> None:
+            self.state = s if isinstance(s, StateDictProxy) else StateDictProxy(s)
+
+    adapter = _Adapter(state)
+    try:
+        write_visual_metadata_to_otio(adapter)
+    except Exception as exc:
+        logger.warning("visual metadata OTIO write failed: %s", exc)
+
+    # Count concepts for confirmation
+    from callbacks.deterministic_steps import extract_json_array
+
+    concepts = extract_json_array(concepts_json)
+    count = len(concepts) if concepts else "unknown"
+    logger.info("save_visual_concepts: persisted %s concepts to pipeline state", count)
+    return f"Saved {count} visual concepts to pipeline state. Ready for run_deterministic_production."
+
+
+@tool
 def run_deterministic_production(tool_context=None) -> str:
     """Run deterministic video production for all scenes.
 
     Reads visual concepts from invocation_state, generates video clips,
     and writes results back. Uses the existing deterministic production
     callback logic for reliability.
+
+    Prerequisite: save_visual_concepts must be called first to populate
+    invocation_state with visual concepts.
 
     Returns:
         Status summary of video production.
@@ -145,12 +194,17 @@ coherence. Then execute production using run_deterministic_production.
 Check your available_skills for technique guidance on ltx-prompt-craft,
 cinematography, batch-optimization, and recovery-strategies.
 
-Steps:
+IMPORTANT WORKFLOW:
 1. Analyze narration content and timing with content_analyst
-2. Generate visual concepts with visual_concepter
+2. Generate visual concepts with visual_concepter (output a JSON array of concepts,
+   each with scene_num, phrase_idx, prompt, duration, lora_id, negative_prompt)
 3. Evaluate coherence with coherence_evaluator
-4. Run production with run_deterministic_production
-5. Verify results with get_timeline_status
+4. MANDATORY: Call save_visual_concepts with the concepts JSON array. This persists
+   concepts to pipeline state and normalizes durations against narration timing.
+   If you skip this step, run_deterministic_production will have no concepts to
+   generate video for and the pipeline will fail.
+5. Run production with run_deterministic_production
+6. Verify results with get_timeline_status
 """
 
 
@@ -196,6 +250,7 @@ def build_video_planner() -> Agent:
             coherence_evaluator.as_tool(
                 "Evaluate visual coherence across all generated concepts"
             ),
+            save_visual_concepts,
             run_deterministic_production,
             verify_production_plan,
             generate_video_clip,

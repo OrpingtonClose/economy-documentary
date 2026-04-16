@@ -6,6 +6,7 @@ with rich toolset and AgentSkills for technique guidance.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -49,6 +50,52 @@ def read_corpus(corpus_path: str) -> str:
         return f.read()
 
 
+@tool
+def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=None) -> str:
+    """Persist the documentary scenario to shared pipeline state.
+
+    MUST be called after generating the scene plan. Writes scenes and
+    visual_style to invocation_state so downstream agents (audio, video,
+    assembly) can access them via the shared state dict.
+
+    Args:
+        scenes_json: JSON array of scene objects.
+        visual_style_json: Optional JSON object with movie-level visual style.
+
+    Returns:
+        Confirmation message with scene count.
+    """
+    if tool_context is None:
+        return "Error: tool_context not available, cannot persist scenario"
+
+    state = tool_context.invocation_state
+
+    # Parse and re-serialize to validate and normalize
+    from callbacks.deterministic_steps import extract_json_array
+
+    scenes = extract_json_array(scenes_json)
+    if scenes:
+        state["scenes"] = json.dumps(scenes, ensure_ascii=False)
+        logger.info("save_scenario: persisted %d scenes to pipeline state", len(scenes))
+    else:
+        # Fall back to raw text so deterministic callbacks can try harder to parse
+        state["scenes"] = scenes_json
+        logger.warning("save_scenario: could not parse scenes JSON, saved raw text")
+
+    if visual_style_json and visual_style_json.strip():
+        state["visual_style"] = visual_style_json
+
+    # Upload scenario to B2 checkpoint if available
+    try:
+        from tools.b2_checkpoint import upload_scenario as _b2_upload
+        _b2_upload(state.get("scenes", "[]"), state.get("visual_style", "{}"))
+    except (ImportError, Exception) as exc:
+        logger.debug("B2 scenario upload skipped: %s", exc)
+
+    count = len(scenes) if scenes else "unknown"
+    return f"Saved {count} scenes to pipeline state. Downstream agents can now access them."
+
+
 SCENARIO_PLANNER_PROMPT = """\
 You are a documentary planner. Create a compelling documentary from the provided corpus.
 
@@ -63,13 +110,24 @@ with estimate_tts_duration before committing to narration text lengths.
 Check your available_skills for technique guidance on cinematography, voice design,
 visual storytelling, and ADHD-friendly documentary format.
 
-Output a JSON array of scenes, each with:
+Each scene must have:
 - scene_num (int)
 - title (str)
 - voice_blocks: [{voice: "V1"|"V2"|"V3", text: str, visual_notes: str}]
 - dopamine_hook (str) - attention grabber for the first 3 seconds
 - visual_style: {mood: str, palette: str, avoid: str}
 - lora_id (str) - from the LoRA catalog
+
+IMPORTANT WORKFLOW:
+1. Use read_corpus to load the source material
+2. Use query_production_capabilities, query_voice_profiles, query_gatekeeper_rules
+   to discover constraints
+3. Design your scenes array
+4. Use create_timeline to initialize the OTIO timeline
+5. MANDATORY: Call save_scenario with the scenes JSON array and a visual_style
+   JSON object. This persists the plan to shared pipeline state so audio and
+   video agents can access it. If you skip this step, downstream agents will
+   have no scenes to work with and the pipeline will fail.
 """
 
 
@@ -83,6 +141,7 @@ def build_scenario_planner() -> Agent:
         model=build_model(),
         tools=[
             read_corpus,
+            save_scenario,
             query_production_capabilities,
             estimate_tts_duration,
             validate_plan,

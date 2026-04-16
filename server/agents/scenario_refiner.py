@@ -12,6 +12,7 @@ from strands import Agent
 from strands.agent.conversation_manager.summarizing_conversation_manager import SummarizingConversationManager
 
 from agents.model_config import build_model
+from agents.scenario_planner import save_scenario
 from plugins.concurrency_plugin import ConcurrencyPlugin
 from plugins.dashboard_plugin import DashboardPlugin
 from tools.environment_tools import estimate_tts_duration, validate_plan
@@ -32,7 +33,10 @@ quality. For each revised scene:
 Do NOT change scenes that have no timing violations. Preserve the overall
 narrative arc and documentary structure.
 
-Output the complete scenes array with revisions applied.
+MANDATORY: After revising scenes, call save_scenario with the complete revised
+scenes JSON array. This updates the shared pipeline state so the audio agent
+re-generates only the changed scenes on the next loop iteration. If you skip
+this step, the audio agent will use the old scenes and the revisions will be lost.
 """
 
 
@@ -43,6 +47,7 @@ def build_scenario_refiner() -> Agent:
         system_prompt=SCENARIO_REFINER_PROMPT,
         model=build_model(),
         tools=[
+            save_scenario,
             estimate_tts_duration,
             validate_plan,
             get_narration_durations_by_scene,
