@@ -192,6 +192,16 @@ class WorkQueue:
             if not clip:
                 return
 
+            # Guard: ignore late failure reports from a previous worker
+            # if the clip has already been reclaimed and reassigned.
+            if clip.assigned_to and clip.assigned_to != worker_id:
+                logger.debug(
+                    "WorkQueue: ignoring late failure for %s from %s "
+                    "(now assigned to %s)",
+                    clip_id, worker_id, clip.assigned_to,
+                )
+                return
+
             clip.error_history.append({
                 "worker_id": worker_id,
                 "error": error,

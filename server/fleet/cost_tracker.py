@@ -166,20 +166,25 @@ class CostTracker:
 
         # Estimate remaining hours
         remaining_hours = (remaining_clips * avg_gen_time_sec) / (total_workers * 3600)
-        # Additional cost = new workers × remaining hours × avg price + boot overhead
-        additional_cost = (
-            proposed_workers * remaining_hours * avg_price
+        # Projected total end-of-run cost:
+        #   current_cost (already spent)
+        # + existing VMs running for remaining_hours
+        # + new VMs running for remaining_hours + boot overhead
+        projected_end_cost = (
+            current_cost
+            + active_workers * remaining_hours * avg_price
+            + proposed_workers * remaining_hours * avg_price
             + proposed_workers * BOOT_OVERHEAD_HOURS * avg_price
         )
 
         usable_budget = self._budget_ceiling * (1.0 - self._safety_buffer)
-        can_afford = (current_cost + additional_cost) <= usable_budget
+        can_afford = projected_end_cost <= usable_budget
 
         if not can_afford:
             logger.warning(
                 "CostTracker: cannot afford %d more workers — "
-                "current=$%.2f, additional=$%.2f, budget=$%.2f (usable=$%.2f)",
-                proposed_workers, current_cost, additional_cost,
+                "current=$%.2f, projected_end=$%.2f, budget=$%.2f (usable=$%.2f)",
+                proposed_workers, current_cost, projected_end_cost,
                 self._budget_ceiling, usable_budget,
             )
 
