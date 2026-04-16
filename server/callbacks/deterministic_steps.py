@@ -679,13 +679,23 @@ def deterministic_audio_callback(
                         duration = result.get("duration", 0)
 
                         if wav_path and duration > 0:
+                            # Track RU clip durations for scene/total QA
+                            # (EN clips are alternate and excluded from QA)
+                            if lang_code == "ru":
+                                budget_key = f"scene_{scene_num:03d}_{voice}"
+                                _actual_durations[budget_key] = duration
+
                             # B2 upload already happened inside generate_narration().
                             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
+                            voice_budget = voice_budgets.get(
+                                f"scene_{scene_num:03d}_{voice}", 0,
+                            )
                             _deferred_gk_clips.append({
                                 "wav_path": wav_path,
                                 "scene_num": scene_num,
                                 "voice": voice_suffix,
                                 "duration": duration,
+                                "budget": voice_budget if lang_code == "ru" else 0,
                             })
 
                             # AG-UI: update narration artifact

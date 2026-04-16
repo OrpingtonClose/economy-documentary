@@ -1012,6 +1012,9 @@ def check_scene_narration_total(
     """
     checks: list[GatekeeperCheck] = []
     scene_runtime = actual_scene_total + gap_overhead
+    # scene_budget is the NARRATION-ONLY budget (already scaled down).
+    # The fair comparison is runtime vs budget+gaps (the full scene slot).
+    scene_budget_with_gaps = scene_budget + gap_overhead
     if scene_budget <= 0:
         checks.append(GatekeeperCheck(
             name="scene_narration_total",
@@ -1021,7 +1024,7 @@ def check_scene_narration_total(
             stage=stage,
             scene_num=scene_num,
         ))
-    elif scene_runtime > scene_budget * 1.15:
+    elif scene_runtime > scene_budget_with_gaps * 1.15:
         checks.append(GatekeeperCheck(
             name="scene_narration_total",
             category="cross_track",
@@ -1029,8 +1032,8 @@ def check_scene_narration_total(
             message=(
                 f"Scene {scene_num} runtime {scene_runtime:.1f}s "
                 f"(narration={actual_scene_total:.1f}s + gaps={gap_overhead:.1f}s) "
-                f"exceeds budget {scene_budget:.1f}s by "
-                f"{((scene_runtime / scene_budget) - 1) * 100:.0f}%"
+                f"exceeds slot {scene_budget_with_gaps:.1f}s by "
+                f"{((scene_runtime / scene_budget_with_gaps) - 1) * 100:.0f}%"
             ),
             stage=stage,
             scene_num=scene_num,
@@ -1038,7 +1041,7 @@ def check_scene_narration_total(
                 "actual_narration": actual_scene_total,
                 "gap_overhead": gap_overhead,
                 "scene_runtime": scene_runtime,
-                "budget": scene_budget,
+                "budget_with_gaps": scene_budget_with_gaps,
             },
         ))
     else:
