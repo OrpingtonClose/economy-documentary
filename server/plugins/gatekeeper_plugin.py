@@ -23,13 +23,17 @@ class GatekeeperPlugin(Plugin):
     def after_invocation(self, event: AfterInvocationEvent) -> None:
         """Run gatekeeper validation on pipeline state."""
         state = event.invocation_state
-        scenes = state.get("scenes", [])
-        if not scenes:
+        raw_scenes = state.get("scenes", "")
+        if not raw_scenes:
             return
 
         try:
+            from callbacks.deterministic_steps import extract_json_array
             from gatekeeper import check_scenario
 
+            scenes = extract_json_array(str(raw_scenes)) if isinstance(raw_scenes, str) else raw_scenes
+            if not scenes:
+                return
             results = check_scenario(scenes)
             warnings = []
             rejections = []

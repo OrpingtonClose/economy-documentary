@@ -149,9 +149,12 @@ async def run_pipeline_endpoint(request: Request):
             # propagates it via initial_state["quick_test"]. We do NOT set
             # process-global env vars here — that would race between
             # concurrent requests.
+            import contextvars
+            ctx = contextvars.copy_context()
             pipeline_future = loop.run_in_executor(
                 None,
-                lambda: run_pipeline(
+                lambda: ctx.run(
+                    run_pipeline,
                     topic=topic,
                     corpus_path=corpus_path,
                     language=language,
