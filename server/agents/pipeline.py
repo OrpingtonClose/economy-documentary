@@ -71,8 +71,8 @@ _orig_production_after = production_supervisor.after_agent_callback
 _orig_assembly_before = assembler_agent.before_agent_callback
 
 
-def _scenario_after_with_gate(callback_context):
-    """After scenario_director: run original callback, then mark ready."""
+def _scenario_after_with_gate_sync(callback_context):
+    """After scenario_director: run original callback, then mark ready (sync)."""
     result = None
     if _orig_scenario_after:
         result = _orig_scenario_after(callback_context)
@@ -84,8 +84,13 @@ def _scenario_after_with_gate(callback_context):
     return result
 
 
-def _audio_before_with_gate(callback_context):
-    """Before audio_agent: wait for scenario approval + TTS worker, then run original."""
+async def _scenario_after_with_gate(callback_context):
+    """After scenario_director: async wrapper to keep event loop free."""
+    return await asyncio.to_thread(_scenario_after_with_gate_sync, callback_context)
+
+
+def _audio_before_with_gate_sync(callback_context):
+    """Before audio_agent: wait for approval + TTS worker, then run original (sync)."""
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
         approved = wait_for_approval("scenario")
@@ -118,8 +123,20 @@ def _audio_before_with_gate(callback_context):
     return None
 
 
-def _visual_after_with_gate(callback_context):
-    """After visual_director: run original callback, then mark prompts ready."""
+async def _audio_before_with_gate(callback_context):
+    """Before audio_agent: async wrapper to keep event loop free for heartbeats.
+
+    The deterministic_audio_callback does heavy blocking I/O (SSH tunnels
+    to Vast.ai, TTS inference, file downloads, B2 uploads) that can take
+    10+ minutes.  Running it in a thread keeps the asyncio event loop free
+    so the unified SSE endpoint can emit heartbeat comments and serve
+    dashboard REST polls.
+    """
+    return await asyncio.to_thread(_audio_before_with_gate_sync, callback_context)
+
+
+def _visual_after_with_gate_sync(callback_context):
+    """After visual_director: run original callback, then mark prompts ready (sync)."""
     result = None
     if _orig_visual_after:
         result = _orig_visual_after(callback_context)
@@ -131,8 +148,13 @@ def _visual_after_with_gate(callback_context):
     return result
 
 
-def _production_before_with_gate(callback_context):
-    """Before production_supervisor: wait for prompts approval + video worker, then run original."""
+async def _visual_after_with_gate(callback_context):
+    """After visual_director: async wrapper to keep event loop free."""
+    return await asyncio.to_thread(_visual_after_with_gate_sync, callback_context)
+
+
+def _production_before_with_gate_sync(callback_context):
+    """Before production_supervisor: wait for approval + video worker (sync)."""
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
         approved = wait_for_approval("prompts")
@@ -165,8 +187,18 @@ def _production_before_with_gate(callback_context):
     return None
 
 
-def _production_after_with_gate(callback_context):
-    """After production_supervisor: run original callback, then mark clips ready."""
+async def _production_before_with_gate(callback_context):
+    """Before production_supervisor: async wrapper to keep event loop free.
+
+    Video generation does heavy blocking I/O (SSH tunnels, LTX inference,
+    B2 uploads) that can take 30+ minutes.  Running in a thread keeps the
+    event loop free for SSE heartbeats.
+    """
+    return await asyncio.to_thread(_production_before_with_gate_sync, callback_context)
+
+
+def _production_after_with_gate_sync(callback_context):
+    """After production_supervisor: run original callback, mark clips ready (sync)."""
     result = None
     if _orig_production_after:
         result = _orig_production_after(callback_context)
@@ -178,8 +210,13 @@ def _production_after_with_gate(callback_context):
     return result
 
 
-def _assembly_before_with_gate(callback_context):
-    """Before assembler_agent: wait for clips approval, then run original."""
+async def _production_after_with_gate(callback_context):
+    """After production_supervisor: async wrapper to keep event loop free."""
+    return await asyncio.to_thread(_production_after_with_gate_sync, callback_context)
+
+
+def _assembly_before_with_gate_sync(callback_context):
+    """Before assembler_agent: wait for clips approval, then run original (sync)."""
     if not is_stage_approved("clips"):
         logger.info("APPROVAL GATE: assembly waiting for clips approval...")
         approved = wait_for_approval("clips")
@@ -193,6 +230,14 @@ def _assembly_before_with_gate(callback_context):
     if _orig_assembly_before:
         return _orig_assembly_before(callback_context)
     return None
+
+
+async def _assembly_before_with_gate(callback_context):
+    """Before assembler_agent: async wrapper to keep event loop free.
+
+    Assembly does FFmpeg rendering which can take several minutes.
+    """
+    return await asyncio.to_thread(_assembly_before_with_gate_sync, callback_context)
 
 
 # Wire approval gates into sub-agents
