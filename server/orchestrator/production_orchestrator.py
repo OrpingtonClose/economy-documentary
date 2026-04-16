@@ -197,7 +197,7 @@ class ProductionOrchestrator:
     def _parse_state(self) -> None:
         """Parse visual concepts, style, workers from state/env."""
         from callbacks.deterministic_steps import extract_json_array, extract_json_object
-        from tools.otio_tools import get_narration_durations_by_scene
+        from tools.otio_tools import get_video_slot_durations
 
         state = self.state
         raw_concepts = state.get("visual_concepts", "")
@@ -249,13 +249,8 @@ class ProductionOrchestrator:
             ", ".join(self.visual_style_avoid) if self.visual_style_avoid else ""
         )
 
-        # Workers
-        worker_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
-        self.worker_urls = (
-            [u.strip() for u in worker_urls_str.split(",") if u.strip()]
-            if worker_urls_str
-            else []
-        )
+        # Workers — prefer InfraAgent healthy workers over env vars
+        self.worker_urls = self._discover_workers()
         self.num_workers = max(1, len(self.worker_urls))
         logger.info(
             "Orchestrator: %d GPU worker(s), %d concepts to plan",
@@ -264,6 +259,9 @@ class ProductionOrchestrator:
 
         # Scan for existing clips (resume support)
         self._scan_existing_clips()
+
+        # Initialize fleet coordinator (if fleet mode enabled)
+        self._init_fleet_coordinator()
 
         # AG-UI feedback store
         from agui import get_feedback_store
@@ -291,8 +289,12 @@ class ProductionOrchestrator:
                 "GATEKEEPER: user halted pipeline at production start"
             )
 
-        # Narration durations for gatekeeper cross-validation
-        self._narr_durations = get_narration_durations_by_scene(
+        # Video slot durations for gatekeeper cross-validation.
+        # Uses get_video_slot_durations() which includes narration + following
+        # gap — the AUTHORITATIVE source for how long each video clip must be.
+        # (Previously used get_narration_durations_by_scene which excluded gaps,
+        # causing freeze-frame mismatches.)
+        self._narr_durations = get_video_slot_durations(
             tool_context=_MockToolContext(state),
         )
 
@@ -321,6 +323,74 @@ class ProductionOrchestrator:
                                 self.existing_clips[clip_id] = mp4_path
                 except (json.JSONDecodeError, OSError, IndexError):
                     pass
+
+    def _init_fleet_coordinator(self) -> None:
+        """Initialize the fleet coordinator for health-aware dispatch.
+
+        Creates a FleetCoordinator singleton if fleet mode is enabled
+        (FLEET_MODE=1 or more than 1 worker available). The coordinator
+        provides work queue, health-aware dispatch, cost tracking, and
+        systemic problem detection.
+        """
+        try:
+            from fleet.coordinator import create_fleet_coordinator, get_fleet_coordinator
+
+            # Only initialize if not already running
+            if get_fleet_coordinator() is not None:
+                logger.debug("Orchestrator: fleet coordinator already active")
+                return
+
+            # Fleet mode: enabled explicitly or when multiple workers exist
+            fleet_enabled = os.environ.get("FLEET_MODE", "").strip().lower() in ("1", "true")
+            if not fleet_enabled and self.num_workers <= 1:
+                return
+
+            budget = float(os.environ.get("PRODUCTION_BUDGET", "0"))
+            coordinator = create_fleet_coordinator(budget_ceiling=budget)
+            coordinator.start()
+
+            logger.info(
+                "Orchestrator: fleet coordinator started (budget=$%.2f, workers=%d)",
+                budget, self.num_workers,
+            )
+        except ImportError:
+            logger.debug("Orchestrator: fleet module not available — skipping")
+        except Exception as e:
+            logger.warning("Orchestrator: fleet coordinator init failed: %s", e)
+
+    def _discover_workers(self) -> list[str]:
+        """Discover GPU video workers from InfraAgent or env vars.
+
+        Priority:
+        1. InfraAgent healthy workers (health-aware)
+        2. VIDEO_WORKER_URLS env var (blind)
+        3. Single VIDEO_WORKER_URL / GPU_WORKER_URL
+        """
+        # 1. Try InfraAgent
+        try:
+            from infra_agent import WorkerRole, get_infra_agent
+            agent = get_infra_agent()
+            if agent:
+                healthy = agent.get_healthy_workers(role=WorkerRole.VIDEO)
+                if healthy:
+                    logger.info(
+                        "Orchestrator: discovered %d healthy workers via InfraAgent",
+                        len(healthy),
+                    )
+                    return healthy
+        except ImportError:
+            pass
+
+        # 2. Env var workers
+        worker_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
+        if worker_urls_str:
+            urls = [u.strip() for u in worker_urls_str.split(",") if u.strip()]
+            if urls:
+                return urls
+
+        # 3. Single worker fallback
+        single = os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
+        return [single] if single else []
 
     def _init_verifier(self) -> None:
         """Initialize the plan verifier with current state."""
@@ -607,11 +677,11 @@ class ProductionOrchestrator:
                 "_clip_id": task.clip_id,
             })
 
-        # Generate active clips in parallel
-        # TODO: task.assigned_worker is planned by the LLM but not yet routed
-        # to specific workers here — generate_video_clip() uses its own
-        # round-robin from VIDEO_WORKER_URLS.  Wire up per-clip routing
-        # once the orchestrator is validated end-to-end.
+        # Generate active clips in parallel.
+        # Worker dispatch is now health-aware: video_tools._get_next_worker_url()
+        # queries InfraAgent/FleetCoordinator for healthy workers instead of
+        # blind round-robin. Failed clips are reported to the fleet coordinator
+        # for retry-on-different-worker tracking.
         if len(task_concepts) > 1 and self.num_workers > 1:
             with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
                 future_to_concept = {

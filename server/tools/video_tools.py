@@ -39,14 +39,43 @@ _worker_index = 0
 
 
 def _get_next_worker_url() -> str:
-    """Get the next GPU worker URL using round-robin distribution.
+    """Get the next GPU worker URL using health-aware dispatch.
 
-    Reads VIDEO_WORKER_URLS (comma-separated) for multiple workers,
-    falls back to VIDEO_WORKER_URL or GPU_WORKER_URL for single worker.
+    Priority order:
+    1. Fleet coordinator (if active) — picks from healthy workers
+    2. InfraAgent healthy workers — health-aware but no load tracking
+    3. Round-robin from VIDEO_WORKER_URLS — blind fallback
+    4. Single worker from VIDEO_WORKER_URL / GPU_WORKER_URL
     """
     global _worker_index
 
-    # Check for multiple workers first
+    # 1. Try fleet coordinator (health-aware + load-aware)
+    try:
+        from fleet.coordinator import get_fleet_coordinator
+        coordinator = get_fleet_coordinator()
+        if coordinator:
+            result = coordinator.dispatch_to_healthy_worker()
+            if result:
+                worker_url, _clip = result
+                return worker_url
+    except ImportError:
+        pass
+
+    # 2. Try InfraAgent healthy workers (health-aware, no load tracking)
+    try:
+        from infra_agent import WorkerRole, get_infra_agent
+        agent = get_infra_agent()
+        if agent:
+            healthy = agent.get_healthy_workers(role=WorkerRole.VIDEO)
+            if healthy:
+                with _worker_lock:
+                    url = healthy[_worker_index % len(healthy)]
+                    _worker_index += 1
+                return url
+    except ImportError:
+        pass
+
+    # 3. Round-robin from env vars (blind fallback)
     urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
     if urls_str:
         urls = [u.strip() for u in urls_str.split(",") if u.strip()]
@@ -56,7 +85,7 @@ def _get_next_worker_url() -> str:
                 _worker_index += 1
             return url
 
-    # Single worker fallback
+    # 4. Single worker fallback
     return os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
 
 
