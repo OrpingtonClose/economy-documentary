@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Any
 
-from strands.hooks.events import AfterModelCallEvent, BeforeModelCallEvent
+from strands.hooks.events import AfterInvocationEvent, AfterModelCallEvent, BeforeModelCallEvent
 from strands.plugins import Plugin, hook
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ class ConcurrencyPlugin(Plugin):
         """Acquire LLM semaphore before model call."""
         self._semaphore.acquire()
         self._local.start_time = time.monotonic()
+        self._local.sem_held = True
         with self._lock:
             self._active_count += 1
             active = self._active_count
@@ -56,6 +57,7 @@ class ConcurrencyPlugin(Plugin):
         """Release LLM semaphore and log token usage."""
         start_time = getattr(self._local, "start_time", 0.0)
         self._local.start_time = 0.0
+        self._local.sem_held = False
         with self._lock:
             self._active_count = max(0, self._active_count - 1)
         self._semaphore.release()
@@ -65,3 +67,14 @@ class ConcurrencyPlugin(Plugin):
             "elapsed_ms=<%d> | released llm semaphore",
             int(elapsed * 1000),
         )
+
+    @hook
+    def after_invocation(self, event: AfterInvocationEvent) -> None:
+        """Safety net: release semaphore if still held after invocation ends."""
+        if getattr(self._local, "sem_held", False):
+            logger.warning("releasing leaked llm semaphore in after_invocation safety net")
+            self._local.sem_held = False
+            self._local.start_time = 0.0
+            with self._lock:
+                self._active_count = max(0, self._active_count - 1)
+            self._semaphore.release()
