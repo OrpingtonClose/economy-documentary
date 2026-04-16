@@ -58,6 +58,7 @@ class ContractsPlugin(Plugin):
                 PRODUCTION_CONTRACT,
                 SCENARIO_CONTRACT,
                 VISUAL_DIRECTION_CONTRACT,
+                ContractViolation,
                 validate_postconditions,
             )
 
@@ -73,29 +74,25 @@ class ContractsPlugin(Plugin):
             if contract is None:
                 return
 
-            violations = validate_postconditions(contract, state)
-            if violations:
-                logger.warning(
-                    "pipeline_phase=<%s>, contract=<%s>, violations=<%d> | "
-                    "postcondition validation failed",
-                    pipeline_phase,
-                    contract_name,
-                    len(violations) if isinstance(violations, list) else 1,
-                )
-                existing = state.get("_contract_violations", [])
-                if isinstance(violations, list):
-                    state["_contract_violations"] = existing + violations
-                else:
-                    state["_contract_violations"] = existing + [str(violations)]
-            else:
-                logger.info(
-                    "pipeline_phase=<%s>, contract=<%s> | postcondition validation passed",
-                    pipeline_phase,
-                    contract_name,
-                )
+            validate_postconditions(contract, state)
+            logger.info(
+                "pipeline_phase=<%s>, contract=<%s> | postcondition validation passed",
+                pipeline_phase,
+                contract_name,
+            )
 
         except ImportError:
             logger.debug("contracts module not available, skipping validation")
+        except ContractViolation as cv:
+            logger.warning(
+                "pipeline_phase=<%s>, contract=<%s> | postcondition validation failed: %s",
+                pipeline_phase,
+                contract_name,
+                cv.message,
+            )
+            existing = state.get("_contract_violations", [])
+            details = cv.details.get("errors", []) if cv.details else [cv.message]
+            state["_contract_violations"] = existing + details
         except Exception:
             logger.exception(
                 "pipeline_phase=<%s> | contract validation error",
