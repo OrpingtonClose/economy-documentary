@@ -58,14 +58,24 @@ def duration_accuracy(session_events: list[dict[str, Any]]) -> float:
         if not data:
             continue
 
-        # Look for batch completion events with clip-level data
-        if data.get("event") == "execution_complete":
-            # Duration accuracy is checked at the OTIO level, not per-event
-            # Return 1.0 as baseline — the real check is in the pipeline
-            pass
+        # Look for clip-level results with target vs actual duration
+        if data.get("event") == "clip_completed":
+            target = data.get("target_duration", 0)
+            actual = data.get("actual_duration", 0)
+            if target > 0 and actual > 0:
+                deviations.append(abs(actual - target) / target)
+
+        # Also check batch_complete events with aggregated clip data
+        if data.get("event") == "batch_complete":
+            clips = data.get("clips", [])
+            for clip in clips:
+                target = clip.get("target_duration", 0)
+                actual = clip.get("actual_duration", 0)
+                if target > 0 and actual > 0:
+                    deviations.append(abs(actual - target) / target)
 
     if not deviations:
-        return 1.0  # no deviation data — assume correct
+        return 1.0  # no deviation data available yet
 
     avg_deviation = sum(deviations) / len(deviations)
     # Score: 1.0 at 0% deviation, 0.0 at 20%+ deviation
@@ -121,7 +131,7 @@ def plan_quality(session_events: list[dict[str, Any]]) -> float:
             rating = data.get("rating", "").upper()
             if rating == "EXCELLENT":
                 achieved_excellent = True
-            if rating:
+            if rating and _rating_rank(rating) > _rating_rank(best_rating):
                 best_rating = rating
 
         # Also check plan_finalized with embedded rating
@@ -208,6 +218,14 @@ def evaluate_production_run(session_events: list[dict[str, Any]]) -> dict[str, f
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_RATING_RANKS = {"POOR": 1, "FAIR": 2, "GOOD": 3, "EXCELLENT": 4}
+
+
+def _rating_rank(rating: str) -> int:
+    """Numeric rank for a plan quality rating (higher = better)."""
+    return _RATING_RANKS.get(rating.upper(), 0) if rating else 0
+
 
 def _parse_event(event: dict[str, Any]) -> dict[str, Any]:
     """Extract structured data from an ADK event."""
