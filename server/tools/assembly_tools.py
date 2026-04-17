@@ -340,6 +340,7 @@ def concat_clips(
     output_path: str,
     tool_context=None,
     master_profile: Optional[MasterProfile] = None,
+    copy_audio: bool = False,
 ) -> str:
     """Concatenate a list of clips using ffmpeg concat demuxer.
 
@@ -362,6 +363,13 @@ def concat_clips(
             bitrate / sample rate.  Without it, the legacy H.264 fast
             crf18 + AAC 192k defaults are used (safe for mixed-codec
             inputs from diffusers / transitions).
+        copy_audio: When ``True`` (only meaningful with ``master_profile``),
+            the audio stream is copied verbatim (``-c:a copy``) instead of
+            being re-encoded.  Use this when every input segment already
+            has AAC audio at the profile's bitrate / sample rate (e.g. in
+            :func:`finalize_master` where all segments come out of the
+            same profile-driven mux) — it avoids a redundant lossy AAC
+            generation.
 
     Returns:
         JSON string with concat result.
@@ -408,7 +416,15 @@ def concat_clips(
             # so the final deliverable keeps its bt709 tags, fps lock,
             # slow preset, and 256k aac.  Without this the hardcoded
             # legacy settings below would silently downgrade quality for
-            # every finalize_master() call (see #90).
+            # every finalize_master() call (see #90).  When copy_audio is
+            # True the caller has guaranteed every segment already has
+            # matching AAC audio, so we stream-copy it to avoid a third
+            # lossy generation (Phase B WAV → mux AAC → concat AAC would
+            # otherwise be two AAC transcodes on the same samples).
+            audio_args = (
+                ["-c:a", "copy"] if copy_audio
+                else list(master_profile.audio_encode_args())
+            )
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -416,7 +432,7 @@ def concat_clips(
                 "-safe", "0",
                 "-i", concat_path,
                 *master_profile.video_encode_args(),
-                *master_profile.audio_encode_args(),
+                *audio_args,
                 "-movflags", "+faststart",
                 output_path,
             ]
@@ -672,12 +688,18 @@ def finalize_master(
     os.makedirs(parts_dir, exist_ok=True)
 
     # 1. Phase B — normalize full narration stream to profile target.
-    normalized_audio = os.path.join(parts_dir, "body_audio_master.m4a")
+    # Keep the intermediate as lossless PCM WAV so there is exactly one
+    # AAC encode in the whole pipeline (the mux step below).  Previously
+    # this wrote an .m4a, which meant the body audio went WAV -> AAC
+    # (Phase B) -> AAC (mux) -> AAC (concat) — three lossy generations
+    # on every deliverable.  See the Devin Review finding on #112.
+    normalized_audio = os.path.join(parts_dir, "body_audio_master.wav")
     try:
         normalize_master(
             input_path=body_audio_path,
             output_path=normalized_audio,
             profile=master_profile,
+            pcm_intermediate=True,
         )
     except LoudnessOutOfSpec as exc:
         return json.dumps({
@@ -734,6 +756,11 @@ def finalize_master(
             clip_paths=",".join(segments),
             output_path=output_path,
             master_profile=master_profile,
+            # All segments (title card, muxed body, end card) had their
+            # audio encoded via the same profile.audio_encode_args(), so
+            # AudioSpecificConfig is identical across them and we can
+            # stream-copy audio without a redundant lossy AAC pass.
+            copy_audio=True,
         ))
         if "error" in concat_result:
             return json.dumps({

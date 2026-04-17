@@ -315,6 +315,7 @@ def normalize_master(
     input_path: str,
     output_path: str,
     profile: MasterProfile,
+    pcm_intermediate: bool = False,
 ) -> LoudnessResult:
     """Phase B: bring the full mix to the profile's loudness envelope.
 
@@ -324,7 +325,27 @@ def normalize_master(
     :class:`LoudnessOutOfSpec` if the remeasured output deviates from the
     target by more than ``MASTER_I_TOLERANCE_LU`` LU or if LRA exceeds
     ``profile.max_lra``.
+
+    When ``pcm_intermediate=True`` the output is written as lossless PCM
+    (so ``output_path`` must end in ``.wav``) and the profile's lossy
+    codec is **not** applied.  This is the right choice when Phase B is
+    an intermediate step feeding a later mux (see
+    :func:`finalize_master`) — it keeps the audio lossless until the
+    single final AAC encode in the mux step, avoiding 2-3 generations of
+    lossy transcoding.
     """
+    if pcm_intermediate:
+        audio_codec: Optional[str] = None
+        audio_bitrate: Optional[str] = None
+        if not output_path.lower().endswith(".wav"):
+            raise ValueError(
+                "normalize_master(pcm_intermediate=True) requires a .wav "
+                f"output_path, got {output_path!r}"
+            )
+    else:
+        audio_codec = profile.audio_codec
+        audio_bitrate = profile.audio_bitrate
+
     result = _two_pass_loudnorm(
         input_path=input_path,
         output_path=output_path,
@@ -332,8 +353,8 @@ def normalize_master(
         true_peak_db=profile.true_peak_db,
         lra=profile.max_lra,
         sample_rate=profile.audio_sample_rate,
-        audio_codec=profile.audio_codec,
-        audio_bitrate=profile.audio_bitrate,
+        audio_codec=audio_codec,
+        audio_bitrate=audio_bitrate,
         timeout=900,
     )
     verify_master(result, profile)

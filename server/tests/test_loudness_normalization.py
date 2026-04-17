@@ -305,3 +305,31 @@ class TestFinalizeMaster:
         # Total duration = title (1s) + body (10s) + end (1.5s) \u2248 12.5s
         total = float(probe["format"]["duration"])
         assert 11.5 <= total <= 13.5, total
+
+        # Regression guard for the "2-3 generations of lossy AAC"
+        # Devin Review finding: the Phase B intermediate MUST be
+        # lossless PCM WAV (not .m4a), otherwise the body audio gets
+        # encoded to AAC in Phase B *and* again in mux *and* again in
+        # concat \u2014 three lossy transcodes on the same samples.
+        parts_dir = tmp_path / "_final_parts"
+        assert (parts_dir / "body_audio_master.wav").exists(), (
+            "Phase B intermediate must be lossless WAV to avoid "
+            "multi-generation AAC transcoding"
+        )
+        assert not (parts_dir / "body_audio_master.m4a").exists(), (
+            "legacy lossy Phase B intermediate found \u2014 fix reverted"
+        )
+        wav_probe = json.loads(subprocess.run(
+            [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_streams",
+                str(parts_dir / "body_audio_master.wav"),
+            ],
+            capture_output=True, text=True, timeout=30,
+        ).stdout)
+        wav_stream = next(
+            s for s in wav_probe["streams"] if s["codec_type"] == "audio"
+        )
+        assert wav_stream["codec_name"].startswith("pcm_"), (
+            f"Phase B intermediate must be PCM, got {wav_stream['codec_name']}"
+        )
