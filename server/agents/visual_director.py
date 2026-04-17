@@ -207,8 +207,11 @@ async def _visual_concepter_before_model(callback_context, llm_request):
     total_chunks = (total_scenes + chunk_size - 1) // chunk_size
     accumulated = []
 
-    from agents.model_config import build_model
-    model_name = build_model()
+    from agents.model_config import build_model, ADK_MODEL_NAME
+    _model_obj = build_model()
+    # build_model() returns Union[str, LiteLlm]. For direct litellm calls
+    # we need the string model name, not the ADK wrapper.
+    model_name = _model_obj if isinstance(_model_obj, str) else ADK_MODEL_NAME
 
     for chunk_idx in range(total_chunks - 1):  # all except last
         start = chunk_idx * chunk_size
