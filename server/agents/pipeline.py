@@ -257,12 +257,14 @@ def _visual_after_with_gate(callback_context):
 
 
 def _production_before_with_gate(callback_context):
-    """Before production_supervisor: contract check + approval gate + video worker."""
-    # CONTRACT: validate preconditions BEFORE entering production stage
-    abort = _validate_preconditions_or_abort(PRODUCTION_CONTRACT, callback_context)
-    if abort is not None:
-        return abort
+    """Before production_supervisor: approval gate + video worker + contract check.
 
+    ORDERING IS CRITICAL: the contract check must run AFTER the video
+    worker is ready because PRODUCTION_CONTRACT.required_services includes
+    a health check to VIDEO_WORKER_URLS.  If the check runs before
+    provisioning completes, it fails and silently skips the entire
+    production stage.  Same pattern as _timing_loop_before_with_gate.
+    """
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
         approved = wait_for_approval("prompts")
@@ -289,6 +291,14 @@ def _production_before_with_gate(callback_context):
                 text=f"ERROR: Video worker provisioning failed: {exc}"
             )],
         )
+
+    # CONTRACT: validate preconditions AFTER video worker is ready.
+    # PRODUCTION_CONTRACT includes service health checks that require the
+    # worker to be reachable — running this earlier would cause a
+    # ContractViolation that silently skips the entire production stage.
+    abort = _validate_preconditions_or_abort(PRODUCTION_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
 
     if _orig_production_before:
         return _orig_production_before(callback_context)
