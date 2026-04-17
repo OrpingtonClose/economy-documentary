@@ -323,10 +323,10 @@ def _generate_digest(agent: str, traces: list[dict]) -> Digest:
 
     summary = "".join(parts)
 
-    # Elevate importance for key signals
+    # Elevate importance for key signals (never lower from HIGH set by errors)
     if rating in ("POOR", "FAIR"):
         importance = Importance.HIGH
-    elif rating == "EXCELLENT":
+    elif rating == "EXCELLENT" and importance != Importance.HIGH:
         importance = Importance.MEDIUM
     if plan_info:
         importance = Importance.HIGH  # production planning is always important

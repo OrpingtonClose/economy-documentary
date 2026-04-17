@@ -404,8 +404,10 @@ async def get_reasoning_traces_raw(
         query += " ORDER BY id DESC LIMIT ?"
         params.append(limit)
 
-        rows = conn.execute(query, params).fetchall()
-        conn.close()
+        try:
+            rows = conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
 
         traces = []
         for row in rows:
