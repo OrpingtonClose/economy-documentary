@@ -1407,6 +1407,369 @@ def F5_flaky_failures() -> EnvironmentSimulationConfig:
 
 
 # ---------------------------------------------------------------------------
+# Category G: GPU Provisioning Failures
+# ---------------------------------------------------------------------------
+# These scenarios exercise the WorkerProvisioner's retry logic and the
+# escalation ladder for infrastructure-level failures.  They inject responses
+# into ``vast_provision_lifecycle`` — the simulatable wrapper around the full
+# VM provisioning lifecycle (offer search → create → boot → SSH → health).
+#
+# Each scenario specifies different failure reasons via ``error_category``
+# (matching the categories in WorkerSpec.bootstrap_error_category) and
+# ``stage`` (which provisioning step failed).
+#
+# The provisioner retries up to 2 times (3 attempts total) with excluded
+# offers.  Scenarios G1-G4 fail on attempt 0 and succeed on attempt 1,
+# testing the retry path.  G5 fails on all attempts, testing the full
+# escalation ladder.
+
+def _provision_lifecycle_success(
+    role: str = "video",
+    gpu_type: str = "A100_SXM4",
+    vm_id: str = "sim-vm-001",
+) -> dict:
+    """Mock successful provisioning lifecycle."""
+    return {
+        "status": "healthy",
+        "vm_id": vm_id,
+        "gpu_type": gpu_type,
+        "role": role,
+        "message": f"{role} worker healthy after provisioning",
+    }
+
+
+def _provision_lifecycle_failure(
+    error: str,
+    error_category: str,
+    stage: str,
+) -> dict:
+    """Mock failed provisioning lifecycle at a specific stage."""
+    return {
+        "status": "error",
+        "error": error,
+        "error_category": error_category,
+        "stage": stage,
+    }
+
+
+def _g_common_tools() -> list:
+    """Common tool configs for G scenarios — all non-provisioning tools succeed."""
+    return [
+        ToolSimulationConfig(
+            tool_name="generate_narration",
+            injection_configs=[
+                InjectionConfig(injected_response=_tts_success()),
+            ],
+        ),
+        ToolSimulationConfig(
+            tool_name="generate_video_clip",
+            injection_configs=[
+                InjectionConfig(injected_response=_video_success()),
+            ],
+        ),
+        ToolSimulationConfig(
+            tool_name="align_narration",
+            injection_configs=[
+                InjectionConfig(injected_response=_alignment_success()),
+            ],
+        ),
+        ToolSimulationConfig(
+            tool_name="create_timeline",
+            injection_configs=[
+                InjectionConfig(injected_response=_timeline_success()),
+            ],
+        ),
+        ToolSimulationConfig(
+            tool_name="provision_gpu_vm",
+            injection_configs=[
+                InjectionConfig(injected_response=_provision_success()),
+            ],
+        ),
+    ]
+
+
+def G1_bootstrap_network_failure() -> EnvironmentSimulationConfig:
+    """Host bootstrap fails (apt-get can't reach repos) → retry on different host → succeeds.
+
+    Simulates the exact failure we hit in production: VM boots, SSH connects,
+    but ``apt-get update`` fails because the host can't resolve
+    ``archive.ubuntu.com``.  The provisioner destroys the VM and retries on
+    a different host, which succeeds.
+    """
+    return EnvironmentSimulationConfig(
+        tool_simulation_configs=[
+            ToolSimulationConfig(
+                tool_name="vast_provision_lifecycle",
+                injection_configs=[
+                    # Attempt 0 (video): bootstrap network failure
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 0},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "apt-get update failed: "
+                                "Err:1 http://archive.ubuntu.com/ubuntu jammy InRelease "
+                                "Could not resolve 'archive.ubuntu.com'"
+                            ),
+                            error_category="network",
+                            stage="bootstrap",
+                        ),
+                    ),
+                    # Attempt 1 (video): success on different host
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 1},
+                        injected_response=_provision_lifecycle_success(
+                            role="video", gpu_type="A100_SXM4", vm_id="sim-vm-002",
+                        ),
+                    ),
+                    # TTS: always succeeds
+                    InjectionConfig(
+                        match_args={"role": "tts"},
+                        injected_response=_provision_lifecycle_success(
+                            role="tts", gpu_type="RTX_4000", vm_id="sim-tts-001",
+                        ),
+                    ),
+                ],
+            ),
+            *_g_common_tools(),
+        ],
+    )
+
+
+def G2_ssh_key_rejection() -> EnvironmentSimulationConfig:
+    """SSH proxy rejects all identity files → retry on different host → succeeds.
+
+    Vast.ai proxy hosts sometimes reject SSH keys that work on other hosts.
+    The provisioner should destroy the VM and try a different offer.
+    """
+    return EnvironmentSimulationConfig(
+        tool_simulation_configs=[
+            ToolSimulationConfig(
+                tool_name="vast_provision_lifecycle",
+                injection_configs=[
+                    # Attempt 0 (video): SSH rejection
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 0},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "SSH proxy rejected all identity files after 5 "
+                                "attempts (tried: id_ed25519, id_rsa, id_ecdsa). "
+                                "Host: ssh5.vast.ai:23894"
+                            ),
+                            error_category="auth",
+                            stage="ssh_tunnel",
+                        ),
+                    ),
+                    # Attempt 1 (video): success on different host
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 1},
+                        injected_response=_provision_lifecycle_success(
+                            role="video", gpu_type="A100_SXM4", vm_id="sim-vm-003",
+                        ),
+                    ),
+                    # TTS: always succeeds
+                    InjectionConfig(
+                        match_args={"role": "tts"},
+                        injected_response=_provision_lifecycle_success(
+                            role="tts", gpu_type="RTX_4000", vm_id="sim-tts-001",
+                        ),
+                    ),
+                ],
+            ),
+            *_g_common_tools(),
+        ],
+    )
+
+
+def G3_docker_image_pull_timeout() -> EnvironmentSimulationConfig:
+    """Docker image pull stalls (slow host) → retry on faster host → succeeds.
+
+    Large Docker images (pytorch 12GB+) can stall on hosts with slow
+    internet.  The provisioner detects the loading timeout and tries a
+    host with better download speed.
+    """
+    return EnvironmentSimulationConfig(
+        tool_simulation_configs=[
+            ToolSimulationConfig(
+                tool_name="vast_provision_lifecycle",
+                injection_configs=[
+                    # Attempt 0 (video): image pull timeout
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 0},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "VM stuck in 'loading' state after 300s "
+                                "(Docker image pull: pytorch/pytorch:2.10.0-cuda12.6-cudnn9-devel). "
+                                "Host inet_down=45 Mbps — too slow for 12GB image."
+                            ),
+                            error_category="timeout",
+                            stage="vm_boot",
+                        ),
+                    ),
+                    # Attempt 1 (video): success on faster host
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 1},
+                        injected_response=_provision_lifecycle_success(
+                            role="video", gpu_type="A100_SXM4", vm_id="sim-vm-004",
+                        ),
+                    ),
+                    # TTS: always succeeds
+                    InjectionConfig(
+                        match_args={"role": "tts"},
+                        injected_response=_provision_lifecycle_success(
+                            role="tts", gpu_type="RTX_4000", vm_id="sim-tts-001",
+                        ),
+                    ),
+                ],
+            ),
+            *_g_common_tools(),
+        ],
+    )
+
+
+def G4_cuda_oom_model_load() -> EnvironmentSimulationConfig:
+    """CUDA OOM during model load (GPU VRAM too small) → retry with larger GPU → succeeds.
+
+    The offer search filter passed but the actual GPU has slightly less
+    usable VRAM than advertised (driver overhead, ECC).  The LTX-2.3
+    transformer (46GB bf16) doesn't fit.  The provisioner retries and
+    gets a host with more headroom.
+    """
+    return EnvironmentSimulationConfig(
+        tool_simulation_configs=[
+            ToolSimulationConfig(
+                tool_name="vast_provision_lifecycle",
+                injection_configs=[
+                    # Attempt 0 (video): CUDA OOM during model load
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 0},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "RuntimeError: CUDA out of memory. "
+                                "Tried to allocate 46.60 GiB. "
+                                "GPU 0 has a total capacity of 47.54 GiB of which "
+                                "44.22 GiB is free. "
+                                "Process peak memory: 3.32 GiB."
+                            ),
+                            error_category="runtime",
+                            stage="model_load",
+                        ),
+                    ),
+                    # Attempt 1 (video): success on host with more VRAM
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 1},
+                        injected_response=_provision_lifecycle_success(
+                            role="video", gpu_type="H100_SXM5", vm_id="sim-vm-005",
+                        ),
+                    ),
+                    # TTS: always succeeds
+                    InjectionConfig(
+                        match_args={"role": "tts"},
+                        injected_response=_provision_lifecycle_success(
+                            role="tts", gpu_type="RTX_4000", vm_id="sim-tts-001",
+                        ),
+                    ),
+                ],
+            ),
+            *_g_common_tools(),
+        ],
+    )
+
+
+def G5_all_hosts_fail_escalation() -> EnvironmentSimulationConfig:
+    """All provisioning attempts fail → full escalation ladder activates.
+
+    Three different hosts fail for three different reasons.  After all
+    retries are exhausted, the provisioner raises RuntimeError, which
+    propagates through the pipeline and triggers the full agent-powered
+    escalation ladder (L0 → L1 → L2 → L3 → L4 human).
+
+    The escalation agents also have access to ``provision_gpu_vm`` (ADK tool)
+    but it returns no_offers — the market is depleted.
+    """
+    return EnvironmentSimulationConfig(
+        tool_simulation_configs=[
+            ToolSimulationConfig(
+                tool_name="vast_provision_lifecycle",
+                injection_configs=[
+                    # Attempt 0 (video): network failure
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 0},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "apt-get update failed: "
+                                "Temporary failure resolving 'archive.ubuntu.com'"
+                            ),
+                            error_category="network",
+                            stage="bootstrap",
+                        ),
+                    ),
+                    # Attempt 1 (video): SSH failure
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 1},
+                        injected_response=_provision_lifecycle_failure(
+                            error="SSH connection refused by proxy host ssh8.vast.ai:29104",
+                            error_category="auth",
+                            stage="ssh_tunnel",
+                        ),
+                    ),
+                    # Attempt 2 (video): CUDA OOM
+                    InjectionConfig(
+                        match_args={"role": "video", "attempt": 2},
+                        injected_response=_provision_lifecycle_failure(
+                            error=(
+                                "RuntimeError: CUDA out of memory. "
+                                "Tried to allocate 46.60 GiB."
+                            ),
+                            error_category="runtime",
+                            stage="model_load",
+                        ),
+                    ),
+                    # TTS: always succeeds (only video provisioning fails)
+                    InjectionConfig(
+                        match_args={"role": "tts"},
+                        injected_response=_provision_lifecycle_success(
+                            role="tts", gpu_type="RTX_4000", vm_id="sim-tts-001",
+                        ),
+                    ),
+                ],
+            ),
+            # Escalation agents try provision_gpu_vm (ADK tool) — also fails
+            ToolSimulationConfig(
+                tool_name="provision_gpu_vm",
+                injection_configs=[
+                    InjectionConfig(injected_response=_provision_no_offers()),
+                ],
+            ),
+            # All other tools succeed (pipeline gets past audio/visual to production)
+            ToolSimulationConfig(
+                tool_name="generate_narration",
+                injection_configs=[
+                    InjectionConfig(injected_response=_tts_success()),
+                ],
+            ),
+            ToolSimulationConfig(
+                tool_name="generate_video_clip",
+                injection_configs=[
+                    InjectionConfig(injected_response=_video_success()),
+                ],
+            ),
+            ToolSimulationConfig(
+                tool_name="align_narration",
+                injection_configs=[
+                    InjectionConfig(injected_response=_alignment_success()),
+                ],
+            ),
+            ToolSimulationConfig(
+                tool_name="create_timeline",
+                injection_configs=[
+                    InjectionConfig(injected_response=_timeline_success()),
+                ],
+            ),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Scenario Registry
 # ---------------------------------------------------------------------------
 
@@ -1451,6 +1814,12 @@ _SCENARIOS: Dict[str, Callable] = {
     "F3": F3_agent_abort,
     "F4": F4_agents_exhausted_human_escalation,
     "F5": F5_flaky_failures,
+    # Category G: GPU provisioning failures
+    "G1": G1_bootstrap_network_failure,
+    "G2": G2_ssh_key_rejection,
+    "G3": G3_docker_image_pull_timeout,
+    "G4": G4_cuda_oom_model_load,
+    "G5": G5_all_hosts_fail_escalation,
 }
 
 # Also register by full function name for convenience
