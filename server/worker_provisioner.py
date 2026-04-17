@@ -644,11 +644,14 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # reuse reserved-but-unallocated memory instead of failing.
         "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
-        f"git clone -b {shlex.quote(_branch)} --single-branch "
+        f"(git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
-        "/workspace/economy-documentary 2>/dev/null || "
+        "/workspace/economy-documentary 2>&1 || "
+        "git clone -b main --single-branch "
+        "https://github.com/OrpingtonClose/economy-documentary.git "
+        "/workspace/economy-documentary 2>&1 || "
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
-        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
+        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)})) && "
         # Install Python deps needed for gpu_worker.py to start (FastAPI + deps).
         # The Docker image already has torch pre-installed (resolved from manifest),
         # so we only need FastAPI + other non-torch deps for the health endpoint.
