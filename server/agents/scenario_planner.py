@@ -92,8 +92,6 @@ def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=No
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         try:
-            from tools.otio_tools import create_timeline as _create_tl
-            # Call the underlying function directly (not as a tool)
             import opentimelineio as otio
             from tools.otio_tools import _timeline_path, _ensure_dir, _otio_lock
             from tools.otio_tools import TRACK_V1, TRACK_A1, TRACK_A2
