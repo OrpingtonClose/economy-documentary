@@ -277,8 +277,31 @@ class TestFinalizeMaster:
         video_stream = next(
             s for s in probe["streams"] if s["codec_type"] == "video"
         )
+        audio_stream = next(
+            s for s in probe["streams"] if s["codec_type"] == "audio"
+        )
         assert video_stream["width"] == 1920
         assert video_stream["height"] == 1080
+        # Regression guard for the Devin Review finding: the concat step
+        # must honour the master profile rather than falling back to the
+        # legacy settings (no bt709 tags, AAC @ 192k, no fps lock).
+        # bitrate is a weak signal on synthetic signals (a sine compresses
+        # far below the target), so we assert on the colour tags + sample
+        # rate + fps which the legacy path does NOT write.
+        assert audio_stream["codec_name"] == "aac"
+        assert int(audio_stream.get("sample_rate", 0)) == 48000
+        assert video_stream.get("color_space") == "bt709", (
+            f"expected bt709 colorspace, got {video_stream.get('color_space')!r}"
+            " \u2014 concat likely used legacy settings"
+        )
+        assert video_stream.get("color_primaries") == "bt709"
+        assert video_stream.get("color_transfer") == "bt709"
+        # r_frame_rate is a fraction string like "24/1".
+        rate = video_stream.get("r_frame_rate", "0/1")
+        num, den = (int(x) for x in rate.split("/"))
+        assert abs(num / den - 24.0) < 0.01, (
+            f"expected 24fps lock from profile, got {rate}"
+        )
         # Total duration = title (1s) + body (10s) + end (1.5s) \u2248 12.5s
         total = float(probe["format"]["duration"])
         assert 11.5 <= total <= 13.5, total

@@ -339,6 +339,7 @@ def concat_clips(
     clip_paths: str,
     output_path: str,
     tool_context=None,
+    master_profile: Optional[MasterProfile] = None,
 ) -> str:
     """Concatenate a list of clips using ffmpeg concat demuxer.
 
@@ -355,6 +356,12 @@ def concat_clips(
     Args:
         clip_paths: Comma-separated list of clip file paths.
         output_path: Path for the concatenated output file.
+        master_profile: Optional :class:`MasterProfile` — when supplied,
+            the video re-encode uses the profile's codec / preset / crf /
+            pix_fmt / colour tags / fps and the profile's audio codec /
+            bitrate / sample rate.  Without it, the legacy H.264 fast
+            crf18 + AAC 192k defaults are used (safe for mixed-codec
+            inputs from diffusers / transitions).
 
     Returns:
         JSON string with concat result.
@@ -396,10 +403,28 @@ def concat_clips(
                 "-c", "copy",
                 output_path,
             ]
+        elif master_profile is not None:
+            # Video + profile: re-encode with the profile's codec settings
+            # so the final deliverable keeps its bt709 tags, fps lock,
+            # slow preset, and 256k aac.  Without this the hardcoded
+            # legacy settings below would silently downgrade quality for
+            # every finalize_master() call (see #90).
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_path,
+                *master_profile.video_encode_args(),
+                *master_profile.audio_encode_args(),
+                "-movflags", "+faststart",
+                output_path,
+            ]
         else:
-            # Video: re-encode to H.264 + AAC for universal compatibility.
-            # -c copy would be faster but breaks when source codecs differ
-            # (e.g. mpeg4 Part 2 from LTX + libx264 from black transitions).
+            # Video, no profile: re-encode to H.264 + AAC for universal
+            # compatibility.  -c copy would be faster but breaks when
+            # source codecs differ (e.g. mpeg4 Part 2 from LTX + libx264
+            # from black transitions).
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -698,13 +723,17 @@ def finalize_master(
         segments.append(end_path)
 
     # 5. Concat everything — if there's nothing to prepend/append, just
-    # copy the muxed body to the final output.
+    # copy the muxed body to the final output.  All segments were
+    # rendered with the same master_profile, so we pass it through to
+    # concat_clips so the final re-encode keeps the profile's codec /
+    # bitrate / colour tags / fps rather than the legacy defaults.
     if len(segments) == 1:
         shutil.copy2(segments[0], output_path)
     else:
         concat_result = json.loads(concat_clips(
             clip_paths=",".join(segments),
             output_path=output_path,
+            master_profile=master_profile,
         ))
         if "error" in concat_result:
             return json.dumps({
