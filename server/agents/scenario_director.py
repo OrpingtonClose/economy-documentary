@@ -170,6 +170,65 @@ Output the scene array as valid JSON in state["scenes"] and the visual style
 object in state["visual_style"].
 """
 
+def _extract_style_lock(text: str) -> dict | None:
+    """Find the style_lock JSON object in generator output.
+
+    The generator emits two top-level JSON objects before the scenes array:
+    ``visual_style`` (keys: ``style``, ``avoid``) and ``style_lock``
+    (keys: ``dominant_style``, ``forbidden_styles``).  The existing
+    after_model_callback only picks up visual_style, so we scan the
+    accumulated text ourselves for the style_lock signature and return it
+    as a plain dict.
+    """
+    if not text:
+        return None
+    # Brace-matched scan: every time we hit '{', try to json.loads the
+    # smallest balanced substring starting there.  Accept the first object
+    # whose keys match the style_lock signature.  This is cheap for the
+    # lengths produced by the generator (~few KB).
+    length = len(text)
+    i = 0
+    while i < length:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        end = -1
+        for j in range(i, length):
+            ch = text[j]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j + 1
+                    break
+        if end == -1:
+            return None
+        candidate = text[i:end]
+        try:
+            obj = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            obj = None
+        if isinstance(obj, dict) and "dominant_style" in obj and "forbidden_styles" in obj:
+            return obj
+        i = end
+    return None
+
+
 def _save_generator_scenes(callback_context):
     """After generator: save scenes backup unconditionally.
 
@@ -187,10 +246,25 @@ def _save_generator_scenes(callback_context):
     state = callback_context.state
     raw = state.get("scenes", "")
     scenes = extract_json_array(str(raw)) if raw else None
+    accumulated = state.get("_generator_accumulated_text", "") or ""
+
+    # Capture style_lock from the accumulated generator text.  The
+    # after_model_callback only picks up visual_style; we pick up
+    # style_lock here so state["style_lock"] is populated before the
+    # structural checks run in the evaluator's before_agent hook.
+    if accumulated and not state.get("style_lock"):
+        sl = _extract_style_lock(str(accumulated))
+        if sl:
+            state["style_lock"] = json.dumps(sl, ensure_ascii=False)
+            logger.info(
+                "Captured style_lock from scenario_generator (dominant_style=%s, "
+                "%d forbidden_styles)",
+                sl.get("dominant_style", "unknown"),
+                len(sl.get("forbidden_styles") or []),
+            )
 
     # Fallback: try accumulated generator text (streaming chunks joined)
     if not scenes:
-        accumulated = state.get("_generator_accumulated_text", "")
         if accumulated:
             from callbacks.after_model import _extract_scenes_array
             scenes = _extract_scenes_array(str(accumulated))
