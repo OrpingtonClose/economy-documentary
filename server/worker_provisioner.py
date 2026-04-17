@@ -1609,7 +1609,7 @@ class WorkerProvisioner:
                 f"was start_provisioning() called?"
             )
 
-        if spec.status == "healthy":
+        if spec.status in ("healthy", "externally_managed"):
             return True
 
         logger.info(
@@ -1637,8 +1637,15 @@ class WorkerProvisioner:
                 f"{spec.error}"
             )
 
-        if spec.status == "healthy":
-            logger.info("%s worker is ready — stage may proceed", role)
+        if spec.status in ("healthy", "externally_managed"):
+            # "externally_managed" = pre-set env var worker that wasn't
+            # immediately reachable; honour it per #65 (operator knows
+            # best — downstream pipeline contracts will surface any
+            # lingering unreachability).
+            logger.info(
+                "%s worker is ready — stage may proceed (status=%s)",
+                role, spec.status,
+            )
             # Start InfraAgent once all workers are ready
             self._start_infra_agent_if_ready()
             return True
@@ -2077,9 +2084,17 @@ class WorkerProvisioner:
             logger.warning("Failed to start InfraAgent: %s", exc)
 
     def _start_infra_agent_if_ready(self) -> None:
-        """Start InfraAgent once all workers are ready."""
+        """Start InfraAgent once all workers are ready.
+
+        A worker counts as "ready" when it is either ``healthy`` (we
+        provisioned it) or ``externally_managed`` (#65: honoured a
+        pre-set env var).  Treating externally-managed workers as not
+        ready would prevent InfraAgent from ever starting in fleets
+        that pin worker URLs via env vars.
+        """
+        ready_states = ("healthy", "externally_managed")
         with self._lock:
-            all_ready = all(s.status == "healthy" for s in self._specs)
+            all_ready = all(s.status in ready_states for s in self._specs)
             already_started = self._provisioned
         if all_ready and not already_started:
             with self._lock:

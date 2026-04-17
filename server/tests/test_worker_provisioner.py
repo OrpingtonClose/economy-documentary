@@ -211,3 +211,37 @@ def test_wait_for_worker_healthy_clamps_to_15min(monkeypatch):
     # With a 15-minute effective window and 60s fake steps, we should
     # never have spent more than ~16 iterations.
     assert len(calls) <= 20
+
+
+# ---------------------------------------------------------------------------
+# #65 regression: wait_for_worker must accept externally_managed status
+# ---------------------------------------------------------------------------
+
+
+def test_wait_for_worker_accepts_externally_managed_status(monkeypatch):
+    """An externally-managed worker (#65) must not crash the pipeline.
+
+    When start_provisioning honours a pre-set env var for a worker that
+    isn't immediately reachable, it marks the spec as
+    ``externally_managed`` and sets the ready event.  The downstream
+    ``wait_for_worker`` call must treat that as a valid ready state
+    instead of raising ``RuntimeError``.
+    """
+    with _FakeProvisionerContext() as ctx:
+        wp = ctx.wp
+        monkeypatch.setenv("TTS_WORKER_URL", "http://tts.example.com:8880")
+        monkeypatch.delenv("GPU_WORKER_URL", raising=False)
+        monkeypatch.delenv("VIDEO_WORKER_URLS", raising=False)
+        # Simulate the "preset but not reachable yet" case.
+        monkeypatch.setattr(wp, "check_worker_health", lambda *a, **k: False)
+
+        provisioner = wp.WorkerProvisioner()
+        provisioner.start_provisioning(require_tts=True, require_video=False)
+
+        tts = next(
+            s for s in provisioner._specs if s.role == "tts"
+        )
+        assert tts.status == "externally_managed"
+
+        # This must return True, not raise RuntimeError.
+        assert provisioner.wait_for_worker("tts", timeout=5) is True
