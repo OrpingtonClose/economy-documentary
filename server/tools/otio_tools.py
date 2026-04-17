@@ -26,6 +26,9 @@ TRACK_A1 = "A1_Narration"
 TRACK_A2 = "A2_Music"
 
 _TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+_SCENE_ASSEMBLY_DIR = os.environ.get(
+    "SCENE_ASSEMBLY_DIR", "/tmp/documentary-pipeline/scene_assemblies"
+)
 
 # Module-level lock to protect OTIO file read-modify-write cycles against
 # concurrent tool calls (parallel_tool_calls=True is the default).
@@ -34,6 +37,95 @@ _otio_lock = threading.Lock()
 
 def _ensure_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+
+def _find_scene_from_state(state: dict, scene_num: int) -> Optional[dict]:
+    """Look up the scene dict matching ``scene_num`` from ``state['scenes']``.
+
+    Returns ``None`` if scenes aren't populated yet (which is valid
+    during the very first scenario pass).  Used by the per-moment
+    validators in :mod:`tools.otio_moments` so they don't need to thread
+    the scene dict through every call site.
+    """
+    try:
+        from callbacks.deterministic_steps import extract_json_array
+    except Exception:  # noqa: BLE001 — keep otio_tools importable standalone
+        extract_json_array = None  # type: ignore[assignment]
+
+    raw = state.get("scenes", "[]") if state else "[]"
+    scenes = None
+    if extract_json_array is not None:
+        scenes = extract_json_array(str(raw))
+    if scenes is None:
+        try:
+            scenes = json.loads(str(raw))
+        except Exception:  # noqa: BLE001
+            return None
+
+    if not isinstance(scenes, list):
+        return None
+    for s in scenes:
+        if not isinstance(s, dict):
+            continue
+        try:
+            if int(s.get("scene_num", 0) or 0) == int(scene_num):
+                return s
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _primary_narration_duration_for_phrase(
+    timeline,
+    scene_num: int,
+    phrase_idx: int,
+) -> Optional[float]:
+    """Narration duration for scene N, phrase K (primary language only).
+
+    Phrase_idx maps to the (phrase_idx)-th narration clip of the scene
+    after filtering out alternate-language clips (voice ends with ``_EN``).
+    Returns ``None`` when the scene has no narration yet (audio stage
+    pending) or when phrase_idx exceeds the scene's narration count.
+    """
+    narration_track = None
+    for track in timeline.tracks:
+        if track.name == TRACK_A1:
+            narration_track = track
+            break
+    if narration_track is None:
+        return None
+
+    durations: list[float] = []
+    for item in narration_track:
+        if not isinstance(item, otio.schema.Clip) or not item.source_range:
+            continue
+        meta = item.metadata.get("documentary", {})
+        if meta.get("scene_num") != scene_num:
+            continue
+        voice = meta.get("voice", "")
+        if voice.endswith("_EN"):
+            continue
+        durations.append(item.source_range.duration.to_seconds())
+
+    if not durations or phrase_idx < 0 or phrase_idx >= len(durations):
+        return None
+    return durations[phrase_idx]
+
+
+def _scene_has_empty_placeholder_gaps(timeline, scene_num: int) -> bool:
+    """Return True when V1_Video still has an ``status=empty`` gap for this scene."""
+    for track in timeline.tracks:
+        if track.name != TRACK_V1:
+            continue
+        for item in track:
+            if not isinstance(item, otio.schema.Gap):
+                continue
+            meta = item.metadata.get("documentary", {})
+            if meta.get("scene_num") != scene_num:
+                continue
+            if meta.get("status") == "empty":
+                return True
+    return False
 
 
 def _timeline_path(topic: str) -> str:
@@ -239,6 +331,20 @@ def add_narration_clip(
         otio.adapters.write_to_file(timeline, timeline_path)
 
     logger.info("Added narration clip: %s (%.2fs)", clip_name, duration)
+
+    # ── Per-moment OTIO compliance (#84) ──────────────────────────────
+    # Validate the freshly-persisted clip against its scene target
+    # IMMEDIATELY instead of batching until post-stage.  Fail loud if
+    # the clip exceeds the per-voice tolerance — this is the hook that
+    # catches phrase-2-is-13.84s-but-scene-target-is-10s drift the
+    # moment it happens, not after 21 wasted GPU clips.
+    _run_per_moment_audio_check(
+        state=state,
+        scene_num=scene_num,
+        voice=voice,
+        actual_duration_sec=duration,
+    )
+
     return json.dumps(
         {
             "status": "added",
@@ -247,6 +353,58 @@ def add_narration_clip(
             "wav_path": wav_path,
         }
     )
+
+
+def _run_per_moment_audio_check(
+    state: dict,
+    scene_num: int,
+    voice: str,
+    actual_duration_sec: float,
+) -> None:
+    """Run the per-moment audio validator and escalate on failure.
+
+    Kept as a free function (not an inline block) so ``add_narration_clip``
+    stays focused on OTIO mutation.  Any validation error is routed
+    through :func:`recovery.escalate_pipeline_error` which respects
+    auto-approve mode for test runs.
+    """
+    from tools.otio_moments import validate_audio_duration_vs_scene_target
+
+    scene = _find_scene_from_state(state, scene_num)
+    if scene is None:
+        # Scenes not yet in state (e.g. early in scenario phase); the
+        # stage-boundary timeline_guardian will still run at end of phase.
+        return
+
+    err = validate_audio_duration_vs_scene_target(
+        scene_num=scene_num,
+        voice=voice,
+        actual_duration_sec=actual_duration_sec,
+        scene=scene,
+    )
+    if err is None:
+        return
+
+    logger.error("PER-MOMENT AUDIO VIOLATION: %s", err)
+    state["otio_violation"] = f"per_moment_audio: {err}"
+    try:
+        from recovery import escalate_pipeline_error
+    except Exception:  # noqa: BLE001 — keep module importable in tests
+        raise RuntimeError(f"per-moment audio violation: {err}") from None
+
+    response = escalate_pipeline_error(
+        operation_name=f"per_moment_audio_scene_{scene_num}_{voice}",
+        error_msg=err,
+        severity="critical",
+        default_action="abort",
+        diagnosis_hint=(
+            "Narration clip exceeds its per-voice duration budget. "
+            "The scene's duration_sec target cannot accommodate it."
+        ),
+        agent_policy_type="otio",
+    )
+    if response.get("action") != "skip":
+        raise RuntimeError(f"per-moment audio violation: {err}")
 
 
 def add_narration_gap(
@@ -753,6 +911,30 @@ def add_video_clip(
         "Added video clip: %s (source_range=%.2fs, avail=%.2fs)",
         clip_name, source_range, available_range,
     )
+
+    # ── Per-moment OTIO compliance (#84, #85) ─────────────────────────
+    # Validate the freshly-persisted video clip against its narration
+    # duration IMMEDIATELY instead of waiting for post-production batch.
+    # On shortfall (video < audio), fire the extension-clip escalation
+    # to supervisor_escalate (W3) so the LLM can choose to generate an
+    # extension clip rather than us having to discover the shortfall
+    # after the fact.
+    _run_per_moment_video_check(
+        state=state,
+        scene_num=scene_num,
+        phrase_idx=phrase_idx,
+        video_source_range_sec=source_range,
+    )
+
+    # ── Per-scene OTIO assembly check (#84) ───────────────────────────
+    # If this clip just closed out the scene (all placeholder gaps are
+    # now filled), persist a standalone scene-assembly artifact and run
+    # its own compliance check before the next scene starts work.
+    _maybe_run_scene_assembly_check(
+        state=state,
+        scene_num=scene_num,
+    )
+
     return json.dumps(
         {
             "status": "added",
@@ -763,6 +945,131 @@ def add_video_clip(
             "lora_id": lora_id,
         }
     )
+
+
+def _run_per_moment_video_check(
+    state: dict,
+    scene_num: int,
+    phrase_idx: int,
+    video_source_range_sec: float,
+) -> None:
+    """Run the per-moment video validator + extension escalation.
+
+    Reads the narration duration for this scene+phrase from OTIO and
+    compares against ``video_source_range_sec``.  On shortfall, fires
+    :func:`tools.otio_moments.fire_extension_escalation` so the
+    supervisor can choose ``generate_extension_clip``.
+
+    The escalation itself is non-raising (it routes through W3) — the
+    loop-until-pass behaviour is implemented by re-calling
+    ``add_video_clip`` after the extension clip lands.
+    """
+    from tools.otio_moments import (
+        fire_extension_escalation,
+        validate_video_duration_vs_audio,
+    )
+
+    timeline_path = state.get("_timeline_path", "") if state else ""
+    if not timeline_path or not os.path.exists(timeline_path):
+        return
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+
+    audio_dur = _primary_narration_duration_for_phrase(
+        timeline, scene_num, phrase_idx,
+    )
+    if audio_dur is None:
+        # Narration for this phrase isn't on the timeline yet — e.g.
+        # production running ahead of audio (shouldn't happen, but
+        # don't block the OTIO write).  The stage-boundary guardian
+        # will catch the ordering violation.
+        return
+
+    err = validate_video_duration_vs_audio(
+        scene_num=scene_num,
+        phrase_idx=phrase_idx,
+        video_duration_sec=video_source_range_sec,
+        audio_duration_sec=audio_dur,
+    )
+    if err is None:
+        return
+
+    logger.error("PER-MOMENT VIDEO VIOLATION: %s", err)
+    state["otio_violation"] = f"per_moment_video: {err}"
+    fire_extension_escalation(
+        state=state,
+        scene_num=scene_num,
+        phrase_idx=phrase_idx,
+        video_duration_sec=video_source_range_sec,
+        audio_duration_sec=audio_dur,
+    )
+
+
+def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
+    """Run the scene-level OTIO assembly check when the scene completes.
+
+    A scene is "complete" when V1_Video has no more ``status=empty``
+    placeholder gaps for that scene_num.  When complete, we persist a
+    standalone ``scene_NNN_assembly.otio`` artifact and validate it.
+    """
+    from tools.otio_moments import (
+        persist_scene_assembly_artifact,
+        validate_scene_assembly,
+    )
+
+    timeline_path = state.get("_timeline_path", "") if state else ""
+    if not timeline_path or not os.path.exists(timeline_path):
+        return
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+
+    if _scene_has_empty_placeholder_gaps(timeline, scene_num):
+        # Scene still has work to do; defer the assembly check.
+        return
+
+    # Persist standalone scene artifact (paper trail for #70 — every
+    # scene assembly becomes its own addressable OTIO file with a
+    # compliance verdict).
+    try:
+        os.makedirs(_SCENE_ASSEMBLY_DIR, exist_ok=True)
+        artifact_path = persist_scene_assembly_artifact(
+            timeline, scene_num, _SCENE_ASSEMBLY_DIR,
+        )
+    except Exception as e:  # noqa: BLE001 — never block the main write
+        logger.warning("Scene %d assembly artifact write failed: %s", scene_num, e)
+        artifact_path = ""
+
+    err = validate_scene_assembly(timeline, scene_num)
+    if err is None:
+        logger.info(
+            "Scene %d per-moment assembly check PASS (artifact=%s)",
+            scene_num, artifact_path or "<no-artifact>",
+        )
+        return
+
+    logger.error("SCENE %d ASSEMBLY VIOLATION: %s", scene_num, err)
+    state["otio_violation"] = f"scene_assembly_{scene_num}: {err}"
+    try:
+        from recovery import escalate_pipeline_error
+    except Exception:  # noqa: BLE001
+        raise RuntimeError(f"scene {scene_num} assembly violation: {err}") from None
+
+    response = escalate_pipeline_error(
+        operation_name=f"scene_assembly_{scene_num}",
+        error_msg=err,
+        severity="critical",
+        default_action="abort",
+        diagnosis_hint=(
+            f"Per-scene OTIO assembly check failed for scene {scene_num}. "
+            f"This runs immediately after all of the scene's video clips "
+            f"are persisted — the scene's assembly cannot be trusted."
+        ),
+        agent_policy_type="otio",
+    )
+    if response.get("action") != "skip":
+        raise RuntimeError(f"scene {scene_num} assembly violation: {err}")
 
 
 def get_timeline_status(tool_context=None) -> str:

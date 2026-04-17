@@ -127,15 +127,128 @@ def _b2_key(relative_path: str) -> str:
     return f"{get_run_id()}/{relative_path}"
 
 
-def upload_file(local_path: str, b2_relative_path: str) -> bool:
-    """Upload a single file to B2 immediately.
+# ---------------------------------------------------------------------------
+# _meta.json sidecar helpers (#70 -- artifact paper trail)
+# ---------------------------------------------------------------------------
+
+# Canonical sidecar keys. Every artifact in B2 (audio clip, video clip,
+# scene assembly, QA result, visual concept) MUST have a sibling
+# ``_meta.json`` file listing these fields so the paper trail is
+# reconstructable from B2 alone.
+SIDECAR_REQUIRED_KEYS = (
+    "creator_agent",
+    "prompt_used",
+    "qa_results_so_far",
+    "validation_outcomes",
+    "parent_artifact_refs",
+)
+
+
+def _sidecar_key(b2_relative_path: str) -> str:
+    """Return the sidecar B2 relative path for a primary artifact.
+
+    For ``audio/scene_001_V1.wav`` this returns
+    ``audio/scene_001_V1.wav._meta.json``.  The ``._meta.json`` suffix is
+    used (instead of replacing the extension) so ordering in B2 listings
+    keeps the primary next to its sidecar and so tools can map one to
+    the other with a simple suffix strip.
+    """
+    return f"{b2_relative_path}._meta.json"
+
+
+def _build_sidecar(
+    local_path: str,
+    primary_b2_key: str,
+    meta: dict,
+) -> dict:
+    """Enrich caller-provided meta with provenance defaults.
+
+    Callers only need to supply the parts they know (creator_agent,
+    prompt_used, etc.); this fills in safe defaults for anything missing
+    so the sidecar shape is uniform across artifact types.
+    """
+    enriched: dict = {
+        "primary_b2_key": primary_b2_key,
+        "primary_local_path": local_path,
+        "primary_size_bytes": (
+            os.path.getsize(local_path) if os.path.exists(local_path) else 0
+        ),
+        "sidecar_written_at": time.time(),
+        "run_id": get_run_id(),
+        "creator_agent": "",
+        "prompt_used": "",
+        "qa_results_so_far": [],
+        "validation_outcomes": [],
+        "parent_artifact_refs": [],
+    }
+    enriched.update(meta or {})
+    return enriched
+
+
+def _upload_json_key(data: dict | list | str, key: str) -> bool:
+    """Internal JSON upload to an explicit B2 key (no run_id prefix)."""
+    bucket = _get_bucket()
+    if bucket is None:
+        return False
+    try:
+        if isinstance(data, str):
+            payload = data.encode("utf-8")
+        else:
+            payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        from b2sdk.v2 import UploadSourceBytes
+        bucket.upload(UploadSourceBytes(payload), _b2_key(key))
+        logger.info("B2 uploaded sidecar (%d bytes) -> %s", len(payload), _b2_key(key))
+        return True
+    except Exception as e:
+        logger.error("B2 sidecar upload failed -> %s: %s", key, e)
+        return False
+
+
+def upload_with_sidecar(
+    local_path: str,
+    b2_relative_path: str,
+    meta: dict,
+) -> bool:
+    """Upload a file to B2 **with** a mandatory ``_meta.json`` sidecar (#70).
+
+    Equivalent to ``upload_file(local_path, b2_relative_path, meta=meta)``;
+    exposed as a distinct entrypoint so callers reading b2_checkpoint can
+    tell at a glance which uploads are paper-trailed.
+
+    Sidecar shape (see :data:`SIDECAR_REQUIRED_KEYS`):
+
+    * ``creator_agent``         -- e.g. "audio_agent", "production_supervisor"
+    * ``prompt_used``           -- full LLM / TTS / video prompt
+    * ``qa_results_so_far``     -- list of {check_name, status, detail}
+    * ``validation_outcomes``   -- list of {phase, pass, error}
+    * ``parent_artifact_refs``  -- list of B2 keys this artifact derives from
+
+    Additional context-specific keys are preserved as-is.
+    """
+    return upload_file(local_path, b2_relative_path, meta=meta)
+
+
+def upload_file(
+    local_path: str,
+    b2_relative_path: str,
+    meta: Optional[dict] = None,
+) -> bool:
+    """Upload a single file to B2 immediately, optionally with a _meta.json sidecar.
 
     Args:
         local_path: Absolute path to the local file.
         b2_relative_path: Path within the run directory (e.g. "audio/scene_001_V1_RU.wav").
+        meta: Optional dict to write as a ``_meta.json`` sidecar alongside
+            the primary file.  See :func:`upload_with_sidecar` for the
+            canonical sidecar schema (creator_agent, prompt_used,
+            qa_results_so_far, validation_outcomes, parent_artifact_refs).
+            When provided, the sidecar upload is part of the same logical
+            operation as the primary upload.
 
     Returns:
-        True on success, False on failure (never raises).
+        True on success, False on failure (never raises).  When ``meta``
+        is supplied, returns True only if BOTH primary and sidecar were
+        uploaded (sidecar loss would break the paper trail for #70).
     """
     bucket = _get_bucket()
     if bucket is None:
@@ -155,21 +268,47 @@ def upload_file(local_path: str, b2_relative_path: str) -> bool:
         )
         elapsed = time.time() - t0
         logger.info("B2 uploaded %s (%.1f MB, %.1fs) -> %s", local_path, size / 1e6, elapsed, key)
-        return True
     except Exception as e:
         logger.error("B2 upload failed %s -> %s: %s", local_path, key, e)
         return False
 
+    # Sidecar is written AFTER the primary so the primary is never
+    # orphaned by a sidecar-only upload.  Failure to upload the sidecar
+    # is a hard failure for this call — the #70 paper trail requires both.
+    if meta is not None:
+        sidecar_path = _sidecar_key(b2_relative_path)
+        enriched = _build_sidecar(
+            local_path=local_path,
+            primary_b2_key=key,
+            meta=meta,
+        )
+        ok = _upload_json_key(enriched, sidecar_path)
+        if not ok:
+            logger.error(
+                "B2 primary uploaded but _meta.json sidecar FAILED for %s "
+                "-- artifact paper trail broken (#70)",
+                key,
+            )
+            return False
 
-def upload_json(data: dict | list | str, b2_relative_path: str) -> bool:
+    return True
+
+
+def upload_json(
+    data: dict | list | str,
+    b2_relative_path: str,
+    meta: Optional[dict] = None,
+) -> bool:
     """Upload JSON data directly to B2 (no local file needed).
 
     Args:
         data: Dict/list to serialise, or a pre-serialised JSON string.
         b2_relative_path: Path within the run directory.
+        meta: Optional ``_meta.json`` sidecar (see :func:`upload_with_sidecar`).
 
     Returns:
-        True on success.
+        True on success.  When ``meta`` is supplied, returns True only
+        if BOTH primary and sidecar uploaded (#70 paper trail).
     """
     bucket = _get_bucket()
     if bucket is None:
@@ -185,10 +324,27 @@ def upload_json(data: dict | list | str, b2_relative_path: str) -> bool:
         from b2sdk.v2 import UploadSourceBytes
         bucket.upload(UploadSourceBytes(payload), key)
         logger.info("B2 uploaded JSON (%d bytes) -> %s", len(payload), key)
-        return True
     except Exception as e:
         logger.error("B2 upload JSON failed -> %s: %s", key, e)
         return False
+
+    if meta is not None:
+        sidecar_rel = _sidecar_key(b2_relative_path)
+        enriched = _build_sidecar(
+            local_path="",  # JSON upload has no local file
+            primary_b2_key=key,
+            meta=meta,
+        )
+        ok = _upload_json_key(enriched, sidecar_rel)
+        if not ok:
+            logger.error(
+                "B2 JSON uploaded but _meta.json sidecar FAILED for %s "
+                "-- artifact paper trail broken (#70)",
+                key,
+            )
+            return False
+
+    return True
 
 
 def upload_stage_marker(stage: str) -> bool:
@@ -218,11 +374,29 @@ def upload_scenario(scenes_json: str, visual_style_json: str) -> bool:
     return ok1 and ok2
 
 
-def upload_tts_clip(wav_path: str, sidecar_path: str = "") -> None:
-    """Upload a TTS WAV file (and its text-hash sidecar) immediately."""
+def upload_tts_clip(
+    wav_path: str,
+    sidecar_path: str = "",
+    meta: Optional[dict] = None,
+) -> None:
+    """Upload a TTS WAV file (and its text-hash sidecar) immediately.
+
+    If ``meta`` is supplied, a canonical ``_meta.json`` sidecar is
+    written next to the WAV in B2 (#70).  Expected shape:
+
+        {
+            "creator_agent": "audio_agent",
+            "prompt_used": "<TTS prompt text>",
+            "qa_results_so_far": [...],
+            "validation_outcomes": [...],
+            "parent_artifact_refs": ["state/scenes.json"],
+        }
+    """
     basename = os.path.basename(wav_path)
-    upload_file(wav_path, f"audio/{basename}")
+    upload_file(wav_path, f"audio/{basename}", meta=meta)
     if sidecar_path and os.path.exists(sidecar_path):
+        # Text-hash sidecar is content-addressed; its own _meta would be
+        # redundant.  It's tracked as a parent_artifact_ref on the WAV.
         upload_file(sidecar_path, f"audio/{os.path.basename(sidecar_path)}")
 
 
@@ -236,24 +410,52 @@ def upload_visual_concepts(visual_concepts_json: str) -> bool:
     return ok
 
 
-def upload_video_clip(mp4_path: str, status_path: str = "") -> None:
-    """Upload a video clip (and its QA status file) immediately."""
+def upload_video_clip(
+    mp4_path: str,
+    status_path: str = "",
+    meta: Optional[dict] = None,
+) -> None:
+    """Upload a video clip (and its QA status file) immediately.
+
+    If ``meta`` is supplied, a canonical ``_meta.json`` sidecar is
+    written next to the MP4 in B2 (#70).
+    """
     basename = os.path.basename(mp4_path)
-    upload_file(mp4_path, f"video/{basename}")
+    upload_file(mp4_path, f"video/{basename}", meta=meta)
     if status_path and os.path.exists(status_path):
         upload_file(status_path, f"video/{os.path.basename(status_path)}")
 
 
-def upload_timeline(otio_path: str) -> None:
-    """Upload OTIO timeline immediately."""
+def upload_timeline(otio_path: str, meta: Optional[dict] = None) -> None:
+    """Upload OTIO timeline immediately.
+
+    Pass ``meta`` to attach a ``_meta.json`` sidecar — useful for scene-
+    level assembly artifacts (#84) so the paper trail records which
+    clips + QA verdicts were current when the scene was assembled.
+    """
     basename = os.path.basename(otio_path)
-    upload_file(otio_path, f"timelines/{basename}")
+    upload_file(otio_path, f"timelines/{basename}", meta=meta)
 
 
-def upload_assembly_file(local_path: str) -> None:
+def upload_scene_assembly(
+    otio_path: str,
+    scene_num: int,
+    meta: Optional[dict] = None,
+) -> None:
+    """Upload a scene-level OTIO assembly artifact with its paper trail (#70, #84).
+
+    Lives under ``scene_assemblies/`` so it is distinct from the full
+    timeline.  The sidecar SHOULD include ``validation_outcomes`` with
+    the scene's compliance verdict.
+    """
+    basename = os.path.basename(otio_path) or f"scene_{scene_num:03d}_assembly.otio"
+    upload_file(otio_path, f"scene_assemblies/{basename}", meta=meta)
+
+
+def upload_assembly_file(local_path: str, meta: Optional[dict] = None) -> None:
     """Upload an assembly intermediate file."""
     basename = os.path.basename(local_path)
-    upload_file(local_path, f"assembly/{basename}")
+    upload_file(local_path, f"assembly/{basename}", meta=meta)
 
 
 def upload_gatekeeper_report(report: dict, stage: str) -> bool:
