@@ -1,5 +1,5 @@
 """
-OTIO timeline tools -- Strands @tool wrappers for OpenTimelineIO operations.
+OTIO timeline tools -- ADK FunctionTool wrappers for OpenTimelineIO operations.
 
 All timeline mutations go through these tools. They enforce idempotency
 (check for existing clips before appending) and maintain the canonical
@@ -16,7 +16,7 @@ from typing import Optional
 
 import opentimelineio as otio
 
-from strands import tool
+from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,6 @@ def _timeline_path(topic: str) -> str:
     return os.path.join(_TIMELINE_DIR, f"{safe_topic}.otio")
 
 
-@tool(context=True)
 def create_timeline(
     topic: str,
     num_scenes: int,
@@ -68,7 +67,7 @@ def create_timeline(
     """
     # Guard: skip re-creation if timeline already exists in session state
     if tool_context:
-        existing_path = tool_context.invocation_state.get("_timeline_path", "")
+        existing_path = tool_context.state.get("_timeline_path", "")
         if existing_path and os.path.exists(existing_path):
             logger.info(
                 "Timeline already exists at %s — skipping re-creation",
@@ -119,7 +118,7 @@ def create_timeline(
 
     # Store path in tool_context state if available
     if tool_context:
-        tool_context.invocation_state["_timeline_path"] = path
+        tool_context.state["_timeline_path"] = path
 
     logger.info("Created OTIO timeline: %s (%d scenes)", path, num_scenes)
 
@@ -133,7 +132,6 @@ def create_timeline(
     )
 
 
-@tool(context=True)
 def add_narration_clip(
     scene_num: int,
     voice: str,
@@ -155,7 +153,7 @@ def add_narration_clip(
     Returns:
         JSON string with clip details.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
@@ -212,7 +210,6 @@ def add_narration_clip(
     )
 
 
-@tool(context=True)
 def add_narration_gap(
     scene_num: int,
     duration: float,
@@ -237,7 +234,7 @@ def add_narration_gap(
     Returns:
         JSON string with gap details.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
@@ -288,7 +285,6 @@ def add_narration_gap(
     })
 
 
-@tool(context=True)
 def add_video_gap(
     scene_num: int,
     duration: float,
@@ -318,7 +314,7 @@ def add_video_gap(
     Returns:
         JSON string with gap details.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
@@ -391,7 +387,6 @@ def add_video_gap(
     })
 
 
-@tool(context=True)
 def get_narration_durations_by_scene(tool_context=None) -> dict:
     """Read the OTIO timeline and return narration durations per scene.
 
@@ -402,7 +397,7 @@ def get_narration_durations_by_scene(tool_context=None) -> dict:
     This is the AUTHORITATIVE source for how long video clips must be.
     Video concepts MUST be sized to match these durations.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return {}
@@ -448,7 +443,7 @@ def get_video_slot_durations(tool_context=None) -> dict:
     Returns a dict mapping scene_num -> list of (voice, slot_duration_sec)
     tuples, ordered as they appear on the A1_Narration track.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return {}
@@ -584,7 +579,6 @@ def _gatekeeper_check_video_clip(
     return None
 
 
-@tool(context=True)
 def add_video_clip(
     scene_num: int,
     phrase_idx: int,
@@ -618,7 +612,7 @@ def add_video_clip(
     Returns:
         JSON string with clip details.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
@@ -732,14 +726,13 @@ def add_video_clip(
     )
 
 
-@tool(context=True)
 def get_timeline_status(tool_context=None) -> str:
     """Get a summary of all tracks, clips, and gaps in the timeline.
 
     Returns:
         JSON string with timeline structure summary.
     """
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found."})
@@ -789,7 +782,6 @@ def get_timeline_status(tool_context=None) -> str:
     )
 
 
-@tool(context=True)
 def validate_timeline(phase: str, tool_context=None) -> str:
     """Run phase-specific validation checks on the timeline.
 
@@ -802,7 +794,7 @@ def validate_timeline(phase: str, tool_context=None) -> str:
     """
     from callbacks.timeline_guardian import _VALIDATORS, _load_timeline
 
-    state = tool_context.invocation_state if tool_context else {}
+    state = tool_context.state if tool_context else {}
     # _load_timeline now acquires _otio_lock internally, so no outer lock needed.
     timeline = _load_timeline(state)
 
@@ -822,10 +814,17 @@ def validate_timeline(phase: str, tool_context=None) -> str:
     return json.dumps({"valid": True, "phase": phase, "message": "All checks passed"})
 
 
+# -- ADK FunctionTool wrappers -------------------------------------------------
+create_timeline_tool = FunctionTool(create_timeline)
+add_narration_clip_tool = FunctionTool(add_narration_clip)
+add_video_clip_tool = FunctionTool(add_video_clip)
+get_timeline_status_tool = FunctionTool(get_timeline_status)
+validate_timeline_tool = FunctionTool(validate_timeline)
+
 otio_tools = [
-    create_timeline,
-    add_narration_clip,
-    add_video_clip,
-    get_timeline_status,
-    validate_timeline,
+    create_timeline_tool,
+    add_narration_clip_tool,
+    add_video_clip_tool,
+    get_timeline_status_tool,
+    validate_timeline_tool,
 ]

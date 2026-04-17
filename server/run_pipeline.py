@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Direct pipeline runner — bypasses AG-UI/CopilotKit and runs the documentary
-pipeline end-to-end using Strands Agents GraphBuilder.
+pipeline end-to-end using Google ADK's Runner.
 
 Usage:
     cd server
@@ -31,21 +31,37 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# --test-mode sets DOCUMENTARY_TEST_MODE so approval gates auto-approve
-# and pre-flight worker checks are skipped. ADK simulation was removed
-# during the Strands migration; --test-mode now only affects gating.
-if "--test-mode" in sys.argv or os.environ.get(
+# Force simulation mode if --test-mode is passed (must be before imports)
+_SIMULATION_MODE = "--test-mode" in sys.argv or os.environ.get(
     "DOCUMENTARY_SIMULATION_MODE", ""
-).strip().lower() in ("1", "true"):
-    os.environ.setdefault("DOCUMENTARY_TEST_MODE", "true")
-    os.environ.setdefault("DOCUMENTARY_AUTO_APPROVE", "true")
+).strip().lower() in ("1", "true")
 if "--quick-test" in sys.argv:
     os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
 from dotenv import load_dotenv
 load_dotenv()
 
+# Activate the E1 (happy path) simulation scenario when --test-mode is used.
+# This replaces the old DOCUMENTARY_TEST_MODE env var — the ADK
+# EnvironmentSimulationEngine must be explicitly activated with a config.
+if _SIMULATION_MODE:
+    from testing.simulation_bridge import activate_simulation
+    from testing.scenarios import get_scenario
+    _sim_scenario = os.environ.get("SIMULATION_SCENARIO", "E1")
+    try:
+        _sim_config = get_scenario(_sim_scenario)
+    except KeyError:
+        _sim_config = None
+    if _sim_config:
+        activate_simulation(_sim_config, scenario_name=_sim_scenario)
+    else:
+        print(f"ERROR: Unknown simulation scenario '{_sim_scenario}', cannot proceed in test mode")
+        sys.exit(1)
 
+from google.adk.agents import SequentialAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types as genai_types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,6 +87,7 @@ class DashboardReporter:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+        # GAP 4.2: Track consecutive failures for escalation
         self._consecutive_failures = 0
 
     def start(self) -> None:
@@ -110,6 +127,7 @@ class DashboardReporter:
                     with urlopen(req, timeout=5) as resp:
                         resp.read()
                 except Exception as exc:
+                    # GAP 4.2: Escalation on consecutive failures
                     self._consecutive_failures += 1
                     if self._consecutive_failures == 10:
                         logger.error(
@@ -125,6 +143,7 @@ class DashboardReporter:
                     else:
                         logger.debug("DashboardReporter POST failed: %s", exc)
                 else:
+                    # Reset on success
                     if self._consecutive_failures > 0:
                         logger.info(
                             "DashboardReporter: recovered after %d failures",
@@ -136,14 +155,16 @@ class DashboardReporter:
 
 
 class ProgressHeartbeat:
-    """Periodic heartbeat to prevent silent pipeline stalls.
+    """GAP 6.1: Periodic heartbeat to prevent silent pipeline stalls.
 
     Emits a log message every ``interval`` seconds with current phase,
-    detail, and clip progress.
+    detail, and clip progress.  Ensures the pipeline never goes silent
+    for more than a few minutes — any monitoring system watching logs
+    will see regular proof-of-life signals.
     """
 
     def __init__(self, interval: int = 300):
-        self.interval = interval
+        self.interval = interval  # seconds (default 5 min)
         self.phase: str = "init"
         self.detail: str = ""
         self.clips_done: int = 0
@@ -188,89 +209,108 @@ class ProgressHeartbeat:
                 )
 
 
-# Thread-local heartbeat storage — each concurrent run_pipeline() call gets
-# its own ProgressHeartbeat, preventing cross-request overwrites.
-_heartbeat_local = threading.local()
+# Module-level heartbeat instance for use by callbacks
+_heartbeat: ProgressHeartbeat | None = None
 
 
 def get_heartbeat() -> ProgressHeartbeat | None:
-    """Return the active heartbeat instance for the current thread (if any)."""
-    return getattr(_heartbeat_local, "heartbeat", None)
+    """Return the active heartbeat instance (if any)."""
+    return _heartbeat
 
 
-def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
-    """Run the full documentary pipeline using Strands Graph.
+async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
+    """Run the full documentary pipeline.
 
     Args:
         topic: Documentary topic.
         corpus_path: Path to the research corpus file.
         language: Language mode — "en", "ru", or "dual_ru_en".
-        quick_test: If True, run in quick test mode (2 scenes, ~15s each).
 
     Returns:
-        Final pipeline state dict.
+        Final session state dict.
     """
-    # Import and build pipeline graph FIRST — before starting any threads.
-    # If build_pipeline() raises (e.g. import error in agent module), no
-    # heartbeat/infra/reporter threads are leaked.
-    from agents.pipeline_graph import build_pipeline
-
+    # GAP 6.1: Start progress heartbeat
+    global _heartbeat
     heartbeat_interval = int(os.environ.get("HEARTBEAT_INTERVAL", "300"))
-    heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
-    _heartbeat_local.heartbeat = heartbeat
-    heartbeat.start()
-    heartbeat.update(phase="init", detail=f"topic={topic}")
+    _heartbeat = ProgressHeartbeat(interval=heartbeat_interval)
+    _heartbeat.start()
+    _heartbeat.update(phase="init", detail=f"topic={topic}")
+
+    # Import pipeline agent (triggers model_config resolution)
+    from agents.pipeline import pipeline_agent
+    from callbacks.state_manager import build_pipeline_state
 
     # Build initial state
-    initial_state: dict[str, Any] = {}
+    initial_state = build_pipeline_state()
     initial_state["topic"] = topic
     initial_state["corpus_path"] = corpus_path
     initial_state["language"] = language
-    initial_state["pipeline_phase"] = "scenario"
 
-    # Quick-test mode constraints
+    # Quick-test mode: inject constraints into state for LLM prompt templates
     if quick_test:
+        from agents.scenario_director import _QUICK_TEST_RULES
         initial_state["quick_test"] = "true"
+        initial_state["quick_test_rules"] = _QUICK_TEST_RULES
         initial_state["max_scene_duration"] = "15"
         initial_state["max_words_per_scene"] = "37"
         logger.info("QUICK TEST MODE: 2 scenes, ~15s each, ~1 min total")
     else:
         initial_state["quick_test"] = ""
+        initial_state["quick_test_rules"] = ""
         initial_state["max_scene_duration"] = "45"
         initial_state["max_words_per_scene"] = "112"
 
     # Restore from B2 if a previous run exists for this topic
-    try:
-        from tools.b2_checkpoint import restore_pipeline, set_run_id
-        # Generate a thread-safe run ID instead of mutating os.environ
-        import time as _time
-        safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
-        set_run_id(f"{safe_topic}_{int(_time.time())}")
-        restored = restore_pipeline(topic)
-        stages_complete = restored.get("stages_complete", [])
-        if restored["run_id"]:
-            logger.info(
-                "B2 restored run '%s': stages=%s, files=%d",
-                restored["run_id"], stages_complete, restored["restored_files"],
-            )
-            for k, v in restored.get("state", {}).items():
-                if v and str(v).strip() not in ("", "[]", "{}", "(not yet analyzed)",
-                                                  "(not yet generated)", "(not yet evaluated)"):
-                    initial_state[k] = v
-        else:
-            logger.info("No previous B2 run found, starting fresh")
-        initial_state["_b2_stages_complete"] = stages_complete
-    except ImportError:
-        logger.warning("B2 checkpoint not available, starting fresh")
+    from tools.b2_checkpoint import restore_pipeline, set_run_id, get_run_id
+    os.environ["DOCUMENTARY_TOPIC"] = topic  # used by get_run_id() for new runs
+    restored = restore_pipeline(topic)
+    stages_complete = restored.get("stages_complete", [])
+    if restored["run_id"]:
+        logger.info(
+            "B2 restored run '%s': stages=%s, files=%d",
+            restored["run_id"], stages_complete, restored["restored_files"],
+        )
+        # Merge restored state into initial state (restored takes precedence)
+        for k, v in restored.get("state", {}).items():
+            if v and str(v).strip() not in ("", "[]", "{}", "(not yet analyzed)",
+                                              "(not yet generated)", "(not yet evaluated)"):
+                initial_state[k] = v
+    else:
+        # New run — generate run_id
+        logger.info("No previous B2 run found, starting fresh")
 
-    # Read corpus content
+    # Store stages_complete in state so callbacks can skip completed stages
+    initial_state["_b2_stages_complete"] = stages_complete
+
+    # Set up ADK session
+    session_service = InMemorySessionService()
+    runner = Runner(
+        agent=pipeline_agent,
+        app_name="documentary_pipeline_runner",
+        session_service=session_service,
+    )
+
+    session = await session_service.create_session(
+        app_name="documentary_pipeline_runner",
+        user_id="pipeline_runner",
+        state=initial_state,
+    )
+
+    logger.info("Session created: %s", session.id)
+    logger.info("Topic: %s", topic)
+    logger.info("Corpus: %s", corpus_path)
+    logger.info("Language: %s", language)
+    logger.info("Simulation mode: %s", _SIMULATION_MODE)
+    logger.info("Model: %s", os.environ.get("ADK_MODEL", "(default)"))
+
+    # Read corpus content to include in the initial message
     corpus_content = ""
     if os.path.exists(corpus_path):
         with open(corpus_path) as f:
             corpus_content = f.read()
         logger.info("Loaded corpus: %d chars", len(corpus_content))
 
-    # Build language instruction
+    # Build the initial user message with corpus and language instructions
     language_instruction = ""
     if language == "ru":
         language_instruction = (
@@ -284,132 +324,100 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
             "an English translation below it. Format:\n"
             "  [RU] <Russian narration text>\n"
             "  [EN] <English translation>\n"
-            "Both versions will be used for the documentary."
-        )
-
-    quick_test_instruction = ""
-    if quick_test:
-        quick_test_instruction = (
-            "\n\nQUICK TEST MODE: Generate EXACTLY 2 scenes only. "
-            "Each scene should be ~15 seconds of narration (~37 words per voice block). "
-            "Total video target: ~1 minute."
+            "Both versions will be used for the documentary — Russian as primary "
+            "narration and English as subtitle/alternate track."
         )
 
     user_message = (
         f"Create an ADHD-friendly documentary about: {topic}\n\n"
         f"Here is the research corpus:\n\n{corpus_content}"
         f"{language_instruction}"
-        f"{quick_test_instruction}"
     )
 
-    # Build pipeline graph BEFORE starting long-lived resources so that if
-    # build_pipeline() raises, we don't leak infra/reporter/heartbeat threads.
-    pipeline = build_pipeline()
+    # Start infra agent for continuous health monitoring.
+    # Runs on a daemon thread (not an asyncio task) so that time.sleep()
+    # in pipeline callbacks (check_infra_pause) cannot deadlock the
+    # monitoring loop.
+    from infra_agent import start_infra_agent
+    infra = start_infra_agent(poll_interval=30.0, max_consecutive_failures=3)
+    infra.start()
+    logger.info("InfraAgent started on daemon thread")
 
-    # Start infra agent for continuous health monitoring
-    try:
-        from infra_agent import start_infra_agent
-        infra = start_infra_agent(poll_interval=30.0, max_consecutive_failures=3)
-        infra.start()
-        logger.info("InfraAgent started on daemon thread")
-    except ImportError:
-        infra = None
-        logger.warning("InfraAgent not available")
-
-    # Start dashboard reporter
+    # Start dashboard reporter — bridges this process to server.py's SSE
     run_id = f"run_{uuid.uuid4().hex[:8]}"
     reporter = DashboardReporter(run_id=run_id, topic=topic)
     reporter.start()
     reporter.send("phase_start", phase="scenario")
 
-    # Run the pipeline graph
+    # Run the pipeline — wrapped in try/finally so the infra agent is
+    # always cleaned up, even if the pipeline raises an exception.
     start_time = time.time()
     logger.info("Starting pipeline run...")
 
-    # Pass initial_state as invocation_state — the graph mutates it in place
-    # so we can read the final pipeline state from it after execution.
-    # Wrap with graph-level graduated recovery (RETRY → ENVIRONMENTAL → HUMAN)
-    # so transient failures get retried before escalating.
-    #
-    # IMPORTANT: The graph mutates initial_state in place. On retry, we must
-    # reset to a clean snapshot so the new attempt doesn't inherit contaminated
-    # state from the failed run (e.g., stale scenes, partial timeline paths).
-    import copy
+    content = genai_types.Content(
+        role="user",
+        parts=[genai_types.Part(text=user_message)],
+    )
 
-    state_snapshot = copy.deepcopy(initial_state)
-    # Keep a reference to the last attempt's state so that if all retries
-    # fail, we still return partial progress (scenes generated, audio files
-    # created, etc.) rather than the blank initial snapshot.
-    last_attempt_state: dict[str, Any] = {}
-
+    final_response = None
+    _last_phase = "scenario"
     try:
-        from recovery import RecoveryPolicy, execute_with_recovery
+        async for event in runner.run_async(
+            user_id="pipeline_runner",
+            session_id=session.id,
+            new_message=content,
+        ):
+            if event.content and event.content.parts:
+                text = "".join(p.text or "" for p in event.content.parts if hasattr(p, "text"))
+                if text.strip():
+                    agent_name = event.author or "unknown"
+                    # Truncate for logging
+                    logger.info("[%s] %s", agent_name, text)
+                    final_response = text
 
-        def _run_graph(**kwargs: Any) -> Any:
-            # Reset initial_state to clean snapshot before each attempt
-            initial_state.clear()
-            initial_state.update(copy.deepcopy(state_snapshot))
-            try:
-                return pipeline(user_message, invocation_state=initial_state)
-            finally:
-                # Always capture the latest attempt's state (even on failure)
-                # so the caller gets the most recent partial progress.
-                last_attempt_state.clear()
-                last_attempt_state.update(initial_state)
+                    # Track phase transitions for dashboard
+                    lower = text.lower()
+                    for phase in ("audio", "visual_direction", "production", "assembly"):
+                        if phase.replace("_", " ") in lower or phase in lower:
+                            if phase != _last_phase:
+                                reporter.send("phase_end", phase=_last_phase, status="completed")
+                                reporter.send("phase_start", phase=phase)
+                                _last_phase = phase
+                                break
 
-        result = execute_with_recovery(
-            operation=_run_graph,
-            operation_name="documentary_pipeline",
-            kwargs={},
-            policy=RecoveryPolicy(
-                max_retries=1,
-                creative_budget=0,
-                enable_env_assessment=True,
-                escalate_to_human=True,
-            ),
-        )
-        logger.info("Pipeline graph execution completed")
-    except ImportError:
-        logger.warning("recovery module not available, running pipeline without graph-level recovery")
-        try:
-            result = pipeline(user_message, invocation_state=initial_state)
-            logger.info("Pipeline graph execution completed")
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            logger.exception("Pipeline execution failed")
-            result = None
-    except RuntimeError:
-        raise
-    except Exception as exc:
-        logger.exception("Pipeline execution failed after recovery attempts")
-        # Restore partial progress from last attempt so caller can inspect
-        # what work was completed (scenes, audio, etc.) before failure.
-        if last_attempt_state:
-            initial_state.clear()
-            initial_state.update(last_attempt_state)
-        result = None
+                    # Track tool calls from agent messages
+                    reporter.send("llm_end", agent=agent_name, duration=0.0, output_tokens=len(text) // 3)
     finally:
-        reporter.send("phase_end", phase="assembly", status="completed")
+        reporter.send("phase_end", phase=_last_phase, status="completed")
         reporter.send("finalize", status="completed")
         reporter.stop()
-        if heartbeat:
-            heartbeat.update(phase="complete")
-            heartbeat.stop()
-            _heartbeat_local.heartbeat = None
-        if infra:
-            infra.shutdown()
-            logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
+        # GAP 6.1: Stop heartbeat
+        if _heartbeat:
+            _heartbeat.update(phase="complete")
+            _heartbeat.stop()
+        # Shutdown infra agent regardless of how the pipeline exits
+        infra.shutdown()
+        logger.info("InfraAgent stopped. Final status: %s", infra.get_worker_summary())
 
     elapsed = time.time() - start_time
     logger.info("Pipeline completed in %.1f seconds", elapsed)
 
-    # initial_state was mutated by the graph during execution — it now
-    # contains the final pipeline state (scenes, timeline, alignment, etc.)
-    initial_state["_elapsed_sec"] = round(elapsed, 1)
-    initial_state["_result"] = str(result) if result else None
+    # Get final session state
+    final_session = await session_service.get_session(
+        app_name="documentary_pipeline_runner",
+        user_id="pipeline_runner",
+        session_id=session.id,
+    )
 
-    return initial_state
+    if final_session:
+        raw = final_session.state
+        state = raw.to_dict() if hasattr(raw, "to_dict") else dict(raw)
+    else:
+        state = {}
+    state["_elapsed_sec"] = round(elapsed, 1)
+    state["_final_response"] = final_response
+
+    return state
 
 
 def main():
@@ -420,7 +428,7 @@ def main():
                         choices=["en", "ru", "dual_ru_en"],
                         help="Language mode (default: dual_ru_en)")
     parser.add_argument("--test-mode", action="store_true",
-                        help="Run in test mode (skip pre-flight checks, auto-approve gates)")
+                        help="Run in test mode (synthetic media, no GPU needed)")
     parser.add_argument("--quick-test", action="store_true",
                         help="Quick test mode: 2 scenes, ~15s each, ~1 min total movie")
     parser.add_argument("--output-dir", default="/tmp/documentary-pipeline/output",
@@ -442,17 +450,21 @@ def main():
 
     logger.info("=== Documentary Pipeline Runner ===")
 
-    # Pre-flight checks (production only)
-    if not args.test_mode:
-        _preflight_check_dashboard()
+    # ── Pre-flight checks ─────────────────────────────────────────
+    # ARCHITECTURE INVARIANT: Every required worker must be healthy
+    # before the pipeline starts.  Never silently degrade to
+    # synthetic/placeholder media — that wastes hours of GPU time on
+    # downstream stages that depend on real upstream artifacts.
+    if not args.test_mode and not _SIMULATION_MODE:
+        _preflight_check_dashboard()  # GAP 4.1
         _preflight_check_workers()
 
-    result = run_pipeline(
+    result = asyncio.run(run_pipeline(
         topic=args.topic,
         corpus_path=args.corpus,
         language=args.language,
         quick_test=args.quick_test,
-    )
+    ))
 
     # Print summary
     print("\n" + "=" * 60)
@@ -480,6 +492,7 @@ def main():
     output_path = os.path.join(args.output_dir, "pipeline_state.json")
     try:
         with open(output_path, "w") as f:
+            # Filter out non-serializable values
             serializable = {}
             for k, v in result.items():
                 try:
@@ -496,7 +509,11 @@ def main():
 
 
 def _preflight_check_dashboard() -> None:
-    """Verify the dashboard is reachable before pipeline start."""
+    """GAP 4.1: Verify the dashboard is reachable before pipeline start.
+
+    If DASHBOARD_URL is set, checks the /health endpoint. Exits with error
+    if unreachable (unless SKIP_DASHBOARD_CHECK=1).
+    """
     dashboard_url = os.environ.get("DASHBOARD_URL", "")
     if not dashboard_url:
         logger.info("DASHBOARD_URL not set — skipping dashboard pre-flight check")
@@ -532,7 +549,12 @@ class PreflightError(RuntimeError):
 
 
 def _check_worker(name: str, url: str, expected_capability: str) -> None:
-    """Verify a single GPU worker is reachable and has the expected model loaded."""
+    """Verify a single GPU worker is reachable and has the expected model loaded.
+
+    Raises ``PreflightError`` if the worker is unreachable or the required
+    model is not loaded.  This enforces the architecture invariant:
+    **every required service must be confirmed healthy before pipeline start.**
+    """
     health_url = f"{url.rstrip('/')}/health"
     try:
         req = Request(health_url)
@@ -551,12 +573,13 @@ def _check_worker(name: str, url: str, expected_capability: str) -> None:
         logger.error(msg)
         raise PreflightError(msg)
 
+    # Check that the required model is actually loaded
     loaded_key = f"{expected_capability}_loaded"
     if not data.get(loaded_key, False):
         msg = (
             f"PRE-FLIGHT FAILED: {name} worker at {url} does not have "
             f"{expected_capability} loaded. Health response: {data}. "
-            f"Each model MUST run on its own dedicated VM."
+            f"Each model MUST run on its own dedicated VM — never swap or share models."
         )
         logger.error(msg)
         raise PreflightError(msg)
@@ -570,14 +593,26 @@ def _check_worker(name: str, url: str, expected_capability: str) -> None:
 
 
 def _preflight_check_workers() -> None:
-    """Validate that ALL required GPU workers are healthy before pipeline start."""
+    """Validate that ALL required GPU workers are healthy before pipeline start.
+
+    Architecture invariants enforced:
+    1. TTS worker must be reachable and have TTS model loaded.
+    2. At least one video worker must be reachable and have LTX loaded.
+    3. Each model runs on its own dedicated VM — never shared.
+
+    If any check fails the pipeline exits immediately with a clear error
+    message instead of silently degrading to synthetic/placeholder media.
+    """
     logger.info("=== Pre-flight worker checks ===")
 
+    # -- TTS worker (required: real narration drives all downstream timing) --
     tts_url = os.environ.get("TTS_WORKER_URL", "")
     if not tts_url:
         logger.error(
             "PRE-FLIGHT FAILED: TTS_WORKER_URL is not set. "
-            "A dedicated TTS worker VM is REQUIRED."
+            "A dedicated TTS worker VM is REQUIRED — the pipeline cannot start "
+            "without real narration because all video timing depends on it. "
+            "Provision a TTS VM and set TTS_WORKER_URL before restarting."
         )
         sys.exit(1)
     try:
@@ -585,6 +620,7 @@ def _preflight_check_workers() -> None:
     except PreflightError:
         sys.exit(1)
 
+    # -- Video workers (at least one required) --
     video_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
     gpu_url = os.environ.get("GPU_WORKER_URL", "")
     video_urls = [u.strip() for u in video_urls_str.split(",") if u.strip()] if video_urls_str else []
@@ -594,7 +630,8 @@ def _preflight_check_workers() -> None:
     if not video_urls:
         logger.error(
             "PRE-FLIGHT FAILED: No video worker URLs configured. "
-            "Set VIDEO_WORKER_URLS or GPU_WORKER_URL."
+            "Set VIDEO_WORKER_URLS or GPU_WORKER_URL to at least one "
+            "LTX-dedicated GPU worker VM."
         )
         sys.exit(1)
 
@@ -608,7 +645,8 @@ def _preflight_check_workers() -> None:
 
     if healthy_video == 0:
         logger.error(
-            "PRE-FLIGHT FAILED: No healthy video workers found."
+            "PRE-FLIGHT FAILED: No healthy video workers found. "
+            "At least one LTX-dedicated GPU VM must be running."
         )
         sys.exit(1)
 

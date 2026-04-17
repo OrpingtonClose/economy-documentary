@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 
-from strands import tool
+from google.adk.tools import FunctionTool
 from worker_provisioner import resolve_docker_image
 
 # ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ def _vast_cmd(args: list[str]) -> dict | list:
         return {"error": "vastai command timed out"}
 
 
-@tool(context=True)
+@simulated("provision_gpu_vm")
 def provision_gpu_vm(
     gpu_type: str = "A100_SXM4",
     min_vram_gb: int = 48,
@@ -253,7 +253,7 @@ def provision_gpu_vm(
     )
 
 
-@tool(context=True)
+@simulated("check_vm_status")
 def check_vm_status(vm_id: str, tool_context=None) -> str:
     """Check if a Vast.ai VM is ready.
 
@@ -267,7 +267,7 @@ def check_vm_status(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@tool(context=True)
+@simulated("terminate_vm")
 def terminate_vm(vm_id: str, tool_context=None) -> str:
     """Stop and destroy a Vast.ai VM — ONLY if this pipeline created it.
 
@@ -297,7 +297,7 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@tool(context=True)
+@simulated("list_active_vms")
 def list_active_vms(tool_context=None) -> str:
     """List all running Vast.ai VMs.
 
@@ -308,4 +308,15 @@ def list_active_vms(tool_context=None) -> str:
     return json.dumps(result)
 
 
-vastai_tools = [provision_gpu_vm, check_vm_status, terminate_vm, list_active_vms]
+# -- ADK FunctionTool wrappers -------------------------------------------------
+provision_gpu_vm_tool = FunctionTool(provision_gpu_vm)
+check_vm_status_tool = FunctionTool(check_vm_status)
+terminate_vm_tool = FunctionTool(terminate_vm)
+list_active_vms_tool = FunctionTool(list_active_vms)
+
+vastai_tools = [
+    provision_gpu_vm_tool,
+    check_vm_status_tool,
+    terminate_vm_tool,
+    list_active_vms_tool,
+]
