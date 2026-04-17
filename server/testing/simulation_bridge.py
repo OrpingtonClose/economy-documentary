@@ -215,6 +215,18 @@ def _post_intercept_generate_narration(call_args: Dict, result: Any) -> None:
     wav_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_{voice_role}.wav")
 
     if not os.path.exists(wav_path):
+        # Skip placeholder for error/corrupt responses (e.g. A3 empty WAV)
+        is_error = isinstance(result, dict) and (
+            result.get("status") == "error"
+            or result.get("mode") == "simulated_corrupt"
+            or (isinstance(result.get("duration"), (int, float)) and result["duration"] <= 0)
+        )
+        if is_error:
+            logger.debug(
+                "Skipping placeholder WAV for error/corrupt response: mode=%s",
+                result.get("mode", "unknown") if isinstance(result, dict) else "unknown",
+            )
+            return
         try:
             import wave
             os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
@@ -243,6 +255,19 @@ def _post_intercept_generate_video_clip(call_args: Dict, result: Any) -> None:
         output_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_phrase_{int(phrase_idx):03d}.mp4")
 
     if not os.path.exists(output_path):
+        # Only create placeholder for success responses — error responses
+        # (CUDA OOM, timeout, QA rejected) should NOT have files on disk.
+        is_error = isinstance(result, dict) and (
+            result.get("success") is False
+            or result.get("error_type")
+            or "error" in result.get("status", "")
+        )
+        if is_error:
+            logger.debug(
+                "Skipping placeholder MP4 for error response: %s",
+                result.get("error_type", result.get("error", "unknown")),
+            )
+            return
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             duration = call_args.get("duration_sec", 5.0)
@@ -288,7 +313,11 @@ def _patch_generate_narration(call_args: Dict, result: dict) -> None:
     result["wav_path"] = os.path.join(
         output_dir, f"scene_{scene_num:03d}_{voice_role}.wav"
     )
-    if text:
+    # Only patch duration for default success responses.  Failure scenarios
+    # (A1 audio drift, A3 empty WAV, B1 moderate drift) intentionally inject
+    # specific durations that must NOT be overwritten.
+    is_default_success = result.get("mode") == "simulated"
+    if text and is_default_success:
         word_count = len(text.split())
         result["duration"] = round(word_count * _SECONDS_PER_WORD, 2)
         result["text_length"] = len(text)
