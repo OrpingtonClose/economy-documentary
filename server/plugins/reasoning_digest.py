@@ -528,7 +528,7 @@ class DigestEngine:
         groups = self._group_traces(raw)
 
         # Generate digests
-        for agent, traces in groups.items():
+        for agent, traces in groups:
             try:
                 digest = _generate_digest(agent, traces)
                 self._store.write(digest)
@@ -536,36 +536,44 @@ class DigestEngine:
                 logger.error("DigestEngine: failed to digest %s: %s", agent, e)
 
     @staticmethod
-    def _group_traces(raw: list[dict]) -> dict[str, list[dict]]:
-        """Group traces by agent, splitting on time gaps > _GROUP_WINDOW."""
+    def _group_traces(raw: list[dict]) -> list[tuple[str, list[dict]]]:
+        """Group traces by agent, splitting on time gaps > _GROUP_WINDOW.
+
+        Returns a list of (agent_name, traces) tuples so the caller always
+        gets the clean agent name (not an internal grouping key).
+        """
+        # Track the current active group key per agent so that after a time
+        # gap creates a new group, subsequent close-in-time traces go into
+        # the new group (not the original one).
         groups: dict[str, list[dict]] = {}
+        agent_active_key: dict[str, str] = {}  # agent -> current group key
         agent_last_ts: dict[str, float] = {}
 
         for trace in raw:
             agent = trace["agent_name"]
             ts = trace["timestamp"]
 
-            # If this agent had a previous event and the gap is large,
-            # flush the current group and start a new one
-            key = agent
             if agent in agent_last_ts:
                 gap = ts - agent_last_ts[agent]
-                if gap > _GROUP_WINDOW and agent in groups:
-                    # This burst is separate — use a numbered key
-                    key = f"{agent}___{ts}"
+                if gap > _GROUP_WINDOW:
+                    # Start a new group for this agent
+                    new_key = f"{agent}___{trace['id']}"
+                    agent_active_key[agent] = new_key
+            else:
+                # First event for this agent
+                agent_active_key[agent] = agent
 
+            key = agent_active_key[agent]
             if key not in groups:
                 groups[key] = []
             groups[key].append(trace)
             agent_last_ts[agent] = ts
 
-        # Flatten keys back to agent names (the key is just for grouping)
-        result: dict[str, list[dict]] = {}
+        # Return (clean_agent_name, traces) tuples
+        result: list[tuple[str, list[dict]]] = []
         for key, traces in groups.items():
-            agent = key.split("___")[0]
-            # Use a unique key per group
-            group_key = f"{agent}_{traces[0]['id']}"
-            result[group_key] = traces
+            clean_name = traces[0]["agent_name"]
+            result.append((clean_name, traces))
 
         return result
 

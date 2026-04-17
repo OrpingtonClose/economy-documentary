@@ -347,7 +347,11 @@ async def get_reasoning_digests(
         if phase:
             digests = [d for d in digests if d.get("phase") == phase]
         if importance:
-            digests = [d for d in digests if d.get("importance") == importance]
+            if importance == "medium":
+                # "Medium+" means medium AND high
+                digests = [d for d in digests if d.get("importance") in ("medium", "high")]
+            else:
+                digests = [d for d in digests if d.get("importance") == importance]
 
         return JSONResponse({"digests": digests, "count": len(digests)})
 

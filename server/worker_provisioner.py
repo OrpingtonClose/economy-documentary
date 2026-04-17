@@ -1449,12 +1449,19 @@ class WorkerProvisioner:
             role, spec.status, timeout,
         )
 
-        # Wait for background thread to finish
-        ready = spec.ready_event.wait(timeout=timeout)
-        if not ready:
-            raise RuntimeError(
-                f"{role} worker provisioning timed out after {timeout}s"
-            )
+        # Poll with short waits (1s) instead of one long blocking wait.
+        # This prevents the async event loop from freezing — the ADK
+        # callbacks run on the event loop thread, so a long blocking
+        # wait would freeze the entire server (HTTP, SSE, dashboard).
+        import time as _time
+        _deadline = _time.monotonic() + timeout
+        while not spec.ready_event.is_set():
+            remaining = _deadline - _time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"{role} worker provisioning timed out after {timeout}s"
+                )
+            spec.ready_event.wait(timeout=min(1.0, remaining))
 
         if spec.status == "failed":
             raise RuntimeError(
@@ -1890,7 +1897,7 @@ class WorkerProvisioner:
                         WorkerRole.TTS if spec.role == "tts"
                         else WorkerRole.VIDEO
                     )
-                    url = f"http://localhost:{spec.local_port}"
+                    url = spec.worker_url or f"http://localhost:{spec.local_port}"
                     infra.add_worker(url, role)
                     logger.info(
                         "Registered %s worker at %s with InfraAgent",
