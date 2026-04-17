@@ -583,6 +583,33 @@ class TestSceneCompleteness:
         # Only one primary-language clip, one video clip -> complete.
         assert _scene_is_video_complete(tl, scene_num=1) is True
 
+    def test_chained_callback_runs_guardian_even_if_oracle_raises(self):
+        """Regression for PR #115 review: if whisperx_oracle_callback raises,
+        the chained wrapper must still invoke timeline_guardian_callback so
+        OTIO violations are caught."""
+        from unittest.mock import patch
+
+        # We exercise _chained_after_agent_callback directly; the real
+        # CallbackContext isn't needed because we patch both inner calls.
+        from agents import audio_agent as audio_agent_mod
+
+        fake_ctx = object()
+        guardian_calls = []
+
+        def boom(_ctx):
+            raise RuntimeError("scenes malformed")
+
+        def guardian(_ctx):
+            guardian_calls.append(1)
+            return None
+
+        with patch.object(audio_agent_mod, "whisperx_oracle_callback", boom), \
+             patch.object(audio_agent_mod, "timeline_guardian_callback", guardian):
+            # Must NOT raise and MUST call the guardian.
+            result = audio_agent_mod._chained_after_agent_callback(fake_ctx)
+        assert result is None
+        assert guardian_calls == [1]
+
     def test_extension_sub_clips_do_not_inflate_count(self):
         """Extension clips (sub_idx set) decorate phrases, not new phrases."""
         import opentimelineio as otio

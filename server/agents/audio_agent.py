@@ -191,8 +191,21 @@ def _chained_after_agent_callback(
     the last thing to run so its RuntimeError (on OTIO violation) is the
     authoritative stage verdict.  The oracle only fires escalations — it
     does not raise.
+
+    The oracle call is wrapped in a best-effort try/except so that any
+    unexpected error (e.g. malformed scenes list, alignment dict shape
+    drift, supervisor import path changes) can NEVER short-circuit the
+    guardian.  An OTIO violation must be caught even if the oracle is
+    buggy — the guardian is the authoritative gate.
     """
-    whisperx_oracle_callback(callback_context)
+    try:
+        whisperx_oracle_callback(callback_context)
+    except Exception as e:  # noqa: BLE001 — advisory check must not block guardian
+        logger.error(
+            "whisperx_oracle_callback raised (should never happen); "
+            "continuing to timeline_guardian_callback: %r",
+            e,
+        )
     return timeline_guardian_callback(callback_context)
 
 
