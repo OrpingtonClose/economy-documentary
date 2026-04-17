@@ -25,7 +25,6 @@ from typing import Optional
 
 from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
-from google.adk.tools.exit_loop_tool import exit_loop
 from google.genai import types as genai_types
 
 from agents.model_config import build_model
@@ -133,10 +132,11 @@ CRITICAL RULES:
 - Output the full revised scenes array as valid JSON
 
 After adjusting, output the complete scenes JSON array.
-Then call exit_loop() to signal refinement is complete.
 
-The audio agent will regenerate narration with your revised text on the
-next iteration of the timing loop.
+Do NOT try to exit the loop — the timing loop will automatically
+re-generate audio with your revised text on the next iteration.
+The loop exits only when the timing evaluator confirms the audio
+is within budget.
 """
 
 
@@ -144,7 +144,7 @@ scenario_refiner = Agent(
     name="scenario_refiner",
     model=build_model(synthesis=True),
     instruction=_REFINER_INSTRUCTION,
-    tools=[exit_loop],
+    tools=[],
     output_key="scenes",
     before_agent_callback=_skip_if_timing_passed,
     after_agent_callback=_save_refined_scenes,

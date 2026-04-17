@@ -177,17 +177,17 @@ def _scenario_after_with_gate(callback_context):
 
 
 def _timing_loop_before_with_gate(callback_context):
-    """Before timing_loop: contract check + approval gate + TTS worker.
+    """Before timing_loop: approval gate + TTS worker + contract check.
 
     The timing_loop wraps audio_agent + timing_evaluator + scenario_refiner.
     All pre-checks (contracts, approval, worker binding) happen once before
     the loop starts, not on every iteration.
-    """
-    # CONTRACT: validate preconditions BEFORE entering audio stage
-    abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
-    if abort is not None:
-        return abort
 
+    ORDERING IS CRITICAL: the contract check must run AFTER the TTS worker
+    is ready because AUDIO_CONTRACT.required_services includes a health
+    check to TTS_WORKER_URL.  If the check runs before provisioning
+    completes, it fails and silently skips the entire audio stage.
+    """
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
         approved = wait_for_approval("scenario")
@@ -214,6 +214,14 @@ def _timing_loop_before_with_gate(callback_context):
                 text=f"ERROR: TTS worker provisioning failed: {exc}"
             )],
         )
+
+    # CONTRACT: validate preconditions AFTER TTS worker is ready.
+    # AUDIO_CONTRACT includes service health checks that require the
+    # worker to be reachable — running this earlier would cause a
+    # ContractViolation that silently skips the entire timing loop.
+    abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
 
     if _orig_timing_loop_before:
         return _orig_timing_loop_before(callback_context)
