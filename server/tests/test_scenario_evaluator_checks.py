@@ -476,9 +476,12 @@ def test_topic_fidelity_tolerates_single_off_topic():
 def test_topic_fidelity_no_classifier_caps_at_good():
     scenario = _make_good_scenario(num_scenes=5)
     r = check_topic_fidelity(scenario["scenes"], "periaqueductal gray")
-    # With no classifier, we can't confirm the scenario is on-topic.  We
-    # return passed=True but cap at GOOD (not EXCELLENT) and say so.
-    assert r.passed
+    # Without a classifier we cannot confirm the scenario is on-topic.
+    # We return passed=False with verdict_cap=GOOD so the aggregator
+    # (which only applies caps on failing checks) actually enforces
+    # the GOOD cap — otherwise the overall verdict could reach EXCELLENT
+    # despite no topic verification having happened.
+    assert not r.passed
     assert r.verdict_cap == "GOOD"
 
 

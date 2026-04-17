@@ -256,7 +256,13 @@ def _save_generator_scenes(callback_context):
     # after_model_callback only picks up visual_style; we pick up
     # style_lock here so state["style_lock"] is populated before the
     # structural checks run in the evaluator's before_agent hook.
-    if accumulated and not state.get("style_lock"):
+    #
+    # IMPORTANT: we re-extract on EVERY iteration rather than caching the
+    # first value.  The whole point of the evaluate-optimize loop is that
+    # the generator can correct a previously-invalid style_lock on the
+    # next iteration; keeping the stale value would strand the loop on a
+    # bad value and defeat the pattern.
+    if accumulated:
         sl = _extract_style_lock(str(accumulated))
         if sl:
             state["style_lock"] = json.dumps(sl, ensure_ascii=False)

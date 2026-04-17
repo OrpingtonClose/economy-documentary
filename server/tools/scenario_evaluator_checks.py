@@ -579,15 +579,21 @@ def check_topic_fidelity(
         )
 
     if classify is None:
-        # No classifier wired in.  We do NOT silently pass — we flag as
-        # "cannot evaluate" and return passed=True but details says so.
+        # No classifier wired in.  We flag as "cannot evaluate" with
+        # passed=False so the GOOD cap is actually applied by the
+        # aggregator (``run_all_structural_checks`` only applies
+        # verdict_cap on failing checks).  Without this, the overall
+        # verdict could reach EXCELLENT despite no topic verification.
         # The caller (scenario evaluator) is expected to supply an LLM
-        # classifier in production.
+        # classifier in production — when wired, this branch is skipped.
         return CheckResult(
             name="topic_fidelity",
-            passed=True,
-            verdict_cap="GOOD",  # cap at GOOD — can't confirm EXCELLENT without classifier
-            details="no topic classifier supplied; skipping semantic fidelity check",
+            passed=False,
+            verdict_cap="GOOD",
+            details=(
+                "no topic classifier supplied; capping at GOOD until a "
+                "semantic fidelity check is wired in"
+            ),
         )
 
     results: list[TopicClassification] = []
