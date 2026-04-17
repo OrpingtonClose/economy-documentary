@@ -217,7 +217,11 @@ def _extract_style_lock(text: str) -> dict | None:
                     end = j + 1
                     break
         if end == -1:
-            return None
+            # Unbalanced '{' — likely a stray brace in prose before the real
+            # JSON object.  Advance one char and keep scanning rather than
+            # abandoning the whole search.
+            i += 1
+            continue
         candidate = text[i:end]
         try:
             obj = json.loads(candidate)

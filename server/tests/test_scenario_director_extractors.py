@@ -91,3 +91,28 @@ def test_extract_style_lock_handles_nested_braces_in_scenes():
 def test_extract_style_lock_empty_input():
     assert _extract_style_lock("") is None
     assert _extract_style_lock(None) is None  # type: ignore[arg-type]
+
+
+def test_extract_style_lock_tolerates_stray_brace_in_prose():
+    # Regression: a stray unmatched '{' in prose before the JSON used to
+    # abort the whole scan, because the brace-matching loop never found
+    # depth==0 and returned None immediately.  Now we skip past the stray
+    # brace and continue searching.
+    text = (
+        'The PAG { area is critical. Here is the lock:\n'
+        '{"dominant_style": "cinematic_documentary", "forbidden_styles": ["anime"]}'
+    )
+    sl = _extract_style_lock(text)
+    assert sl is not None
+    assert sl["dominant_style"] == "cinematic_documentary"
+
+
+def test_extract_style_lock_tolerates_stray_brace_in_string_like_prose():
+    # Another stray-brace variant: an f-string-like "{topic}" in prose.
+    text = (
+        'Generator wrote something about {topic} and then:\n'
+        '{"dominant_style": "painterly", "forbidden_styles": []}'
+    )
+    sl = _extract_style_lock(text)
+    assert sl is not None
+    assert sl["dominant_style"] == "painterly"
