@@ -2629,8 +2629,34 @@ def deterministic_assembly_callback(
         """
         track_errors = []
         try:
-            combined_audio = _render_audio_track(narration_items, lang_suffix)
+            combined_audio_raw = _render_audio_track(narration_items, lang_suffix)
             combined_video = _render_video_track(video_items, lang_suffix)
+
+            # Loudness normalization (EBU R128) — different TTS voices
+            # produce clips at varying volume levels.  Without normalization,
+            # the final documentary has jarring volume shifts between narrators.
+            # This was identified as R7 in the deep architecture audit.
+            from tools.assembly_tools import normalize_audio_loudness
+            normalized_audio_path = os.path.join(
+                assembly_dir, f"otio_audio_normalized{lang_suffix}.wav",
+            )
+            norm_result = json.loads(normalize_audio_loudness(
+                input_path=combined_audio_raw,
+                output_path=normalized_audio_path,
+            ))
+            if norm_result.get("status") in ("normalized", "copied_without_normalization"):
+                combined_audio = normalized_audio_path
+                logger.info(
+                    "Audio loudness normalization%s: %s",
+                    lang_suffix, norm_result.get("status"),
+                )
+            else:
+                # Normalization failed entirely — use raw audio
+                combined_audio = combined_audio_raw
+                logger.warning(
+                    "Audio loudness normalization%s failed, using raw: %s",
+                    lang_suffix, norm_result.get("error", "unknown"),
+                )
 
             # Verify duration alignment (informational — OTIO is truth)
             audio_probe = json.loads(probe_clip(mp4_path=combined_audio))
