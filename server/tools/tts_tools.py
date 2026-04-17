@@ -16,7 +16,7 @@ import wave
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from strands import tool
+from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def _generate_silent_wav(output_path: str, duration: float) -> None:
         wf.writeframes(silent_data)
 
 
-@tool(context=True)
+@simulated("generate_narration")
 def generate_narration(
     scene_num: int,
     voice_role: str,
@@ -247,4 +247,7 @@ def generate_narration(
     )
 
 
-tts_tools = [generate_narration]
+# -- ADK FunctionTool wrappers -------------------------------------------------
+generate_narration_tool = FunctionTool(generate_narration)
+
+tts_tools = [generate_narration_tool]

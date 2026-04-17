@@ -1,9 +1,16 @@
-"""Approval gate compatibility shim for the Strands migration.
+"""
+Approval Gate — human-in-the-loop checkpoints between pipeline stages.
 
-The original file-based approval gate was replaced by the ApprovalGatePlugin
-(server/hooks/approval_gate.py) which uses Strands graph interrupts. This shim
-provides the mark_stage_ready() function that deterministic_steps.py still calls
-at line 1698 to signal that clips are ready for human review.
+The pipeline pauses after each stage completes, waits for human approval
+via the dashboard, then proceeds to the next stage.
+
+Approval state is persisted to disk so it survives restarts.
+
+Flow:
+    Stage completes → after_agent_callback signals "ready for review"
+    Dashboard shows data + "Approve" button
+    Human clicks "Approve" → POST /agui/approve
+    Next stage's before_agent_callback polls until approved → proceeds
 """
 
 from __future__ import annotations
@@ -12,18 +19,28 @@ import json
 import logging
 import os
 import time
+from typing import Optional
+
+from google.adk.agents.callback_context import CallbackContext
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
-_AUTO_APPROVE = _TEST_MODE or os.environ.get(
+_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
+_APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
+
+# Auto-approve all stages (no human needed).
+# Controlled by DOCUMENTARY_AUTO_APPROVE env var OR active simulation mode.
+from testing.simulation_bridge import is_simulation_active
+
+_AUTO_APPROVE_ENV = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
 
-_APPROVAL_FILE = os.path.join(
-    os.environ.get("PIPELINE_STATE_DIR", os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")),
-    ".approval_state.json",
-)
+
+def _should_auto_approve() -> bool:
+    """Check if gates should auto-approve (env var OR active simulation)."""
+    return _AUTO_APPROVE_ENV or is_simulation_active()
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
@@ -34,18 +51,18 @@ _MAX_WAIT = 7200.0
 
 
 def _read_approval_state() -> dict:
-    """Read the approval state file."""
-    if os.path.exists(_APPROVAL_FILE):
-        try:
-            with open(_APPROVAL_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    """Read approval state from disk."""
+    if not os.path.exists(_APPROVAL_FILE):
+        return {}
+    try:
+        with open(_APPROVAL_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def _write_approval_state(state: dict) -> None:
-    """Write the approval state file."""
+    """Write approval state to disk."""
     os.makedirs(os.path.dirname(_APPROVAL_FILE), exist_ok=True)
     with open(_APPROVAL_FILE, "w") as f:
         json.dump(state, f, indent=2)
@@ -54,9 +71,10 @@ def _write_approval_state(state: dict) -> None:
 def is_stage_approved(stage: str) -> bool:
     """Check if a stage has been approved by the human.
 
-    In test/auto-approve mode, all stages are auto-approved.
+    In simulation mode or when DOCUMENTARY_AUTO_APPROVE is set, all stages
+    are auto-approved.
     """
-    if _AUTO_APPROVE:
+    if _should_auto_approve():
         return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
@@ -65,10 +83,10 @@ def is_stage_approved(stage: str) -> bool:
 def mark_stage_ready(stage: str) -> None:
     """Mark a stage as ready for human review (but not yet approved).
 
-    In test mode, stages are auto-approved -- skip disk I/O entirely.
+    In simulation/auto-approve mode, stages are auto-approved — skip disk I/O.
     """
-    if _AUTO_APPROVE:
-        logger.info("stage=<%s> | auto-approved (test mode)", stage)
+    if _should_auto_approve():
+        logger.info("Stage '%s' auto-approved (test mode)", stage)
         return
     state = _read_approval_state()
     if stage not in state:
@@ -76,7 +94,7 @@ def mark_stage_ready(stage: str) -> None:
     state[stage]["ready"] = True
     state[stage]["ready_at"] = time.time()
     _write_approval_state(state)
-    logger.info("stage=<%s> | marked ready for review", stage)
+    logger.info("Stage '%s' marked ready for review", stage)
 
 
 def approve_stage(stage: str) -> None:
@@ -85,8 +103,8 @@ def approve_stage(stage: str) -> None:
     Used by quick-test and other automated paths that skip the normal
     human-in-the-loop flow but still need downstream stages to proceed.
     """
-    if _AUTO_APPROVE:
-        logger.info("stage=<%s> | already auto-approved (test/auto-approve mode)", stage)
+    if _should_auto_approve():
+        logger.info("Stage '%s' already auto-approved (auto-approve/simulation mode)", stage)
         return
     state = _read_approval_state()
     if stage not in state:
@@ -96,7 +114,7 @@ def approve_stage(stage: str) -> None:
     state[stage]["approved_at"] = time.time()
     state[stage]["approved_by"] = "quick-test"
     _write_approval_state(state)
-    logger.info("stage=<%s> | programmatically approved (quick-test)", stage)
+    logger.info("Stage '%s' programmatically approved (quick-test)", stage)
 
 
 def wait_for_approval(stage: str) -> bool:
@@ -105,18 +123,57 @@ def wait_for_approval(stage: str) -> bool:
     Returns True if approved, False if timed out.
     In test mode, returns immediately.
     """
-    if _AUTO_APPROVE:
-        logger.info("stage=<%s> | auto-approved (test mode)", stage)
+    if _should_auto_approve():
+        logger.info("Stage '%s' auto-approved (auto-approve/simulation mode)", stage)
         return True
     start = time.time()
-    logger.info("stage=<%s> | waiting for human approval", stage)
+    logger.info("Waiting for human approval of stage '%s'...", stage)
 
     while time.time() - start < _MAX_WAIT:
         if is_stage_approved(stage):
             elapsed = time.time() - start
-            logger.info("stage=<%s>, elapsed=<%.1fs> | approved", stage, elapsed)
+            logger.info("Stage '%s' approved after %.1fs", stage, elapsed)
             return True
         time.sleep(_POLL_INTERVAL)
 
-    logger.warning("stage=<%s>, max_wait=<%.0fs> | timed out waiting for approval", stage, _MAX_WAIT)
+    logger.warning("Timed out waiting for approval of stage '%s' (%.0fs)", stage, _MAX_WAIT)
     return False
+
+
+# ---------------------------------------------------------------------------
+# Callback factories — create before/after callbacks for each stage
+# ---------------------------------------------------------------------------
+
+def make_after_stage_callback(stage: str):
+    """Create an after_agent_callback that marks a stage ready for review.
+
+    This wraps any existing after_agent_callback so both run.
+    """
+    def _after_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
+        mark_stage_ready(stage)
+        return None
+    return _after_callback
+
+
+def make_before_stage_callback(requires_stage: str):
+    """Create a before_agent_callback that waits for a prerequisite stage approval.
+
+    The callback blocks (polls) until the required stage is approved.
+    If timed out, it returns Content to skip the agent with an error.
+    """
+    def _before_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
+        if not is_stage_approved(requires_stage):
+            logger.info(
+                "Stage requires '%s' approval — waiting...", requires_stage
+            )
+            approved = wait_for_approval(requires_stage)
+            if not approved:
+                return genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(
+                        text=f"ERROR: Timed out waiting for '{requires_stage}' approval. "
+                             f"Please approve the {requires_stage} stage on the dashboard."
+                    )],
+                )
+        return None
+    return _before_callback

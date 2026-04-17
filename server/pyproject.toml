@@ -3,11 +3,11 @@ name = "documentary-pipeline"
 version = "0.1.0"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-    "strands-agents @ git+https://github.com/OrpingtonClose/sdk-python.git",
-    "strands-agents-builder",
-    "litellm",
+    "google-adk>=1.0.0",
     "python-dotenv",
+    "litellm",
     "aiosqlite",
+    "ag-ui-adk>=0.5.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
     "duckdb>=1.4.0,<1.5.0",
@@ -17,5 +17,4 @@ dependencies = [
     "numpy",
     "vastai",
     "b2sdk (>=2.10.4,<3.0.0)",
-    "pydantic>=2.0.0",
 ]

@@ -108,8 +108,8 @@ PRODUCTION_CONTRACT = StageContract(
             capability="ltx",
         ),
     ],
-    required_state=["scenes", "whisperx_alignment"],
-    produced_state=["visual_concepts"],
+    required_state=["scenes", "whisperx_alignment", "visual_concepts"],
+    produced_state=[],
     produced_artifacts=["video/*.mp4"],
 )
 

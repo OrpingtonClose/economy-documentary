@@ -15,12 +15,11 @@ import subprocess
 import tempfile
 from typing import List
 
-from strands import tool
+from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
 
-@tool(context=True)
 def mux_audio_video(
     audio_path: str,
     video_path: str,
@@ -95,7 +94,6 @@ def mux_audio_video(
         return json.dumps({"error": "ffmpeg mux timed out"})
 
 
-@tool(context=True)
 def concat_clips(
     clip_paths: str,
     output_path: str,
@@ -210,7 +208,6 @@ def concat_clips(
             pass
 
 
-@tool(context=True)
 def trim_clip(
     input_path: str,
     start_sec: float,
@@ -280,4 +277,9 @@ def trim_clip(
         return json.dumps({"error": "ffmpeg trim timed out"})
 
 
-assembly_tools = [mux_audio_video, concat_clips, trim_clip]
+# -- ADK FunctionTool wrappers -------------------------------------------------
+mux_audio_video_tool = FunctionTool(mux_audio_video)
+concat_clips_tool = FunctionTool(concat_clips)
+trim_clip_tool = FunctionTool(trim_clip)
+
+assembly_tools = [mux_audio_video_tool, concat_clips_tool, trim_clip_tool]
