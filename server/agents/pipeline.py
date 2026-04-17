@@ -49,11 +49,73 @@ from callbacks.approval_gate import (
     mark_stage_ready,
     wait_for_approval,
 )
-from callbacks.state_manager import build_pipeline_state
+from callbacks.state_manager import build_pipeline_state, safe_state_dict
+from contracts import (
+    ASSEMBLY_CONTRACT,
+    AUDIO_CONTRACT,
+    PRODUCTION_CONTRACT,
+    SCENARIO_CONTRACT,
+    VISUAL_DIRECTION_CONTRACT,
+    ContractViolation,
+    validate_postconditions,
+    validate_preconditions,
+)
 from testing.simulation_bridge import create_agent_callback, is_simulation_active
 from tools.otio_tools import _timeline_path
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_preconditions_or_abort(
+    contract,
+    callback_context: CallbackContext,
+) -> Optional[genai_types.Content]:
+    """Validate stage preconditions; return Content to abort if violated.
+
+    This is the graph-level precondition guard learned from the Strands
+    migration.  It runs BEFORE each agent starts, preventing wasted GPU
+    time when upstream state is missing or placeholder.
+
+    Returns None if preconditions pass, or Content with an error message
+    if they fail (which causes ADK to skip the agent).
+    """
+    try:
+        validate_preconditions(contract, safe_state_dict(callback_context.state))
+        return None
+    except ContractViolation as cv:
+        logger.error(
+            "stage=<%s> | CONTRACT precondition FAILED — skipping agent: %s",
+            contract.name, cv,
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"CONTRACT VIOLATION: {cv}"
+            )],
+        )
+
+
+def _validate_postconditions_and_log(
+    contract,
+    callback_context: CallbackContext,
+) -> None:
+    """Validate stage postconditions after completion; log but don't block.
+
+    Postcondition violations are logged as errors for visibility but do
+    not abort — the downstream stage's precondition check will catch the
+    missing output and halt cleanly.
+    """
+    try:
+        validate_postconditions(contract, safe_state_dict(callback_context.state))
+        logger.info(
+            "stage=<%s> | CONTRACT postconditions PASSED",
+            contract.name,
+        )
+    except ContractViolation as cv:
+        logger.error(
+            "stage=<%s> | CONTRACT postcondition FAILED: %s",
+            contract.name, cv,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -72,10 +134,11 @@ _orig_assembly_before = assembler_agent.before_agent_callback
 
 
 def _scenario_after_with_gate(callback_context):
-    """After scenario_director: run original callback, then mark ready."""
+    """After scenario_director: validate postconditions, then mark ready."""
     result = None
     if _orig_scenario_after:
         result = _orig_scenario_after(callback_context)
+    _validate_postconditions_and_log(SCENARIO_CONTRACT, callback_context)
     mark_stage_ready("scenario")
     logger.info("APPROVAL GATE: scenario stage ready — waiting for human approval")
     approved = wait_for_approval("scenario")
@@ -85,7 +148,12 @@ def _scenario_after_with_gate(callback_context):
 
 
 def _audio_before_with_gate(callback_context):
-    """Before audio_agent: wait for scenario approval + TTS worker, then run original."""
+    """Before audio_agent: contract check + approval gate + TTS worker, then run original."""
+    # CONTRACT: validate preconditions BEFORE entering audio stage
+    abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
         approved = wait_for_approval("scenario")
@@ -119,10 +187,11 @@ def _audio_before_with_gate(callback_context):
 
 
 def _visual_after_with_gate(callback_context):
-    """After visual_director: run original callback, then mark prompts ready."""
+    """After visual_director: validate postconditions, then mark prompts ready."""
     result = None
     if _orig_visual_after:
         result = _orig_visual_after(callback_context)
+    _validate_postconditions_and_log(VISUAL_DIRECTION_CONTRACT, callback_context)
     mark_stage_ready("prompts")
     logger.info("APPROVAL GATE: prompts stage ready — waiting for human approval")
     approved = wait_for_approval("prompts")
@@ -132,7 +201,12 @@ def _visual_after_with_gate(callback_context):
 
 
 def _production_before_with_gate(callback_context):
-    """Before production_supervisor: wait for prompts approval + video worker, then run original."""
+    """Before production_supervisor: contract check + approval gate + video worker."""
+    # CONTRACT: validate preconditions BEFORE entering production stage
+    abort = _validate_preconditions_or_abort(PRODUCTION_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
         approved = wait_for_approval("prompts")
@@ -179,7 +253,12 @@ def _production_after_with_gate(callback_context):
 
 
 def _assembly_before_with_gate(callback_context):
-    """Before assembler_agent: wait for clips approval, then run original."""
+    """Before assembler_agent: contract check + approval gate, then run original."""
+    # CONTRACT: validate preconditions BEFORE entering assembly stage
+    abort = _validate_preconditions_or_abort(ASSEMBLY_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
     if not is_stage_approved("clips"):
         logger.info("APPROVAL GATE: assembly waiting for clips approval...")
         approved = wait_for_approval("clips")
