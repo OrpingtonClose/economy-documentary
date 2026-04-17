@@ -149,6 +149,23 @@ def is_simulation_active() -> bool:
     return SimulationRegistry.get().active
 
 
+def has_provisioning_simulation() -> bool:
+    """Return True if the active scenario includes provisioning lifecycle injections.
+
+    Used by ``WorkerProvisioner`` to decide whether to skip provisioning
+    entirely (fast path for non-provisioning scenarios) or run through
+    the simulated provisioning flow.
+    """
+    registry = SimulationRegistry.get()
+    if not registry.active or not registry.config:
+        return False
+    _PROVISIONING_TOOLS = frozenset({"vast_provision_lifecycle"})
+    for tc in registry.config.tool_simulation_configs:
+        if tc.tool_name in _PROVISIONING_TOOLS:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Public API — activate / deactivate
 # ---------------------------------------------------------------------------
@@ -344,13 +361,12 @@ _RESPONSE_PATCHERS: Dict[str, Callable] = {
 }
 
 
-def simulated(tool_name: str, *, description: str = ""):
+def simulated(tool_name: str, *, description: str = "", json_return: bool = True):
     """Decorator that checks the simulation engine before calling the real function.
 
     If a simulation scenario is active and the engine has an injection config
     for ``tool_name`` that matches the call arguments, the mock result is
-    returned (as a JSON string, matching tool return conventions).  Otherwise
-    the real function executes normally.
+    returned.  Otherwise the real function executes normally.
 
     When a simulation intercepts a media-generating tool, a post-interception
     hook creates placeholder files on disk so downstream code (gatekeeper
@@ -363,9 +379,17 @@ def simulated(tool_name: str, *, description: str = ""):
             # Real implementation — only reached when no simulation matches
             ...
 
+        # For internal (non-tool) functions that return native Python types:
+        @simulated("vast_provision_lifecycle", json_return=False)
+        def _simulated_provision_lifecycle(role, gpu_type, attempt=0):
+            return None  # stub — simulation engine provides the response
+
     Args:
         tool_name: The tool name to match in ``EnvironmentSimulationConfig``.
         description: Optional description for the ToolProxy.
+        json_return: If True (default), dict results are returned as JSON
+            strings (matching ADK tool conventions).  If False, dict results
+            are returned as-is (for internal functions that expect native types).
     """
 
     def decorator(fn: Callable) -> Callable:
@@ -432,8 +456,9 @@ def simulated(tool_name: str, *, description: str = ""):
                             tool_name, hook_exc,
                         )
 
-                # Tool functions return JSON strings — match that convention
-                if isinstance(result, dict):
+                # Tool functions return JSON strings — match that convention.
+                # Internal functions (json_return=False) get raw dicts.
+                if json_return and isinstance(result, dict):
                     return json.dumps(result)
                 return result
 
