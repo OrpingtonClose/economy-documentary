@@ -48,7 +48,10 @@ if _SIMULATION_MODE:
     from testing.simulation_bridge import activate_simulation
     from testing.scenarios import get_scenario
     _sim_scenario = os.environ.get("SIMULATION_SCENARIO", "E1")
-    _sim_config = get_scenario(_sim_scenario)
+    try:
+        _sim_config = get_scenario(_sim_scenario)
+    except KeyError:
+        _sim_config = None
     if _sim_config:
         activate_simulation(_sim_config, scenario_name=_sim_scenario)
     else:
