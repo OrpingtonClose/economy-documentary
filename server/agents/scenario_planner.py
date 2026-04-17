@@ -131,7 +131,9 @@ def save_scenario(scenes_json: str, visual_style_json: str = "", tool_context=No
         logger.debug("B2 scenario upload skipped: %s", exc)
 
     count = len(scenes) if scenes else "unknown"
-    return f"Saved {count} scenes to pipeline state and created OTIO timeline. Downstream agents can now access them."
+    timeline_created = bool(state.get("_timeline_path"))
+    timeline_msg = "and created OTIO timeline" if timeline_created else "but OTIO timeline creation FAILED — call create_timeline explicitly"
+    return f"Saved {count} scenes to pipeline state {timeline_msg}. Downstream agents can now access them."
 
 
 SCENARIO_PLANNER_PROMPT = """\

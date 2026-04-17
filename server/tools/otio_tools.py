@@ -448,7 +448,7 @@ def get_video_slot_durations(tool_context=None) -> dict:
     Returns a dict mapping scene_num -> list of (voice, slot_duration_sec)
     tuples, ordered as they appear on the A1_Narration track.
     """
-    state = tool_context.state if tool_context else {}
+    state = tool_context.invocation_state if tool_context else {}
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return {}
