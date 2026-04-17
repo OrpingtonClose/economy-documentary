@@ -37,12 +37,15 @@ from typing import Optional
 
 from google.adk.agents import SequentialAgent
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.loop_agent import LoopAgent
 from google.genai import types as genai_types
 
 from agents.assembler_agent import assembler_agent
 from agents.audio_agent import audio_agent
 from agents.production_supervisor import production_supervisor
 from agents.scenario_director import scenario_director
+from agents.scenario_refiner import scenario_refiner
+from agents.timing_evaluator import timing_evaluator
 from agents.visual_director import visual_director
 from callbacks.approval_gate import (
     is_stage_approved,
@@ -126,7 +129,8 @@ def _validate_postconditions_and_log(
 # editing every individual agent file and keeps the gate logic central.
 
 _orig_scenario_after = scenario_director.after_agent_callback
-_orig_audio_before = audio_agent.before_agent_callback
+_orig_timing_loop_before = timing_loop.before_agent_callback
+_orig_timing_loop_after = timing_loop.after_agent_callback
 _orig_visual_after = visual_director.after_agent_callback
 _orig_production_before = production_supervisor.before_agent_callback
 _orig_production_after = production_supervisor.after_agent_callback
@@ -147,8 +151,13 @@ def _scenario_after_with_gate(callback_context):
     return result
 
 
-def _audio_before_with_gate(callback_context):
-    """Before audio_agent: contract check + approval gate + TTS worker, then run original."""
+def _timing_loop_before_with_gate(callback_context):
+    """Before timing_loop: contract check + approval gate + TTS worker.
+
+    The timing_loop wraps audio_agent + timing_evaluator + scenario_refiner.
+    All pre-checks (contracts, approval, worker binding) happen once before
+    the loop starts, not on every iteration.
+    """
     # CONTRACT: validate preconditions BEFORE entering audio stage
     abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
     if abort is not None:
@@ -171,7 +180,7 @@ def _audio_before_with_gate(callback_context):
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
         provisioner.wait_for_worker("tts", timeout=2700)
-        logger.info("TTS worker ready — audio stage proceeding")
+        logger.info("TTS worker ready — timing loop proceeding")
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
         return genai_types.Content(
@@ -181,9 +190,23 @@ def _audio_before_with_gate(callback_context):
             )],
         )
 
-    if _orig_audio_before:
-        return _orig_audio_before(callback_context)
+    if _orig_timing_loop_before:
+        return _orig_timing_loop_before(callback_context)
     return None
+
+
+def _timing_loop_after_with_gate(callback_context):
+    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready."""
+    result = None
+    if _orig_timing_loop_after:
+        result = _orig_timing_loop_after(callback_context)
+    _validate_postconditions_and_log(AUDIO_CONTRACT, callback_context)
+    mark_stage_ready("audio")
+    logger.info("APPROVAL GATE: audio stage ready — waiting for human approval")
+    approved = wait_for_approval("audio")
+    if not approved:
+        logger.error("APPROVAL GATE: timed out waiting for audio approval")
+    return result
 
 
 def _visual_after_with_gate(callback_context):
@@ -276,7 +299,8 @@ def _assembly_before_with_gate(callback_context):
 
 # Wire approval gates into sub-agents
 scenario_director.after_agent_callback = _scenario_after_with_gate
-audio_agent.before_agent_callback = _audio_before_with_gate
+timing_loop.before_agent_callback = _timing_loop_before_with_gate
+timing_loop.after_agent_callback = _timing_loop_after_with_gate
 visual_director.after_agent_callback = _visual_after_with_gate
 production_supervisor.before_agent_callback = _production_before_with_gate
 production_supervisor.after_agent_callback = _production_after_with_gate
@@ -309,7 +333,10 @@ def _wire_simulation_callbacks(sim_callback) -> None:
 
     agents_to_wire = [
         scenario_director,
+        timing_loop,
         audio_agent,
+        timing_evaluator,
+        scenario_refiner,
         visual_director,
         production_supervisor,
         assembler_agent,
@@ -601,18 +628,44 @@ def _cleanup_pipeline_state(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Timing feedback loop (R3 from deep audit — fixes ~30-40% of duration
+# compliance failures).  Wraps audio generation + timing evaluation +
+# scenario refinement in a LoopAgent so that if audio overshoots the
+# duration budget, the scenario is automatically refined and audio
+# regenerated.  Max 3 iterations; the refiner's before_agent_callback
+# returns Content (skipping the LLM) when timing passes, and the
+# LoopAgent exits when max_iterations is reached.
+# ---------------------------------------------------------------------------
+timing_loop = LoopAgent(
+    name="timing_loop",
+    description=(
+        "Audio generation with timing feedback: generates TTS narration, "
+        "evaluates duration compliance, and refines scene text if the "
+        "total duration deviates from the target budget by more than 15%."
+    ),
+    max_iterations=3,
+    sub_agents=[
+        audio_agent,
+        timing_evaluator,
+        scenario_refiner,
+    ],
+)
+
+
 pipeline_agent = SequentialAgent(
     name="documentary_pipeline",
     description=(
         "ADHD-friendly documentary pipeline: scenario generation with "
-        "evaluate-optimize loop, TTS narration with WhisperX alignment, "
-        "iterative visual planning with LoRA selection, GPU video production, "
-        "and final assembly. All phases validated by Timeline Guardian. "
+        "evaluate-optimize loop, TTS narration with timing feedback loop "
+        "(audio → evaluate → refine → re-audio), iterative visual planning "
+        "with LoRA selection, GPU video production, and final assembly. "
+        "All phases validated by Timeline Guardian. "
         "Each stage pauses for human approval before the next one begins."
     ),
     sub_agents=[
         scenario_director,
-        audio_agent,
+        timing_loop,
         visual_director,
         production_supervisor,
         assembler_agent,
