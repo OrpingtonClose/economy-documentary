@@ -18,3 +18,12 @@ dependencies = [
     "vastai",
     "b2sdk (>=2.10.4,<3.0.0)",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
