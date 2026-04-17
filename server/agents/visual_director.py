@@ -161,7 +161,7 @@ OUTPUT: JSON array of visual concepts, each containing:
 Store the result in state["visual_concepts"].
 """
 
-def _visual_concepter_before_model(callback_context, llm_request):
+async def _visual_concepter_before_model(callback_context, llm_request):
     """Chunk scenes so visual_concepter never exceeds output token limits.
 
     If there are more than 3 scenes in content_analysis, this callback
@@ -180,7 +180,7 @@ def _visual_concepter_before_model(callback_context, llm_request):
 
     # If chunking already completed in a prior call, just pass through
     if state.get("_vc_chunking_done"):
-        return before_model_callback(callback_context, llm_request)
+        return await before_model_callback(callback_context, llm_request)
 
     raw_ca = state.get("content_analysis", "")
     try:
@@ -192,7 +192,7 @@ def _visual_concepter_before_model(callback_context, llm_request):
     scene_key = "scenes" if "scenes" in ca else "semantic_segments"
     scenes_data = ca.get(scene_key, [])
     if not isinstance(scenes_data, list):
-        return before_model_callback(callback_context, llm_request)
+        return await before_model_callback(callback_context, llm_request)
 
     chunk_size = 3
     total_scenes = len(scenes_data)
@@ -200,7 +200,7 @@ def _visual_concepter_before_model(callback_context, llm_request):
     if total_scenes <= chunk_size:
         # Small enough — no chunking needed
         state["_vc_chunking_done"] = True
-        return before_model_callback(callback_context, llm_request)
+        return await before_model_callback(callback_context, llm_request)
 
     # Process ALL chunks except the last one internally via direct LLM calls.
     # The last chunk is left for the normal model call.
@@ -311,7 +311,7 @@ def _visual_concepter_before_model(callback_context, llm_request):
         total_chunks - 1, len(accumulated), last_start + 1, last_end,
     )
 
-    return before_model_callback(callback_context, llm_request)
+    return await before_model_callback(callback_context, llm_request)
 
 
 def _visual_concepter_after_model(callback_context, llm_response):
