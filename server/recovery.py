@@ -4,9 +4,10 @@ Graduated recovery middleware — cross-cutting concern for intelligent error ha
 Instead of binary crash-or-swallow, every pipeline operation gets a 4-level
 recovery ladder:
 
-    Level 1  RETRY          Same strategy, transient failures (backoff)
-    Level 2  CREATIVE       Different approach, same goal (change params)
-    Level 3  ENVIRONMENTAL  Diagnose root cause (VRAM, model, API keys, disk)
+    Level 0  FIX            Domain specialist agent rewrites inputs to fix
+    Level 1  RETRY          Intelligent retry agent analyses error patterns
+    Level 2  CREATIVE       Alternative strategy agent brainstorms new approach
+    Level 3  COLLABORATIVE  Inter-agent coordination (talks to other agents)
     Level 4  HUMAN          Pause pipeline, present diagnosis via AG-UI
 
 Usage as decorator::
@@ -31,7 +32,6 @@ recovery history (what was tried at each level).
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import os
 import time
@@ -52,11 +52,22 @@ F = TypeVar("F", bound=Callable[..., Any])
 # ---------------------------------------------------------------------------
 
 class RecoveryLevel(IntEnum):
-    """Graduated recovery levels — each escalates effort and intelligence."""
-    RETRY = 1           # Same strategy, transient failures
-    CREATIVE = 2        # Different approach, same goal
-    ENVIRONMENTAL = 3   # Diagnose root cause
-    HUMAN = 4           # Escalate to human via AG-UI
+    """Graduated recovery levels — each has an LLM-powered agent.
+
+    Every level's agent gets LLM access, tool access, and full diagnostic
+    context.  The agent at each level has increasing authority and scope:
+
+        FIX (0)           Domain specialist — rewrites inputs to fix the specific problem
+        RETRY (1)         Intelligent retry — checks health, analyses error patterns
+        CREATIVE (2)      Alternative strategies — different model, different approach
+        COLLABORATIVE (3) Inter-agent — talks to other pipeline agents to coordinate
+        HUMAN (4)         Last resort — presents full chain to human via AG-UI
+    """
+    FIX = 0              # Domain-specific intelligent fix (LLM agent)
+    RETRY = 1            # Intelligent retry (LLM agent)
+    CREATIVE = 2         # Alternative strategy (LLM agent)
+    COLLABORATIVE = 3    # Inter-agent coordination (LLM agent)
+    HUMAN = 4            # Escalate to human via AG-UI
 
 
 # ---------------------------------------------------------------------------
@@ -67,9 +78,25 @@ class RecoveryLevel(IntEnum):
 class RecoveryPolicy:
     """Configurable recovery behaviour for an operation type.
 
-    Each field controls one level of the recovery ladder.  Set a budget
-    to 0 to skip that level entirely.
+    Each level of the ladder has an LLM-powered agent.  The ``agents``
+    dict maps ``RecoveryLevel`` (int) to a ``RecoveryAgent`` instance.
+    The ``level_budgets`` dict controls how many attempts each level gets.
+
+    Legacy fields (max_retries, creative_amendments, etc.) are still
+    supported for backward compatibility — they're used when no agent
+    is configured for that level.
     """
+    # ── Agent-powered recovery (new) ──────────────────────────────────
+    agents: Optional[dict] = None
+    # ^-- dict[int, RecoveryAgent] mapping level number to agent instance.
+    #     Import RecoveryAgent from recovery_agents to avoid circular imports.
+    #     Example: {0: AudioTimingAgent(), 1: RetryAgent(), 2: CreativeAgent(), 3: CollaborativeAgent()}
+
+    level_budgets: Optional[dict] = None
+    # ^-- dict[int, int] mapping level number to max attempts.
+    #     Default: {0: 5, 1: 3, 2: 2, 3: 1}
+
+    # ── Legacy fields (backward compat) ───────────────────────────────
     # Level 1: retry
     max_retries: int = 3
     retry_backoff_base: float = 2.0      # seconds; exponential backoff
@@ -81,20 +108,30 @@ class RecoveryPolicy:
     # Level 2: creative amendment
     creative_budget: int = 2
     creative_amendments: Optional[list[Callable[[dict], dict]]] = None
-    # ^-- list of callables that take the current kwargs and return amended
-    #     kwargs.  Applied in order.  If None, Level 2 is skipped.
 
-    # Level 3: environmental assessment
+    # Level 3: environmental assessment (legacy — replaced by CollaborativeAgent)
     enable_env_assessment: bool = True
 
     # Level 4: human escalation
     escalate_to_human: bool = True
     human_timeout_sec: float = 600.0     # max wait for human response
 
-    # Non-retryable: errors that should skip L1/L2/L3 and go straight to
-    # human escalation (L4).  These indicate fundamental problems that
-    # retrying or amending won't fix (e.g. QA REJECTED corrupted output).
+    # Non-retryable: errors that should skip L0/L1/L2/L3 and go straight to
+    # human escalation (L4).
     non_retryable_patterns: tuple[str, ...] = ()
+
+    def get_level_budget(self, level: int) -> int:
+        """Get the attempt budget for a recovery level."""
+        defaults = {0: 5, 1: 3, 2: 2, 3: 1}
+        if self.level_budgets:
+            return self.level_budgets.get(level, defaults.get(level, 1))
+        return defaults.get(level, 1)
+
+    def get_agent(self, level: int):
+        """Get the agent for a recovery level, or None."""
+        if self.agents:
+            return self.agents.get(level)
+        return None
 
 
 # ── Pre-built policies for common operation types ─────────────────────────
@@ -202,9 +239,6 @@ VIDEO_POLICY = RecoveryPolicy(
     ],
     enable_env_assessment=True,
     escalate_to_human=True,
-    # QA rejections are now retryable — corrective hints from the QA
-    # reason are injected into the prompt via _video_amend_prompt_with_qa_hints.
-    # Only truly unrecoverable errors (GPU crashes, OOM) skip retries.
     non_retryable_patterns=(),
 )
 
@@ -220,7 +254,7 @@ TTS_POLICY = RecoveryPolicy(
 LLM_POLICY = RecoveryPolicy(
     max_retries=2,
     retry_backoff_base=2.0,
-    creative_budget=0,  # LLM retries are usually sufficient
+    creative_budget=0,
     enable_env_assessment=False,
     escalate_to_human=True,
 )
@@ -230,8 +264,67 @@ B2_POLICY = RecoveryPolicy(
     retry_backoff_base=2.0,
     creative_budget=0,
     enable_env_assessment=False,
-    escalate_to_human=False,  # B2 failures are non-fatal (cache only)
+    escalate_to_human=False,
 )
+
+
+# ── Agent-powered policies ────────────────────────────────────────────────
+# These use LLM-powered agents at every level of the ladder.
+# Import agents lazily to avoid circular imports at module load time.
+
+def _make_audio_agent_policy() -> RecoveryPolicy:
+    """Audio operations: L0 rewrites narration text to fix timing."""
+    from recovery_agents import AUDIO_AGENTS
+    return RecoveryPolicy(
+        agents=AUDIO_AGENTS,
+        level_budgets={0: 5, 1: 3, 2: 2, 3: 1},
+        retry_backoff_base=3.0,
+        escalate_to_human=True,
+    )
+
+
+def _make_video_agent_policy() -> RecoveryPolicy:
+    """Video operations: L0 rewrites visual prompts based on QA feedback."""
+    from recovery_agents import VIDEO_AGENTS
+    return RecoveryPolicy(
+        agents=VIDEO_AGENTS,
+        level_budgets={0: 3, 1: 3, 2: 2, 3: 1},
+        retry_backoff_base=5.0,
+        escalate_to_human=True,
+    )
+
+
+def _make_production_agent_policy() -> RecoveryPolicy:
+    """Production batch operations: L0 restructures batches."""
+    from recovery_agents import PRODUCTION_AGENTS
+    return RecoveryPolicy(
+        agents=PRODUCTION_AGENTS,
+        level_budgets={0: 3, 1: 2, 2: 2, 3: 1},
+        retry_backoff_base=5.0,
+        escalate_to_human=True,
+    )
+
+
+def _make_otio_agent_policy() -> RecoveryPolicy:
+    """OTIO validation: L0 fixes timeline gaps and violations."""
+    from recovery_agents import OTIO_AGENTS
+    return RecoveryPolicy(
+        agents=OTIO_AGENTS,
+        level_budgets={0: 3, 1: 2, 2: 1, 3: 1},
+        retry_backoff_base=2.0,
+        escalate_to_human=True,
+    )
+
+
+def _make_generic_agent_policy() -> RecoveryPolicy:
+    """Generic operations: no domain L0, starts at L1 retry agent."""
+    from recovery_agents import GENERIC_AGENTS
+    return RecoveryPolicy(
+        agents=GENERIC_AGENTS,
+        level_budgets={1: 3, 2: 2, 3: 1},
+        retry_backoff_base=3.0,
+        escalate_to_human=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -684,17 +777,27 @@ def execute_with_recovery(
     kwargs: dict,
     policy: RecoveryPolicy,
     context: Optional[dict] = None,
+    pipeline_state: Optional[dict] = None,
+    diagnostic_data: Optional[dict] = None,
 ) -> Any:
-    """Execute an operation with graduated recovery.
+    """Execute an operation with the agent-powered recovery ladder.
 
-    This is the core engine that drives the recovery ladder.
+    Every level (0–3) has an LLM-powered agent that can diagnose the
+    failure and alter the inputs to fix it.  Level 4 is human escalation.
+
+    If the policy has ``agents`` configured, the agent-powered path is
+    used.  Otherwise, falls back to the legacy retry/amend/assess path
+    for backward compatibility.
 
     Args:
         operation: The callable to execute.
         operation_name: Human-readable name for logging/escalation.
         kwargs: Keyword arguments to pass to the operation.
         policy: Recovery policy controlling behaviour at each level.
-        context: Optional context dict (pipeline state, metadata).
+        context: Optional context dict (metadata).
+        pipeline_state: Optional pipeline state dict (for agent context).
+        diagnostic_data: Optional domain-specific diagnostic data
+            (e.g. timing analysis, QA results).
 
     Returns:
         The operation's return value on success.
@@ -702,15 +805,339 @@ def execute_with_recovery(
     Raises:
         RecoveryExhausted: If all recovery levels are exhausted.
     """
+    # If agents are configured, use the agent-powered path
+    if policy.agents:
+        return _execute_with_agents(
+            operation, operation_name, kwargs, policy,
+            context, pipeline_state, diagnostic_data,
+        )
+    # Otherwise, fall back to legacy path
+    return _execute_legacy(
+        operation, operation_name, kwargs, policy, context,
+    )
+
+
+def _execute_with_agents(
+    operation: Callable,
+    operation_name: str,
+    kwargs: dict,
+    policy: RecoveryPolicy,
+    context: Optional[dict] = None,
+    pipeline_state: Optional[dict] = None,
+    diagnostic_data: Optional[dict] = None,
+) -> Any:
+    """Agent-powered recovery ladder.
+
+    Levels 0–3 each have an LLM agent.  The agent receives full
+    diagnostic context and returns a ``RecoveryDecision``:
+
+    - ``fix``:      Apply state_patches, re-run the operation.
+    - ``retry``:    Re-run without changes.
+    - ``skip``:     Accept the failure, continue pipeline.
+    - ``escalate``: Move to the next level.
+    - ``abort``:    Stop the pipeline.
+    """
+    from recovery_agents import RecoveryContext  # noqa: F811
+
     attempts: list[RecoveryAttempt] = []
     current_kwargs = dict(kwargs)
     last_error: Optional[Exception] = None
     diagnosis: Optional[EnvironmentalDiagnosis] = None
 
-    # ── Check for non-retryable patterns ──────────────────────────────
-    # Some errors indicate fundamental problems (e.g. QA REJECTED corrupted
-    # output) where retrying, amending, or diagnosing won't help.  Skip
-    # straight to human escalation.
+    # Non-retryable check
+    def _is_non_retryable(err: Exception) -> bool:
+        err_str = str(err)
+        return any(pat in err_str for pat in policy.non_retryable_patterns)
+
+    # ── Initial execution ─────────────────────────────────────────────
+    try:
+        return operation(**current_kwargs)
+    except Exception as e:
+        last_error = e
+        if _is_non_retryable(e):
+            logger.error(
+                "Recovery: '%s' non-retryable error, skipping to L4: %s",
+                operation_name, str(e)[:300],
+            )
+            attempts.append(RecoveryAttempt(
+                level=RecoveryLevel.FIX,
+                attempt_num=0,
+                error=str(e)[:500],
+                strategy="initial execution — non-retryable",
+                timestamp=time.time(),
+            ))
+            # Jump straight to human escalation
+            return _escalate_to_human(
+                operation, operation_name, current_kwargs, policy,
+                last_error, attempts, diagnosis,
+            )
+        logger.info(
+            "Recovery: '%s' failed, entering agent-powered ladder: %s",
+            operation_name, str(e)[:200],
+        )
+
+    # ── Levels 0–3: Agent-powered recovery ────────────────────────────
+    _level_names = {
+        0: "FIX (domain specialist)",
+        1: "RETRY (intelligent retry)",
+        2: "CREATIVE (alternative strategy)",
+        3: "COLLABORATIVE (inter-agent coordination)",
+    }
+
+    for level in range(4):  # 0, 1, 2, 3
+        agent = policy.get_agent(level)
+        if agent is None:
+            continue  # No agent for this level — skip to next
+
+        budget = policy.get_level_budget(level)
+        level_name = _level_names.get(level, f"Level {level}")
+
+        logger.info(
+            "Recovery L%d (%s): '%s' — agent '%s' (budget: %d)",
+            level, level_name, operation_name, agent.name, budget,
+        )
+
+        for attempt_num in range(1, budget + 1):
+            # Build context for the agent
+            agent_context = RecoveryContext(
+                operation_name=operation_name,
+                error_msg=str(last_error) if last_error else "Unknown error",
+                current_level=level,
+                level_name=level_name,
+                attempt_num=attempt_num,
+                max_attempts=budget,
+                previous_attempts=[a.to_dict() for a in attempts],
+                operation_kwargs=current_kwargs,
+                pipeline_state=pipeline_state or {},
+                diagnostic_data=diagnostic_data or {},
+            )
+
+            # Ask the agent what to do
+            try:
+                decision = agent.decide(agent_context)
+            except Exception as agent_err:
+                logger.error(
+                    "Recovery L%d: agent '%s' crashed: %s",
+                    level, agent.name, str(agent_err)[:300],
+                )
+                attempts.append(RecoveryAttempt(
+                    level=RecoveryLevel(level),
+                    attempt_num=attempt_num,
+                    error=f"Agent crashed: {agent_err}",
+                    strategy=f"agent '{agent.name}' error",
+                    timestamp=time.time(),
+                ))
+                break  # Move to next level
+
+            logger.info(
+                "Recovery L%d: agent '%s' decided: action=%s confidence=%.2f — %s",
+                level, agent.name, decision.action,
+                decision.confidence, decision.explanation[:200],
+            )
+
+            attempts.append(RecoveryAttempt(
+                level=RecoveryLevel(level),
+                attempt_num=attempt_num,
+                error=str(last_error)[:500] if last_error else "",
+                strategy=f"agent '{agent.name}': {decision.action} — {decision.explanation[:200]}",
+                timestamp=time.time(),
+                success=decision.action in ("fix", "retry", "skip"),
+                amended_kwargs=(
+                    {k: str(v)[:100] for k, v in decision.state_patches.items()}
+                    if decision.state_patches else None
+                ),
+            ))
+
+            # ── Handle the decision ───────────────────────────────────
+            if decision.action == "fix":
+                # Apply state patches and re-run
+                if decision.state_patches:
+                    current_kwargs.update(decision.state_patches)
+                    # Also update pipeline_state if patches are for it
+                    if pipeline_state is not None:
+                        pipeline_state.update(decision.state_patches)
+                try:
+                    result = operation(**current_kwargs)
+                    logger.info(
+                        "Recovery L%d: '%s' succeeded after agent fix (attempt %d/%d)",
+                        level, operation_name, attempt_num, budget,
+                    )
+                    return result
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        "Recovery L%d: '%s' still failed after agent fix: %s",
+                        level, operation_name, str(e)[:200],
+                    )
+                    # Update diagnostic_data with new error for next attempt
+                    if diagnostic_data is not None:
+                        diagnostic_data["last_fix_error"] = str(e)[:500]
+                    continue  # Try again at this level
+
+            elif decision.action == "retry":
+                try:
+                    backoff = policy.retry_backoff_base * (2 ** (attempt_num - 1))
+                    backoff = min(backoff, policy.retry_backoff_max)
+                    time.sleep(backoff)
+                    result = operation(**current_kwargs)
+                    logger.info(
+                        "Recovery L%d: '%s' succeeded on retry (attempt %d/%d)",
+                        level, operation_name, attempt_num, budget,
+                    )
+                    return result
+                except Exception as e:
+                    last_error = e
+                    logger.warning(
+                        "Recovery L%d: '%s' retry failed: %s",
+                        level, operation_name, str(e)[:200],
+                    )
+                    continue
+
+            elif decision.action == "skip":
+                logger.warning(
+                    "Recovery L%d: agent '%s' decided to skip '%s'",
+                    level, agent.name, operation_name,
+                )
+                return None  # Caller must handle None
+
+            elif decision.action == "abort":
+                raise RecoveryExhausted(
+                    operation_name=operation_name,
+                    original_error=last_error or RuntimeError(f"{operation_name} aborted by agent"),
+                    attempts=attempts,
+                    diagnosis=diagnosis,
+                )
+
+            elif decision.action == "escalate":
+                logger.info(
+                    "Recovery L%d: agent '%s' escalated '%s' to next level",
+                    level, agent.name, operation_name,
+                )
+                break  # Move to next level
+
+        # End of budget for this level — move to next
+
+    # ── Level 4: Human escalation ─────────────────────────────────────
+    return _escalate_to_human(
+        operation, operation_name, current_kwargs, policy,
+        last_error, attempts, diagnosis,
+    )
+
+
+def _escalate_to_human(
+    operation: Callable,
+    operation_name: str,
+    current_kwargs: dict,
+    policy: RecoveryPolicy,
+    last_error: Optional[Exception],
+    attempts: list[RecoveryAttempt],
+    diagnosis: Optional[EnvironmentalDiagnosis],
+) -> Any:
+    """Level 4: Human escalation — presents full diagnostic chain."""
+    if not policy.escalate_to_human or last_error is None:
+        raise RecoveryExhausted(
+            operation_name=operation_name,
+            original_error=last_error or RuntimeError(f"{operation_name} failed"),
+            attempts=attempts,
+            diagnosis=diagnosis,
+        )
+
+    escalation_id = _next_escalation_id()
+    diag_dict = diagnosis.to_dict() if diagnosis else {
+        "root_cause": f"All agent levels exhausted for {operation_name}",
+        "confidence": "confirmed",
+        "proposed_fix": "Manual investigation needed — agents at L0-L3 could not resolve.",
+    }
+    proposed_actions = [
+        {
+            "action_id": "retry_with_fix",
+            "description": "Retry after manual fix",
+            "risk_level": "low",
+        },
+        {
+            "action_id": "skip",
+            "description": f"Skip {operation_name} and continue pipeline",
+            "risk_level": "medium",
+        },
+        {
+            "action_id": "abort",
+            "description": "Abort the pipeline",
+            "risk_level": "high",
+        },
+    ]
+
+    req = HumanEscalationRequest(
+        id=escalation_id,
+        operation_name=operation_name,
+        error_chain=[a.to_dict() for a in attempts],
+        diagnosis=diag_dict,
+        proposed_actions=proposed_actions,
+        severity="critical" if len(attempts) > 3 else "warning",
+        timestamp=time.time(),
+    )
+    submit_escalation(req)
+
+    logger.critical(
+        "Recovery L4: '%s' — waiting for human (escalation %s, timeout %.0fs). "
+        "Agent chain: %d attempts across %d levels.",
+        operation_name, escalation_id, policy.human_timeout_sec,
+        len(attempts), len(set(a.level for a in attempts)),
+    )
+    human_response = _wait_for_human_response(escalation_id, policy.human_timeout_sec)
+
+    if human_response:
+        action = human_response.get("action", "")
+        if action == "retry_with_fix":
+            logger.info("Recovery L4: human approved retry for '%s'", operation_name)
+            try:
+                result = operation(**current_kwargs)
+                return result
+            except Exception as e:
+                pass  # Fall through to exhausted
+        elif action == "skip":
+            logger.warning("Recovery L4: human chose to skip '%s'", operation_name)
+            return None
+        elif action == "abort":
+            raise RecoveryExhausted(
+                operation_name=operation_name,
+                original_error=last_error,
+                attempts=attempts,
+                diagnosis=diagnosis,
+            )
+        elif action == "amend":
+            amended = human_response.get("kwargs", {})
+            if amended:
+                current_kwargs.update(amended)
+                try:
+                    return operation(**current_kwargs)
+                except Exception:
+                    pass  # Fall through to exhausted
+
+    # All levels exhausted
+    raise RecoveryExhausted(
+        operation_name=operation_name,
+        original_error=last_error or RuntimeError(f"{operation_name} failed"),
+        attempts=attempts,
+        diagnosis=diagnosis,
+    )
+
+
+def _execute_legacy(
+    operation: Callable,
+    operation_name: str,
+    kwargs: dict,
+    policy: RecoveryPolicy,
+    context: Optional[dict] = None,
+) -> Any:
+    """Legacy recovery path — retry/amend/assess without agents.
+
+    Used when no agents are configured in the policy.
+    """
+    attempts: list[RecoveryAttempt] = []
+    current_kwargs = dict(kwargs)
+    last_error: Optional[Exception] = None
+    diagnosis: Optional[EnvironmentalDiagnosis] = None
+
     def _is_non_retryable(err: Exception) -> bool:
         err_str = str(err)
         return any(pat in err_str for pat in policy.non_retryable_patterns)
@@ -728,30 +1155,28 @@ def execute_with_recovery(
         except Exception as e:
             last_error = e
 
-            # Non-retryable error — skip all recovery levels, go to escalation
             if _is_non_retryable(e):
                 logger.error(
-                    "Recovery: '%s' hit non-retryable error, skipping to escalation: %s",
+                    "Recovery: '%s' hit non-retryable error: %s",
                     operation_name, str(e)[:300],
                 )
                 attempts.append(RecoveryAttempt(
                     level=RecoveryLevel.RETRY,
                     attempt_num=retry_num,
                     error=str(e)[:500],
-                    strategy="non-retryable error — skipping to human escalation",
+                    strategy="non-retryable — skipping to escalation",
                     timestamp=time.time(),
                 ))
                 break
 
             is_retryable = isinstance(e, policy.retryable_exceptions)
-            attempt = RecoveryAttempt(
+            attempts.append(RecoveryAttempt(
                 level=RecoveryLevel.RETRY,
                 attempt_num=retry_num,
                 error=str(e)[:500],
                 strategy=f"retry {retry_num}/{policy.max_retries} (backoff)",
                 timestamp=time.time(),
-            )
-            attempts.append(attempt)
+            ))
 
             if not is_retryable or retry_num == policy.max_retries:
                 logger.warning(
@@ -770,13 +1195,9 @@ def execute_with_recovery(
             )
             time.sleep(backoff)
 
-    # ── Skip L2/L3 for non-retryable errors ───────────────────────────
     _skip_to_escalation = last_error is not None and _is_non_retryable(last_error)
 
-    # ── Extract QA hints from last error for creative amendments ─────
-    # When video QA rejects a clip, the error message contains
-    # "QA_HINTS: <reason>" which creative amendments can use to inject
-    # corrective guidance into the prompt.
+    # Extract QA hints for creative amendments
     if last_error is not None:
         _err_str = str(last_error)
         _hints_marker = "QA_HINTS: "
@@ -787,14 +1208,13 @@ def execute_with_recovery(
     # ── Level 2: Creative amendment ───────────────────────────────────
     amendments = policy.creative_amendments or []
     if _skip_to_escalation:
-        logger.info("Recovery: skipping L2 (creative) for non-retryable error")
-        amendments = []  # skip all amendments
+        amendments = []
     for amend_num, amend_fn in enumerate(amendments[:policy.creative_budget], 1):
         try:
             current_kwargs = amend_fn(current_kwargs)
             result = operation(**current_kwargs)
             logger.info(
-                "Recovery L2: '%s' succeeded with creative amendment %d",
+                "Recovery L2: '%s' succeeded with amendment %d",
                 operation_name, amend_num,
             )
             attempts.append(RecoveryAttempt(
@@ -817,124 +1237,26 @@ def execute_with_recovery(
                 timestamp=time.time(),
             ))
             logger.warning(
-                "Recovery L2: '%s' creative amendment %d (%s) failed: %s",
+                "Recovery L2: '%s' amendment %d (%s) failed: %s",
                 operation_name, amend_num, amend_fn.__name__, str(e)[:200],
             )
 
     # ── Level 3: Environmental assessment ─────────────────────────────
-    if _skip_to_escalation:
-        logger.info("Recovery: skipping L3 (environmental) for non-retryable error")
-    elif policy.enable_env_assessment and last_error is not None:
+    if not _skip_to_escalation and policy.enable_env_assessment and last_error is not None:
         logger.info("Recovery L3: '%s' — running environmental assessment", operation_name)
         diagnosis = _assessor.diagnose(last_error, operation_name, context)
         attempts.append(RecoveryAttempt(
-            level=RecoveryLevel.ENVIRONMENTAL,
+            level=RecoveryLevel.COLLABORATIVE,
             attempt_num=1,
             error=str(last_error)[:500],
             strategy=f"environmental assessment: {diagnosis.root_cause}",
             timestamp=time.time(),
         ))
-        logger.warning(
-            "Recovery L3: '%s' diagnosis: %s (confidence: %s). Proposed: %s",
-            operation_name, diagnosis.root_cause,
-            diagnosis.confidence, diagnosis.proposed_fix,
-        )
 
     # ── Level 4: Human escalation ─────────────────────────────────────
-    if policy.escalate_to_human and last_error is not None:
-        escalation_id = _next_escalation_id()
-        diag_dict = diagnosis.to_dict() if diagnosis else {
-            "root_cause": f"Unknown failure in {operation_name}",
-            "confidence": "possible",
-            "proposed_fix": "Manual investigation needed",
-        }
-        proposed_actions = [
-            {
-                "action_id": "retry_with_fix",
-                "description": diagnosis.proposed_fix if diagnosis else "Retry after manual fix",
-                "risk_level": "low",
-            },
-            {
-                "action_id": "skip",
-                "description": f"Skip {operation_name} and continue pipeline",
-                "risk_level": "medium",
-            },
-            {
-                "action_id": "abort",
-                "description": "Abort the pipeline",
-                "risk_level": "high",
-            },
-        ]
-
-        req = HumanEscalationRequest(
-            id=escalation_id,
-            operation_name=operation_name,
-            error_chain=[a.to_dict() for a in attempts],
-            diagnosis=diag_dict,
-            proposed_actions=proposed_actions,
-            severity="critical" if len(attempts) > 3 else "warning",
-            timestamp=time.time(),
-        )
-        submit_escalation(req)
-
-        logger.critical(
-            "Recovery L4: '%s' — waiting for human response (escalation %s, timeout %.0fs)",
-            operation_name, escalation_id, policy.human_timeout_sec,
-        )
-        human_response = _wait_for_human_response(escalation_id, policy.human_timeout_sec)
-
-        if human_response:
-            action = human_response.get("action", "")
-            if action == "retry_with_fix":
-                # Human approved a fix — try one more time
-                logger.info("Recovery L4: human approved retry for '%s'", operation_name)
-                try:
-                    result = operation(**current_kwargs)
-                    attempts.append(RecoveryAttempt(
-                        level=RecoveryLevel.HUMAN,
-                        attempt_num=1,
-                        error="",
-                        strategy="human-approved retry",
-                        timestamp=time.time(),
-                        success=True,
-                    ))
-                    return result
-                except Exception as e:
-                    last_error = e
-                    attempts.append(RecoveryAttempt(
-                        level=RecoveryLevel.HUMAN,
-                        attempt_num=1,
-                        error=str(e)[:500],
-                        strategy="human-approved retry (failed)",
-                        timestamp=time.time(),
-                    ))
-            elif action == "skip":
-                logger.warning("Recovery L4: human chose to skip '%s'", operation_name)
-                return None  # caller must handle None
-            elif action == "abort":
-                raise RecoveryExhausted(
-                    operation_name=operation_name,
-                    original_error=last_error,
-                    attempts=attempts,
-                    diagnosis=diagnosis,
-                )
-            elif action == "amend":
-                # Human provided amended kwargs
-                amended = human_response.get("kwargs", {})
-                if amended:
-                    current_kwargs.update(amended)
-                    try:
-                        result = operation(**current_kwargs)
-                        return result
-                    except Exception as e:
-                        last_error = e
-
-    # All levels exhausted
-    raise RecoveryExhausted(
-        operation_name=operation_name,
-        original_error=last_error or RuntimeError(f"{operation_name} failed with no error captured"),
-        attempts=attempts,
-        diagnosis=diagnosis,
+    return _escalate_to_human(
+        operation, operation_name, current_kwargs, policy,
+        last_error, attempts, diagnosis,
     )
 
 
@@ -996,27 +1318,79 @@ def escalate_pipeline_error(
     default_action: str = "abort",
     diagnosis_hint: Optional[str] = None,
     wait_timeout_sec: float = 600.0,
+    pipeline_state: Optional[dict] = None,
+    diagnostic_data: Optional[dict] = None,
+    agent_policy_type: Optional[str] = None,
 ) -> dict:
-    """Submit a pipeline error as an escalation and wait for human resolution.
+    """Cross-cutting recovery entry point with agent-powered ladder.
 
     This is the **cross-cutting concern** that every error site in the
-    pipeline should use instead of ``raise RuntimeError(...)``.  It:
+    pipeline should use instead of ``raise RuntimeError(...)``.  It now
+    runs the full agent-powered recovery ladder (L0–L3) before falling
+    back to human escalation (L4):
 
-    1. Submits a ``HumanEscalationRequest`` (emits SSE event to dashboard).
-    2. In auto-approve mode (``DOCUMENTARY_AUTO_APPROVE=true``): returns
-       ``{"action": default_action}`` immediately — no waiting.
-    3. In manual mode: blocks until the human responds via the AG-UI
-       ``/agui/escalations/{id}/respond`` endpoint, or until timeout.
+    1. Select an agent policy based on ``agent_policy_type``
+       ("audio", "video", "production", "otio", "generic").
+    2. Run the agent ladder: L0 (domain fix) → L1 (intelligent retry)
+       → L2 (creative) → L3 (collaborative/inter-agent).
+    3. If all agent levels are exhausted:
+       - Auto-approve mode: returns ``{"action": default_action}``
+       - Manual mode: submits human escalation, waits for response.
 
-    The **caller** decides what to do with the response:
-    - ``"skip"``  → continue the pipeline (accept degraded quality)
-    - ``"abort"`` → raise an error (with the full escalation trail)
-    - ``"retry_with_fix"`` → re-run the failing stage
-    - ``"amend"`` → use amended parameters from the human
+    Args:
+        operation_name: What failed (for logging + agent context).
+        error_msg: The error message.
+        severity: "warning" or "critical".
+        proposed_actions: Human escalation actions (if agents fail).
+        default_action: Auto-approve fallback action.
+        diagnosis_hint: Extra context for the agents.
+        wait_timeout_sec: Human escalation timeout.
+        pipeline_state: Pipeline state dict (passed to agents).
+        diagnostic_data: Domain-specific data (timing, QA results, etc.).
+        agent_policy_type: Which agent set to use:
+            "audio", "video", "production", "otio", "generic", or None.
+            If None, runs agent ladder with generic agents (no L0).
 
     Returns:
         Response dict with at minimum ``{"action": "..."}``.
     """
+    # ── Step 1: Run agent-powered ladder (L0–L3) ─────────────────────
+    agent_decision = _run_agent_ladder(
+        operation_name=operation_name,
+        error_msg=error_msg,
+        diagnosis_hint=diagnosis_hint,
+        pipeline_state=pipeline_state,
+        diagnostic_data=diagnostic_data,
+        agent_policy_type=agent_policy_type,
+    )
+
+    if agent_decision is not None:
+        action = agent_decision.get("action", "escalate")
+        if action in ("fix", "retry", "skip"):
+            # Map agent vocabulary to caller vocabulary so pipeline callers
+            # (which check for "skip", "retry_with_fix", "amend") recognise
+            # the agent's decision without raising RuntimeError.
+            _AGENT_TO_CALLER = {"fix": "retry_with_fix", "retry": "retry_with_fix"}
+            mapped = _AGENT_TO_CALLER.get(action, action)
+            agent_decision["action"] = mapped
+            logger.info(
+                "Agent ladder resolved '%s' at L%s: action=%s (agent=%s)",
+                operation_name,
+                agent_decision.get("level", "?"),
+                mapped,
+                action,
+            )
+            return agent_decision
+        elif action == "abort":
+            logger.warning(
+                "Agent ladder decided to abort '%s' at L%s (agent=%s)",
+                operation_name,
+                agent_decision.get("level", "?"),
+                agent_decision.get("agent", "?"),
+            )
+            return {"action": "abort", **agent_decision}
+
+    # ── Step 2: Agent ladder exhausted — fall back to human (L4) ─────
     if proposed_actions is None:
         proposed_actions = [
             {
@@ -1037,10 +1411,24 @@ def escalate_pipeline_error(
         ]
 
     escalation_id = _next_escalation_id()
+
+    # Include agent chain in the diagnosis
+    agent_chain_summary = ""
+    if agent_decision and agent_decision.get("agent_chain"):
+        chain = agent_decision["agent_chain"]
+        agent_chain_summary = (
+            f" Agent chain ({len(chain)} attempts): "
+            + "; ".join(
+                f"L{a.get('level', '?')} {a.get('agent', '?')}: {a.get('action', '?')}"
+                for a in chain[-5:]
+            )
+        )
+
     diag_dict = {
-        "root_cause": diagnosis_hint or error_msg[:300],
+        "root_cause": (diagnosis_hint or error_msg[:300]) + agent_chain_summary,
         "confidence": "likely",
-        "proposed_fix": f"Review the {operation_name} failure and choose an action.",
+        "proposed_fix": f"All agent levels exhausted for {operation_name}. "
+                        f"Manual review needed.",
     }
 
     req = HumanEscalationRequest(
@@ -1049,7 +1437,7 @@ def escalate_pipeline_error(
         error_chain=[{
             "level": "PIPELINE",
             "error": error_msg[:500],
-            "strategy": "escalate_pipeline_error",
+            "strategy": "escalate_pipeline_error (agents exhausted)",
             "timestamp": time.time(),
         }],
         diagnosis=diag_dict,
@@ -1059,8 +1447,7 @@ def escalate_pipeline_error(
     )
     submit_escalation(req)
 
-    # In auto-approve mode, return the default action immediately.
-    # The escalation is still submitted (audit trail + dashboard visibility).
+    # Auto-approve mode
     auto_approve = os.environ.get(
         "DOCUMENTARY_AUTO_APPROVE", ""
     ).strip().lower() in ("1", "true", "yes")
@@ -1071,14 +1458,14 @@ def escalate_pipeline_error(
         )
         resolve_escalation(escalation_id, {
             "action": default_action,
-            "comment": "auto-resolved (DOCUMENTARY_AUTO_APPROVE)",
+            "comment": "auto-resolved (DOCUMENTARY_AUTO_APPROVE) — agents exhausted",
             "timestamp": time.time(),
         })
         return {"action": default_action}
 
-    # Manual mode — wait for human response
+    # Manual mode — wait for human
     logger.critical(
-        "ESCALATION %s: '%s' — waiting for human response (timeout %.0fs). "
+        "ESCALATION %s: '%s' — agents exhausted, waiting for human (timeout %.0fs). "
         "Error: %s",
         escalation_id, operation_name, wait_timeout_sec, error_msg[:200],
     )
@@ -1087,9 +1474,149 @@ def escalate_pipeline_error(
     if human_response:
         return human_response
 
-    # Timeout — no human response.  Default to abort.
     logger.error(
         "Escalation %s timed out — defaulting to abort for '%s'",
         escalation_id, operation_name,
     )
     return {"action": "abort", "comment": "timeout — no human response"}
+
+
+def _run_agent_ladder(
+    operation_name: str,
+    error_msg: str,
+    diagnosis_hint: Optional[str] = None,
+    pipeline_state: Optional[dict] = None,
+    diagnostic_data: Optional[dict] = None,
+    agent_policy_type: Optional[str] = None,
+) -> Optional[dict]:
+    """Run the agent-powered recovery ladder (L0–L3) and return the decision.
+
+    Returns None if all agent levels are exhausted.
+    Returns a dict with {"action": ..., "state_patches": ..., "level": ..., "agent_chain": [...]}
+    """
+    # Select agent policy
+    policy_factories = {
+        "audio": _make_audio_agent_policy,
+        "video": _make_video_agent_policy,
+        "production": _make_production_agent_policy,
+        "otio": _make_otio_agent_policy,
+        "generic": _make_generic_agent_policy,
+    }
+
+    factory = policy_factories.get(agent_policy_type or "generic")
+    if factory is None:
+        factory = _make_generic_agent_policy
+
+    try:
+        policy = factory()
+    except ImportError:
+        logger.warning(
+            "Recovery agents not available (ImportError) — skipping agent ladder for '%s'",
+            operation_name,
+        )
+        return None
+
+    if not policy.agents:
+        return None
+
+    from recovery_agents import RecoveryContext
+
+    agent_chain: list[dict] = []
+    _level_names = {
+        0: "FIX (domain specialist)",
+        1: "RETRY (intelligent retry)",
+        2: "CREATIVE (alternative strategy)",
+        3: "COLLABORATIVE (inter-agent coordination)",
+    }
+
+    for level in range(4):
+        agent = policy.get_agent(level)
+        if agent is None:
+            continue
+
+        budget = policy.get_level_budget(level)
+        level_name = _level_names.get(level, f"Level {level}")
+
+        logger.info(
+            "Agent ladder L%d (%s): '%s' — agent '%s' (budget: %d)",
+            level, level_name, operation_name, agent.name, budget,
+        )
+
+        for attempt_num in range(1, budget + 1):
+            ctx = RecoveryContext(
+                operation_name=operation_name,
+                error_msg=error_msg,
+                current_level=level,
+                level_name=level_name,
+                attempt_num=attempt_num,
+                max_attempts=budget,
+                previous_attempts=agent_chain.copy(),
+                pipeline_state=pipeline_state or {},
+                diagnostic_data=diagnostic_data or {},
+            )
+
+            try:
+                decision = agent.decide(ctx)
+            except Exception as agent_err:
+                logger.error(
+                    "Agent ladder L%d: agent '%s' crashed: %s",
+                    level, agent.name, str(agent_err)[:300],
+                )
+                agent_chain.append({
+                    "level": level,
+                    "agent": agent.name,
+                    "action": "error",
+                    "explanation": f"Agent crashed: {agent_err}",
+                })
+                break
+
+            agent_chain.append({
+                "level": level,
+                "agent": agent.name,
+                "action": decision.action,
+                "explanation": decision.explanation[:300],
+                "state_patches": decision.state_patches,
+                "confidence": decision.confidence,
+            })
+
+            logger.info(
+                "Agent ladder L%d: '%s' decided action=%s (confidence=%.2f): %s",
+                level, agent.name, decision.action,
+                decision.confidence, decision.explanation[:200],
+            )
+
+            if decision.action in ("fix", "retry"):
+                return {
+                    "action": decision.action,
+                    "state_patches": decision.state_patches,
+                    "level": level,
+                    "agent": agent.name,
+                    "explanation": decision.explanation,
+                    "agent_chain": agent_chain,
+                }
+            elif decision.action == "skip":
+                return {
+                    "action": "skip",
+                    "level": level,
+                    "agent": agent.name,
+                    "explanation": decision.explanation,
+                    "agent_chain": agent_chain,
+                }
+            elif decision.action == "abort":
+                return {
+                    "action": "abort",
+                    "level": level,
+                    "agent": agent.name,
+                    "explanation": decision.explanation,
+                    "agent_chain": agent_chain,
+                }
+            elif decision.action == "escalate":
+                break  # Move to next level
+
+    # All agent levels exhausted
+    logger.warning(
+        "Agent ladder exhausted for '%s' after %d attempts across %d levels",
+        operation_name, len(agent_chain),
+        len(set(a["level"] for a in agent_chain)),
+    )
+    return {"action": "escalate", "agent_chain": agent_chain}

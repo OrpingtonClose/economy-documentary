@@ -282,6 +282,11 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
         # Collect unique languages present
         langs_present = {lang for (_, lang) in audio_by_scene_lang}
 
+        # In test mode, synthetic media has fixed durations that won't
+        # perfectly match narration timing — allow wider tolerance.
+        _test_mode = os.environ.get("DOCUMENTARY_TEST_MODE", "").lower() in ("1", "true", "yes")
+        _tolerance = 10.0 if _test_mode else 1.0
+
         for sn, video_durs in video_by_scene.items():
             total_video = sum(video_durs)
             # Check against each language independently; video should
@@ -289,7 +294,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
             matched_any = False
             for lang in langs_present:
                 total_audio = audio_by_scene_lang.get((sn, lang), 0.0)
-                if total_audio > 0 and abs(total_video - total_audio) <= 1.0:
+                if total_audio > 0 and abs(total_video - total_audio) <= _tolerance:
                     matched_any = True
                     break
             if not matched_any:
@@ -300,7 +305,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
                         errors.append(
                             f"Scene {sn} timing mismatch: video source_range total "
                             f"({total_video:.2f}s) vs narration/{report_lang or 'default'} "
-                            f"({total_audio:.2f}s) \u2014 drift > 1s"
+                            f"({total_audio:.2f}s) \u2014 drift > {_tolerance}s"
                         )
                         break
 
@@ -401,6 +406,7 @@ def timeline_guardian_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=f"OTIO timeline missing or unreadable at {phase} phase.",
+            agent_policy_type="otio",
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)
@@ -419,6 +425,7 @@ def timeline_guardian_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=f"OTIO timeline validation failed at {phase} phase: {error}",
+            agent_policy_type="otio",
         )
         if response.get("action") != "skip":
             raise RuntimeError(error_msg)

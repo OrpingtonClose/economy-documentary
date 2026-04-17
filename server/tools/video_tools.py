@@ -182,6 +182,7 @@ def generate_video_clip(
             severity="critical",
             default_action="abort",
             diagnosis_hint="No GPU worker is provisioned or healthy.",
+            agent_policy_type="production",
         )
         if response.get("action") != "skip":
             raise RuntimeError(_no_worker_msg)
@@ -402,6 +403,7 @@ def generate_video_clip(
                 severity="warning",
                 default_action="abort",
                 diagnosis_hint="QA model could not evaluate clip quality.",
+                agent_policy_type="video",
             )
             if response.get("action") != "skip":
                 raise RuntimeError(_strict_msg)

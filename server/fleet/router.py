@@ -12,6 +12,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
+import re
 
 from typing import Any, Optional
 
@@ -136,9 +137,9 @@ async def enqueue_clips(req: EnqueueRequest) -> dict[str, Any]:
     queued_clips = []
     for c in req.clips:
         queued_clips.append(QueuedClip(
-            clip_id=c.get("clip_id", f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}"),
-            scene_num=c.get("scene_num", 0),
-            phrase_idx=c.get("phrase_idx", 0),
+            clip_id=c.get("clip_id", f"scene_{int(re.sub(r'[^0-9]', '', str(c.get('scene_num', 0))) or 0):03d}_phrase_{int(re.sub(r'[^0-9]', '', str(c.get('phrase_idx', 0))) or 0):03d}"),
+            scene_num=int(re.sub(r'[^0-9]', '', str(c.get('scene_num', 0))) or 0),
+            phrase_idx=int(re.sub(r'[^0-9]', '', str(c.get('phrase_idx', 0))) or 0),
             prompt=c.get("prompt", ""),
             negative_prompt=c.get("negative_prompt", ""),
             duration=c.get("duration", 5.0),
@@ -163,7 +164,7 @@ async def fleet_status() -> dict[str, Any]:
 
     summary = coordinator.get_summary()
     summary["active"] = True
-    summary["cost"] = coordinator.cost_tracker.summary
+    summary["cost"] = coordinator.cost_tracker.summary()
     return summary
 
 
