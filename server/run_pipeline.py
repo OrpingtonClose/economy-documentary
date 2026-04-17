@@ -31,9 +31,9 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# Force test mode if --test-mode is passed (must be before imports)
+# Force simulation mode if --test-mode is passed (must be before imports)
 if "--test-mode" in sys.argv:
-    os.environ["DOCUMENTARY_TEST_MODE"] = "true"
+    os.environ["DOCUMENTARY_SIMULATION_MODE"] = "true"
 if "--quick-test" in sys.argv:
     os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
@@ -282,7 +282,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     logger.info("Topic: %s", topic)
     logger.info("Corpus: %s", corpus_path)
     logger.info("Language: %s", language)
-    logger.info("Test mode: %s", os.environ.get("DOCUMENTARY_TEST_MODE", "false"))
+    logger.info("Simulation mode: %s", os.environ.get("DOCUMENTARY_SIMULATION_MODE", "false"))
     logger.info("Model: %s", os.environ.get("ADK_MODEL", "(default)"))
 
     # Read corpus content to include in the initial message

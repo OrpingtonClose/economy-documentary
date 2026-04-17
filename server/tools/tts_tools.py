@@ -1,8 +1,9 @@
 """
 TTS tools -- Qwen3-TTS generation wrapper.
 
-For production: generates narration WAV files using Qwen3-TTS on GPU.
-For test run: generates silent WAV files with correct estimated duration (no GPU).
+Generates narration WAV files using Qwen3-TTS on GPU.  In simulation mode
+(activated via ``testing.simulation_bridge``), the ADK EnvironmentSimulationConfig
+intercepts calls and returns mock responses — no hand-rolled ``_TEST_MODE`` needed.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "TTS_OUTPUT_DIR", "/tmp/documentary-pipeline/audio"
 )
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+from testing.simulation_bridge import simulated
 
 # Approximate speech rate: ~0.3s per word (for test duration estimation)
 _SECONDS_PER_WORD = 0.3
@@ -48,6 +49,7 @@ def _generate_silent_wav(output_path: str, duration: float) -> None:
         wf.writeframes(silent_data)
 
 
+@simulated("generate_narration")
 def generate_narration(
     scene_num: int,
     voice_role: str,
@@ -122,28 +124,6 @@ def generate_narration(
                 f.write(h)
         except OSError:
             pass
-
-    if _TEST_MODE:
-        # Test mode: generate silent WAV with correct duration
-        _generate_silent_wav(wav_path, duration)
-        # Do NOT write sidecar for test mode — prevents silent WAVs from being
-        # mistakenly cached as production audio when switching modes.
-        if os.path.isfile(sidecar_path):
-            os.remove(sidecar_path)
-        logger.info(
-            "Test mode: generated silent WAV %s (%.2fs)", wav_path, duration
-        )
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "test",
-                "wav_path": wav_path,
-                "duration": round(duration, 2),
-                "sample_rate": _SAMPLE_RATE,
-                "text_length": len(text),
-                "word_count": len(text.split()),
-            }
-        )
 
     # Production mode: call Qwen3-TTS on GPU worker
     # ARCHITECTURE INVARIANT: TTS must run on a dedicated VM.

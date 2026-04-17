@@ -29,11 +29,11 @@ logger = logging.getLogger(__name__)
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
-# Auto-approve all stages in test mode (no human needed)
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true", "yes")
-# Separate flag: auto-approve gates without enabling test-mode fakes.
-# Useful for real GPU runs that still skip manual approval.
-_AUTO_APPROVE = _TEST_MODE or os.environ.get(
+# Auto-approve all stages (no human needed).
+# Controlled by DOCUMENTARY_AUTO_APPROVE env var.  When simulation mode is
+# active (via testing.simulation_bridge), tool calls are intercepted by the
+# ADK EnvironmentSimulationEngine — approval gates use this flag independently.
+_AUTO_APPROVE = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
 

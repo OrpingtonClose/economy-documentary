@@ -57,10 +57,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in (
-    "1",
-    "true",
-)
+from testing.simulation_bridge import is_simulation_active
 
 
 # ---------------------------------------------------------------------------
@@ -1049,9 +1046,9 @@ class WorkerProvisioner:
         self._provision_start_error = ""
         self._specs_ready.clear()
 
-        if _TEST_MODE:
+        if is_simulation_active():
             logger.info(
-                "WorkerProvisioner: TEST MODE — skipping worker provisioning"
+                "WorkerProvisioner: simulation mode — skipping worker provisioning"
             )
             self._specs_ready.set()
             return
@@ -1212,7 +1209,7 @@ class WorkerProvisioner:
         Returns True if the worker is healthy.
         Raises RuntimeError if provisioning failed or timed out.
         """
-        if _TEST_MODE:
+        if is_simulation_active():
             return True
 
         # Wait for start_provisioning() to populate _specs.  When
@@ -1303,8 +1300,8 @@ class WorkerProvisioner:
             require_video=require_video,
         )
 
-        if _TEST_MODE:
-            return {"status": "test_mode", "workers": []}
+        if is_simulation_active():
+            return {"status": "simulation_mode", "workers": []}
 
         status = {"workers": [], "provisioned": [], "already_healthy": []}
 
