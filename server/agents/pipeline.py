@@ -31,6 +31,7 @@ Human-in-the-loop gates (AG-UI approval workflow):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -49,6 +50,7 @@ from callbacks.approval_gate import (
     wait_for_approval,
 )
 from callbacks.state_manager import build_pipeline_state
+from testing.simulation_bridge import create_agent_callback, is_simulation_active
 from tools.otio_tools import _timeline_path
 
 logger = logging.getLogger(__name__)
@@ -203,6 +205,106 @@ assembler_agent.before_agent_callback = _assembly_before_with_gate
 
 
 # ---------------------------------------------------------------------------
+# Simulation callback wiring
+# ---------------------------------------------------------------------------
+
+# Store original (pre-simulation) callbacks so re-wiring restores them first.
+_original_callbacks: dict[str, Any] = {}
+_simulation_wired = False
+
+
+def _wire_simulation_callbacks(sim_callback) -> None:
+    """Compose a dynamic simulation before_tool_callback onto each agent.
+
+    The composed callback reads from ``SimulationRegistry`` at call time, so
+    it always uses the *current* scenario's engine — even if
+    ``deactivate_simulation()`` + ``activate_simulation(new_config)`` was
+    called between runs.  This means multi-scenario test runners work without
+    needing to re-wire callbacks for each scenario.
+
+    The ``sim_callback`` parameter (from ``EnvironmentSimulationFactory``) is
+    kept as a fast-path for ADK-registered tools, but the dynamic registry
+    check ensures correctness even if the factory callback becomes stale.
+    """
+    global _simulation_wired
+
+    agents_to_wire = [
+        scenario_director,
+        audio_agent,
+        visual_director,
+        production_supervisor,
+        assembler_agent,
+    ]
+
+    # Walk sub-agents too (LoopAgent children, etc.)
+    expanded = []
+    for agent in agents_to_wire:
+        expanded.append(agent)
+        if hasattr(agent, "sub_agents"):
+            for sub in agent.sub_agents:
+                expanded.append(sub)
+
+    for agent in expanded:
+        # On first wiring, save the original callback; on re-wiring, restore it
+        # so we don't compose on top of a previous composition.
+        if agent.name in _original_callbacks:
+            orig = _original_callbacks[agent.name]
+        else:
+            orig = agent.before_tool_callback
+            _original_callbacks[agent.name] = orig
+
+        def _compose(original_cb, agent_name):
+            """Create a composed callback that checks SimulationRegistry dynamically."""
+            async def _composed(callback_context, tool_name, tool_input):
+                # Dynamic check: is simulation still active?
+                from testing.simulation_bridge import is_simulation_active
+
+                if is_simulation_active():
+                    result = None
+                    try:
+                        if asyncio.iscoroutinefunction(sim_callback):
+                            result = await sim_callback(callback_context, tool_name, tool_input)
+                        else:
+                            result = sim_callback(callback_context, tool_name, tool_input)
+                    except Exception as exc:
+                        logger.debug(
+                            "Simulation callback error for %s.%s: %s",
+                            agent_name, tool_name, exc,
+                        )
+
+                    if result is not None:
+                        logger.info(
+                            "Simulation intercepted ADK tool %s on %s",
+                            tool_name, agent_name,
+                        )
+                        return result
+
+                # No simulation match or simulation inactive — run original
+                if original_cb is not None:
+                    if asyncio.iscoroutinefunction(original_cb):
+                        return await original_cb(callback_context, tool_name, tool_input)
+                    return original_cb(callback_context, tool_name, tool_input)
+                return None
+
+            return _composed
+
+        agent.before_tool_callback = _compose(orig, agent.name)
+        logger.debug("Simulation callback composed onto agent: %s", agent.name)
+
+    _simulation_wired = True
+
+
+def _reset_simulation_wiring() -> None:
+    """Restore original callbacks and allow re-wiring.
+
+    Called by ``deactivate_simulation()`` so the next ``activate_simulation()``
+    can wire a fresh callback from the new scenario's config.
+    """
+    global _simulation_wired
+    _simulation_wired = False
+
+
+# ---------------------------------------------------------------------------
 # Pipeline-level callbacks
 # ---------------------------------------------------------------------------
 
@@ -229,6 +331,17 @@ def _init_pipeline_state(
             "Pipeline state initialised: pipeline_key=%s",
             state["_pipeline_key"],
         )
+
+    # ── ADK Environment Simulation wiring ──────────────────────────────
+    # When a simulation scenario is active, compose the ADK-native
+    # before_tool_callback with each agent's existing callback so that
+    # ADK FunctionTools are intercepted by the EnvironmentSimulationEngine.
+    # Callback-called functions are already handled by the @simulated decorator.
+    if is_simulation_active():
+        sim_callback = create_agent_callback()
+        if sim_callback:
+            _wire_simulation_callbacks(sim_callback)
+            logger.info("Simulation callbacks wired into all pipeline agents")
 
     # ── Trace capture for across-run learning ─────────────────────────
     try:

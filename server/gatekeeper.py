@@ -190,9 +190,7 @@ _INTERVENTION_TIMEOUT = float(os.environ.get("GATEKEEPER_TIMEOUT", "10"))
 _AUTO_APPROVE = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
-_TEST_MODE = os.environ.get(
-    "DOCUMENTARY_TEST_MODE", ""
-).strip().lower() in ("1", "true", "yes")
+from testing.simulation_bridge import is_simulation_active
 
 
 def intervention_window(stage: str, checks: list[GatekeeperCheck]) -> bool:
@@ -203,7 +201,7 @@ def intervention_window(stage: str, checks: list[GatekeeperCheck]) -> bool:
 
     Returns True if the pipeline should proceed, False if halted.
     """
-    if _AUTO_APPROVE or _TEST_MODE:
+    if _AUTO_APPROVE or is_simulation_active():
         logger.info(
             "Gatekeeper intervention window skipped (auto-approve): %s", stage
         )
@@ -666,9 +664,9 @@ def check_video_clip(
         ))
 
     # 5. Anti-cheat: dead stills
-    # In test mode, solid-color placeholder clips are expected to be "dead stills"
-    # and "looping" — skip anti-cheat checks that would reject them.
-    if _TEST_MODE:
+    # In simulation mode, placeholder clips may be "dead stills" / "looping"
+    # — skip anti-cheat checks that would reject them.
+    if is_simulation_active():
         for _ac_name in ("anti_cheat_dead_still", "anti_cheat_looping"):
             checks.append(GatekeeperCheck(
                 name=_ac_name,
