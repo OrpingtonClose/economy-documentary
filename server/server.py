@@ -156,8 +156,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Fleet coordinator failed to start: %s", e)
 
+    # Start reasoning digest engine (background thread that batch-processes
+    # raw traces into concise summaries for the frontend observer)
+    from plugins.reasoning_digest import get_digest_engine
+    _digest_engine = get_digest_engine()
+
     logger.info("Documentary pipeline server started")
     yield
+
+    # Shutdown digest engine
+    _digest_engine.stop()
 
     # Shutdown fleet coordinator
     if _fleet_coordinator:

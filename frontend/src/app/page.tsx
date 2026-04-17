@@ -31,12 +31,17 @@ const QADashboard = dynamic(
   () => import("@/components/qa-dashboard").then((m) => m.QADashboard),
   { ssr: false }
 );
+const ReasoningTracePanel = dynamic(
+  () => import("@/components/reasoning-trace").then((m) => m.ReasoningTracePanel),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("dashboard");
 
   const tabs = [
     { id: "dashboard", label: "Pipeline Dashboard" },
+    { id: "reasoning", label: "Agent Reasoning" },
     { id: "scenario", label: "Scenario Editor" },
     { id: "prompts", label: "Prompt Reviewer" },
     { id: "clips", label: "Clip Reviewer" },
@@ -89,6 +94,7 @@ export default function Home() {
         {/* Tab content */}
         <div className="flex-1 overflow-auto p-4">
           {activeTab === "dashboard" && <PipelineDashboard />}
+          {activeTab === "reasoning" && <ReasoningTracePanel />}
           {activeTab === "scenario" && <ScenarioEditor />}
           {activeTab === "prompts" && <PromptReviewer />}
           {activeTab === "clips" && <ClipReviewer />}

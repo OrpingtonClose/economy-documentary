@@ -313,6 +313,121 @@ def emit_agui_event(event_type: str, data: dict) -> None:
 # REST endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/reasoning/digests")
+async def get_reasoning_digests(
+    limit: int = 50,
+    since: float | None = None,
+    phase: str | None = None,
+    importance: str | None = None,
+):
+    """Get reasoning digests — concise summaries of agent activity.
+
+    These are batch-processed from raw traces by the DigestEngine background
+    thread.  Each digest summarises a burst of agent activity into a 1-2
+    sentence summary with structured details (ratings, errors, token costs,
+    production planning decisions).
+
+    Query params:
+        limit:      max digests (default 50)
+        since:      only digests after this Unix timestamp (for polling)
+        phase:      filter by pipeline phase (scenario, audio, visual_direction, production, assembly)
+        importance: filter by importance (low, medium, high)
+    """
+    try:
+        from plugins.reasoning_digest import get_digest_engine
+
+        engine = get_digest_engine()
+
+        if since and since > 0:
+            digests = engine.get_since(since, limit=limit)
+        else:
+            digests = engine.get_recent(limit)
+
+        # Apply filters
+        if phase:
+            digests = [d for d in digests if d.get("phase") == phase]
+        if importance:
+            digests = [d for d in digests if d.get("importance") == importance]
+
+        return JSONResponse({"digests": digests, "count": len(digests)})
+
+    except Exception as e:
+        return JSONResponse(
+            {"digests": [], "count": 0, "error": str(e)},
+            status_code=200,
+        )
+
+
+@router.get("/reasoning/raw")
+async def get_reasoning_traces_raw(
+    agent: str | None = None,
+    event_type: str | None = None,
+    limit: int = 50,
+    since: float | None = None,
+):
+    """Get raw reasoning traces (for drill-down from a digest).
+
+    The frontend should prefer ``/reasoning/digests`` for the main view.
+    Use this endpoint when the user expands a digest and wants to see the
+    underlying raw events.
+
+    Query params:
+        agent:      filter by agent name
+        event_type: filter by event type (llm_request, llm_response, etc.)
+        limit:      max rows (default 50)
+        since:      only rows after this Unix timestamp (for polling)
+    """
+    try:
+        from plugins.reasoning_trace import _REASONING_DB
+        import sqlite3 as _sqlite3
+
+        conn = _sqlite3.connect(_REASONING_DB, timeout=5)
+        conn.row_factory = _sqlite3.Row
+
+        query = "SELECT * FROM reasoning_log WHERE 1=1"
+        params: list = []
+
+        if agent:
+            query += " AND agent_name = ?"
+            params.append(agent)
+        if event_type:
+            query += " AND event_type = ?"
+            params.append(event_type)
+        if since:
+            query += " AND timestamp > ?"
+            params.append(since)
+
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        conn.close()
+
+        traces = []
+        for row in rows:
+            traces.append({
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "agent_name": row["agent_name"],
+                "model": row["model"],
+                "content": row["content"],
+                "tokens_in": row["tokens_in"],
+                "tokens_out": row["tokens_out"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
+            })
+
+        # Return in chronological order (query was DESC for LIMIT)
+        traces.reverse()
+        return JSONResponse({"traces": traces, "count": len(traces)})
+
+    except Exception as e:
+        return JSONResponse(
+            {"traces": [], "count": 0, "error": str(e)},
+            status_code=200,
+        )
+
+
 @router.get("/artifacts")
 async def get_artifacts(type: str | None = None):
     """Get all artifacts produced by the pipeline.

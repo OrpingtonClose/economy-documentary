@@ -182,3 +182,40 @@ export interface ProposedAction {
   description: string;
   risk_level: "low" | "medium" | "high";
 }
+
+// Reasoning trace types — live agent thinking surfaced to the observer
+
+export interface ReasoningDigest {
+  id: number;
+  timestamp: number;
+  agent: string;
+  phase: string;
+  importance: "low" | "medium" | "high";
+  summary: string;
+  details: {
+    tokens?: { in: number; out: number };
+    rating?: string;
+    feedback?: string;
+    focus_areas?: string[];
+    plan?: {
+      batches?: number;
+      strategy?: string;
+      estimated_gpu_minutes?: number;
+    };
+    tools_used?: string[];
+    errors?: string[];
+  };
+  raw_trace_ids: number[];
+}
+
+export interface ReasoningTrace {
+  id: number;
+  timestamp: number;
+  event_type: "agent_started" | "agent_completed" | "llm_request" | "llm_response" | "llm_error" | "tool_started" | "tool_completed" | "tool_error" | "agent_event" | "invocation_started" | "invocation_completed";
+  agent_name: string;
+  model: string;
+  content: string;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  metadata: Record<string, unknown>;
+}
