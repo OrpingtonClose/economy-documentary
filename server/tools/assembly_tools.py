@@ -19,6 +19,182 @@ from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Timeout scaling — learned from Strands migration
+# ---------------------------------------------------------------------------
+# Hardcoded 120s/300s timeouts are too short for 5-minute movies (30+ clips).
+# A 5-min H.264 re-encode at 'fast' preset takes ~10s per minute of content
+# on a modern CPU; concat of 30+ clips can take 5-10 minutes.
+# Formula: base + (per_minute * estimated_duration_minutes), clamped to a max.
+
+_MUX_TIMEOUT_BASE = 60       # seconds base
+_MUX_TIMEOUT_PER_MIN = 30    # seconds per minute of input
+_MUX_TIMEOUT_MAX = 1200      # 20-minute hard cap
+
+_CONCAT_TIMEOUT_BASE = 60
+_CONCAT_TIMEOUT_PER_CLIP = 20  # seconds per clip (re-encode overhead)
+_CONCAT_TIMEOUT_MAX = 1800     # 30-minute hard cap
+
+_TRIM_TIMEOUT_BASE = 30
+_TRIM_TIMEOUT_PER_MIN = 15
+_TRIM_TIMEOUT_MAX = 600
+
+
+def _estimate_file_duration_minutes(path: str) -> float:
+    """Estimate media duration in minutes via ffprobe (fast, metadata only).
+
+    Returns 5.0 as a safe default if ffprobe fails.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries",
+             "format=duration", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip()) / 60.0
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        pass
+    return 5.0  # conservative default for a 5-min movie
+
+
+def _scaled_timeout(base: int, per_unit: int, units: float, cap: int) -> int:
+    """Calculate a scaled timeout clamped to a maximum."""
+    return min(cap, int(base + per_unit * units))
+
+
+def normalize_audio_loudness(
+    input_path: str,
+    output_path: str,
+    target_lufs: float = -16.0,
+    tool_context=None,
+) -> str:
+    """Normalize audio loudness using ffmpeg's loudnorm filter (EBU R128).
+
+    Different TTS voices produce clips at varying volume levels.  Without
+    normalization, the final documentary has jarring volume shifts between
+    narrators (V1/V2/V3).  This two-pass loudnorm ensures consistent
+    perceived loudness across all narration clips.
+
+    Args:
+        input_path: Path to the input audio file (WAV).
+        output_path: Path for the normalized output file.
+        target_lufs: Target integrated loudness in LUFS (default -16.0,
+            broadcast standard for web content).
+
+    Returns:
+        JSON string with normalization result.
+    """
+    if not os.path.exists(input_path):
+        return json.dumps({"error": f"Input file not found: {input_path}"})
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    # Pass 1: measure loudness stats
+    measure_cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-af", f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11:print_format=json",
+        "-f", "null", "-",
+    ]
+
+    try:
+        measure_result = subprocess.run(
+            measure_cmd, capture_output=True, text=True, timeout=120,
+        )
+        if measure_result.returncode != 0:
+            logger.warning(
+                "Loudnorm pass 1 failed (rc=%d), copying without normalization",
+                measure_result.returncode,
+            )
+            # Fallback: copy without normalization rather than failing
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return json.dumps({
+                "status": "copied_without_normalization",
+                "output_path": output_path,
+                "reason": "loudnorm measurement failed",
+            })
+
+        # Extract measured loudness from stderr (ffmpeg writes stats there)
+        stderr = measure_result.stderr
+        # Find the JSON block in stderr
+        json_start = stderr.rfind("{")
+        json_end = stderr.rfind("}") + 1
+        if json_start >= 0 and json_end > json_start:
+            stats = json.loads(stderr[json_start:json_end])
+        else:
+            logger.warning("Could not parse loudnorm stats, using single-pass")
+            stats = None
+
+    except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        logger.warning("Loudnorm pass 1 error: %s, using single-pass", exc)
+        stats = None
+
+    # Pass 2: apply normalization with measured stats (or single-pass fallback)
+    if stats:
+        measured_i = stats.get("input_i", "-24.0")
+        measured_tp = stats.get("input_tp", "-2.0")
+        measured_lra = stats.get("input_lra", "7.0")
+        measured_thresh = stats.get("input_thresh", "-34.0")
+        af_filter = (
+            f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11:"
+            f"measured_I={measured_i}:measured_TP={measured_tp}:"
+            f"measured_LRA={measured_lra}:measured_thresh={measured_thresh}:"
+            f"linear=true"
+        )
+    else:
+        af_filter = f"loudnorm=I={target_lufs}:TP=-1.5:LRA=11"
+
+    normalize_cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-af", af_filter,
+        "-ar", "24000",  # match TTS output sample rate
+        output_path,
+    ]
+
+    dur_min = _estimate_file_duration_minutes(input_path)
+    timeout = _scaled_timeout(60, 20, dur_min, 600)
+
+    try:
+        result = subprocess.run(
+            normalize_cmd, capture_output=True, text=True, timeout=timeout,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Loudnorm pass 2 failed (rc=%d), copying without normalization",
+                result.returncode,
+            )
+            import shutil
+            shutil.copy2(input_path, output_path)
+            return json.dumps({
+                "status": "copied_without_normalization",
+                "output_path": output_path,
+                "reason": f"loudnorm encoding failed (rc={result.returncode})",
+            })
+
+        logger.info(
+            "Normalized %s -> %s (target=%.1f LUFS)",
+            input_path, output_path, target_lufs,
+        )
+        return json.dumps({
+            "status": "normalized",
+            "output_path": output_path,
+            "target_lufs": target_lufs,
+            "measured_lufs": stats.get("input_i") if stats else "unknown",
+        })
+
+    except subprocess.TimeoutExpired:
+        logger.warning("Loudnorm timed out after %ds, copying without normalization", timeout)
+        import shutil
+        shutil.copy2(input_path, output_path)
+        return json.dumps({
+            "status": "copied_without_normalization",
+            "output_path": output_path,
+            "reason": f"loudnorm timed out after {timeout}s",
+        })
+
 
 def mux_audio_video(
     audio_path: str,
@@ -65,12 +241,25 @@ def mux_audio_video(
         output_path,
     ]
 
+    # Scale timeout by input duration (a 5-min movie re-encode takes much
+    # longer than the old hardcoded 120s allowed)
+    dur_min = max(
+        _estimate_file_duration_minutes(audio_path),
+        _estimate_file_duration_minutes(video_path),
+    )
+    timeout = _scaled_timeout(
+        _MUX_TIMEOUT_BASE, _MUX_TIMEOUT_PER_MIN, dur_min, _MUX_TIMEOUT_MAX,
+    )
+    logger.info(
+        "ffmpeg mux: estimated %.1f min input, timeout=%ds", dur_min, timeout,
+    )
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -91,7 +280,7 @@ def mux_audio_video(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg mux timed out"})
+        return json.dumps({"error": f"ffmpeg mux timed out after {timeout}s (input ~{dur_min:.1f} min)"})
 
 
 def concat_clips(
@@ -175,11 +364,21 @@ def concat_clips(
                 output_path,
             ]
 
+        # Scale timeout by number of clips (re-encoding 30+ clips takes
+        # much longer than the old hardcoded 300s)
+        timeout = _scaled_timeout(
+            _CONCAT_TIMEOUT_BASE, _CONCAT_TIMEOUT_PER_CLIP,
+            len(paths), _CONCAT_TIMEOUT_MAX,
+        )
+        logger.info(
+            "ffmpeg concat: %d clips, timeout=%ds", len(paths), timeout,
+        )
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -200,7 +399,7 @@ def concat_clips(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg concat timed out"})
+        return json.dumps({"error": f"ffmpeg concat timed out after {timeout}s ({len(paths)} clips)"})
     finally:
         try:
             os.unlink(concat_path)
@@ -241,12 +440,18 @@ def trim_clip(
         output_path,
     ]
 
+    # Scale timeout by duration being extracted
+    dur_min = duration_sec / 60.0
+    timeout = _scaled_timeout(
+        _TRIM_TIMEOUT_BASE, _TRIM_TIMEOUT_PER_MIN, dur_min, _TRIM_TIMEOUT_MAX,
+    )
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -274,7 +479,7 @@ def trim_clip(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg trim timed out"})
+        return json.dumps({"error": f"ffmpeg trim timed out after {timeout}s"})
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------

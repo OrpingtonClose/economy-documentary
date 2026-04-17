@@ -132,6 +132,45 @@ def create_timeline(
     )
 
 
+def clear_narration_track(timeline_path: str) -> int:
+    """Remove all clips and gaps from the A1_Narration track.
+
+    Called at the start of a timing loop re-iteration to prevent
+    duplicate narration clips from accumulating across iterations.
+
+    Args:
+        timeline_path: Path to the OTIO timeline file.
+
+    Returns:
+        Number of items removed.
+    """
+    if not timeline_path or not os.path.exists(timeline_path):
+        return 0
+
+    with _otio_lock:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        narration_track = None
+        for track in timeline.tracks:
+            if track.name == TRACK_A1:
+                narration_track = track
+                break
+
+        if narration_track is None:
+            return 0
+
+        count = len(narration_track)
+        if count > 0:
+            # Clear all items (clips + gaps) from the narration track
+            del narration_track[:]
+            otio.adapters.write_to_file(timeline, timeline_path)
+            logger.info(
+                "track=<%s>, items_removed=<%d> | cleared narration track "
+                "for timing loop re-iteration",
+                TRACK_A1, count,
+            )
+        return count
+
+
 def add_narration_clip(
     scene_num: int,
     voice: str,

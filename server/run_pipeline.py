@@ -349,8 +349,25 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     reporter.start()
     reporter.send("phase_start", phase="scenario")
 
-    # Run the pipeline — wrapped in try/finally so the infra agent is
-    # always cleaned up, even if the pipeline raises an exception.
+    # ── Graph-level recovery wrapper (from Strands lessons) ─────────────
+    # Wraps the entire pipeline execution with async-native retry logic.
+    # On failure, the pipeline is retried with fresh state (restored from
+    # B2 checkpoints if available).
+    #
+    # NOTE: We use an async retry loop instead of recovery.py's
+    # execute_with_recovery() because the pipeline is async and ADK's
+    # Runner/SessionService/Session are bound to the current event loop.
+    # Wrapping in a sync function + thread pool would crash with
+    # "attached to a different loop" errors.
+    from copy import deepcopy
+
+    _pipeline_max_retries = int(os.environ.get("PIPELINE_MAX_RETRIES", "1"))
+    _retry_backoff_base = 5.0
+    _retry_backoff_max = 30.0
+
+    # Snapshot initial state for clean retries
+    _initial_state_snapshot = deepcopy(initial_state)
+
     start_time = time.time()
     logger.info("Starting pipeline run...")
 
@@ -361,7 +378,26 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
 
     final_response = None
     _last_phase = "scenario"
-    try:
+
+    async def _run_pipeline_once() -> str:
+        """Execute one full pipeline run.  Returns final response text.
+
+        On retry, the session state is reset from the snapshot (which may
+        include B2-restored checkpoints, so completed stages are skipped).
+        """
+        nonlocal final_response, _last_phase
+        _last_phase = "scenario"
+
+        # Reset session state from snapshot for clean retry
+        current_session = await session_service.get_session(
+            app_name="documentary_pipeline_runner",
+            user_id="pipeline_runner",
+            session_id=session.id,
+        )
+        if current_session and hasattr(current_session, "state"):
+            for k, v in _initial_state_snapshot.items():
+                current_session.state[k] = v
+
         async for event in runner.run_async(
             user_id="pipeline_runner",
             session_id=session.id,
@@ -371,7 +407,6 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
                 text = "".join(p.text or "" for p in event.content.parts if hasattr(p, "text"))
                 if text.strip():
                     agent_name = event.author or "unknown"
-                    # Truncate for logging
                     logger.info("[%s] %s", agent_name, text)
                     final_response = text
 
@@ -385,8 +420,45 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
                                 _last_phase = phase
                                 break
 
-                    # Track tool calls from agent messages
                     reporter.send("llm_end", agent=agent_name, duration=0.0, output_tokens=len(text) // 3)
+
+        return final_response or ""
+
+    # Async retry loop — runs in the same event loop as ADK objects
+    _retryable = (RuntimeError, ConnectionError, TimeoutError, OSError)
+    _last_err: Exception | None = None
+    try:
+        for attempt in range(_pipeline_max_retries + 1):
+            try:
+                await _run_pipeline_once()
+                _last_err = None
+                break
+            except _retryable as err:
+                _last_err = err
+                if attempt < _pipeline_max_retries:
+                    backoff = min(
+                        _retry_backoff_max,
+                        _retry_backoff_base * (2 ** attempt),
+                    )
+                    logger.warning(
+                        "attempt=<%d/%d>, error=<%s> | pipeline failed, "
+                        "retrying in %.1fs from B2 checkpoint",
+                        attempt + 1, _pipeline_max_retries + 1, err, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(
+                        "attempt=<%d/%d>, error=<%s> | pipeline exhausted "
+                        "all retries",
+                        attempt + 1, _pipeline_max_retries + 1, err,
+                    )
+        if _last_err is not None:
+            raise _last_err
+    except Exception as pipeline_err:
+        logger.error(
+            "Pipeline failed after recovery attempts: %s", pipeline_err,
+        )
+        raise
     finally:
         reporter.send("phase_end", phase=_last_phase, status="completed")
         reporter.send("finalize", status="completed")

@@ -26,6 +26,8 @@ from typing import Optional
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types as genai_types
 
+from callbacks.state_manager import safe_state_dict
+
 logger = logging.getLogger(__name__)
 
 # Maximum duration for a single LTX-Video 2.3 clip (seconds).
@@ -387,8 +389,35 @@ def clean_scenes_after_scenario(
         #   sum(scene_duration_sec) + total_gaps = original_target
         #
         # The gap constants MUST match those in deterministic_audio_callback.
+        #
+        # IMPORTANT: On timing loop re-iterations, the scenes in state
+        # already have scaled durations from the previous pass.  We
+        # preserve the ORIGINAL unscaled durations on the first pass and
+        # always scale from those, preventing compounding shrinkage
+        # (e.g. 420→390→360→332) across iterations.
         _INTER_VOICE_PAUSE = 1.5
         _INTER_SCENE_PAUSE = 2.5
+
+        # Preserve original durations on first pass; restore on re-iterations
+        _raw_orig = state.get("_original_scene_durations")
+        if _raw_orig:
+            try:
+                _orig_durations = json.loads(str(_raw_orig))
+                # Restore original duration_sec before scaling
+                for s in scenes:
+                    sn = str(s.get("scene_num", 0))
+                    if sn in _orig_durations:
+                        s["duration_sec"] = _orig_durations[sn]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            # First pass: snapshot the unscaled durations
+            _orig_durations = {
+                str(s.get("scene_num", 0)): s.get("duration_sec", 0)
+                for s in scenes
+            }
+            state["_original_scene_durations"] = json.dumps(_orig_durations)
+
         original_total = sum(s.get("duration_sec", 0) for s in scenes)
         if original_total > 0:
             num_scenes = len(scenes)
@@ -470,7 +499,7 @@ def clean_scenes_after_scenario(
         from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
         vs_raw = str(state.get("visual_style", ""))
         _b2_ok = upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
-        _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
+        _b2_ok = upload_pipeline_state(safe_state_dict(state)) and _b2_ok
         # Upload timeline if it exists
         tp = state.get("_timeline_path", "")
         if tp and os.path.exists(tp):
@@ -591,7 +620,7 @@ def deterministic_audio_callback(
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
-    validate_preconditions(AUDIO_CONTRACT, state.to_dict())
+    validate_preconditions(AUDIO_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -601,6 +630,26 @@ def deterministic_audio_callback(
     check_infra_pause()
 
     state["pipeline_phase"] = "audio"
+
+    # ── Timing loop re-iteration: clear stale narration clips ─────────
+    # When the timing loop re-iterates (timing_evaluator found audio
+    # overshoots the budget, scenario_refiner adjusted scenes), the
+    # A1_Narration track still contains clips from the previous iteration.
+    # Without clearing, add_narration_clip's idempotency check would skip
+    # unchanged clips but still append new ones, and any removed/renamed
+    # clips would linger — producing a corrupted timeline with overlapping
+    # narration in the final assembly.
+    _audio_regen = state.get("_audio_needs_regeneration", False)
+    if isinstance(_audio_regen, str):
+        _audio_regen = _audio_regen.lower() in ("true", "1", "yes")
+    if _audio_regen:
+        from tools.otio_tools import clear_narration_track
+        _tl_path = state.get("_timeline_path", "")
+        _removed = clear_narration_track(_tl_path)
+        logger.info(
+            "Timing loop re-iteration: cleared %d stale narration items", _removed,
+        )
+        state["_audio_needs_regeneration"] = False
 
     # Parse scenes
     raw_scenes = state.get("scenes", "[]")
@@ -631,11 +680,80 @@ def deterministic_audio_callback(
     INTER_VOICE_PAUSE_SEC = 1.5   # breathing room between V1→V2→V3
     INTER_SCENE_PAUSE_SEC = 2.5   # transition between scenes
 
+    # ── Anti-compounding duration scaling ─────────────────────────────
+    # On timing loop re-iterations, scene durations were already scaled
+    # on the previous pass.  Restore original unscaled durations before
+    # re-scaling to prevent compounding shrinkage (420→390→360→332).
+    # This logic MUST be here (not in clean_scenes_after_scenario which
+    # only runs once after scenario_director, before the timing loop).
+    _raw_orig = state.get("_original_scene_durations")
+    if _raw_orig:
+        try:
+            _orig_durations = json.loads(str(_raw_orig))
+            for s in scenes:
+                sn = str(s.get("scene_num", 0))
+                if sn in _orig_durations:
+                    s["duration_sec"] = _orig_durations[sn]
+            logger.info(
+                "Restored %d original scene durations for scaling",
+                len(_orig_durations),
+            )
+        except (json.JSONDecodeError, TypeError):
+            pass
+    else:
+        # First pass: snapshot the unscaled durations
+        _orig_durations = {
+            str(s.get("scene_num", 0)): s.get("duration_sec", 0)
+            for s in scenes
+        }
+        state["_original_scene_durations"] = json.dumps(_orig_durations)
+
+    # Scale scene durations to account for gap overhead
+    _orig_total = sum(s.get("duration_sec", 0) for s in scenes)
+    if _orig_total > 0:
+        _total_voice_gaps = 0.0
+        for s in scenes:
+            _voices = s.get("voices") or []
+            _active = sum(1 for v in _voices if v.get("text", "").strip())
+            _total_voice_gaps += max(0, _active - 1) * INTER_VOICE_PAUSE_SEC
+        _total_scene_gaps = max(0, len(scenes) - 1) * INTER_SCENE_PAUSE_SEC
+        _gap_overhead = _total_voice_gaps + _total_scene_gaps
+        _narr_budget = _orig_total - _gap_overhead
+        if _narr_budget > 0 and _narr_budget < _orig_total:
+            _scale = _narr_budget / _orig_total
+            for s in scenes:
+                _old_dur = s.get("duration_sec", 0)
+                s["duration_sec"] = round(_old_dur * _scale, 2)
+            logger.info(
+                "Duration budget: scaled %.1fs → %.1fs (gaps=%.1fs)",
+                _orig_total, sum(s.get("duration_sec", 0) for s in scenes),
+                _gap_overhead,
+            )
+
+    # Compute per-voice narration budgets from (scaled) scene durations
+    _voice_budgets: dict[str, float] = {}
+    for s in scenes:
+        _sn = _safe_int(s.get("scene_num", 0))
+        _dur = float(s.get("duration_sec", 0))
+        _voices_list = s.get("voices") or []
+        _active_v = [v for v in _voices_list if v.get("text", "").strip()]
+        _total_words = sum(len(v.get("text", "").split()) for v in _active_v)
+        if _total_words <= 0:
+            _total_words = 1
+        for v in _active_v:
+            _vname = v.get("voice", "V1")
+            _words = len(v.get("text", "").split())
+            _budget = _dur * (_words / _total_words) if _dur > 0 else 0
+            _key = f"scene_{_sn:03d}_{_vname}"
+            _voice_budgets[_key] = round(_budget, 2)
+    state["_voice_budgets"] = json.dumps(_voice_budgets)
+    state["scenes"] = json.dumps(scenes, ensure_ascii=False)
+
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
     _feedback_store = get_feedback_store()
 
-    # Load per-voice narration budgets from scenario stage
+    # Load per-voice narration budgets (just computed above)
     _raw_budgets = state.get("_voice_budgets", "{}")
     try:
         voice_budgets: dict[str, float] = json.loads(str(_raw_budgets))
@@ -943,7 +1061,7 @@ def deterministic_audio_callback(
 
     # Upload audio artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
-    _b2_ok = upload_pipeline_state(state.to_dict())
+    _b2_ok = upload_pipeline_state(safe_state_dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1063,7 +1181,7 @@ def deterministic_audio_callback(
                 "(LLM generated too few scenes or too-short narration)."
             ),
             agent_policy_type="audio",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
             diagnostic_data={
                 "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
                 "total_checks": len(all_gk_checks),
@@ -1480,8 +1598,7 @@ def write_visual_metadata_to_otio(
     raw_vc = str(callback_context.state.get("visual_concepts", ""))
     if raw_vc:
         _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
-    _state_d = callback_context.state.to_dict() if hasattr(callback_context.state, "to_dict") else dict(callback_context.state)
-    _b2_ok = upload_pipeline_state(_state_d) and _b2_ok
+    _b2_ok = upload_pipeline_state(safe_state_dict(callback_context.state)) and _b2_ok
     tp = callback_context.state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1539,7 +1656,7 @@ def deterministic_production_callback(
 
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
-    validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
+    validate_preconditions(PRODUCTION_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -1667,7 +1784,7 @@ def deterministic_production_callback(
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
     # GATEKEEPER: stage handoff check (visual_direction → production)
-    handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
+    handoff_checks = check_stage_handoff("visual_direction", "production", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
@@ -1679,7 +1796,7 @@ def deterministic_production_callback(
             default_action="abort",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
             agent_policy_type="video",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
@@ -2098,7 +2215,7 @@ def deterministic_production_callback(
 
     # Upload production artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
-    _b2_ok = upload_pipeline_state(state.to_dict())
+    _b2_ok = upload_pipeline_state(safe_state_dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -2142,7 +2259,7 @@ def deterministic_production_callback(
             default_action="abort",
             diagnosis_hint="Video clips failed quality checks after production.",
             agent_policy_type="production",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
             diagnostic_data={
                 "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
                 "total_checks": len(all_gk_checks),
@@ -2248,7 +2365,7 @@ def deterministic_assembly_callback(
 
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
-    validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
+    validate_preconditions(ASSEMBLY_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -2298,7 +2415,7 @@ def deterministic_assembly_callback(
         raise RuntimeError(msg)
 
     # GATEKEEPER: stage handoff check (production → assembly)
-    handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
+    handoff_checks = check_stage_handoff("production", "assembly", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
@@ -2628,8 +2745,34 @@ def deterministic_assembly_callback(
         """
         track_errors = []
         try:
-            combined_audio = _render_audio_track(narration_items, lang_suffix)
+            combined_audio_raw = _render_audio_track(narration_items, lang_suffix)
             combined_video = _render_video_track(video_items, lang_suffix)
+
+            # Loudness normalization (EBU R128) — different TTS voices
+            # produce clips at varying volume levels.  Without normalization,
+            # the final documentary has jarring volume shifts between narrators.
+            # This was identified as R7 in the deep architecture audit.
+            from tools.assembly_tools import normalize_audio_loudness
+            normalized_audio_path = os.path.join(
+                assembly_dir, f"otio_audio_normalized{lang_suffix}.wav",
+            )
+            norm_result = json.loads(normalize_audio_loudness(
+                input_path=combined_audio_raw,
+                output_path=normalized_audio_path,
+            ))
+            if norm_result.get("status") in ("normalized", "copied_without_normalization"):
+                combined_audio = normalized_audio_path
+                logger.info(
+                    "Audio loudness normalization%s: %s",
+                    lang_suffix, norm_result.get("status"),
+                )
+            else:
+                # Normalization failed entirely — use raw audio
+                combined_audio = combined_audio_raw
+                logger.warning(
+                    "Audio loudness normalization%s failed, using raw: %s",
+                    lang_suffix, norm_result.get("error", "unknown"),
+                )
 
             # Verify duration alignment (informational — OTIO is truth)
             audio_probe = json.loads(probe_clip(mp4_path=combined_audio))
@@ -2765,7 +2908,7 @@ def deterministic_assembly_callback(
         _b2_ok = upload_final_output(final_path) and _b2_ok
     if alt_final_path and os.path.exists(alt_final_path):
         _b2_ok = upload_final_output(alt_final_path) and _b2_ok
-    _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
+    _b2_ok = upload_pipeline_state(safe_state_dict(state)) and _b2_ok
     # Only mark stage complete if critical artifacts uploaded
     if _b2_ok:
         upload_stage_marker("assembly")

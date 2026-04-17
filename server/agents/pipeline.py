@@ -37,23 +37,113 @@ from typing import Optional
 
 from google.adk.agents import SequentialAgent
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.loop_agent import LoopAgent
 from google.genai import types as genai_types
 
 from agents.assembler_agent import assembler_agent
 from agents.audio_agent import audio_agent
 from agents.production_supervisor import production_supervisor
 from agents.scenario_director import scenario_director
+from agents.scenario_refiner import scenario_refiner
+from agents.timing_evaluator import timing_evaluator
 from agents.visual_director import visual_director
 from callbacks.approval_gate import (
     is_stage_approved,
     mark_stage_ready,
     wait_for_approval,
 )
-from callbacks.state_manager import build_pipeline_state
+from callbacks.state_manager import build_pipeline_state, safe_state_dict
+from contracts import (
+    ASSEMBLY_CONTRACT,
+    AUDIO_CONTRACT,
+    PRODUCTION_CONTRACT,
+    SCENARIO_CONTRACT,
+    VISUAL_DIRECTION_CONTRACT,
+    ContractViolation,
+    validate_postconditions,
+    validate_preconditions,
+)
 from testing.simulation_bridge import create_agent_callback, is_simulation_active
 from tools.otio_tools import _timeline_path
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_preconditions_or_abort(
+    contract,
+    callback_context: CallbackContext,
+) -> Optional[genai_types.Content]:
+    """Validate stage preconditions; return Content to abort if violated.
+
+    This is the graph-level precondition guard learned from the Strands
+    migration.  It runs BEFORE each agent starts, preventing wasted GPU
+    time when upstream state is missing or placeholder.
+
+    Returns None if preconditions pass, or Content with an error message
+    if they fail (which causes ADK to skip the agent).
+    """
+    try:
+        validate_preconditions(contract, safe_state_dict(callback_context.state))
+        return None
+    except ContractViolation as cv:
+        logger.error(
+            "stage=<%s> | CONTRACT precondition FAILED — skipping agent: %s",
+            contract.name, cv,
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"CONTRACT VIOLATION: {cv}"
+            )],
+        )
+
+
+def _validate_postconditions_and_log(
+    contract,
+    callback_context: CallbackContext,
+) -> None:
+    """Validate stage postconditions after completion; log but don't block.
+
+    Postcondition violations are logged as errors for visibility but do
+    not abort — the downstream stage's precondition check will catch the
+    missing output and halt cleanly.
+    """
+    try:
+        validate_postconditions(contract, safe_state_dict(callback_context.state))
+        logger.info(
+            "stage=<%s> | CONTRACT postconditions PASSED",
+            contract.name,
+        )
+    except ContractViolation as cv:
+        logger.error(
+            "stage=<%s> | CONTRACT postcondition FAILED: %s",
+            contract.name, cv,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Timing feedback loop (R3 from deep audit — fixes ~30-40% of duration
+# compliance failures).  Wraps audio generation + timing evaluation +
+# scenario refinement in a LoopAgent so that if audio overshoots the
+# duration budget, the scenario is automatically refined and audio
+# regenerated.  Max 3 iterations; the refiner's before_agent_callback
+# returns Content (skipping the LLM) when timing passes, and sets
+# actions.escalate=True so the LoopAgent exits immediately.
+# ---------------------------------------------------------------------------
+timing_loop = LoopAgent(
+    name="timing_loop",
+    description=(
+        "Audio generation with timing feedback: generates TTS narration, "
+        "evaluates duration compliance, and refines scene text if the "
+        "total duration deviates from the target budget by more than 15%."
+    ),
+    max_iterations=3,
+    sub_agents=[
+        audio_agent,
+        timing_evaluator,
+        scenario_refiner,
+    ],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +154,8 @@ logger = logging.getLogger(__name__)
 # editing every individual agent file and keeps the gate logic central.
 
 _orig_scenario_after = scenario_director.after_agent_callback
-_orig_audio_before = audio_agent.before_agent_callback
+_orig_timing_loop_before = timing_loop.before_agent_callback
+_orig_timing_loop_after = timing_loop.after_agent_callback
 _orig_visual_after = visual_director.after_agent_callback
 _orig_production_before = production_supervisor.before_agent_callback
 _orig_production_after = production_supervisor.after_agent_callback
@@ -72,10 +163,11 @@ _orig_assembly_before = assembler_agent.before_agent_callback
 
 
 def _scenario_after_with_gate(callback_context):
-    """After scenario_director: run original callback, then mark ready."""
+    """After scenario_director: validate postconditions, then mark ready."""
     result = None
     if _orig_scenario_after:
         result = _orig_scenario_after(callback_context)
+    _validate_postconditions_and_log(SCENARIO_CONTRACT, callback_context)
     mark_stage_ready("scenario")
     logger.info("APPROVAL GATE: scenario stage ready — waiting for human approval")
     approved = wait_for_approval("scenario")
@@ -84,8 +176,18 @@ def _scenario_after_with_gate(callback_context):
     return result
 
 
-def _audio_before_with_gate(callback_context):
-    """Before audio_agent: wait for scenario approval + TTS worker, then run original."""
+def _timing_loop_before_with_gate(callback_context):
+    """Before timing_loop: approval gate + TTS worker + contract check.
+
+    The timing_loop wraps audio_agent + timing_evaluator + scenario_refiner.
+    All pre-checks (contracts, approval, worker binding) happen once before
+    the loop starts, not on every iteration.
+
+    ORDERING IS CRITICAL: the contract check must run AFTER the TTS worker
+    is ready because AUDIO_CONTRACT.required_services includes a health
+    check to TTS_WORKER_URL.  If the check runs before provisioning
+    completes, it fails and silently skips the entire audio stage.
+    """
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
         approved = wait_for_approval("scenario")
@@ -103,7 +205,7 @@ def _audio_before_with_gate(callback_context):
         from worker_provisioner import get_provisioner
         provisioner = get_provisioner()
         provisioner.wait_for_worker("tts", timeout=2700)
-        logger.info("TTS worker ready — audio stage proceeding")
+        logger.info("TTS worker ready — timing loop proceeding")
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
         return genai_types.Content(
@@ -113,16 +215,39 @@ def _audio_before_with_gate(callback_context):
             )],
         )
 
-    if _orig_audio_before:
-        return _orig_audio_before(callback_context)
+    # CONTRACT: validate preconditions AFTER TTS worker is ready.
+    # AUDIO_CONTRACT includes service health checks that require the
+    # worker to be reachable — running this earlier would cause a
+    # ContractViolation that silently skips the entire timing loop.
+    abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
+    if _orig_timing_loop_before:
+        return _orig_timing_loop_before(callback_context)
     return None
 
 
+def _timing_loop_after_with_gate(callback_context):
+    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready."""
+    result = None
+    if _orig_timing_loop_after:
+        result = _orig_timing_loop_after(callback_context)
+    _validate_postconditions_and_log(AUDIO_CONTRACT, callback_context)
+    mark_stage_ready("audio")
+    logger.info("APPROVAL GATE: audio stage ready — waiting for human approval")
+    approved = wait_for_approval("audio")
+    if not approved:
+        logger.error("APPROVAL GATE: timed out waiting for audio approval")
+    return result
+
+
 def _visual_after_with_gate(callback_context):
-    """After visual_director: run original callback, then mark prompts ready."""
+    """After visual_director: validate postconditions, then mark prompts ready."""
     result = None
     if _orig_visual_after:
         result = _orig_visual_after(callback_context)
+    _validate_postconditions_and_log(VISUAL_DIRECTION_CONTRACT, callback_context)
     mark_stage_ready("prompts")
     logger.info("APPROVAL GATE: prompts stage ready — waiting for human approval")
     approved = wait_for_approval("prompts")
@@ -132,7 +257,14 @@ def _visual_after_with_gate(callback_context):
 
 
 def _production_before_with_gate(callback_context):
-    """Before production_supervisor: wait for prompts approval + video worker, then run original."""
+    """Before production_supervisor: approval gate + video worker + contract check.
+
+    ORDERING IS CRITICAL: the contract check must run AFTER the video
+    worker is ready because PRODUCTION_CONTRACT.required_services includes
+    a health check to VIDEO_WORKER_URLS.  If the check runs before
+    provisioning completes, it fails and silently skips the entire
+    production stage.  Same pattern as _timing_loop_before_with_gate.
+    """
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
         approved = wait_for_approval("prompts")
@@ -160,16 +292,25 @@ def _production_before_with_gate(callback_context):
             )],
         )
 
+    # CONTRACT: validate preconditions AFTER video worker is ready.
+    # PRODUCTION_CONTRACT includes service health checks that require the
+    # worker to be reachable — running this earlier would cause a
+    # ContractViolation that silently skips the entire production stage.
+    abort = _validate_preconditions_or_abort(PRODUCTION_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
     if _orig_production_before:
         return _orig_production_before(callback_context)
     return None
 
 
 def _production_after_with_gate(callback_context):
-    """After production_supervisor: run original callback, then mark clips ready."""
+    """After production_supervisor: validate postconditions, then mark clips ready."""
     result = None
     if _orig_production_after:
         result = _orig_production_after(callback_context)
+    _validate_postconditions_and_log(PRODUCTION_CONTRACT, callback_context)
     mark_stage_ready("clips")
     logger.info("APPROVAL GATE: clips stage ready — waiting for human approval")
     approved = wait_for_approval("clips")
@@ -179,7 +320,12 @@ def _production_after_with_gate(callback_context):
 
 
 def _assembly_before_with_gate(callback_context):
-    """Before assembler_agent: wait for clips approval, then run original."""
+    """Before assembler_agent: contract check + approval gate, then run original."""
+    # CONTRACT: validate preconditions BEFORE entering assembly stage
+    abort = _validate_preconditions_or_abort(ASSEMBLY_CONTRACT, callback_context)
+    if abort is not None:
+        return abort
+
     if not is_stage_approved("clips"):
         logger.info("APPROVAL GATE: assembly waiting for clips approval...")
         approved = wait_for_approval("clips")
@@ -197,7 +343,8 @@ def _assembly_before_with_gate(callback_context):
 
 # Wire approval gates into sub-agents
 scenario_director.after_agent_callback = _scenario_after_with_gate
-audio_agent.before_agent_callback = _audio_before_with_gate
+timing_loop.before_agent_callback = _timing_loop_before_with_gate
+timing_loop.after_agent_callback = _timing_loop_after_with_gate
 visual_director.after_agent_callback = _visual_after_with_gate
 production_supervisor.before_agent_callback = _production_before_with_gate
 production_supervisor.after_agent_callback = _production_after_with_gate
@@ -230,7 +377,7 @@ def _wire_simulation_callbacks(sim_callback) -> None:
 
     agents_to_wire = [
         scenario_director,
-        audio_agent,
+        timing_loop,
         visual_director,
         production_supervisor,
         assembler_agent,
@@ -526,14 +673,15 @@ pipeline_agent = SequentialAgent(
     name="documentary_pipeline",
     description=(
         "ADHD-friendly documentary pipeline: scenario generation with "
-        "evaluate-optimize loop, TTS narration with WhisperX alignment, "
-        "iterative visual planning with LoRA selection, GPU video production, "
-        "and final assembly. All phases validated by Timeline Guardian. "
+        "evaluate-optimize loop, TTS narration with timing feedback loop "
+        "(audio → evaluate → refine → re-audio), iterative visual planning "
+        "with LoRA selection, GPU video production, and final assembly. "
+        "All phases validated by Timeline Guardian. "
         "Each stage pauses for human approval before the next one begins."
     ),
     sub_agents=[
         scenario_director,
-        audio_agent,
+        timing_loop,
         visual_director,
         production_supervisor,
         assembler_agent,

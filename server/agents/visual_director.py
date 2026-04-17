@@ -33,6 +33,7 @@ from callbacks.after_tool import after_tool_callback
 from callbacks.deterministic_steps import write_visual_metadata_to_otio
 from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
+from tools.validation_tools import validate_otio_compliance_tool, validate_stage_output_tool
 
 logger = logging.getLogger(__name__)
 
@@ -530,7 +531,7 @@ coherence_evaluator = Agent(
     name="coherence_evaluator",
     model=build_model(vision=True),
     instruction=_COHERENCE_EVALUATOR_INSTRUCTION,
-    tools=[exit_loop],
+    tools=[exit_loop, validate_otio_compliance_tool, validate_stage_output_tool],
     output_key="coherence_evaluation",
     after_agent_callback=_check_coherence_approval,
     before_model_callback=before_model_callback,
@@ -571,7 +572,8 @@ def _visual_phase_setup(callback_context):
     # Runs AFTER B2 skip so checkpoint resumes don't trigger unnecessary
     # validation + intervention windows.
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
-    handoff_checks = check_stage_handoff("audio", "visual_direction", state.to_dict() if hasattr(state, "to_dict") else dict(state))
+    from callbacks.state_manager import safe_state_dict
+    handoff_checks = check_stage_handoff("audio", "visual_direction", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         raise RuntimeError(

@@ -190,8 +190,8 @@ class ProductionOrchestrator:
 
         # CONTRACT: validate preconditions before starting production stage
         from contracts import PRODUCTION_CONTRACT, validate_preconditions
-        state_dict = state.to_dict() if hasattr(state, "to_dict") else dict(state)
-        validate_preconditions(PRODUCTION_CONTRACT, state_dict)
+        from callbacks.state_manager import safe_state_dict
+        validate_preconditions(PRODUCTION_CONTRACT, safe_state_dict(state))
 
         # INFRA: notify stage start + check if pipeline is paused
         from infra_agent import check_infra_pause, get_infra_agent
@@ -285,9 +285,9 @@ class ProductionOrchestrator:
         )
 
         # GATEKEEPER: stage handoff check (visual_direction → production)
-        _state_dict = state.to_dict() if hasattr(state, "to_dict") else dict(state)
+        from callbacks.state_manager import safe_state_dict as _ssd
         handoff_checks = check_stage_handoff(
-            "visual_direction", "production", _state_dict
+            "visual_direction", "production", _ssd(state)
         )
         if has_rejects(handoff_checks):
             rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
