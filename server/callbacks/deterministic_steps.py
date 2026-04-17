@@ -26,6 +26,8 @@ from typing import Optional
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types as genai_types
 
+from callbacks.state_manager import safe_state_dict
+
 logger = logging.getLogger(__name__)
 
 # Maximum duration for a single LTX-Video 2.3 clip (seconds).
@@ -470,7 +472,7 @@ def clean_scenes_after_scenario(
         from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
         vs_raw = str(state.get("visual_style", ""))
         _b2_ok = upload_scenario(json.dumps(scenes, ensure_ascii=False), vs_raw)
-        _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
+        _b2_ok = upload_pipeline_state(safe_state_dict(state)) and _b2_ok
         # Upload timeline if it exists
         tp = state.get("_timeline_path", "")
         if tp and os.path.exists(tp):
@@ -591,7 +593,7 @@ def deterministic_audio_callback(
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
-    validate_preconditions(AUDIO_CONTRACT, state.to_dict())
+    validate_preconditions(AUDIO_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -943,7 +945,7 @@ def deterministic_audio_callback(
 
     # Upload audio artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
-    _b2_ok = upload_pipeline_state(state.to_dict())
+    _b2_ok = upload_pipeline_state(safe_state_dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1063,7 +1065,7 @@ def deterministic_audio_callback(
                 "(LLM generated too few scenes or too-short narration)."
             ),
             agent_policy_type="audio",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
             diagnostic_data={
                 "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
                 "total_checks": len(all_gk_checks),
@@ -1480,8 +1482,7 @@ def write_visual_metadata_to_otio(
     raw_vc = str(callback_context.state.get("visual_concepts", ""))
     if raw_vc:
         _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
-    _state_d = callback_context.state.to_dict() if hasattr(callback_context.state, "to_dict") else dict(callback_context.state)
-    _b2_ok = upload_pipeline_state(_state_d) and _b2_ok
+    _b2_ok = upload_pipeline_state(safe_state_dict(callback_context.state)) and _b2_ok
     tp = callback_context.state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1539,7 +1540,7 @@ def deterministic_production_callback(
 
     # CONTRACT: validate preconditions before starting production stage
     from contracts import PRODUCTION_CONTRACT, validate_preconditions
-    validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
+    validate_preconditions(PRODUCTION_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -1667,7 +1668,7 @@ def deterministic_production_callback(
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
     # GATEKEEPER: stage handoff check (visual_direction → production)
-    handoff_checks = check_stage_handoff("visual_direction", "production", state.to_dict())
+    handoff_checks = check_stage_handoff("visual_direction", "production", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
@@ -1679,7 +1680,7 @@ def deterministic_production_callback(
             default_action="abort",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
             agent_policy_type="video",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
         )
         if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
@@ -2098,7 +2099,7 @@ def deterministic_production_callback(
 
     # Upload production artifacts to B2 — artifacts FIRST, then gatekeeper, then stage marker.
     from tools.b2_checkpoint import upload_stage_marker, upload_pipeline_state, upload_timeline, upload_gatekeeper_report
-    _b2_ok = upload_pipeline_state(state.to_dict())
+    _b2_ok = upload_pipeline_state(safe_state_dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -2142,7 +2143,7 @@ def deterministic_production_callback(
             default_action="abort",
             diagnosis_hint="Video clips failed quality checks after production.",
             agent_policy_type="production",
-            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            pipeline_state=safe_state_dict(state),
             diagnostic_data={
                 "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
                 "total_checks": len(all_gk_checks),
@@ -2248,7 +2249,7 @@ def deterministic_assembly_callback(
 
     # CONTRACT: validate preconditions before starting assembly stage
     from contracts import ASSEMBLY_CONTRACT, validate_preconditions
-    validate_preconditions(ASSEMBLY_CONTRACT, state.to_dict())
+    validate_preconditions(ASSEMBLY_CONTRACT, safe_state_dict(state))
 
     # INFRA: notify stage start + check if pipeline is paused
     from infra_agent import get_infra_agent, check_infra_pause
@@ -2298,7 +2299,7 @@ def deterministic_assembly_callback(
         raise RuntimeError(msg)
 
     # GATEKEEPER: stage handoff check (production → assembly)
-    handoff_checks = check_stage_handoff("production", "assembly", state.to_dict())
+    handoff_checks = check_stage_handoff("production", "assembly", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
@@ -2765,7 +2766,7 @@ def deterministic_assembly_callback(
         _b2_ok = upload_final_output(final_path) and _b2_ok
     if alt_final_path and os.path.exists(alt_final_path):
         _b2_ok = upload_final_output(alt_final_path) and _b2_ok
-    _b2_ok = upload_pipeline_state(state.to_dict()) and _b2_ok
+    _b2_ok = upload_pipeline_state(safe_state_dict(state)) and _b2_ok
     # Only mark stage complete if critical artifacts uploaded
     if _b2_ok:
         upload_stage_marker("assembly")

@@ -571,7 +571,8 @@ def _visual_phase_setup(callback_context):
     # Runs AFTER B2 skip so checkpoint resumes don't trigger unnecessary
     # validation + intervention windows.
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
-    handoff_checks = check_stage_handoff("audio", "visual_direction", state.to_dict() if hasattr(state, "to_dict") else dict(state))
+    from callbacks.state_manager import safe_state_dict
+    handoff_checks = check_stage_handoff("audio", "visual_direction", safe_state_dict(state))
     if has_rejects(handoff_checks):
         rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
         raise RuntimeError(

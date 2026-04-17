@@ -301,7 +301,8 @@ def run_gatekeeper_and_upload(
 
     # Upload production artifacts to B2 — artifacts FIRST, then gatekeeper,
     # then stage marker.
-    b2_ok = upload_pipeline_state(state.to_dict() if hasattr(state, "to_dict") else state)
+    from callbacks.state_manager import safe_state_dict
+    b2_ok = upload_pipeline_state(safe_state_dict(state))
     tp = state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -381,11 +382,8 @@ def run_post_production(
         # Route through escalation system instead of crashing
         try:
             from recovery import escalate_pipeline_error
-            _state_d = (
-                callback_context.state.to_dict()
-                if hasattr(callback_context.state, "to_dict")
-                else dict(callback_context.state)
-            )
+            from callbacks.state_manager import safe_state_dict
+            _state_d = safe_state_dict(callback_context.state)
             action = escalate_pipeline_error(
                 operation_name="timeline_guardian_production",
                 error_msg=str(e),
