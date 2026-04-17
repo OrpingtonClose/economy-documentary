@@ -604,6 +604,26 @@ def deterministic_audio_callback(
 
     state["pipeline_phase"] = "audio"
 
+    # ── Timing loop re-iteration: clear stale narration clips ─────────
+    # When the timing loop re-iterates (timing_evaluator found audio
+    # overshoots the budget, scenario_refiner adjusted scenes), the
+    # A1_Narration track still contains clips from the previous iteration.
+    # Without clearing, add_narration_clip's idempotency check would skip
+    # unchanged clips but still append new ones, and any removed/renamed
+    # clips would linger — producing a corrupted timeline with overlapping
+    # narration in the final assembly.
+    _audio_regen = state.get("_audio_needs_regeneration", False)
+    if isinstance(_audio_regen, str):
+        _audio_regen = _audio_regen.lower() in ("true", "1", "yes")
+    if _audio_regen:
+        from tools.otio_tools import clear_narration_track
+        _tl_path = state.get("_timeline_path", "")
+        _removed = clear_narration_track(_tl_path)
+        logger.info(
+            "Timing loop re-iteration: cleared %d stale narration items", _removed,
+        )
+        state["_audio_needs_regeneration"] = False
+
     # Parse scenes
     raw_scenes = state.get("scenes", "[]")
     scenes = extract_json_array(str(raw_scenes))

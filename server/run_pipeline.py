@@ -349,30 +349,21 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     reporter.start()
     reporter.send("phase_start", phase="scenario")
 
-    # ── Graph-level recovery wrapper (R3 from Strands lessons) ─────────
-    # Wraps the entire pipeline execution with the graduated recovery
-    # ladder from recovery.py.  On failure, the pipeline is retried with
-    # fresh state (restored from B2 checkpoints if available).
+    # ── Graph-level recovery wrapper (from Strands lessons) ─────────────
+    # Wraps the entire pipeline execution with async-native retry logic.
+    # On failure, the pipeline is retried with fresh state (restored from
+    # B2 checkpoints if available).
     #
-    # Recovery levels:
-    #   L1 RETRY:         Re-run pipeline from last B2 checkpoint
-    #   L2 CREATIVE:      Amend state (e.g. reduce scene count, simplify)
-    #   L3 ENVIRONMENTAL: Diagnose systemic issues (workers, disk, API)
-    #   L4 HUMAN:         Escalate to human operator
+    # NOTE: We use an async retry loop instead of recovery.py's
+    # execute_with_recovery() because the pipeline is async and ADK's
+    # Runner/SessionService/Session are bound to the current event loop.
+    # Wrapping in a sync function + thread pool would crash with
+    # "attached to a different loop" errors.
     from copy import deepcopy
-    from recovery import RecoveryPolicy, execute_with_recovery
 
     _pipeline_max_retries = int(os.environ.get("PIPELINE_MAX_RETRIES", "1"))
-    _pipeline_recovery_policy = RecoveryPolicy(
-        max_retries=_pipeline_max_retries,
-        retry_backoff_base=5.0,
-        retry_backoff_max=30.0,
-        retryable_exceptions=(RuntimeError, ConnectionError, TimeoutError, OSError),
-        creative_budget=0,  # no creative amendments at graph level
-        enable_env_assessment=True,
-        escalate_to_human=True,
-        human_timeout_sec=900.0,
-    )
+    _retry_backoff_base = 5.0
+    _retry_backoff_max = 30.0
 
     # Snapshot initial state for clean retries
     _initial_state_snapshot = deepcopy(initial_state)
@@ -391,7 +382,6 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     async def _run_pipeline_once() -> str:
         """Execute one full pipeline run.  Returns final response text.
 
-        This inner function is what gets retried by the recovery wrapper.
         On retry, the session state is reset from the snapshot (which may
         include B2-restored checkpoints, so completed stages are skipped).
         """
@@ -433,34 +423,40 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
 
         return final_response or ""
 
-    # Wrap the async pipeline in a sync callable for execute_with_recovery
-    def _sync_pipeline_run(**kwargs: Any) -> str:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # Already in an async context — create a task
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(asyncio.run, _run_pipeline_once()).result()
-        return loop.run_until_complete(_run_pipeline_once())
-
+    # Async retry loop — runs in the same event loop as ADK objects
+    _retryable = (RuntimeError, ConnectionError, TimeoutError, OSError)
+    _last_err: Exception | None = None
     try:
-        if _pipeline_max_retries > 0:
-            execute_with_recovery(
-                operation=_sync_pipeline_run,
-                operation_name="documentary_pipeline",
-                kwargs={},
-                policy=_pipeline_recovery_policy,
-                context={"topic": topic, "language": language},
-                pipeline_state=_initial_state_snapshot,
-            )
-        else:
-            # No recovery — run once directly
-            await _run_pipeline_once()
+        for attempt in range(_pipeline_max_retries + 1):
+            try:
+                await _run_pipeline_once()
+                _last_err = None
+                break
+            except _retryable as err:
+                _last_err = err
+                if attempt < _pipeline_max_retries:
+                    backoff = min(
+                        _retry_backoff_max,
+                        _retry_backoff_base * (2 ** attempt),
+                    )
+                    logger.warning(
+                        "attempt=<%d/%d>, error=<%s> | pipeline failed, "
+                        "retrying in %.1fs from B2 checkpoint",
+                        attempt + 1, _pipeline_max_retries + 1, err, backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(
+                        "attempt=<%d/%d>, error=<%s> | pipeline exhausted "
+                        "all retries",
+                        attempt + 1, _pipeline_max_retries + 1, err,
+                    )
+        if _last_err is not None:
+            raise _last_err
     except Exception as pipeline_err:
         logger.error(
             "Pipeline failed after recovery attempts: %s", pipeline_err,
         )
-        # Re-raise so the caller knows the pipeline failed
         raise
     finally:
         reporter.send("phase_end", phase=_last_phase, status="completed")
