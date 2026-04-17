@@ -23,8 +23,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from google.adk.agents.callback_context import CallbackContext
-from google.genai import types as genai_types
+from callbacks._compat import CallbackContext, genai_types
 
 logger = logging.getLogger(__name__)
 
@@ -654,7 +653,7 @@ def deterministic_audio_callback(
 
     for scene_idx, scene in enumerate(scenes):
         scene_num = _safe_int(scene.get("scene_num", 0))
-        voices = scene.get("voices", [])
+        voices = scene.get("voices") if "voices" in scene and scene["voices"] is not None else scene.get("voice_blocks", [])
         # Track which voice index we're on for interleaving gaps
         active_voices = [vb for vb in voices if vb.get("text", "").strip()]
         active_voice_count = len(active_voices)
@@ -1802,6 +1801,7 @@ def deterministic_production_callback(
             output_path=output_path,
             negative_prompt=clip_negative,
             visual_style=visual_style_str,
+            tool_context=_MockToolContext(state),
         )
         gen_result = json.loads(gen_result_json)
         gen_result["scene_num"] = scene_num
@@ -2898,7 +2898,13 @@ def _generate_black_video(duration_sec: float, output_path: str, width: int = 51
 
 
 class _MockToolContext:
-    """Minimal mock of ADK tool_context for direct function calls."""
+    """Minimal mock of tool_context for direct function calls.
+
+    Exposes both .state (legacy) and .invocation_state (Strands) so that
+    OTIO tools migrated to invocation_state still work when called from
+    deterministic callbacks.
+    """
 
     def __init__(self, state: dict):
         self.state = state
+        self.invocation_state = state

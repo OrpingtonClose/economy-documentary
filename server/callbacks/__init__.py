@@ -1,1 +1,1 @@
-# Documentary Pipeline — ADK Callbacks
+# Documentary Pipeline — Callbacks (deterministic steps kept for Strands tool wrappers)

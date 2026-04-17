@@ -26,8 +26,7 @@ import logging
 import os
 from typing import Optional
 
-from google.adk.agents.callback_context import CallbackContext
-from google.genai import types as genai_types
+from callbacks._compat import CallbackContext, genai_types
 
 logger = logging.getLogger(__name__)
 

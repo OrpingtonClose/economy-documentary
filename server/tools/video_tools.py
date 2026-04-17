@@ -21,7 +21,7 @@ import subprocess
 import threading
 from urllib.request import Request, urlopen
 
-from google.adk.tools import FunctionTool
+from strands import tool
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def _generate_solid_color_mp4(
         return False
 
 
-@simulated("generate_video_clip")
+@tool(context=True)
 def generate_video_clip(
     prompt: str,
     duration_sec: float,
@@ -259,9 +259,13 @@ def generate_video_clip(
 
             # ── QA GATE ── raise INSIDE recovery context so
             # non_retryable_patterns routes to human escalation (L4).
+            # Check both env var (CLI) and invocation_state (server endpoint)
             _is_quick_test = os.environ.get(
                 "DOCUMENTARY_QUICK_TEST", ""
             ).strip().lower() in ("1", "true", "yes")
+            if not _is_quick_test and tool_context is not None:
+                _state = getattr(tool_context, "invocation_state", None) or {}
+                _is_quick_test = str(_state.get("quick_test", "")).strip().lower() in ("1", "true", "yes")
 
             _is_auto_approve = os.environ.get(
                 "DOCUMENTARY_AUTO_APPROVE", ""
@@ -411,6 +415,7 @@ def generate_video_clip(
     )
 
 
+@tool(context=True)
 def probe_clip(mp4_path: str, tool_context=None) -> str:
     """Probe an MP4 file for duration, resolution, and FPS using ffprobe.
 
@@ -484,8 +489,4 @@ def probe_clip(mp4_path: str, tool_context=None) -> str:
         return json.dumps({"error": f"ffprobe output parse error: {e}"})
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-generate_video_clip_tool = FunctionTool(generate_video_clip)
-probe_clip_tool = FunctionTool(probe_clip)
-
-video_tools = [generate_video_clip_tool, probe_clip_tool]
+video_tools = [generate_video_clip, probe_clip]

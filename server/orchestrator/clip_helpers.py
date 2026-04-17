@@ -23,10 +23,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class _MockToolContext:
-    """Minimal mock of ADK tool_context for direct function calls."""
+    """Minimal mock of tool_context for direct function calls.
+
+    Exposes both .state (legacy) and .invocation_state (Strands) so that
+    OTIO tools migrated to invocation_state still work when called from
+    deterministic callbacks.
+    """
 
     def __init__(self, state: dict):
         self.state = state
+        self.invocation_state = state
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +45,7 @@ def generate_one_clip(
     default_negative: str,
     visual_style_str: str,
     feedback_store: object,
+    tool_context: object | None = None,
 ) -> dict:
     """Generate a single video clip (thread-safe for parallel execution).
 
@@ -119,6 +126,7 @@ def generate_one_clip(
         output_path=output_path,
         negative_prompt=clip_negative,
         visual_style=visual_style_str,
+        tool_context=tool_context,
     )
     gen_result = json.loads(gen_result_json)
     gen_result["scene_num"] = scene_num

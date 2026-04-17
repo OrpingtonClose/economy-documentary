@@ -1,1 +1,1 @@
-# Documentary Pipeline — ADK Agent definitions
+# Documentary Pipeline — Strands Agent definitions
