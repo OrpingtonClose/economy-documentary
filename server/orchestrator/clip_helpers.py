@@ -146,6 +146,31 @@ def generate_one_clip(
             timestamp=time.time(),
         ))
 
+    # Per-clip B2 resume tracking (R5 from deep audit):
+    # Record clip completion in a progress manifest so recovery knows
+    # exactly which clips are done.  The manifest is uploaded to B2
+    # after each clip, enabling resume from exact point of failure.
+    try:
+        _manifest_path = os.path.join(video_dir, "_clip_progress.json")
+        _manifest: dict = {}
+        if os.path.exists(_manifest_path):
+            with open(_manifest_path) as _mf:
+                _manifest = json.load(_mf)
+        clip_id = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+        _manifest[clip_id] = {
+            "status": "completed" if not gen_result.get("error") else "failed",
+            "quality": gen_result.get("qa_quality", "unknown"),
+            "output_path": output_path,
+            "timestamp": time.time(),
+        }
+        with open(_manifest_path, "w") as _mf:
+            json.dump(_manifest, _mf, indent=2)
+        # Upload manifest to B2 for cross-machine resume
+        from tools.b2_checkpoint import upload_file
+        upload_file(_manifest_path, "video/_clip_progress.json")
+    except Exception as _manifest_err:
+        logger.debug("Clip progress manifest update failed: %s", _manifest_err)
+
     return gen_result
 
 
