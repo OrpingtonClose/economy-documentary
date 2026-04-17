@@ -54,7 +54,12 @@ def _find_scene_from_state(state: dict, scene_num: int) -> Optional[dict]:
 
     raw = state.get("scenes", "[]") if state else "[]"
     scenes = None
-    if extract_json_array is not None:
+    if isinstance(raw, list):
+        # Already a list on state -- mirror whisperx_oracle_callback's
+        # handling so per-moment audio validation keeps working when the
+        # caller stores scenes as a native list instead of a JSON string.
+        scenes = raw
+    elif extract_json_array is not None:
         scenes = extract_json_array(str(raw))
     if scenes is None:
         try:

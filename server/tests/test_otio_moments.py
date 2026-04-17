@@ -583,6 +583,32 @@ class TestSceneCompleteness:
         # Only one primary-language clip, one video clip -> complete.
         assert _scene_is_video_complete(tl, scene_num=1) is True
 
+    def test_find_scene_from_state_accepts_list(self):
+        """Regression for PR #115 review: _find_scene_from_state must accept
+        a native list on state['scenes'], not only a JSON string."""
+        from tools.otio_tools import _find_scene_from_state
+        scenes_list = [
+            {"scene_num": 1, "duration_sec": 30.0},
+            {"scene_num": 5, "duration_sec": 45.0},
+        ]
+        # Native list -- must NOT fall through str(raw) which would produce
+        # invalid JSON (single-quoted repr).
+        found = _find_scene_from_state({"scenes": scenes_list}, scene_num=5)
+        assert found is not None
+        assert found["duration_sec"] == 45.0
+
+    def test_find_scene_from_state_accepts_json_string(self):
+        from tools.otio_tools import _find_scene_from_state
+        state = {"scenes": '[{"scene_num": 2, "duration_sec": 22.0}]'}
+        found = _find_scene_from_state(state, scene_num=2)
+        assert found is not None
+        assert found["duration_sec"] == 22.0
+
+    def test_find_scene_from_state_returns_none_for_garbage(self):
+        from tools.otio_tools import _find_scene_from_state
+        assert _find_scene_from_state({"scenes": "not-json"}, scene_num=1) is None
+        assert _find_scene_from_state({}, scene_num=1) is None
+
     def test_chained_callback_runs_guardian_even_if_oracle_raises(self):
         """Regression for PR #115 review: if whisperx_oracle_callback raises,
         the chained wrapper must still invoke timeline_guardian_callback so
