@@ -126,6 +126,14 @@ class EscalationAction:
                     f"Action '{self.action}' requires field '{field_name}' "
                     f"(expected {expected_type.__name__})"
                 )
+            # Reject empty strings for required str fields -- otherwise
+            # to_dict() would silently drop them and break the round-trip
+            # guarantee that test_action_menu_parses_all_signatures relies on.
+            if expected_type is str and isinstance(value, str) and value == "":
+                raise EscalationActionError(
+                    f"Action '{self.action}' field '{field_name}' must be "
+                    f"a non-empty string"
+                )
             # Allow int → float coercion (common from JSON).
             if expected_type is float and isinstance(value, int) and not isinstance(value, bool):
                 setattr(self, field_name, float(value))
