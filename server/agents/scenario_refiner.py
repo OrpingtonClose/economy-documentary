@@ -85,8 +85,15 @@ def _save_refined_scenes(callback_context: CallbackContext) -> None:
     scenes = extract_json_array(str(raw)) if raw else None
 
     if scenes:
-        # Persist backup so we don't lose refined scenes on re-run
-        state["_approved_scenes_backup"] = json.dumps(scenes)
+        # Persist cleaned JSON back to state AND backup.
+        # Without this, output_key="scenes" stores the raw LLM output
+        # (which may include markdown fences, explanatory text, etc.).
+        # On subsequent iterations, {scenes} in the instruction expands
+        # to this raw output, nesting previous iterations' noise and
+        # degrading LLM response quality.
+        cleaned_json = json.dumps(scenes, ensure_ascii=False)
+        state["scenes"] = cleaned_json
+        state["_approved_scenes_backup"] = cleaned_json
         logger.info(
             "Refined scenes saved: %d scenes", len(scenes),
         )

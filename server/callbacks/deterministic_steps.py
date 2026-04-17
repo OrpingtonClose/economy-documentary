@@ -680,11 +680,80 @@ def deterministic_audio_callback(
     INTER_VOICE_PAUSE_SEC = 1.5   # breathing room between V1→V2→V3
     INTER_SCENE_PAUSE_SEC = 2.5   # transition between scenes
 
+    # ── Anti-compounding duration scaling ─────────────────────────────
+    # On timing loop re-iterations, scene durations were already scaled
+    # on the previous pass.  Restore original unscaled durations before
+    # re-scaling to prevent compounding shrinkage (420→390→360→332).
+    # This logic MUST be here (not in clean_scenes_after_scenario which
+    # only runs once after scenario_director, before the timing loop).
+    _raw_orig = state.get("_original_scene_durations")
+    if _raw_orig:
+        try:
+            _orig_durations = json.loads(str(_raw_orig))
+            for s in scenes:
+                sn = str(s.get("scene_num", 0))
+                if sn in _orig_durations:
+                    s["duration_sec"] = _orig_durations[sn]
+            logger.info(
+                "Restored %d original scene durations for scaling",
+                len(_orig_durations),
+            )
+        except (json.JSONDecodeError, TypeError):
+            pass
+    else:
+        # First pass: snapshot the unscaled durations
+        _orig_durations = {
+            str(s.get("scene_num", 0)): s.get("duration_sec", 0)
+            for s in scenes
+        }
+        state["_original_scene_durations"] = json.dumps(_orig_durations)
+
+    # Scale scene durations to account for gap overhead
+    _orig_total = sum(s.get("duration_sec", 0) for s in scenes)
+    if _orig_total > 0:
+        _total_voice_gaps = 0.0
+        for s in scenes:
+            _voices = s.get("voices") or []
+            _active = sum(1 for v in _voices if v.get("text", "").strip())
+            _total_voice_gaps += max(0, _active - 1) * INTER_VOICE_PAUSE_SEC
+        _total_scene_gaps = max(0, len(scenes) - 1) * INTER_SCENE_PAUSE_SEC
+        _gap_overhead = _total_voice_gaps + _total_scene_gaps
+        _narr_budget = _orig_total - _gap_overhead
+        if _narr_budget > 0 and _narr_budget < _orig_total:
+            _scale = _narr_budget / _orig_total
+            for s in scenes:
+                _old_dur = s.get("duration_sec", 0)
+                s["duration_sec"] = round(_old_dur * _scale, 2)
+            logger.info(
+                "Duration budget: scaled %.1fs → %.1fs (gaps=%.1fs)",
+                _orig_total, sum(s.get("duration_sec", 0) for s in scenes),
+                _gap_overhead,
+            )
+
+    # Compute per-voice narration budgets from (scaled) scene durations
+    _voice_budgets: dict[str, float] = {}
+    for s in scenes:
+        _sn = _safe_int(s.get("scene_num", 0))
+        _dur = float(s.get("duration_sec", 0))
+        _voices_list = s.get("voices") or []
+        _active_v = [v for v in _voices_list if v.get("text", "").strip()]
+        _total_words = sum(len(v.get("text", "").split()) for v in _active_v)
+        if _total_words <= 0:
+            _total_words = 1
+        for v in _active_v:
+            _vname = v.get("voice", "V1")
+            _words = len(v.get("text", "").split())
+            _budget = _dur * (_words / _total_words) if _dur > 0 else 0
+            _key = f"scene_{_sn:03d}_{_vname}"
+            _voice_budgets[_key] = round(_budget, 2)
+    state["_voice_budgets"] = json.dumps(_voice_budgets)
+    state["scenes"] = json.dumps(scenes, ensure_ascii=False)
+
     # AG-UI: emit artifact events as narration clips are generated
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
     _feedback_store = get_feedback_store()
 
-    # Load per-voice narration budgets from scenario stage
+    # Load per-voice narration budgets (just computed above)
     _raw_budgets = state.get("_voice_budgets", "{}")
     try:
         voice_budgets: dict[str, float] = json.loads(str(_raw_budgets))
