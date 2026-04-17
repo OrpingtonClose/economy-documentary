@@ -386,6 +386,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         include B2-restored checkpoints, so completed stages are skipped).
         """
         nonlocal final_response, _last_phase
+        _last_phase = "scenario"
 
         # Reset session state from snapshot for clean retry
         current_session = await session_service.get_session(

@@ -93,7 +93,7 @@ def _save_refined_scenes(callback_context: CallbackContext) -> None:
 
         # Clear timing state so audio regeneration is fresh
         state["timing_passed"] = False
-        state.pop("timing_analysis", None)
+        state["timing_analysis"] = None
 
         # Clear audio state to force regeneration with new scenes
         # The audio callback checks for existing clips and skips them,
