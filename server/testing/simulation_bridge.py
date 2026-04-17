@@ -190,6 +190,77 @@ def _run_async(coro):
         return asyncio.run(coro)
 
 
+# ---------------------------------------------------------------------------
+# Post-interception hooks — create placeholder files for simulated media tools
+# ---------------------------------------------------------------------------
+# The old _TEST_MODE code generated actual files on disk (silent WAVs,
+# solid-color MP4s).  The @simulated decorator only returns mock JSON,
+# which breaks downstream code that expects files to exist (gatekeeper
+# file-existence checks, probe_clip, Timeline Guardian).
+#
+# These hooks run AFTER the simulation engine returns a mock response,
+# creating minimal placeholder files so the rest of the pipeline works.
+
+def _post_intercept_generate_narration(call_args: Dict, result: Any) -> None:
+    """Create a silent WAV placeholder after narration simulation."""
+    output_dir = call_args.get("output_dir", "/tmp/documentary-pipeline/audio")
+    scene_num = call_args.get("scene_num", 0)
+    voice_role = call_args.get("voice_role", "v1")
+    language = call_args.get("language", "en")
+    wav_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_{voice_role}_{language}.wav")
+
+    if not os.path.exists(wav_path):
+        try:
+            import wave
+            os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
+            sample_rate = 24000
+            duration = 5.0  # default placeholder duration
+            num_frames = int(sample_rate * duration)
+            with wave.open(wav_path, "w") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(b'\x00' * (num_frames * 2))
+            logger.info("Simulation placeholder: created silent WAV %s", wav_path)
+        except Exception as exc:
+            logger.warning("Failed to create placeholder WAV %s: %s", wav_path, exc)
+
+
+def _post_intercept_generate_video_clip(call_args: Dict, result: Any) -> None:
+    """Create a solid-color MP4 placeholder after video simulation."""
+    import subprocess as _sp
+
+    output_path = call_args.get("output_path", "")
+    if not output_path:
+        output_dir = call_args.get("output_dir", "/tmp/documentary-pipeline/video")
+        scene_num = call_args.get("scene_num", 0)
+        phrase_idx = call_args.get("phrase_idx", 0)
+        output_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_phrase_{int(phrase_idx):03d}.mp4")
+
+    if not os.path.exists(output_path):
+        try:
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            duration = call_args.get("duration", 5.0)
+            cmd = [
+                "ffmpeg", "-y", "-f", "lavfi",
+                "-i", f"color=c=0x336699:s=1280x720:d={float(duration):.2f}:r=24",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-t", f"{float(duration):.2f}",
+                output_path,
+            ]
+            _sp.run(cmd, capture_output=True, text=True, timeout=60)
+            logger.info("Simulation placeholder: created MP4 %s", output_path)
+        except Exception as exc:
+            logger.warning("Failed to create placeholder MP4 %s: %s", output_path, exc)
+
+
+# Registry of post-interception hooks keyed by tool_name
+_POST_INTERCEPT_HOOKS: Dict[str, Callable] = {
+    "generate_narration": _post_intercept_generate_narration,
+    "generate_video_clip": _post_intercept_generate_video_clip,
+}
+
+
 def simulated(tool_name: str, *, description: str = ""):
     """Decorator that checks the simulation engine before calling the real function.
 
@@ -197,6 +268,10 @@ def simulated(tool_name: str, *, description: str = ""):
     for ``tool_name`` that matches the call arguments, the mock result is
     returned (as a JSON string, matching tool return conventions).  Otherwise
     the real function executes normally.
+
+    When a simulation intercepts a media-generating tool, a post-interception
+    hook creates placeholder files on disk so downstream code (gatekeeper
+    file-existence checks, probe_clip, Timeline Guardian) works correctly.
 
     Usage::
 
@@ -250,6 +325,18 @@ def simulated(tool_name: str, *, description: str = ""):
                     tool_name,
                     _truncate(str(result), 200),
                 )
+
+                # Run post-interception hook to create placeholder files
+                hook = _POST_INTERCEPT_HOOKS.get(tool_name)
+                if hook:
+                    try:
+                        hook(call_args, result)
+                    except Exception as hook_exc:
+                        logger.warning(
+                            "Post-intercept hook failed for %s: %s",
+                            tool_name, hook_exc,
+                        )
+
                 # Tool functions return JSON strings — match that convention
                 if isinstance(result, dict):
                     return json.dumps(result)

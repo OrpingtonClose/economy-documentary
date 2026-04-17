@@ -55,7 +55,8 @@ if _SIMULATION_MODE:
     if _sim_config:
         activate_simulation(_sim_config, scenario_name=_sim_scenario)
     else:
-        print(f"WARNING: Unknown simulation scenario '{_sim_scenario}', running without simulation")
+        print(f"ERROR: Unknown simulation scenario '{_sim_scenario}', cannot proceed in test mode")
+        sys.exit(1)
 
 from google.adk.agents import SequentialAgent
 from google.adk.runners import Runner
