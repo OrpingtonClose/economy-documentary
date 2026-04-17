@@ -288,10 +288,11 @@ def _production_before_with_gate(callback_context):
 
 
 def _production_after_with_gate(callback_context):
-    """After production_supervisor: run original callback, then mark clips ready."""
+    """After production_supervisor: validate postconditions, then mark clips ready."""
     result = None
     if _orig_production_after:
         result = _orig_production_after(callback_context)
+    _validate_postconditions_and_log(PRODUCTION_CONTRACT, callback_context)
     mark_stage_ready("clips")
     logger.info("APPROVAL GATE: clips stage ready — waiting for human approval")
     approved = wait_for_approval("clips")

@@ -389,8 +389,35 @@ def clean_scenes_after_scenario(
         #   sum(scene_duration_sec) + total_gaps = original_target
         #
         # The gap constants MUST match those in deterministic_audio_callback.
+        #
+        # IMPORTANT: On timing loop re-iterations, the scenes in state
+        # already have scaled durations from the previous pass.  We
+        # preserve the ORIGINAL unscaled durations on the first pass and
+        # always scale from those, preventing compounding shrinkage
+        # (e.g. 420→390→360→332) across iterations.
         _INTER_VOICE_PAUSE = 1.5
         _INTER_SCENE_PAUSE = 2.5
+
+        # Preserve original durations on first pass; restore on re-iterations
+        _raw_orig = state.get("_original_scene_durations")
+        if _raw_orig:
+            try:
+                _orig_durations = json.loads(str(_raw_orig))
+                # Restore original duration_sec before scaling
+                for s in scenes:
+                    sn = str(s.get("scene_num", 0))
+                    if sn in _orig_durations:
+                        s["duration_sec"] = _orig_durations[sn]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        else:
+            # First pass: snapshot the unscaled durations
+            _orig_durations = {
+                str(s.get("scene_num", 0)): s.get("duration_sec", 0)
+                for s in scenes
+            }
+            state["_original_scene_durations"] = json.dumps(_orig_durations)
+
         original_total = sum(s.get("duration_sec", 0) for s in scenes)
         if original_total > 0:
             num_scenes = len(scenes)
