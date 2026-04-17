@@ -1922,8 +1922,9 @@ def assign_clip_endpoint(req: dict):
     if _vm_agent:
         _vm_agent.record_task(True, elapsed)
 
-    # Save the output
-    output_path = os.path.join(_output_dir, f"{clip_id}.mp4")
+    # Save the output (sanitize clip_id to prevent path traversal)
+    safe_clip_id = clip_id.replace("/", "_").replace("\\", "_").replace("..", "_")
+    output_path = os.path.join(_output_dir, f"{safe_clip_id}.mp4")
     with open(output_path, "wb") as f:
         f.write(mp4_bytes)
 

@@ -33,6 +33,21 @@ logger = logging.getLogger(__name__)
 _LTX_CAP = 10.0
 
 
+def _safe_int(val, default: int = 0) -> int:
+    """Convert a value to int, handling strings like "scene_001" or "phrase_002".
+
+    Extracts digits from the string and converts to int. Returns *default*
+    if no digits are found.
+    """
+    if isinstance(val, int):
+        return val
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        digits = re.sub(r'[^0-9]', '', str(val))
+        return int(digits) if digits else default
+
+
 # ---------------------------------------------------------------------------
 # JSON extraction helper
 # ---------------------------------------------------------------------------
@@ -411,8 +426,8 @@ def clean_scenes_after_scenario(
         # the scene's (already-scaled) duration_sec.
         voice_budgets: dict[str, float] = {}  # "scene_NNN_voice" → seconds
         for s in scenes:
-            sn = s.get("scene_num", 0)
-            dur = s.get("duration_sec", 0)
+            sn = _safe_int(s.get("scene_num", 0))
+            dur = float(s.get("duration_sec", 0))
             voices = s.get("voices", [])
             active = [v for v in voices if v.get("text", "").strip()]
             total_words = sum(len(v.get("text", "").split()) for v in active)
@@ -430,6 +445,26 @@ def clean_scenes_after_scenario(
 
         state["scenes"] = json.dumps(scenes, ensure_ascii=False)
         logger.info("Cleaned scenes JSON: %d scenes extracted", len(scenes))
+
+        # Ensure OTIO timeline exists — create deterministically if the LLM
+        # did not call the create_timeline tool during scenario generation.
+        tp = state.get("_timeline_path", "")
+        if not tp or not os.path.exists(tp):
+            from tools.otio_tools import create_timeline as _create_tl
+            topic = state.get("topic", "") or "documentary"
+            # Fallback: derive topic from first scene title if state topic is empty
+            if topic == "documentary" and scenes:
+                first_title = scenes[0].get("title", "")
+                if first_title:
+                    topic = first_title[:40]
+            _tl_result = _create_tl(topic=str(topic), num_scenes=len(scenes))
+            import json as _json
+            _tl_info = _json.loads(_tl_result)
+            state["_timeline_path"] = _tl_info["timeline_path"]
+            logger.info(
+                "Deterministically created OTIO timeline: %s (%d scenes)",
+                _tl_info["timeline_path"], len(scenes),
+            )
 
         # Upload scenario artifacts to B2 immediately
         from tools.b2_checkpoint import upload_scenario, upload_stage_marker, upload_pipeline_state, upload_timeline
@@ -550,6 +585,7 @@ def deterministic_audio_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="A previous stage flagged an OTIO violation.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_gate_msg)
 
@@ -617,7 +653,7 @@ def deterministic_audio_callback(
     _deferred_gk_clips: list[dict] = []
 
     for scene_idx, scene in enumerate(scenes):
-        scene_num = scene.get("scene_num", 0)
+        scene_num = _safe_int(scene.get("scene_num", 0))
         voices = scene.get("voices", [])
         # Track which voice index we're on for interleaving gaps
         active_voices = [vb for vb in voices if vb.get("text", "").strip()]
@@ -738,6 +774,7 @@ def deterministic_audio_callback(
                                     error_msg=_clip_msg,
                                     severity="critical",
                                     default_action="abort",
+                                    agent_policy_type="otio",
                                 )
                                 raise RuntimeError(_clip_msg)
                             total_clips += 1
@@ -952,8 +989,8 @@ def deterministic_audio_callback(
 
     # Level 3: scene-level QA
     for scene in scenes:
-        sn = scene.get("scene_num", 0)
-        scene_budget = scene.get("duration_sec", 0)
+        sn = _safe_int(scene.get("scene_num", 0))
+        scene_budget = float(scene.get("duration_sec", 0))
         scene_voices = scene.get("voices", [])
         active = [v for v in scene_voices if v.get("text", "").strip()]
         scene_voice_gaps = max(0, len(active) - 1) * INTER_VOICE_PAUSE_SEC
@@ -1006,7 +1043,9 @@ def deterministic_audio_callback(
         upload_gatekeeper_report(audit_report, "audio")
 
     # NOW evaluate rejects — everything is safely in B2
+    _gk_rejected = False
     if has_rejects(all_gk_checks):
+        _gk_rejected = True
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
         from recovery import escalate_pipeline_error
@@ -1023,16 +1062,27 @@ def deterministic_audio_callback(
                 "Root cause is likely insufficient text in the scenario "
                 "(LLM generated too few scenes or too-short narration)."
             ),
+            agent_policy_type="audio",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            diagnostic_data={
+                "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
+                "total_checks": len(all_gk_checks),
+                "scenes": state.get("scenes", []),
+            },
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
                 f"audit report uploaded to B2): {reject_msgs}"
             )
+        logger.warning(
+            "Audio gatekeeper rejection escalated and resolved with action=%s — continuing pipeline",
+            response.get("action"),
+        )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
-    if _b2_ok:
+    if _b2_ok and not _gk_rejected:
         upload_stage_marker("audio")
 
     summary_parts = [
@@ -1359,7 +1409,8 @@ def write_visual_metadata_to_otio(
             # incorrect after concept normalization re-indexes phrase_idx).
             # Each alignment key is scene_{NNN}_{voice} or
             # scene_{NNN}_{voice}_{lang} in dual mode.
-            scene_prefix = f"scene_{sn:03d}_"
+            _sn_int = _safe_int(sn)
+            scene_prefix = f"scene_{_sn_int:03d}_"
             scene_align = {
                 k: v for k, v in alignment_data.items()
                 if k.startswith(scene_prefix)
@@ -1396,10 +1447,10 @@ def write_visual_metadata_to_otio(
             logger.error("V1_Video track not found")
             video_track_missing = True
         else:
-            # Build a map of scene_num -> concepts
-            scene_concepts = {}
+            # Build a map of scene_num (int) -> concepts
+            scene_concepts: dict[int, list] = {}
             for concept in concepts:
-                sn = concept.get("scene_num", 0)
+                sn = _safe_int(concept.get("scene_num", 0))
                 if sn not in scene_concepts:
                     scene_concepts[sn] = []
                 scene_concepts[sn].append(concept)
@@ -1429,7 +1480,8 @@ def write_visual_metadata_to_otio(
     raw_vc = str(callback_context.state.get("visual_concepts", ""))
     if raw_vc:
         _b2_ok = upload_visual_concepts(raw_vc) and _b2_ok
-    _b2_ok = upload_pipeline_state(callback_context.state.to_dict()) and _b2_ok
+    _state_d = callback_context.state.to_dict() if hasattr(callback_context.state, "to_dict") else dict(callback_context.state)
+    _b2_ok = upload_pipeline_state(_state_d) and _b2_ok
     tp = callback_context.state.get("_timeline_path", "")
     if tp and os.path.exists(tp):
         upload_timeline(tp)
@@ -1626,11 +1678,17 @@ def deterministic_production_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="Visual direction stage output failed gatekeeper checks.",
+            agent_policy_type="video",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER BLOCKED production start: {reject_msgs}"
             )
+        logger.warning(
+            "Production handoff gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
     if not intervention_window("production_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
@@ -1668,9 +1726,9 @@ def deterministic_production_callback(
         we generate multiple sub-clips of ≤10s each and return a list so
         the caller can add them all to the OTIO timeline.
         """
-        scene_num = concept.get("scene_num", 0)
-        phrase_idx = concept.get("phrase_idx", 0)
-        full_duration = concept.get("duration", 5.0)
+        scene_num = _safe_int(concept.get("scene_num", 0))
+        phrase_idx = _safe_int(concept.get("phrase_idx", 0))
+        full_duration = float(concept.get("duration", 5.0))
 
         # Split concepts >10s into multiple sub-clips for LTX-2.3
         if concept.get("needs_split") and full_duration > _LTX_CAP:
@@ -1831,9 +1889,9 @@ def deterministic_production_callback(
         queued = []
         for c in concepts:
             queued.append(_QueuedClip(
-                clip_id=f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}",
-                scene_num=c.get("scene_num", 0),
-                phrase_idx=c.get("phrase_idx", 0),
+                clip_id=f"scene_{_safe_int(c.get('scene_num', 0)):03d}_phrase_{_safe_int(c.get('phrase_idx', 0)):03d}",
+                scene_num=_safe_int(c.get("scene_num", 0)),
+                phrase_idx=_safe_int(c.get("phrase_idx", 0)),
                 prompt=c.get("prompt", ""),
                 negative_prompt=c.get("negative_prompt", ""),
                 duration=c.get("duration", 5.0),
@@ -1849,7 +1907,7 @@ def deterministic_production_callback(
             }
             for future in as_completed(future_to_concept):
                 c = future_to_concept[future]
-                clip_id = f"scene_{c.get('scene_num', 0):03d}_phrase_{c.get('phrase_idx', 0):03d}"
+                clip_id = f"scene_{_safe_int(c.get('scene_num', 0)):03d}_phrase_{_safe_int(c.get('phrase_idx', 0)):03d}"
                 try:
                     result = future.result()
                     _collect_result(result, results)
@@ -1948,6 +2006,7 @@ def deterministic_production_callback(
                         error_msg=_clip_msg,
                         severity="critical",
                         default_action="abort",
+                        agent_policy_type="otio",
                     )
                     raise RuntimeError(_clip_msg)
                 skipped_clips += 1
@@ -2067,7 +2126,9 @@ def deterministic_production_callback(
         upload_gatekeeper_report(audit_report, "production")
 
     # NOW evaluate rejects — everything is safely in B2
+    _gk_rejected = False
     if has_rejects(all_gk_checks):
+        _gk_rejected = True
         rejects = [c for c in all_gk_checks if c.verdict.value == "reject"]
         reject_msgs = "; ".join(c.message for c in rejects)
         from recovery import escalate_pipeline_error
@@ -2080,16 +2141,26 @@ def deterministic_production_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="Video clips failed quality checks after production.",
+            agent_policy_type="production",
+            pipeline_state=state.to_dict() if hasattr(state, "to_dict") else {},
+            diagnostic_data={
+                "rejects": [{"message": c.message, "verdict": c.verdict.value} for c in rejects],
+                "total_checks": len(all_gk_checks),
+            },
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER REJECT (production stage, {len(rejects)} reject(s) — "
                 f"audit report uploaded to B2): {reject_msgs}"
             )
+        logger.warning(
+            "Production gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
-    if _b2_ok:
+    if _b2_ok and not _gk_rejected:
         upload_stage_marker("production")
 
     summary_parts = [
@@ -2171,6 +2242,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="A previous stage flagged an OTIO violation.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_gate_msg)
 
@@ -2200,6 +2272,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="Timeline file missing — assembly cannot proceed.",
+            agent_policy_type="otio",
         )
         raise RuntimeError(_otio_msg)
 
@@ -2220,6 +2293,7 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint=msg[:300],
+            agent_policy_type="otio",
         )
         raise RuntimeError(msg)
 
@@ -2235,11 +2309,16 @@ def deterministic_assembly_callback(
             severity="critical",
             default_action="abort",
             diagnosis_hint="Production stage output failed gatekeeper checks before assembly.",
+            agent_policy_type="production",
         )
-        if response.get("action") != "skip":
+        if response.get("action") not in ("skip", "retry_with_fix", "amend"):
             raise RuntimeError(
                 f"GATEKEEPER BLOCKED assembly start: {reject_msgs}"
             )
+        logger.warning(
+            "Assembly handoff gatekeeper rejection resolved with action=%s — continuing",
+            response.get("action"),
+        )
     if not intervention_window("assembly_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at assembly start")
 

@@ -161,13 +161,274 @@ OUTPUT: JSON array of visual concepts, each containing:
 Store the result in state["visual_concepts"].
 """
 
+def _visual_concepter_before_model(callback_context, llm_request):
+    """Chunk scenes so visual_concepter never exceeds output token limits.
+
+    If there are more than 3 scenes in content_analysis, this callback
+    processes ALL chunks internally (making direct LLM calls for earlier
+    chunks) in a single LoopAgent iteration. This decouples chunking from
+    the evaluation loop so LoopAgent iterations are used only for
+    evaluator refinement, not chunk advancement.
+
+    The final chunk is left for the normal model call to handle, so the
+    LoopAgent's output_key mechanism works correctly.
+    """
+    import json as _json
+    import litellm
+
+    state = callback_context.state
+
+    # If chunking already completed in a prior call, just pass through
+    if state.get("_vc_chunking_done"):
+        return before_model_callback(callback_context, llm_request)
+
+    raw_ca = state.get("content_analysis", "")
+    try:
+        ca = _json.loads(raw_ca) if raw_ca.strip() else {}
+    except (_json.JSONDecodeError, TypeError):
+        ca = {}
+
+    # Determine scenes in content_analysis
+    scene_key = "scenes" if "scenes" in ca else "semantic_segments"
+    scenes_data = ca.get(scene_key, [])
+    if not isinstance(scenes_data, list):
+        return before_model_callback(callback_context, llm_request)
+
+    chunk_size = 3
+    total_scenes = len(scenes_data)
+
+    if total_scenes <= chunk_size:
+        # Small enough — no chunking needed
+        state["_vc_chunking_done"] = True
+        return before_model_callback(callback_context, llm_request)
+
+    # Process ALL chunks except the last one internally via direct LLM calls.
+    # The last chunk is left for the normal model call.
+    total_chunks = (total_scenes + chunk_size - 1) // chunk_size
+    accumulated = []
+
+    from config import build_model
+    model_name = build_model()
+
+    for chunk_idx in range(total_chunks - 1):  # all except last
+        start = chunk_idx * chunk_size
+        end = min(start + chunk_size, total_scenes)
+
+        chunked_ca = dict(ca)
+        chunked_ca[scene_key] = scenes_data[start:end]
+        chunked_ca["_chunk_info"] = {
+            "chunk_idx": chunk_idx,
+            "scenes_in_chunk": list(range(start, end)),
+            "total_scenes": total_scenes,
+            "is_partial": True,
+        }
+
+        logger.info(
+            "Visual concepter: processing chunk %d/%d (scenes %d-%d of %d) via direct LLM call",
+            chunk_idx + 1, total_chunks, start + 1, end, total_scenes,
+        )
+
+        # Build a minimal prompt for this chunk
+        chunk_prompt = (
+            f"Generate visual concepts for the following scenes. "
+            f"This is chunk {chunk_idx + 1} of {total_chunks}.\n\n"
+            f"Content analysis (partial):\n{_json.dumps(chunked_ca, ensure_ascii=False)}\n\n"
+            f"Visual style: {state.get('visual_style', '')}\n\n"
+            f"Output a JSON array of visual concept objects."
+        )
+
+        try:
+            # Ensure Gemini models use the gemini/ prefix for Google AI Studio
+            import os as _os
+            _model = model_name
+            if (
+                isinstance(_model, str)
+                and _model.startswith("gemini-")
+                and not _model.startswith("gemini/")
+                and _os.environ.get("GOOGLE_API_KEY")
+            ):
+                _model = f"gemini/{_model}"
+
+            resp = litellm.completion(
+                model=_model,
+                messages=[
+                    {"role": "system", "content": _VISUAL_CONCEPTER_INSTRUCTION},
+                    {"role": "user", "content": chunk_prompt},
+                ],
+                temperature=0.7,
+            )
+            raw_text = resp.choices[0].message.content or ""
+
+            # Parse concepts from response
+            text = raw_text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines)
+
+            parsed = _json.loads(text)
+            if isinstance(parsed, list):
+                accumulated.extend(parsed)
+            elif isinstance(parsed, dict) and "concepts" in parsed:
+                accumulated.extend(parsed["concepts"])
+
+            logger.info(
+                "Visual concepter: chunk %d/%d yielded %d concepts",
+                chunk_idx + 1, total_chunks,
+                len(parsed) if isinstance(parsed, list) else len(parsed.get("concepts", [])),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Visual concepter: chunk %d/%d LLM call failed: %s",
+                chunk_idx + 1, total_chunks, exc,
+            )
+
+    # Store accumulated concepts from earlier chunks
+    state["_vc_pre_accumulated"] = _json.dumps(accumulated, ensure_ascii=False)
+    state["_vc_chunking_done"] = True
+
+    # Set content_analysis to only the LAST chunk for the normal model call
+    last_start = (total_chunks - 1) * chunk_size
+    last_end = total_scenes
+    last_ca = dict(ca)
+    last_ca[scene_key] = scenes_data[last_start:last_end]
+    last_ca["_chunk_info"] = {
+        "chunk_idx": total_chunks - 1,
+        "scenes_in_chunk": list(range(last_start, last_end)),
+        "total_scenes": total_scenes,
+        "is_partial": True,
+        "previously_accumulated": len(accumulated),
+    }
+    state["content_analysis"] = _json.dumps(last_ca, ensure_ascii=False)
+    # Save full content_analysis for restoration after generation
+    state["_vc_full_content_analysis"] = raw_ca
+
+    logger.info(
+        "Visual concepter: %d earlier chunks done (%d concepts), "
+        "last chunk (scenes %d-%d) left for normal model call",
+        total_chunks - 1, len(accumulated), last_start + 1, last_end,
+    )
+
+    return before_model_callback(callback_context, llm_request)
+
+
+def _visual_concepter_after_model(callback_context, llm_response):
+    """Merge pre-accumulated concepts (from earlier chunks) with the last chunk.
+
+    The before_model_callback processes all chunks except the last one
+    internally via direct LLM calls. This after_model callback merges
+    those pre-accumulated concepts with the last chunk's output (from
+    the normal model call) and modifies llm_response so output_key
+    stores the complete result.
+    """
+    import json as _json
+
+    # Run the original after_model_callback first
+    result = after_model_callback(callback_context, llm_response)
+
+    state = callback_context.state
+
+    # If no pre-accumulated concepts exist, nothing to merge
+    raw_pre = state.get("_vc_pre_accumulated")
+    if not raw_pre:
+        return result
+
+    try:
+        pre_accumulated = _json.loads(raw_pre)
+    except (_json.JSONDecodeError, TypeError):
+        pre_accumulated = []
+
+    if not pre_accumulated:
+        # Even though there's nothing to merge, we must still restore
+        # the full content_analysis (which was overwritten with only the
+        # last chunk by the before_model callback) and clean up state.
+        full_ca = state.get("_vc_full_content_analysis")
+        if full_ca:
+            state["content_analysis"] = full_ca
+        for key in ("_vc_pre_accumulated", "_vc_full_content_analysis", "_vc_chunking_done"):
+            try:
+                del state[key]
+            except (KeyError, TypeError):
+                pass
+        return result
+
+    # Extract last chunk's concepts from llm_response
+    raw_llm_text = ""
+    try:
+        if hasattr(llm_response, "content") and llm_response.content:
+            if hasattr(llm_response.content, "parts"):
+                raw_llm_text = "".join(
+                    getattr(p, "text", "") for p in llm_response.content.parts
+                )
+            elif isinstance(llm_response.content, str):
+                raw_llm_text = llm_response.content
+    except Exception:
+        raw_llm_text = ""
+
+    last_chunk_concepts = []
+    if raw_llm_text.strip():
+        text = raw_llm_text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            text = "\n".join(lines)
+        try:
+            parsed = _json.loads(text)
+            if isinstance(parsed, list):
+                last_chunk_concepts = parsed
+            elif isinstance(parsed, dict) and "concepts" in parsed:
+                last_chunk_concepts = parsed["concepts"]
+        except (_json.JSONDecodeError, TypeError):
+            pass
+
+    # Merge: pre-accumulated (earlier chunks) + last chunk
+    all_concepts = pre_accumulated + last_chunk_concepts
+    all_concepts_json = _json.dumps(all_concepts, ensure_ascii=False)
+
+    # Modify llm_response so output_key stores the complete merged result
+    try:
+        if hasattr(llm_response, "content") and hasattr(llm_response.content, "parts"):
+            for part in llm_response.content.parts:
+                if hasattr(part, "text"):
+                    part.text = all_concepts_json
+                    break
+    except Exception:
+        pass
+
+    # Also set state directly as a safety net
+    state["visual_concepts"] = all_concepts_json
+
+    # Restore full content_analysis for the evaluator
+    full_ca = state.get("_vc_full_content_analysis")
+    if full_ca:
+        state["content_analysis"] = full_ca
+
+    logger.info(
+        "Visual concepter: merged %d pre-accumulated + %d last-chunk = %d total concepts",
+        len(pre_accumulated), len(last_chunk_concepts), len(all_concepts),
+    )
+
+    # Clean up chunk state
+    for key in ("_vc_pre_accumulated", "_vc_full_content_analysis", "_vc_chunking_done"):
+        try:
+            del state[key]
+        except (KeyError, TypeError):
+            pass
+
+    return result
+
+
 visual_concepter = Agent(
     name="visual_concepter",
     model=build_model(),
     instruction=_VISUAL_CONCEPTER_INSTRUCTION,
     output_key="visual_concepts",
-    before_model_callback=before_model_callback,
-    after_model_callback=after_model_callback,
+    before_model_callback=_visual_concepter_before_model,
+    after_model_callback=_visual_concepter_after_model,
 )
 
 # -- Coherence Evaluator -------------------------------------------------------
@@ -244,6 +505,24 @@ def _check_coherence_approval(callback_context):
     return None
 
 
+def _evaluator_before_tool(callback_context, tool_name, tool_input):
+    """Block exit_loop if chunking is still in progress.
+
+    With the new internal-chunking approach, this should rarely fire
+    since all chunks are processed in a single before_model_callback.
+    But kept as a safety net in case state flags are stale.
+    """
+    if tool_name == "exit_loop" and "_vc_pre_accumulated" in callback_context.state:
+        logger.info(
+            "Coherence evaluator tried to exit_loop but chunking state "
+            "is still present — blocking exit"
+        )
+        return "Cannot exit yet — visual concepts are still being finalized. " \
+               "Please rate as FAIR and wait for the next iteration."
+    # Delegate to standard before_tool_callback for all other cases
+    return before_tool_callback(callback_context, tool_name, tool_input)
+
+
 coherence_evaluator = Agent(
     name="coherence_evaluator",
     model=build_model(vision=True),
@@ -253,7 +532,7 @@ coherence_evaluator = Agent(
     after_agent_callback=_check_coherence_approval,
     before_model_callback=before_model_callback,
     after_model_callback=after_model_callback,
-    before_tool_callback=before_tool_callback,
+    before_tool_callback=_evaluator_before_tool,
     after_tool_callback=after_tool_callback,
 )
 
@@ -527,7 +806,7 @@ visual_director = LoopAgent(
         "Coherence Evaluator checks narrative-visual alignment. Loops until "
         "GOOD or EXCELLENT rating."
     ),
-    max_iterations=3,
+    max_iterations=5,
     sub_agents=[content_analyst, visual_concepter, coherence_evaluator],
     before_agent_callback=_visual_phase_setup,
     # write_visual_metadata_to_otio writes gap metadata then runs timeline guardian

@@ -314,6 +314,7 @@ class FleetCoordinator:
                     f"Recommended action: {pattern.recommended_action}. "
                     f"Evidence: {len(pattern.evidence)} data points."
                 ),
+                agent_policy_type="production",
             )
             action = response.get("action", "abort")
             if action == "skip":

@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
@@ -183,12 +184,14 @@ class ProductionOrchestrator:
                 severity="critical",
                 default_action="abort",
                 diagnosis_hint="A previous stage flagged an OTIO violation.",
+                agent_policy_type="otio",
             )
             raise RuntimeError(_otio_gate_msg)
 
         # CONTRACT: validate preconditions before starting production stage
         from contracts import PRODUCTION_CONTRACT, validate_preconditions
-        validate_preconditions(PRODUCTION_CONTRACT, state.to_dict())
+        state_dict = state.to_dict() if hasattr(state, "to_dict") else dict(state)
+        validate_preconditions(PRODUCTION_CONTRACT, state_dict)
 
         # INFRA: notify stage start + check if pipeline is paused
         from infra_agent import check_infra_pause, get_infra_agent
@@ -282,8 +285,9 @@ class ProductionOrchestrator:
         )
 
         # GATEKEEPER: stage handoff check (visual_direction → production)
+        _state_dict = state.to_dict() if hasattr(state, "to_dict") else dict(state)
         handoff_checks = check_stage_handoff(
-            "visual_direction", "production", state.to_dict()
+            "visual_direction", "production", _state_dict
         )
         if has_rejects(handoff_checks):
             rejects = [c for c in handoff_checks if c.verdict.value == "reject"]
@@ -295,6 +299,7 @@ class ProductionOrchestrator:
                 severity="critical",
                 default_action="abort",
                 diagnosis_hint="Visual direction output failed gatekeeper checks.",
+                agent_policy_type="video",
             )
             if response.get("action") != "skip":
                 raise RuntimeError(
@@ -898,6 +903,16 @@ class ProductionOrchestrator:
             if model_name.startswith("litellm/"):
                 model_name = model_name[len("litellm/"):]
 
+            # Ensure Gemini models use the gemini/ prefix for Google AI Studio
+            # (without prefix, LiteLLM treats them as Vertex AI requiring GCP creds)
+            import os as _os
+            if (
+                model_name.startswith("gemini-")
+                and not model_name.startswith("gemini/")
+                and _os.environ.get("GOOGLE_API_KEY")
+            ):
+                model_name = f"gemini/{model_name}"
+
             response = await litellm.acompletion(
                 model=model_name,
                 messages=[
@@ -1007,6 +1022,15 @@ class ProductionOrchestrator:
         for concept in self.concepts:
             sn = concept.get("scene_num", 0)
             pi = concept.get("phrase_idx", 0)
+            # scene_num/phrase_idx may be strings from LLM JSON
+            try:
+                sn = int(re.sub(r'[^0-9]', '', str(sn)) or 0)
+            except (ValueError, TypeError):
+                sn = 0
+            try:
+                pi = int(re.sub(r'[^0-9]', '', str(pi)) or 0)
+            except (ValueError, TypeError):
+                pi = 0
             clip_id = f"s{sn:03d}_p{pi:03d}"
 
             is_skip = clip_id in self.existing_clips

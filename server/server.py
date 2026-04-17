@@ -273,6 +273,15 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
                     break
                 elif kind == "agent_error":
                     logger.error("ADK agent error in unified stream: %s", payload)
+                    # Save trace capture on error path (pipeline cleanup may not run)
+                    try:
+                        from orchestrator.trace_capture import get_trace_capture
+                        _tc = get_trace_capture()
+                        _tc.end_run(summary=f"Pipeline error: {str(payload)[:200]}")
+                        _tc_path = _tc.save()
+                        logger.info("Trace captured on error path: %s", _tc_path)
+                    except Exception as _tc_err:
+                        logger.debug("Trace capture on error skipped: %s", _tc_err)
                     from ag_ui.core import RunErrorEvent
                     err_event = RunErrorEvent(
                         type=EventType.RUN_ERROR,

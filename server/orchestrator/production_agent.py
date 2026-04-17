@@ -20,6 +20,7 @@ from typing import AsyncGenerator, Optional
 
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
+from google.adk.events.event import Event
 from google.genai import types as genai_types
 
 from orchestrator.production_models import (
@@ -121,7 +122,7 @@ class ProductionAgent(BaseAgent):
 
     async def _run_async_impl(
         self, ctx: InvocationContext
-    ) -> AsyncGenerator[genai_types.Content, None]:
+    ) -> AsyncGenerator[Event, None]:
         """Main execution — orchestrate production and yield events."""
 
         state = ctx.session.state if ctx.session else {}
@@ -323,14 +324,17 @@ class ProductionAgent(BaseAgent):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _event(event_type: str, data: dict) -> genai_types.Content:
-    """Create an ADK Content event for the trace."""
-    return genai_types.Content(
-        role="model",
-        parts=[genai_types.Part(text=json.dumps({
-            "event": event_type,
-            **data,
-        }))],
+def _event(event_type: str, data: dict, *, author: str = "production_supervisor") -> Event:
+    """Create a proper ADK Event for the trace."""
+    return Event(
+        author=author,
+        content=genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text=json.dumps({
+                "event": event_type,
+                **data,
+            }))],
+        ),
     )
 
 

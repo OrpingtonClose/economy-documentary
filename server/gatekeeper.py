@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -1234,7 +1235,11 @@ def check_stage_handoff(
 
         concepts_by_scene: dict[int, int] = {}
         for c in concepts:
-            sn = c.get("scene_num", 0)
+            _raw_sn = c.get("scene_num", 0)
+            try:
+                sn = int(re.sub(r'[^0-9]', '', str(_raw_sn)) or 0)
+            except (ValueError, TypeError):
+                sn = 0
             if sn > 0:
                 concepts_by_scene[sn] = concepts_by_scene.get(sn, 0) + 1
 
