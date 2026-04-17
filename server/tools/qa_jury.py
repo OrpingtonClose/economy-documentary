@@ -500,7 +500,19 @@ class GeminiVoter:
                 model=self._model_name,
                 contents=[uploaded, prompt],
             )
-            text = getattr(response, "text", "") or ""
+            text = getattr(response, "text", None)
+            if not text:
+                # Empty / blocked response -- same treatment as a rejected
+                # video: disable the verdict so aggregate() drops it rather
+                # than silently producing a False/0.0 vote.
+                return VoterVerdict(
+                    voter_model=self._model_name,
+                    voter_family="gemini",
+                    voter_score_bias=0.0,
+                    value=None,
+                    disabled=True,
+                    error="Gemini returned an empty response (likely safety-filtered).",
+                )
             return VoterVerdict(
                 voter_model=self._model_name,
                 voter_family="gemini",
@@ -590,13 +602,31 @@ class _OpenAICompatVideoVoter:
                 ],
                 timeout=self._request_timeout_s,
             )
-            text = response.choices[0].message.content if response.choices else ""
+
+            # OpenAI chat-completions defines ``message.content`` as
+            # ``Optional[str]``.  A ``None`` here would silently coerce to
+            # ``bool(None) == False`` in binary aggregation or crash
+            # ``float(None)`` in numeric aggregation, so we treat an empty
+            # response the same way we treat a rejected video: mark the
+            # verdict disabled and let ``aggregate`` drop it.
+            raw_text: str | None = None
+            if response.choices:
+                raw_text = response.choices[0].message.content
+            if not raw_text:
+                return VoterVerdict(
+                    voter_model=self._model_name,
+                    voter_family=self.capabilities.family,
+                    voter_score_bias=self.capabilities.score_bias,
+                    value=None,
+                    disabled=True,
+                    error="Provider returned an empty response (no message content).",
+                )
             return VoterVerdict(
                 voter_model=self._model_name,
                 voter_family=self.capabilities.family,
                 voter_score_bias=self.capabilities.score_bias,
-                value=text,
-                rationale=text or "",
+                value=raw_text,
+                rationale=raw_text,
             )
         except Exception as exc:  # noqa: BLE001 - adapter boundary
             logger.warning(

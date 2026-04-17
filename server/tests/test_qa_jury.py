@@ -213,6 +213,70 @@ def test_aggregate_majority_vote_tie_fails() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Null-response handling for OpenAI-compat voters
+# ---------------------------------------------------------------------------
+def test_openai_compat_voter_disables_verdict_when_content_is_none(monkeypatch) -> None:
+    """OpenAI's ``message.content`` is ``Optional[str]``.
+
+    A ``None`` must surface as a *disabled* verdict so ``aggregate`` drops
+    it -- never as a silent ``bool(None) == False`` vote in binary checks
+    or as a ``float(None)`` crash in numeric aggregation.
+    """
+
+    class _Msg:
+        content = None
+
+    class _Choice:
+        message = _Msg()
+
+    class _Resp:
+        choices = [_Choice()]
+
+    class _Completions:
+        def create(self, **kwargs):
+            return _Resp()
+
+    class _Chat:
+        completions = _Completions()
+
+    class _FakeClient:
+        chat = _Chat()
+
+    def _fake_openai_class(*args, **kwargs):
+        return _FakeClient()
+
+    # Pretend the SDK is importable and swap in our fake OpenAI constructor.
+    fake_module = type("fake_openai_mod", (), {"OpenAI": _fake_openai_class})
+    monkeypatch.setitem(__import__("sys").modules, "openai", fake_module)
+    monkeypatch.setenv("DASHSCOPE_INTL_API_KEY", "test-key")
+    monkeypatch.setenv("GLM_API_KEY", "test-key")
+
+    artifact = FinalCut(
+        artifact_id="final-null-test",
+        path="",
+        url="https://example.invalid/fake.mp4",
+    )
+
+    for voter in (DashscopeQwenVoter(), GLMVoter()):
+        verdict = asyncio.run(voter.judge(artifact, "rate this"))
+        assert verdict.disabled is True, (
+            f"{type(voter).__name__} must disable verdicts when the provider "
+            f"returns content=None"
+        )
+        assert verdict.value is None
+        # Must be dropped by aggregate() so neither binary nor numeric
+        # aggregation sees it at all.
+        jury_binary = aggregate(
+            [verdict], check_type="binary", check_name="ok", artifact_id="x"
+        )
+        jury_numeric = aggregate(
+            [verdict], check_type="numeric", check_name="score", artifact_id="x"
+        )
+        assert jury_binary.overall == "escalate" and jury_binary.confidence == 0.0
+        assert jury_numeric.overall == "escalate" and jury_numeric.confidence == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Integration smoke test (skipped by default)
 # ---------------------------------------------------------------------------
 # Marked so CI never runs it automatically.  Invoke manually with
