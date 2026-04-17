@@ -649,14 +649,21 @@ class ProductionOrchestrator:
             replan_count=replan_count,
         )
 
-    def _execute_batch(
+    async def _execute_batch(
         self, batch: ClipBatch, batch_idx: int
     ) -> tuple[BatchResult, list[dict]]:
         """Execute a single batch of clips in parallel.
 
-        Uses existing generate_video_clip() from server/tools/video_tools.py
-        with the existing recovery middleware (VIDEO_POLICY from server/recovery.py).
-        Uses ThreadPoolExecutor like the current implementation for GPU I/O.
+        Issue #67: The previous implementation used ThreadPoolExecutor +
+        ``as_completed`` + ``future.result()`` inside an async function,
+        which blocks the event loop while waiting on HTTP calls to GPU
+        workers (each call can take 60 minutes for LTX video generation
+        with QA retries).
+
+        New design: dispatch each ``generate_one_clip`` call as an
+        ``asyncio.to_thread`` coroutine and await them concurrently via
+        ``asyncio.gather``.  The event loop stays responsive so SSE /
+        dashboard / heartbeat consumers keep getting fed.
         """
         clip_results: list[ClipResult] = []
         gen_results: list[dict] = []
