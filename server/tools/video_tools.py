@@ -1,8 +1,9 @@
 """
 Video generation tools -- LTX-2.3 + ffprobe wrappers.
 
-For production: generates video clips using LTX-2.3 on GPU VM.
-For test run: generates solid-color MP4 files with correct duration using ffmpeg.
+Generates video clips using LTX-2.3 on GPU VM.  In simulation mode
+(activated via ``testing.simulation_bridge``), the ADK EnvironmentSimulationConfig
+intercepts calls and returns mock responses.
 
 Rules:
 - Duration should be target_duration * 1.15 (15% longer for trim margin)
@@ -27,7 +28,8 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video"
 )
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+from testing.simulation_bridge import simulated
+
 _TRIM_MARGIN = 1.15  # 15% longer for trim margin
 
 # Round-robin state for distributing work across multiple GPU workers
@@ -134,35 +136,6 @@ def generate_video_clip(
         JSON string with generation results.
     """
     actual_duration = duration_sec * _TRIM_MARGIN
-
-    if _TEST_MODE:
-        success = _generate_solid_color_mp4(output_path, actual_duration)
-        if not success:
-            return json.dumps(
-                {
-                    "status": "error",
-                    "error": "Failed to generate test video via ffmpeg",
-                }
-            )
-
-        logger.info(
-            "Test mode: generated solid-color MP4 %s (%.2fs)",
-            output_path,
-            actual_duration,
-        )
-        return json.dumps(
-            {
-                "status": "generated",
-                "mode": "test",
-                "output_path": output_path,
-                "target_duration": round(duration_sec, 2),
-                "actual_duration": round(actual_duration, 2),
-                "lora_id": lora_id,
-                "lora_weight": lora_weight,
-                "resolution": "1280x720",
-                "fps": 24,
-            }
-        )
 
     # Production mode: call LTX-2.3 on GPU worker
     # ARCHITECTURE INVARIANT: Video generation MUST use a real GPU worker.

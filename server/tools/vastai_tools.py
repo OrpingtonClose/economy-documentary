@@ -45,7 +45,7 @@ def register_owned_vm(vm_id: str) -> None:
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+from testing.simulation_bridge import simulated
 
 
 import ast as _ast
@@ -129,18 +129,6 @@ def provision_gpu_vm(
     Returns:
         JSON string with VM details or error.
     """
-    if _TEST_MODE:
-        return json.dumps(
-            {
-                "status": "test_mode",
-                "vm_id": "test-vm-001",
-                "message": "Test mode: no actual VM provisioned",
-                "gpu_type": gpu_type,
-                "min_vram_gb": min_vram_gb,
-                "max_price": max_price,
-            }
-        )
-
     # Fetch ALL on-demand offers from Vast.ai, then filter in Python.
     # The vastai CLI v1.0's query-string filtering is unreliable when
     # called via subprocess (silently returns empty results), so we
@@ -275,15 +263,6 @@ def check_vm_status(vm_id: str, tool_context=None) -> str:
     Returns:
         JSON string with VM status.
     """
-    if _TEST_MODE:
-        return json.dumps(
-            {
-                "vm_id": vm_id,
-                "status": "running",
-                "mode": "test",
-            }
-        )
-
     result = _vast_cmd(["show", "instance", vm_id, "--raw"])
     return json.dumps(result)
 
@@ -298,15 +277,6 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
     Returns:
         JSON string with termination result or refusal.
     """
-    if _TEST_MODE:
-        return json.dumps(
-            {
-                "vm_id": vm_id,
-                "status": "terminated",
-                "mode": "test",
-            }
-        )
-
     # GAP 2.1: Ownership guard — refuse to destroy VMs we didn't create
     owned = _load_owned_vms()
     if str(vm_id) not in owned:
@@ -334,15 +304,6 @@ def list_active_vms(tool_context=None) -> str:
     Returns:
         JSON string with list of active VMs.
     """
-    if _TEST_MODE:
-        return json.dumps(
-            {
-                "vms": [],
-                "mode": "test",
-                "message": "No VMs in test mode",
-            }
-        )
-
     result = _vast_cmd(["show", "instances", "--raw"])
     return json.dumps(result)
 

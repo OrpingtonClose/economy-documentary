@@ -31,14 +31,17 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# Force test mode if --test-mode is passed (must be before imports)
-if "--test-mode" in sys.argv:
-    os.environ["DOCUMENTARY_TEST_MODE"] = "true"
+# Force simulation mode if --test-mode is passed (must be before imports)
+_SIMULATION_MODE = "--test-mode" in sys.argv or os.environ.get(
+    "DOCUMENTARY_SIMULATION_MODE", ""
+).strip().lower() in ("1", "true")
 if "--quick-test" in sys.argv:
     os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
 from dotenv import load_dotenv
 load_dotenv()
+
+
 
 logging.basicConfig(
     level=logging.INFO,

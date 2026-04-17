@@ -282,10 +282,10 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
         # Collect unique languages present
         langs_present = {lang for (_, lang) in audio_by_scene_lang}
 
-        # In test mode, synthetic media has fixed durations that won't
+        # In simulation mode, mock media has fixed durations that won't
         # perfectly match narration timing — allow wider tolerance.
-        _test_mode = os.environ.get("DOCUMENTARY_TEST_MODE", "").lower() in ("1", "true", "yes")
-        _tolerance = 10.0 if _test_mode else 1.0
+        from testing.simulation_bridge import is_simulation_active
+        _tolerance = 10.0 if is_simulation_active() else 1.0
 
         for sn, video_durs in video_by_scene.items():
             total_video = sum(video_durs)

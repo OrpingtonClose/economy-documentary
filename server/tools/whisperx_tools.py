@@ -1,8 +1,8 @@
 """
 WhisperX alignment tools -- word-level timestamp extraction from TTS audio.
 
-For production: runs WhisperX on generated WAV files.
-For test run: generates synthetic alignment data from text (~0.3s per word).
+Runs WhisperX on generated WAV files.  In simulation mode, the ADK
+EnvironmentSimulationConfig intercepts calls and returns mock alignment data.
 """
 
 from __future__ import annotations
@@ -16,7 +16,8 @@ from strands import tool
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in ("1", "true")
+from testing.simulation_bridge import simulated
+
 _SECONDS_PER_WORD = 0.3
 _WORD_GAP = 0.05  # Small gap between words
 
@@ -65,11 +66,11 @@ def align_narration(
     Returns:
         JSON string with per-word {word, start, end} timing data.
     """
-    if _TEST_MODE or not os.path.exists(wav_path):
-        # Test mode: generate synthetic alignment
+    if not os.path.exists(wav_path):
+        # WAV file missing — fall back to synthetic alignment
         alignment = _generate_synthetic_alignment(text)
-        logger.info(
-            "Test mode: synthetic alignment for %s (%d words, %.2fs)",
+        logger.warning(
+            "WAV file missing, synthetic alignment for %s (%d words, %.2fs)",
             wav_path,
             alignment["word_count"],
             alignment["total_duration"],
@@ -77,7 +78,7 @@ def align_narration(
         return json.dumps(
             {
                 "status": "aligned",
-                "mode": "synthetic",
+                "mode": "synthetic_missing_wav",
                 "wav_path": wav_path,
                 **alignment,
             }

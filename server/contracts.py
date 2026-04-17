@@ -30,10 +30,7 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "").strip().lower() in (
-    "1",
-    "true",
-)
+from testing.simulation_bridge import is_simulation_active
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +264,8 @@ def validate_preconditions(contract: StageContract, state: dict) -> None:
         + "\n".join(f"  - {e}" for e in errors)
     )
 
-    if _TEST_MODE:
-        logger.warning("Contract [%s]: %s (test mode — continuing)", contract.name, error_msg)
+    if is_simulation_active():
+        logger.warning("Contract [%s]: %s (simulation mode — continuing)", contract.name, error_msg)
         return
 
     raise ContractViolation(
@@ -335,8 +332,8 @@ def validate_postconditions(contract: StageContract, state: dict) -> None:
         + "\n".join(f"  - {e}" for e in errors)
     )
 
-    if _TEST_MODE:
-        logger.warning("Contract [%s]: %s (test mode — continuing)", contract.name, error_msg)
+    if is_simulation_active():
+        logger.warning("Contract [%s]: %s (simulation mode — continuing)", contract.name, error_msg)
         return
 
     raise ContractViolation(
