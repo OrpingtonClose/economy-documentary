@@ -75,7 +75,7 @@ class WorkerSpec:
 
     role: str  # "tts" or "video"
     env_var: str  # e.g. "TTS_WORKER_URL"
-    local_port: int  # localhost port for SSH tunnel
+    local_port: int  # localhost port for SSH tunnel (legacy fallback)
     remote_port: int  # port on the GPU VM
     capability: str  # health check key (e.g. "tts", "ltx")
     gpu_type: str = "A100_SXM4"
@@ -88,6 +88,10 @@ class WorkerSpec:
     ssh_host: str = ""
     ssh_port: int = 0
     tunnel_proc: Optional[subprocess.Popen] = field(default=None, repr=False)
+    # Direct connection fields — used with --direct port mapping
+    public_ipaddr: str = ""  # VM's public IP for direct connections
+    direct_port: int = 0  # mapped external port (from Vast.ai port info)
+    worker_url: str = ""  # resolved worker URL (direct or tunnel)
     # Parallel provisioning status — used by background threads
     status: str = "pending"  # "pending", "provisioning", "healthy", "failed"
     error: str = ""  # error message if status == "failed"
@@ -640,11 +644,14 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         # reuse reserved-but-unallocated memory instead of failing.
         "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
         "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
-        f"git clone -b {shlex.quote(_branch)} --single-branch "
+        f"(git clone -b {shlex.quote(_branch)} --single-branch "
         "https://github.com/OrpingtonClose/economy-documentary.git "
-        "/workspace/economy-documentary 2>/dev/null || "
+        "/workspace/economy-documentary 2>&1 || "
+        "git clone -b main --single-branch "
+        "https://github.com/OrpingtonClose/economy-documentary.git "
+        "/workspace/economy-documentary 2>&1 || "
         f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
-        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)}) && "
+        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)})) && "
         # Install Python deps needed for gpu_worker.py to start (FastAPI + deps).
         # The Docker image already has torch pre-installed (resolved from manifest),
         # so we only need FastAPI + other non-torch deps for the health endpoint.
@@ -682,6 +689,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
+        "--env", f"-p {spec.remote_port}:{spec.remote_port}",
         "--label", _label,  # GAP 2.3: VM labeling for identification
         "--onstart-cmd", onstart,
     ])
@@ -718,7 +726,9 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
 def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
     """Wait for a provisioned VM to reach 'running' status.
 
-    Returns the VM info dict with SSH connection details.
+    Returns the VM info dict with connection details.
+    Extracts both SSH proxy info (legacy fallback) and direct connection
+    info (public_ipaddr + port mapping) for direct HTTP access.
     """
     logger.info(
         "Waiting for %s VM %s to start (timeout %ds)...",
@@ -738,8 +748,30 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
                     spec.role, spec.vm_id, status, elapsed,
                 )
                 if status == "running":
+                    # Legacy SSH proxy info
                     spec.ssh_host = result.get("ssh_host", "")
                     spec.ssh_port = int(result.get("ssh_port", 0))
+                    # Direct connection info
+                    spec.public_ipaddr = result.get("public_ipaddr", "")
+                    # Extract mapped port from Vast.ai ports dict.
+                    # Format: {"8880/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8880"}]}
+                    # or sometimes the external port differs from internal.
+                    ports = result.get("ports", {}) or {}
+                    port_key = f"{spec.remote_port}/tcp"
+                    if port_key in ports:
+                        port_bindings = ports[port_key]
+                        if isinstance(port_bindings, list) and port_bindings:
+                            spec.direct_port = int(
+                                port_bindings[0].get("HostPort", 0)
+                            )
+                        elif isinstance(port_bindings, (int, str)):
+                            spec.direct_port = int(port_bindings)
+                    if spec.public_ipaddr and spec.direct_port:
+                        logger.info(
+                            "  %s VM %s direct connection: %s:%d",
+                            spec.role, spec.vm_id,
+                            spec.public_ipaddr, spec.direct_port,
+                        )
                     return result
         except Exception as exc:
             logger.warning("  Error checking VM status: %s", exc)
@@ -873,6 +905,135 @@ def setup_ssh_tunnel(
 
 
 # ---------------------------------------------------------------------------
+# Direct connection (no SSH tunnel) — preferred for --direct VMs
+# ---------------------------------------------------------------------------
+
+
+def establish_direct_connection(
+    spec: WorkerSpec, max_retries: int = 20, retry_delay: int = 15,
+) -> str:
+    """Establish a direct HTTP connection to the worker via public IP.
+
+    Uses the VM's public_ipaddr and mapped port (from --direct + --env
+    port mapping).  Falls back to polling ``vastai execute`` to check if
+    the worker process is listening, then resolves the URL.
+
+    Returns the direct worker URL (e.g. "http://1.2.3.4:8880").
+    Raises RuntimeError if direct connection cannot be established.
+    """
+    # Strategy 1: Use port mapping from VM info (populated by wait_for_vm_running)
+    if spec.public_ipaddr and spec.direct_port:
+        direct_url = f"http://{spec.public_ipaddr}:{spec.direct_port}"
+        logger.info(
+            "Trying direct connection to %s at %s...",
+            spec.role, direct_url,
+        )
+        # Poll until the worker port is reachable (onstart script may still
+        # be bootstrapping — installing deps, downloading models, starting
+        # the FastAPI server).
+        for attempt in range(1, max_retries + 1):
+            try:
+                req = Request(f"{direct_url}/health")
+                with urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                    logger.info(
+                        "Direct connection to %s ESTABLISHED (attempt %d): %s",
+                        spec.role, attempt, data.get("status", "unknown"),
+                    )
+                    spec.worker_url = direct_url
+                    return direct_url
+            except Exception:
+                if attempt % 4 == 0:
+                    # Periodic diagnostics via vastai tools
+                    _log_vm_diagnostics(spec)
+                if attempt < max_retries:
+                    logger.info(
+                        "  Direct connection attempt %d/%d to %s — "
+                        "worker not yet reachable, retrying in %ds...",
+                        attempt, max_retries, spec.role, retry_delay,
+                    )
+                    time.sleep(retry_delay)
+                    continue
+        # Direct port was mapped but worker never responded
+        logger.warning(
+            "Direct connection to %s at %s failed after %d attempts",
+            spec.role, direct_url, max_retries,
+        )
+
+    # Strategy 2: No port mapping available — try vastai execute to
+    # check if worker is running inside the VM and get its internal URL.
+    if spec.vm_id:
+        logger.info(
+            "No direct port mapping for %s — using vastai execute "
+            "to check worker status on VM %s",
+            spec.role, spec.vm_id,
+        )
+        for attempt in range(1, min(max_retries, 5) + 1):
+            try:
+                result = _vast_cmd([
+                    "execute", spec.vm_id,
+                    f"curl -s http://localhost:{spec.remote_port}/health",
+                ])
+                if isinstance(result, str) and "ok" in result.lower():
+                    logger.info(
+                        "Worker %s is running inside VM %s (via vastai execute)",
+                        spec.role, spec.vm_id,
+                    )
+                    # Worker is running but we can't reach it directly.
+                    # Fall through to SSH tunnel fallback.
+                    break
+            except Exception as exc:
+                logger.warning(
+                    "vastai execute health check failed (attempt %d): %s",
+                    attempt, exc,
+                )
+            time.sleep(retry_delay)
+
+    raise RuntimeError(
+        f"Direct connection to {spec.role} worker failed — "
+        f"public_ip={spec.public_ipaddr}, direct_port={spec.direct_port}, "
+        f"vm_id={spec.vm_id}"
+    )
+
+
+def _log_vm_diagnostics(spec: WorkerSpec) -> None:
+    """Fetch and log diagnostics from a VM using vastai CLI tools.
+
+    Uses ``vastai logs`` and ``vastai execute`` to understand what's
+    happening inside the VM without needing an SSH connection.
+    """
+    if not spec.vm_id:
+        return
+
+    # Fetch container logs
+    try:
+        logs = _vast_cmd(["logs", spec.vm_id, "--tail", "20"])
+        if isinstance(logs, str) and logs.strip():
+            logger.info(
+                "VM %s (%s) container logs (last 20 lines):\n%s",
+                spec.vm_id, spec.role, logs.strip(),
+            )
+    except Exception as exc:
+        logger.debug("Could not fetch logs for VM %s: %s", spec.vm_id, exc)
+
+    # Check if worker process is running
+    try:
+        ps_result = _vast_cmd([
+            "execute", spec.vm_id,
+            "ps aux | grep gpu_worker || echo 'no worker process'",
+        ])
+        if isinstance(ps_result, str) and ps_result.strip():
+            logger.info(
+                "VM %s (%s) process check: %s",
+                spec.vm_id, spec.role, ps_result.strip()[:200],
+            )
+    except Exception as exc:
+        logger.debug(
+            "Could not check processes on VM %s: %s", spec.vm_id, exc,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Wait for worker health
 # ---------------------------------------------------------------------------
 
@@ -907,7 +1068,8 @@ def wait_for_worker_healthy(
     can see exactly what's happening and escalate failures immediately
     rather than waiting for a blind timeout.
     """
-    url = f"http://localhost:{spec.local_port}"
+    # Use resolved worker_url if available (direct connection), else legacy tunnel
+    url = spec.worker_url or f"http://localhost:{spec.local_port}"
     logger.info(
         "Waiting for %s worker at %s to become healthy (timeout %ds)...",
         spec.role, url, timeout,
@@ -919,7 +1081,7 @@ def wait_for_worker_healthy(
     while time.time() - start < timeout:
         elapsed = int(time.time() - start)
 
-        # Check if tunnel is still alive
+        # Check if tunnel is still alive (only relevant for SSH tunnel connections)
         if spec.tunnel_proc and spec.tunnel_proc.poll() is not None:
             logger.warning(
                 "SSH tunnel for %s died — restarting...", spec.role
@@ -1205,7 +1367,7 @@ class WorkerProvisioner:
             spec.status = "healthy"
 
             # Update env var so contracts see the new URL
-            new_url = f"http://localhost:{spec.local_port}"
+            new_url = spec.worker_url or f"http://localhost:{spec.local_port}"
             os.environ[spec.env_var] = new_url
             logger.info(
                 "Background provisioning COMPLETE for %s: %s=%s (VM %s)",
@@ -1287,12 +1449,19 @@ class WorkerProvisioner:
             role, spec.status, timeout,
         )
 
-        # Wait for background thread to finish
-        ready = spec.ready_event.wait(timeout=timeout)
-        if not ready:
-            raise RuntimeError(
-                f"{role} worker provisioning timed out after {timeout}s"
-            )
+        # Poll with short waits (1s) instead of one long blocking wait.
+        # This prevents the async event loop from freezing — the ADK
+        # callbacks run on the event loop thread, so a long blocking
+        # wait would freeze the entire server (HTTP, SSE, dashboard).
+        import time as _time
+        _deadline = _time.monotonic() + timeout
+        while not spec.ready_event.is_set():
+            remaining = _deadline - _time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    f"{role} worker provisioning timed out after {timeout}s"
+                )
+            spec.ready_event.wait(timeout=min(1.0, remaining))
 
         if spec.status == "failed":
             raise RuntimeError(
@@ -1452,15 +1621,23 @@ class WorkerProvisioner:
     def _provision_and_connect(
         self, spec: WorkerSpec, timeout: int = 2400
     ) -> None:
-        """Provision a VM, set up tunnel, and wait for health.
+        """Provision a VM, connect, and wait for health.
 
         Full lifecycle for a single worker.  The wall-clock ``timeout``
         covers all steps end-to-end.  The health-wait step gets whatever
-        time remains after provisioning + VM boot + SSH setup, with a
+        time remains after provisioning + VM boot + connection, with a
         minimum of 120s so the wait isn't uselessly short.
 
+        Connection strategy (in order):
+        1. **Direct HTTP** via VM's public IP + mapped port (``--direct``
+           + ``--env '-p 8880:8880'``).  No SSH needed.  Uses
+           ``establish_direct_connection()`` which polls the /health
+           endpoint and uses ``vastai execute``/``vastai logs`` for
+           diagnostics.
+        2. **SSH tunnel** (legacy fallback) if direct connection fails.
+
         If the VM stays in "loading" (Docker image pull) for too long,
-        the SSH proxy host rejects our keys, or the worker's bootstrap
+        connections fail on both direct and SSH, or the worker's bootstrap
         fails (e.g., network issues, CUDA OOM), the VM is destroyed and
         re-provisioned on a different host.
         Up to ``_MAX_PROVISION_RETRIES`` retries are attempted.
@@ -1520,17 +1697,49 @@ class WorkerProvisioner:
                 else:
                     raise  # all retries exhausted
 
-            # Step 3: Set up SSH tunnel — retry on a new VM if proxy
-            # host consistently rejects our SSH keys.
+            # Step 3: Connect to worker — try direct first, SSH tunnel as fallback.
+            # Direct connection uses the VM's public IP + mapped port (no SSH).
+            # This avoids the SSH proxy reliability issues (Connection refused).
+            connection_ok = False
             try:
-                setup_ssh_tunnel(spec)
-            except RuntimeError:
+                direct_url = establish_direct_connection(
+                    spec,
+                    max_retries=40,  # ~10 min of polling (15s intervals)
+                    retry_delay=15,
+                )
+                spec.worker_url = direct_url
+                connection_ok = True
+                logger.info(
+                    "%s worker connected via DIRECT: %s",
+                    spec.role, direct_url,
+                )
+            except RuntimeError as direct_err:
+                logger.warning(
+                    "Direct connection to %s failed: %s — "
+                    "falling back to SSH tunnel",
+                    spec.role, direct_err,
+                )
+                # Fallback: SSH tunnel
+                try:
+                    setup_ssh_tunnel(spec)
+                    spec.worker_url = f"http://localhost:{spec.local_port}"
+                    connection_ok = True
+                    logger.info(
+                        "%s worker connected via SSH TUNNEL: %s",
+                        spec.role, spec.worker_url,
+                    )
+                except RuntimeError:
+                    logger.warning(
+                        "SSH tunnel to %s also failed", spec.role,
+                    )
+
+            if not connection_ok:
                 if attempt < _MAX_PROVISION_RETRIES:
                     if selected_offer_id:
                         _excluded_offers.add(selected_offer_id)
                     logger.warning(
-                        "%s VM %s (offer %s) SSH proxy rejected all keys "
-                        "— destroying and retrying on a different host "
+                        "%s VM %s (offer %s) — both direct and SSH "
+                        "connections failed — destroying and retrying "
                         "(attempt %d/%d, excluded offers: %s)",
                         spec.role, spec.vm_id, selected_offer_id,
                         attempt + 2, 1 + _MAX_PROVISION_RETRIES,
@@ -1539,7 +1748,11 @@ class WorkerProvisioner:
                     self._destroy_and_reset_spec(spec)
                     continue
                 else:
-                    raise  # all retries exhausted
+                    raise RuntimeError(
+                        f"{spec.role} worker on VM {spec.vm_id}: "
+                        f"both direct and SSH connections failed after "
+                        f"all retries"
+                    )
 
             # Step 4: Wait for worker to be healthy
             # Bootstrap + model download can take 15-30 min (95GB at ~65 MB/s)
@@ -1547,7 +1760,7 @@ class WorkerProvisioner:
             remaining = max(timeout - elapsed, 120)
             healthy = wait_for_worker_healthy(spec, timeout=remaining)
             if healthy:
-                break  # VM running + SSH + healthy — done
+                break  # VM running + connected + healthy — done
 
             # Step 4b: Bootstrap failed — retry on a different host.
             # Previously this was a hard failure, but bootstrap errors
@@ -1608,6 +1821,9 @@ class WorkerProvisioner:
                 # Keep spec.vm_id so cleanup() can retry destruction
         spec.ssh_host = ""
         spec.ssh_port = 0
+        spec.public_ipaddr = ""
+        spec.direct_port = 0
+        spec.worker_url = ""
 
     def _cleanup_single_worker(
         self, spec: WorkerSpec, *, force_destroy: bool = False,
@@ -1681,7 +1897,7 @@ class WorkerProvisioner:
                         WorkerRole.TTS if spec.role == "tts"
                         else WorkerRole.VIDEO
                     )
-                    url = f"http://localhost:{spec.local_port}"
+                    url = spec.worker_url or f"http://localhost:{spec.local_port}"
                     infra.add_worker(url, role)
                     logger.info(
                         "Registered %s worker at %s with InfraAgent",

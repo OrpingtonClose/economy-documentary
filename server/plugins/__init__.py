@@ -2,7 +2,7 @@
 
 Provides two public helpers:
 
-* ``setup_otel()``   -- configures dual OTel span exporters (SQLite archive +
+* ``setup_otel()``   -- configures OTel span exporters (SQLite archive +
   optional Phoenix dashboard).
 
 * ``build_plugins()`` -- returns the ordered list of ADK ``BasePlugin`` instances:
@@ -10,8 +10,13 @@ Provides two public helpers:
   1. **ContextFilterPlugin** -- context window management
   2. **ReflectAndRetryToolPlugin** -- auto-retry failed tool calls
   3. **GlobalInstructionPlugin** -- documentary-specific global instructions
-  4. **LoggingPlugin** -- ADK execution visibility
-  5. **DebugLoggingPlugin** -- conditional on ``ADK_DEBUG=1``
+  4. **ReasoningTracePlugin** -- full LLM traces stored + surfaced to frontend
+
+  ``ReasoningTracePlugin`` replaces the old LoggingPlugin + DebugLoggingPlugin
+  + ADK_DEBUG + PHOENIX_ENABLED scattered configuration.  Full LLM
+  request/response content is always stored (no env var gates) and reasoning
+  chatter is pushed to the AG-UI event bus so the human observer sees what
+  every agent is thinking in real time.
 """
 
 from __future__ import annotations
@@ -99,11 +104,17 @@ DOCUMENTARY PIPELINE RULES (apply to every agent):
 
 
 def build_plugins() -> List[BasePlugin]:
-    """Return the ordered list of ADK plugins for every Runner / App."""
+    """Return the ordered list of ADK plugins for every Runner / App.
+
+    Observability is handled entirely by ``ReasoningTracePlugin`` — it stores
+    full LLM request/response content in SQLite and pushes reasoning chatter
+    to the frontend via the AG-UI event bus.  No env vars required.
+    """
     from google.adk.plugins.context_filter_plugin import ContextFilterPlugin
     from google.adk.plugins.global_instruction_plugin import GlobalInstructionPlugin
-    from google.adk.plugins.logging_plugin import LoggingPlugin
     from google.adk.plugins.reflect_retry_tool_plugin import ReflectAndRetryToolPlugin
+
+    from plugins.reasoning_trace import ReasoningTracePlugin
 
     plugins: List[BasePlugin] = [
         # 1. Context management
@@ -119,17 +130,9 @@ def build_plugins() -> List[BasePlugin]:
         ),
         # 3. Cross-cutting instructions
         GlobalInstructionPlugin(global_instruction=_GLOBAL_INSTRUCTION),
-        # 4. ADK execution visibility (console)
-        LoggingPlugin(),
+        # 4. Full observability — stores traces + surfaces reasoning to UI
+        ReasoningTracePlugin(),
     ]
-
-    # 5. Debug YAML traces -- opt-in via ADK_DEBUG=1
-    if os.environ.get("ADK_DEBUG", "").strip() == "1":
-        from google.adk.plugins.debug_logging_plugin import DebugLoggingPlugin
-
-        debug_path = os.path.join(_FINDINGS_DIR, "adk_debug.yaml")
-        plugins.append(DebugLoggingPlugin(output_path=debug_path))
-        logger.info("DebugLoggingPlugin enabled -> %s", debug_path)
 
     logger.info(
         "ADK plugins: %s",
