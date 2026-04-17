@@ -1566,6 +1566,15 @@ class WorkerProvisioner:
                     attempt + 2, 1 + _MAX_PROVISION_RETRIES,
                     _excluded_offers,
                 )
+                # Kill the SSH tunnel before destroying the VM — the tunnel
+                # is bound to spec.local_port and would block the next attempt.
+                if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
+                    spec.tunnel_proc.terminate()
+                    try:
+                        spec.tunnel_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        spec.tunnel_proc.kill()
+                    spec.tunnel_proc = None
                 self._destroy_and_reset_spec(spec)
                 # Reset bootstrap error for next attempt
                 spec.bootstrap_error = ""
