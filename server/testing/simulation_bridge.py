@@ -203,11 +203,10 @@ def _run_async(coro):
 
 def _post_intercept_generate_narration(call_args: Dict, result: Any) -> None:
     """Create a silent WAV placeholder after narration simulation."""
-    output_dir = call_args.get("output_dir", "/tmp/documentary-pipeline/audio")
+    output_dir = call_args.get("output_dir", "") or "/tmp/documentary-pipeline/audio"
     scene_num = call_args.get("scene_num", 0)
     voice_role = call_args.get("voice_role", "v1")
-    language = call_args.get("language", "en")
-    wav_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_{voice_role}_{language}.wav")
+    wav_path = os.path.join(output_dir, f"scene_{int(scene_num):03d}_{voice_role}.wav")
 
     if not os.path.exists(wav_path):
         try:
@@ -240,7 +239,7 @@ def _post_intercept_generate_video_clip(call_args: Dict, result: Any) -> None:
     if not os.path.exists(output_path):
         try:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            duration = call_args.get("duration", 5.0)
+            duration = call_args.get("duration_sec", 5.0)
             cmd = [
                 "ffmpeg", "-y", "-f", "lavfi",
                 "-i", f"color=c=0x336699:s=1280x720:d={float(duration):.2f}:r=24",
