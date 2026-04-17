@@ -300,7 +300,7 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     logger.info("Topic: %s", topic)
     logger.info("Corpus: %s", corpus_path)
     logger.info("Language: %s", language)
-    logger.info("Simulation mode: %s", os.environ.get("DOCUMENTARY_SIMULATION_MODE", "false"))
+    logger.info("Simulation mode: %s", _SIMULATION_MODE)
     logger.info("Model: %s", os.environ.get("ADK_MODEL", "(default)"))
 
     # Read corpus content to include in the initial message
@@ -455,7 +455,7 @@ def main():
     # before the pipeline starts.  Never silently degrade to
     # synthetic/placeholder media — that wastes hours of GPU time on
     # downstream stages that depend on real upstream artifacts.
-    if not args.test_mode:
+    if not args.test_mode and not _SIMULATION_MODE:
         _preflight_check_dashboard()  # GAP 4.1
         _preflight_check_workers()
 
