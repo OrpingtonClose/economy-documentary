@@ -1074,6 +1074,72 @@ class ProductionOrchestrator:
             risk_assessment="Fallback plan — no LLM optimization applied",
         )
 
+    # -- Supervisor escalation bridge (new, additive) -----------------------
+    #
+    # Closes #61, #73, #76, #77, #102, #103.  Provides a single entry point
+    # for any production-stage decision point (round-robin fall-through,
+    # batch failure, partial plan) to consult the canonical supervisor
+    # action menu instead of silently degrading.  Existing methods are NOT
+    # modified — callers opt in explicitly.
+
+    def supervisor_decide(
+        self,
+        failing_artifact: str,
+        artifact_descriptor: Optional[dict] = None,
+        high_cost: bool = False,
+    ):
+        """Ask the production supervisor for a canonical EscalationAction.
+
+        Returns an ``EscalationAction`` from the 8-item canonical menu.
+        Never returns ``None``: on LLM/parse failure the supervisor returns
+        a deterministic ``abort_run`` action and still increments the LLM
+        call counter, so the #102 invariant holds by construction.
+        """
+        from agents.production_supervisor import supervisor_escalate
+        from orchestrator.escalation_menu import EscalationContext
+
+        context = EscalationContext(
+            failing_artifact=failing_artifact,
+            artifact_descriptor=artifact_descriptor or {},
+            timeline_state_snapshot=self._snapshot_timeline_state(),
+            user_original_prompt=self.state.get("user_prompt", "")
+                if isinstance(self.state, dict) else "",
+            budget_remaining=float(
+                self.state.get("budget_remaining", 0.0)
+                if isinstance(self.state, dict) else 0.0
+            ),
+            escalation_history=(
+                self.state.get("escalation_history", [])
+                if isinstance(self.state, dict) else []
+            ),
+            high_cost=high_cost,
+        )
+        return supervisor_escalate(context)
+
+    def _snapshot_timeline_state(self) -> dict:
+        """Cheap timeline-state snapshot for the supervisor prompt.
+
+        Pulls lightweight fields (counts, durations) out of ``self.state``
+        without pulling in the full OTIO object — the supervisor LLM only
+        needs aggregate signal.
+        """
+        if not isinstance(self.state, dict):
+            return {}
+        snap: dict = {}
+        for key in (
+            "scene_count",
+            "total_duration",
+            "visual_concepts_count",
+            "pipeline_phase",
+            "batches_completed",
+        ):
+            if key in self.state:
+                snap[key] = self.state[key]
+        concepts = self.state.get("visual_concepts") or []
+        if isinstance(concepts, list):
+            snap["visual_concepts_count"] = len(concepts)
+        return snap
+
     # -- AG-UI event emission -----------------------------------------------
 
     def _emit_planning_event(self, event_type: str, data: dict) -> None:
