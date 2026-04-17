@@ -31,10 +31,14 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-# Force simulation mode if --test-mode is passed (must be before imports)
-_SIMULATION_MODE = "--test-mode" in sys.argv or os.environ.get(
+# --test-mode sets DOCUMENTARY_TEST_MODE so approval gates auto-approve
+# and pre-flight worker checks are skipped. ADK simulation was removed
+# during the Strands migration; --test-mode now only affects gating.
+if "--test-mode" in sys.argv or os.environ.get(
     "DOCUMENTARY_SIMULATION_MODE", ""
-).strip().lower() in ("1", "true")
+).strip().lower() in ("1", "true"):
+    os.environ.setdefault("DOCUMENTARY_TEST_MODE", "true")
+    os.environ.setdefault("DOCUMENTARY_AUTO_APPROVE", "true")
 if "--quick-test" in sys.argv:
     os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
@@ -412,7 +416,7 @@ def main():
                         choices=["en", "ru", "dual_ru_en"],
                         help="Language mode (default: dual_ru_en)")
     parser.add_argument("--test-mode", action="store_true",
-                        help="Run in test mode (synthetic media, no GPU needed)")
+                        help="Run in test mode (skip pre-flight checks, auto-approve gates)")
     parser.add_argument("--quick-test", action="store_true",
                         help="Quick test mode: 2 scenes, ~15s each, ~1 min total movie")
     parser.add_argument("--output-dir", default="/tmp/documentary-pipeline/output",
