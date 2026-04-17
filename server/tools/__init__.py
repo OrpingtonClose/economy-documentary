@@ -1,1 +1,1 @@
-# Documentary Pipeline — Strands @tool wrappers
+# Documentary Pipeline — ADK FunctionTool wrappers

@@ -1,9 +1,10 @@
 """
-Shared model configuration for all Strands agents.
+Shared model configuration for all ADK agents.
 
-Uses ``strands.models.litellm.LiteLLMModel`` instead of Google ADK's
-``LiteLlm``.  Preserves the 4 model roles (primary, synthesis, thinker,
-vision) and the Venice/OpenRouter ``extra_body`` logic.
+For native Gemini models (``gemini-*``), returns a plain string so ADK
+uses its built-in handler.  For LiteLLM-routed models, returns a
+``LiteLlm`` instance with vendor-specific ``extra_body`` forwarding
+(e.g. Venice ``venice_parameters``).
 
 Model roles:
   - ADK_MODEL: primary model for tool-capable agents
@@ -15,15 +16,13 @@ Model roles:
 from __future__ import annotations
 
 import json
-import logging
 import os
+from typing import Union
 
-from strands.models.litellm import LiteLLMModel
-
-logger = logging.getLogger(__name__)
+from google.adk.models import LiteLlm
 
 # -- Model names ---------------------------------------------------------------
-_raw_model = os.environ.get("ADK_MODEL", "openai/gpt-4o")
+_raw_model = os.environ.get("ADK_MODEL", "litellm/openai/gpt-4o")
 ADK_MODEL_NAME = _raw_model.split(":")[0]
 
 _raw_synthesis = os.environ.get("ADK_SYNTHESIS_MODEL", "")
@@ -100,77 +99,69 @@ _vision_api_base = os.environ.get("VISION_API_BASE", _api_base)
 _vision_api_key = os.environ.get("VISION_API_KEY", "")
 
 
-def _pick_model_name(synthesis: bool, thinker: bool, vision: bool) -> str:
-    """Select model name based on role flags."""
-    if vision:
-        return ADK_VISION_MODEL_NAME
-    if thinker:
-        return ADK_THINKER_MODEL_NAME
-    if synthesis:
-        return ADK_SYNTHESIS_MODEL_NAME
-    return ADK_MODEL_NAME
-
-
-def _pick_extra_body(synthesis: bool, thinker: bool, vision: bool) -> dict:
-    """Select vendor-specific extra_body based on role flags."""
-    if vision and _has_separate_vision:
-        return {}
-    if thinker and _has_separate_thinker and _thinker_api_base:
-        return _thinker_extra_body
-    if (synthesis or thinker) and _has_separate_synthesis and _synthesis_api_base:
-        return _synthesis_extra_body
-    return _extra_body
-
-
-def _pick_client_args(synthesis: bool, thinker: bool, vision: bool) -> dict:
-    """Build client_args (api_key, api_base) for the selected model role."""
-    args: dict = {}
-
-    if vision and _vision_api_key:
-        args["api_key"] = _vision_api_key
-    elif thinker and _thinker_api_key:
-        args["api_key"] = _thinker_api_key
-    elif (synthesis or thinker) and _synthesis_api_key:
-        args["api_key"] = _synthesis_api_key
-
-    if vision and _vision_api_base:
-        args["api_base"] = _vision_api_base
-    elif thinker and _thinker_api_base:
-        args["api_base"] = _thinker_api_base
-    elif (synthesis or thinker) and _synthesis_api_base:
-        args["api_base"] = _synthesis_api_base
-
-    return args
-
-
 def build_model(
     *,
+    parallel_tool_calls: bool = True,
     synthesis: bool = False,
     thinker: bool = False,
     vision: bool = False,
-) -> LiteLLMModel:
-    """Return a Strands LiteLLMModel for Agent(model=...).
+) -> Union[str, LiteLlm]:
+    """Return the model for ADK Agent(model=...).
+
+    * Native Gemini models (``gemini-*``) -> plain string (ADK native path).
+    * Everything else -> ``LiteLlm`` with vendor-specific ``extra_body``.
 
     Args:
+        parallel_tool_calls: Whether the model may emit multiple tool calls
+            in a single response.
         synthesis: Use the synthesis model (ADK_SYNTHESIS_MODEL).
         thinker: Use the thinker model (ADK_THINKER_MODEL).
         vision: Use the vision model (ADK_VISION_MODEL) for clip evaluation.
     """
-    name = _pick_model_name(synthesis, thinker, vision)
-    extra = _pick_extra_body(synthesis, thinker, vision)
-    client_args = _pick_client_args(synthesis, thinker, vision)
+    if vision:
+        name = ADK_VISION_MODEL_NAME
+    elif thinker:
+        name = ADK_THINKER_MODEL_NAME
+    elif synthesis:
+        name = ADK_SYNTHESIS_MODEL_NAME
+    else:
+        name = ADK_MODEL_NAME
+
+    # Determine extra_body based on model role
+    if vision and _has_separate_vision:
+        extra = {}
+    elif thinker and _has_separate_thinker and _thinker_api_base:
+        extra = _thinker_extra_body
+    elif (synthesis or thinker) and _has_separate_synthesis and _synthesis_api_base:
+        extra = _synthesis_extra_body
+    else:
+        extra = _extra_body
 
     # Strip the ``litellm/`` prefix -- ADK routing convention
     if name.startswith("litellm/"):
         name = name[len("litellm/"):]
 
-    config: dict = {}
-    if extra:
-        config["extra_body"] = extra
+    # Native Gemini models use ADK's built-in handler
+    if name.startswith("gemini"):
+        return name
 
-    logger.info("Building LiteLLMModel: model_id=%s", name)
-    return LiteLLMModel(
-        model_id=name,
-        client_args=client_args if client_args else None,
-        **config,
-    )
+    kwargs: dict = {"extra_body": extra}
+    if not parallel_tool_calls:
+        kwargs["parallel_tool_calls"] = False
+
+    # Per-model api_key and api_base for separate providers
+    if vision and _vision_api_key:
+        kwargs["api_key"] = _vision_api_key
+    elif thinker and _thinker_api_key:
+        kwargs["api_key"] = _thinker_api_key
+    elif (synthesis or thinker) and _synthesis_api_key:
+        kwargs["api_key"] = _synthesis_api_key
+
+    if vision and _vision_api_base:
+        kwargs["api_base"] = _vision_api_base
+    elif thinker and _thinker_api_base:
+        kwargs["api_base"] = _thinker_api_base
+    elif (synthesis or thinker) and _synthesis_api_base:
+        kwargs["api_base"] = _synthesis_api_base
+
+    return LiteLlm(model=name, **kwargs)

@@ -13,7 +13,7 @@ import logging
 import os
 from typing import List, Optional
 
-from strands import tool
+from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,6 @@ def _score_match(entry: dict, content_type: str, mood: str, tags: List[str]) -> 
     return score
 
 
-@tool(context=True)
 def query_lora_catalog(
     content_type: str = "",
     mood: str = "",
@@ -125,7 +124,6 @@ def query_lora_catalog(
     return json.dumps({"matches": results, "total_in_catalog": len(catalog)})
 
 
-@tool(context=True)
 def get_lora_details(lora_id: str, tool_context=None) -> str:
     """Get full details for a specific LoRA entry.
 
@@ -149,4 +147,8 @@ def get_lora_details(lora_id: str, tool_context=None) -> str:
     return json.dumps({"lora_id": lora_id, **entry})
 
 
-lora_tools = [query_lora_catalog, get_lora_details]
+# -- ADK FunctionTool wrappers -------------------------------------------------
+query_lora_catalog_tool = FunctionTool(query_lora_catalog)
+get_lora_details_tool = FunctionTool(get_lora_details)
+
+lora_tools = [query_lora_catalog_tool, get_lora_details_tool]
