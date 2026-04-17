@@ -39,8 +39,12 @@ def _skip_if_timing_passed(callback_context: CallbackContext) -> Optional[genai_
     """Skip the refiner entirely if timing already passed.
 
     This is the key optimization: when timing is within budget, the
-    refiner returns Content immediately (skipping the LLM call) and
-    calls exit_loop to break out of the timing_loop LoopAgent.
+    refiner returns Content immediately (skipping the LLM call) AND
+    sets actions.escalate=True so the parent LoopAgent exits.
+
+    Without actions.escalate, LoopAgent would run all max_iterations
+    even though timing passed on iteration 1 — wasting GPU time on
+    redundant TTS generation + WhisperX alignment per extra iteration.
 
     When timing fails, returns None so the LLM runs and adjusts scenes.
     """
@@ -53,6 +57,11 @@ def _skip_if_timing_passed(callback_context: CallbackContext) -> Optional[genai_
 
     if timing_passed:
         logger.info("Timing passed — skipping scenario refiner, exiting loop")
+        # Signal LoopAgent to exit: LoopAgent checks event.actions.escalate
+        # after each sub-agent and breaks when True.  This is the same
+        # mechanism used by the exit_loop tool (which sets
+        # tool_context.actions.escalate = True).
+        callback_context.actions.escalate = True
         return genai_types.Content(
             role="model",
             parts=[genai_types.Part(

@@ -122,6 +122,31 @@ def _validate_postconditions_and_log(
 
 
 # ---------------------------------------------------------------------------
+# Timing feedback loop (R3 from deep audit — fixes ~30-40% of duration
+# compliance failures).  Wraps audio generation + timing evaluation +
+# scenario refinement in a LoopAgent so that if audio overshoots the
+# duration budget, the scenario is automatically refined and audio
+# regenerated.  Max 3 iterations; the refiner's before_agent_callback
+# returns Content (skipping the LLM) when timing passes, and sets
+# actions.escalate=True so the LoopAgent exits immediately.
+# ---------------------------------------------------------------------------
+timing_loop = LoopAgent(
+    name="timing_loop",
+    description=(
+        "Audio generation with timing feedback: generates TTS narration, "
+        "evaluates duration compliance, and refines scene text if the "
+        "total duration deviates from the target budget by more than 15%."
+    ),
+    max_iterations=3,
+    sub_agents=[
+        audio_agent,
+        timing_evaluator,
+        scenario_refiner,
+    ],
+)
+
+
+# ---------------------------------------------------------------------------
 # Approval-gate wrappers that compose with existing sub-agent callbacks
 # ---------------------------------------------------------------------------
 # We monkey-patch the sub-agents' after_agent_callback and
@@ -626,31 +651,6 @@ def _cleanup_pipeline_state(
     state["_workers_provisioned"] = False
 
     return None
-
-
-# ---------------------------------------------------------------------------
-# Timing feedback loop (R3 from deep audit — fixes ~30-40% of duration
-# compliance failures).  Wraps audio generation + timing evaluation +
-# scenario refinement in a LoopAgent so that if audio overshoots the
-# duration budget, the scenario is automatically refined and audio
-# regenerated.  Max 3 iterations; the refiner's before_agent_callback
-# returns Content (skipping the LLM) when timing passes, and the
-# LoopAgent exits when max_iterations is reached.
-# ---------------------------------------------------------------------------
-timing_loop = LoopAgent(
-    name="timing_loop",
-    description=(
-        "Audio generation with timing feedback: generates TTS narration, "
-        "evaluates duration compliance, and refines scene text if the "
-        "total duration deviates from the target budget by more than 15%."
-    ),
-    max_iterations=3,
-    sub_agents=[
-        audio_agent,
-        timing_evaluator,
-        scenario_refiner,
-    ],
-)
 
 
 pipeline_agent = SequentialAgent(
