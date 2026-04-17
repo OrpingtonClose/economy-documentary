@@ -84,6 +84,11 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
             logger.warning("Timing evaluator: OTIO read failed: %s", e)
 
     # Fallback: estimate from WhisperX alignment data
+    # Each alignment entry's end_time is relative to the start of that
+    # individual voice clip, so we SUM them to get total narration duration.
+    # Using max() would give the longest single clip (~10-30s), not the
+    # total movie narration (~300s for a 5-min doc), causing a massive
+    # underestimate that always triggers unnecessary refinement.
     if actual_duration <= 0:
         raw_alignment = state.get("whisperx_alignment", "{}")
         try:
@@ -91,10 +96,7 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
             if isinstance(alignment, dict):
                 for scene_data in alignment.values():
                     if isinstance(scene_data, dict):
-                        actual_duration = max(
-                            actual_duration,
-                            scene_data.get("end_time", 0),
-                        )
+                        actual_duration += scene_data.get("end_time", 0)
         except (json.JSONDecodeError, TypeError):
             pass
 
