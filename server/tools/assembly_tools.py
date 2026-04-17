@@ -19,6 +19,49 @@ from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Timeout scaling — learned from Strands migration
+# ---------------------------------------------------------------------------
+# Hardcoded 120s/300s timeouts are too short for 5-minute movies (30+ clips).
+# A 5-min H.264 re-encode at 'fast' preset takes ~10s per minute of content
+# on a modern CPU; concat of 30+ clips can take 5-10 minutes.
+# Formula: base + (per_minute * estimated_duration_minutes), clamped to a max.
+
+_MUX_TIMEOUT_BASE = 60       # seconds base
+_MUX_TIMEOUT_PER_MIN = 30    # seconds per minute of input
+_MUX_TIMEOUT_MAX = 1200      # 20-minute hard cap
+
+_CONCAT_TIMEOUT_BASE = 60
+_CONCAT_TIMEOUT_PER_CLIP = 20  # seconds per clip (re-encode overhead)
+_CONCAT_TIMEOUT_MAX = 1800     # 30-minute hard cap
+
+_TRIM_TIMEOUT_BASE = 30
+_TRIM_TIMEOUT_PER_MIN = 15
+_TRIM_TIMEOUT_MAX = 600
+
+
+def _estimate_file_duration_minutes(path: str) -> float:
+    """Estimate media duration in minutes via ffprobe (fast, metadata only).
+
+    Returns 5.0 as a safe default if ffprobe fails.
+    """
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries",
+             "format=duration", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return float(result.stdout.strip()) / 60.0
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        pass
+    return 5.0  # conservative default for a 5-min movie
+
+
+def _scaled_timeout(base: int, per_unit: int, units: float, cap: int) -> int:
+    """Calculate a scaled timeout clamped to a maximum."""
+    return min(cap, int(base + per_unit * units))
+
 
 def mux_audio_video(
     audio_path: str,
@@ -65,12 +108,25 @@ def mux_audio_video(
         output_path,
     ]
 
+    # Scale timeout by input duration (a 5-min movie re-encode takes much
+    # longer than the old hardcoded 120s allowed)
+    dur_min = max(
+        _estimate_file_duration_minutes(audio_path),
+        _estimate_file_duration_minutes(video_path),
+    )
+    timeout = _scaled_timeout(
+        _MUX_TIMEOUT_BASE, _MUX_TIMEOUT_PER_MIN, dur_min, _MUX_TIMEOUT_MAX,
+    )
+    logger.info(
+        "ffmpeg mux: estimated %.1f min input, timeout=%ds", dur_min, timeout,
+    )
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -91,7 +147,7 @@ def mux_audio_video(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg mux timed out"})
+        return json.dumps({"error": f"ffmpeg mux timed out after {timeout}s (input ~{dur_min:.1f} min)"})
 
 
 def concat_clips(
@@ -175,11 +231,21 @@ def concat_clips(
                 output_path,
             ]
 
+        # Scale timeout by number of clips (re-encoding 30+ clips takes
+        # much longer than the old hardcoded 300s)
+        timeout = _scaled_timeout(
+            _CONCAT_TIMEOUT_BASE, _CONCAT_TIMEOUT_PER_CLIP,
+            len(paths), _CONCAT_TIMEOUT_MAX,
+        )
+        logger.info(
+            "ffmpeg concat: %d clips, timeout=%ds", len(paths), timeout,
+        )
+
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -200,7 +266,7 @@ def concat_clips(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg concat timed out"})
+        return json.dumps({"error": f"ffmpeg concat timed out after {timeout}s ({len(paths)} clips)"})
     finally:
         try:
             os.unlink(concat_path)
@@ -241,12 +307,18 @@ def trim_clip(
         output_path,
     ]
 
+    # Scale timeout by duration being extracted
+    dur_min = duration_sec / 60.0
+    timeout = _scaled_timeout(
+        _TRIM_TIMEOUT_BASE, _TRIM_TIMEOUT_PER_MIN, dur_min, _TRIM_TIMEOUT_MAX,
+    )
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout,
         )
         if result.returncode != 0:
             return json.dumps(
@@ -274,7 +346,7 @@ def trim_clip(
         )
 
     except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffmpeg trim timed out"})
+        return json.dumps({"error": f"ffmpeg trim timed out after {timeout}s"})
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------
