@@ -276,7 +276,14 @@ def _build_escalate_prompt(
         "=" * 40,
         f"Failing artifact: {context.failing_artifact}",
         f"User's original prompt: {context.user_original_prompt or '(not provided)'}",
-        f"Budget remaining: ${context.budget_remaining:.2f}",
+        # ``budget_remaining == 0.0`` means "not tracked / unbounded" per the
+        # EscalationContext docstring -- rendering it as "$0.00" would bias
+        # the LLM toward abort_run.
+        (
+            "Budget remaining: (unbounded / not tracked)"
+            if context.budget_remaining == 0.0
+            else f"Budget remaining: ${context.budget_remaining:.2f}"
+        ),
         "",
         "Artifact descriptor:",
         json.dumps(context.artifact_descriptor, indent=2, default=str),

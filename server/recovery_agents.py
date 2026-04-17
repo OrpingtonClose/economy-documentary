@@ -304,10 +304,11 @@ class RecoveryAgent:
             elif content.strip().startswith("{"):
                 json_str = content.strip()
             else:
-                # No JSON found — treat as escalation
-                return RecoveryDecision(
-                    action="escalate",
-                    explanation=f"Agent response (no JSON): {content[:500]}",
+                # No JSON found — route to the supervisor instead of
+                # passing the buck up the ladder (#61, #73 round-robin fix).
+                return _supervisor_fallback_decision(
+                    context=context,
+                    reason=f"Agent response (no JSON): {content[:500]}",
                     tool_results=tool_results,
                 )
 
