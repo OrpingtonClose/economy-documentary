@@ -166,6 +166,12 @@ def activate_simulation(config, scenario_name: str = "") -> None:
 def deactivate_simulation() -> None:
     """Deactivate the current simulation scenario."""
     SimulationRegistry.get().deactivate()
+    # Reset pipeline callback wiring so next activate_simulation() can re-wire
+    try:
+        from agents.pipeline import _reset_simulation_wiring
+        _reset_simulation_wiring()
+    except ImportError:
+        pass  # pipeline module may not be loaded in unit test contexts
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +219,7 @@ def _post_intercept_generate_narration(call_args: Dict, result: Any) -> None:
             import wave
             os.makedirs(os.path.dirname(wav_path) or ".", exist_ok=True)
             sample_rate = 24000
-            duration = 5.0  # default placeholder duration
+            duration = result.get("duration", 5.0) if isinstance(result, dict) else 5.0
             num_frames = int(sample_rate * duration)
             with wave.open(wav_path, "w") as wf:
                 wf.setnchannels(1)
