@@ -186,7 +186,7 @@ def _build_sidecar(
 
 
 def _upload_json_key(data: dict | list | str, key: str) -> bool:
-    """Internal JSON upload to an explicit B2 key (no run_id prefix)."""
+    """Internal JSON upload — ``key`` is a run-relative path (run_id prefix added automatically)."""
     bucket = _get_bucket()
     if bucket is None:
         return False
