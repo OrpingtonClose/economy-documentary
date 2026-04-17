@@ -301,13 +301,22 @@ def apply_pronunciation_hints(
         if not replacement:
             replacement = _letter_spell(key)
 
-        # Whole-word boundary match, case-sensitive so we only rewrite
-        # the initialism form.
-        pattern = rf"\b{re.escape(key)}\b"
+        escaped = re.escape(key)
 
         if ssml_supported:
+            # Skip matches already inside a <say-as interpret-as="characters">
+            # wrapper so a second call is idempotent.  The wrapper produces
+            # '...characters">KEY</say-as>' — the fixed-width lookbehind
+            # "characters\">" (12 chars) and lookahead "</say-as>" prevent
+            # re-wrapping.
+            pattern = (
+                rf'(?<!characters">)\b{escaped}\b(?!</say-as>)'
+            )
             sub = f'<say-as interpret-as="characters">{key}</say-as>'
         else:
+            # Whole-word boundary match, case-sensitive so we only rewrite
+            # the initialism form.
+            pattern = rf"\b{escaped}\b"
             sub = replacement
 
         out = re.sub(pattern, sub, out)

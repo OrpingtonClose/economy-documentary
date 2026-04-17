@@ -87,6 +87,36 @@ def test_apply_hints_idempotent_in_literal_mode():
     assert once == twice
 
 
+def test_apply_hints_idempotent_in_ssml_mode():
+    # Regression test: running twice must not nest <say-as> tags.
+    hints = {"PAG": "P-A-G"}
+    once = apply_pronunciation_hints(
+        "The PAG projects widely. PAG also connects to the amygdala.",
+        hints,
+        ssml_supported=True,
+    )
+    twice = apply_pronunciation_hints(once, hints, ssml_supported=True)
+    assert once == twice
+    # Extra safety: no nested wrappers.
+    assert '<say-as interpret-as="characters"><say-as' not in twice
+    # Both occurrences were wrapped exactly once each.
+    assert twice.count('<say-as interpret-as="characters">PAG</say-as>') == 2
+
+
+def test_apply_hints_ssml_mode_doesnt_rewrap_existing_say_as():
+    # If the caller hands us a string that's already partially wrapped,
+    # only the unwrapped occurrence should gain a new wrapper.
+    hints = {"PAG": "P-A-G"}
+    pre_wrapped = (
+        'The <say-as interpret-as="characters">PAG</say-as> projects widely. '
+        "PAG also connects to the amygdala."
+    )
+    out = apply_pronunciation_hints(pre_wrapped, hints, ssml_supported=True)
+    # Exactly two wrappers total, not three.
+    assert out.count('<say-as interpret-as="characters">PAG</say-as>') == 2
+    assert '<say-as interpret-as="characters"><say-as' not in out
+
+
 def test_apply_hints_handles_empty_inputs():
     assert apply_pronunciation_hints("", {"PAG": "P-A-G"}, False) == ""
     assert apply_pronunciation_hints("text", {}, False) == "text"
