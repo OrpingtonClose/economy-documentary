@@ -163,6 +163,15 @@ def build_pipeline() -> Any:
     # This is defense-in-depth — agents also validate their own output via
     # validate_deliverables tool. The plugin catches cases where the agent
     # fails to self-heal.
+    #
+    # TODO: ApprovalGatePlugin (server/hooks/approval_gate.py) is defined but
+    # intentionally NOT registered here yet. It uses event.interrupt() which
+    # transitions the graph to INTERRUPTED state and requires the frontend to
+    # send resume signals. Until the server.py SSE endpoint and frontend
+    # support graph interrupt/resume, enabling it would halt the pipeline
+    # indefinitely. Wire it in once interrupt handling is implemented:
+    #   from hooks.approval_gate import ApprovalGatePlugin
+    #   builder.set_hook_providers([NodeRecoveryPlugin(), ApprovalGatePlugin()])
     builder.set_hook_providers([NodeRecoveryPlugin()])
 
     pipeline = builder.build()

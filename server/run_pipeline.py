@@ -374,9 +374,13 @@ def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", qui
         try:
             result = pipeline(user_message, invocation_state=initial_state)
             logger.info("Pipeline graph execution completed")
+        except RuntimeError:
+            raise
         except Exception as exc:
             logger.exception("Pipeline execution failed")
             result = None
+    except RuntimeError:
+        raise
     except Exception as exc:
         logger.exception("Pipeline execution failed after recovery attempts")
         # Restore partial progress from last attempt so caller can inspect
