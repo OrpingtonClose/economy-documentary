@@ -30,12 +30,17 @@ _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
 # Auto-approve all stages (no human needed).
-# Controlled by DOCUMENTARY_AUTO_APPROVE env var.  When simulation mode is
-# active (via testing.simulation_bridge), tool calls are intercepted by the
-# ADK EnvironmentSimulationEngine — approval gates use this flag independently.
-_AUTO_APPROVE = os.environ.get(
+# Controlled by DOCUMENTARY_AUTO_APPROVE env var OR active simulation mode.
+from testing.simulation_bridge import is_simulation_active
+
+_AUTO_APPROVE_ENV = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
+
+
+def _should_auto_approve() -> bool:
+    """Check if gates should auto-approve (env var OR active simulation)."""
+    return _AUTO_APPROVE_ENV or is_simulation_active()
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
@@ -66,9 +71,10 @@ def _write_approval_state(state: dict) -> None:
 def is_stage_approved(stage: str) -> bool:
     """Check if a stage has been approved by the human.
 
-    In test mode, all stages are auto-approved.
+    In simulation mode or when DOCUMENTARY_AUTO_APPROVE is set, all stages
+    are auto-approved.
     """
-    if _AUTO_APPROVE:
+    if _should_auto_approve():
         return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
@@ -77,9 +83,9 @@ def is_stage_approved(stage: str) -> bool:
 def mark_stage_ready(stage: str) -> None:
     """Mark a stage as ready for human review (but not yet approved).
 
-    In test mode, stages are auto-approved — skip disk I/O entirely.
+    In simulation/auto-approve mode, stages are auto-approved — skip disk I/O.
     """
-    if _AUTO_APPROVE:
+    if _should_auto_approve():
         logger.info("Stage '%s' auto-approved (test mode)", stage)
         return
     state = _read_approval_state()
@@ -97,8 +103,8 @@ def approve_stage(stage: str) -> None:
     Used by quick-test and other automated paths that skip the normal
     human-in-the-loop flow but still need downstream stages to proceed.
     """
-    if _AUTO_APPROVE:
-        logger.info("Stage '%s' already auto-approved (test/auto-approve mode)", stage)
+    if _should_auto_approve():
+        logger.info("Stage '%s' already auto-approved (auto-approve/simulation mode)", stage)
         return
     state = _read_approval_state()
     if stage not in state:
@@ -117,8 +123,8 @@ def wait_for_approval(stage: str) -> bool:
     Returns True if approved, False if timed out.
     In test mode, returns immediately.
     """
-    if _AUTO_APPROVE:
-        logger.info("Stage '%s' auto-approved (test mode)", stage)
+    if _should_auto_approve():
+        logger.info("Stage '%s' auto-approved (auto-approve/simulation mode)", stage)
         return True
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)

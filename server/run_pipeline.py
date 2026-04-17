@@ -32,13 +32,27 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 # Force simulation mode if --test-mode is passed (must be before imports)
-if "--test-mode" in sys.argv:
-    os.environ["DOCUMENTARY_SIMULATION_MODE"] = "true"
+_SIMULATION_MODE = "--test-mode" in sys.argv or os.environ.get(
+    "DOCUMENTARY_SIMULATION_MODE", ""
+).strip().lower() in ("1", "true")
 if "--quick-test" in sys.argv:
     os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
 from dotenv import load_dotenv
 load_dotenv()
+
+# Activate the E1 (happy path) simulation scenario when --test-mode is used.
+# This replaces the old DOCUMENTARY_TEST_MODE env var — the ADK
+# EnvironmentSimulationEngine must be explicitly activated with a config.
+if _SIMULATION_MODE:
+    from testing.simulation_bridge import activate_simulation
+    from testing.scenarios import get_scenario
+    _sim_scenario = os.environ.get("SIMULATION_SCENARIO", "E1")
+    _sim_config = get_scenario(_sim_scenario)
+    if _sim_config:
+        activate_simulation(_sim_config, scenario_name=_sim_scenario)
+    else:
+        print(f"WARNING: Unknown simulation scenario '{_sim_scenario}', running without simulation")
 
 from google.adk.agents import SequentialAgent
 from google.adk.runners import Runner
