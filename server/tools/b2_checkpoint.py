@@ -87,13 +87,60 @@ def _get_bucket():
             info = InMemoryAccountInfo()
             _b2_api = B2Api(info)
             _b2_api.authorize_account("production", key_id, app_key)
-            _b2_bucket = _b2_api.get_bucket_by_name(bucket_name)
-            logger.info("B2 checkpoint enabled: bucket=%s", bucket_name)
+            _b2_bucket = _ensure_public_bucket(_b2_api, bucket_name)
+            logger.info(
+                "B2 checkpoint enabled: bucket=%s (type=%s)",
+                bucket_name, getattr(_b2_bucket, "type_", "unknown"),
+            )
         except Exception as e:
             logger.error("B2 checkpoint init failed: %s", e)
             _b2_bucket = None
 
     return _b2_bucket
+
+
+# ---------------------------------------------------------------------------
+# Bucket provisioning (#108)
+# ---------------------------------------------------------------------------
+
+# Per-run buckets must be created as ``allPublic`` so downstream consumers
+# (frontend preview, QA dashboard, human reviewers) can fetch artifacts by
+# URL without additional auth.  The previous code silently used whatever
+# type the bucket happened to have, which meant dashboards 404ed when a
+# run used a freshly-created private bucket.
+B2_BUCKET_TYPE_PUBLIC = "allPublic"
+
+
+def _ensure_public_bucket(api, bucket_name: str):
+    """Return a bucket handle, creating it as allPublic if missing.
+
+    Issue #108: per-run B2 buckets MUST be ``allPublic``.  If the bucket
+    already exists with a different type we log a loud warning (we don't
+    mutate existing buckets — that's a destructive op that needs human
+    sign-off) but still return the handle so uploads work.  New buckets
+    are always created with ``bucket_type="allPublic"``.
+    """
+    try:
+        bucket = api.get_bucket_by_name(bucket_name)
+        existing_type = getattr(bucket, "type_", None)
+        if existing_type and existing_type != B2_BUCKET_TYPE_PUBLIC:
+            logger.warning(
+                "B2 bucket %s has type=%s (expected %s). "
+                "Artifact URLs may 401/404 for public consumers. "
+                "Create a new allPublic bucket or use b2 update-bucket.",
+                bucket_name, existing_type, B2_BUCKET_TYPE_PUBLIC,
+            )
+        return bucket
+    except Exception as get_exc:
+        # Either the bucket doesn't exist, or the SDK raised
+        # NonExistentBucket.  Fall through to create.
+        logger.info(
+            "B2 bucket %s not found (%s) — creating as %s per #108",
+            bucket_name, get_exc, B2_BUCKET_TYPE_PUBLIC,
+        )
+        # b2sdk v2 signature: create_bucket(name, bucket_type, ...)
+        # bucket_type must be "allPublic" or "allPrivate".
+        return api.create_bucket(bucket_name, bucket_type=B2_BUCKET_TYPE_PUBLIC)
 
 
 def get_run_id() -> str:

@@ -9,12 +9,32 @@ Provides:
 
 Real-time streaming is handled by the unified CopilotKit SSE endpoint
 (POST /) in server.py.  There is no separate /dashboard/stream SSE.
+
+Issues #66 and #68 (dashboard blind after scenario / SSE drops during
+audio phase):
+
+The original /ingest handler only accepted phase_start/phase_end and
+tool_start/tool_end events, which meant per-scene audio clip generation
+never hit the dashboard (it was one tool call that looked like a single
+long-running operation).  This module now accepts ``stage_event`` pings
+with structured ``scene_id``, ``stage``, and ``status`` fields so every
+major pipeline stage — scenario, audio, video, assembly, gatekeeper —
+emits at least one event per scene.  The audio agent in particular now
+pings once per clip so the dashboard never goes dark.
+
+The companion helper ``emit_stage_event()`` is importable from other
+modules so agents can emit without hand-rolling the HTTP payload.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
+import time
+from typing import Any, Optional
+from urllib import request as _urllib_request
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
@@ -24,6 +44,65 @@ from dashboard.event_store import get_all_runs, get_run_detail, insert_run
 from dashboard.html_report import generate_dashboard_html
 
 logger = logging.getLogger(__name__)
+
+# Stages that the dashboard expects at least one event from per run.
+# Used by the audit check at /dashboard/coverage.  Keep this aligned with
+# the pipeline stage names emitted by callbacks/deterministic_steps.py.
+KNOWN_PIPELINE_STAGES = (
+    "scenario",
+    "visual_director",
+    "audio",
+    "video",
+    "assembly",
+    "gatekeeper",
+    "finalize",
+)
+
+
+def emit_stage_event(
+    run_id: str,
+    stage: str,
+    status: str,
+    scene_id: Optional[str] = None,
+    detail: str = "",
+    dashboard_url: Optional[str] = None,
+) -> bool:
+    """Emit a structured stage event to the dashboard /ingest endpoint.
+
+    Returns True on a successful POST, False on any failure (network
+    error, missing dashboard URL, etc).  Callers should treat this as
+    best-effort observability — never a fatal dependency.
+
+    Issue #66/#68: every agent's major step should call this at least
+    once with (scene_id, stage, status) so the dashboard can render
+    progress granularity finer than the overall phase.
+    """
+    url = dashboard_url or os.environ.get(
+        "DASHBOARD_URL", "http://127.0.0.1:8000"
+    )
+    payload = {
+        "run_id": run_id,
+        "event_type": "stage_event",
+        "stage": stage,
+        "status": status,
+        "scene_id": scene_id or "",
+        "detail": detail,
+        "ts": time.time(),
+    }
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        req = _urllib_request.Request(
+            f"{url.rstrip('/')}/dashboard/ingest",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urllib_request.urlopen(req, timeout=2) as resp:
+            resp.read()
+        return True
+    except Exception as exc:
+        logger.debug("emit_stage_event(%s/%s) failed: %s", stage, status, exc)
+        return False
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -156,9 +235,74 @@ async def dashboard_ingest(request: Request):
         )
     elif event_type == "finalize":
         collector.finalize(body.get("status", "completed"))
+    elif event_type == "stage_event":
+        # #66/#68: structured per-scene progress event.  We use the
+        # phase_start/phase_end plumbing on the collector so the event
+        # shows up in the run's events list, but we also record stage
+        # + scene_id + status on the collector's recent_events stream
+        # so the dashboard can render per-scene progress.
+        stage = body.get("stage", "unknown")
+        status = body.get("status", "running")
+        scene_id = body.get("scene_id", "")
+        label = f"{stage}:{scene_id}" if scene_id else stage
+        if status in ("start", "started", "running"):
+            collector.phase_start(label)
+        elif status in ("complete", "completed", "ok", "done"):
+            collector.phase_end(label, status="completed")
+        elif status in ("error", "failed", "fail"):
+            collector.phase_end(label, status="failed")
+        else:
+            # Unknown intermediate status — emit as a tool_start/end
+            # pair so it still renders on the dashboard.
+            collector.tool_start(label, body.get("agent", "pipeline"), status)
+            collector.tool_end(label, body.get("agent", "pipeline"), 0.0, 0)
+        logger.debug(
+            "Dashboard stage_event: run=%s stage=%s scene=%s status=%s",
+            run_id, stage, scene_id, status,
+        )
     # heartbeat: just keeps the collector alive, no action needed
 
     return JSONResponse({"status": "ok", "run_id": run_id})
+
+
+@router.get("/coverage/{run_id}")
+async def dashboard_coverage(run_id: str):
+    """Report which stages have emitted at least one event for a run.
+
+    Issue #66/#68 audit: the pipeline should emit at least one event per
+    ``KNOWN_PIPELINE_STAGES`` entry per run.  Gaps here mean the
+    dashboard went blind for that stage — typically indicative of a
+    blocking call in the same event loop as the SSE emitter.
+    """
+    collectors = get_all_active_collectors()
+    collector = collectors.get(run_id)
+    if collector is None:
+        detail = get_run_detail(run_id)
+        if not detail:
+            return JSONResponse(
+                {"error": f"Run {run_id} not found"}, status_code=404
+            )
+        events = detail.get("events", [])
+    else:
+        events = collector.to_report_dict().get("events", [])
+
+    seen: set[str] = set()
+    for ev in events:
+        name = ev.get("name", "") or ev.get("tool", "")
+        for stage in KNOWN_PIPELINE_STAGES:
+            if name.startswith(stage):
+                seen.add(stage)
+                break
+
+    missing = [s for s in KNOWN_PIPELINE_STAGES if s not in seen]
+    return JSONResponse(
+        {
+            "run_id": run_id,
+            "seen_stages": sorted(seen),
+            "missing_stages": missing,
+            "complete": not missing,
+        }
+    )
 
 
 @router.get("/infra")

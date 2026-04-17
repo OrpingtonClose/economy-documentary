@@ -69,6 +69,44 @@ from testing.simulation_bridge import (
 # ---------------------------------------------------------------------------
 
 
+# Valid gpu_worker.py --mode values.  Historically the provisioner
+# accidentally passed ``--mode video`` which gpu_worker.py rejects (see
+# #63).  ``_WORKER_MODE_ALIASES`` normalises legacy names to the
+# canonical value the worker expects.
+_VALID_WORKER_MODES = ("tts", "ltx", "both")
+_WORKER_MODE_ALIASES = {
+    "video": "ltx",
+    "ltx2": "ltx",
+    "qwen_tts": "tts",
+}
+
+
+def normalize_worker_mode(mode: str) -> str:
+    """Map legacy worker-mode aliases to canonical gpu_worker.py values.
+
+    The canonical values accepted by ``scripts/gpu_worker.py --mode`` are
+    ``tts``, ``ltx``, and ``both``.  Anything else raises ``ValueError``
+    to prevent silent misconfiguration (issue #63).
+    """
+    if not mode:
+        raise ValueError("worker_mode must be non-empty")
+    m = mode.strip().lower()
+    m = _WORKER_MODE_ALIASES.get(m, m)
+    if m not in _VALID_WORKER_MODES:
+        raise ValueError(
+            f"Invalid worker_mode {mode!r}; must be one of "
+            f"{_VALID_WORKER_MODES} (aliases: {sorted(_WORKER_MODE_ALIASES)})"
+        )
+    return m
+
+
+# Control-plane health-endpoint port on the GPU VM.  gpu_worker.py serves
+# the main worker API on spec.remote_port (8880 by default); the
+# bootstrap/health controller listens on 5000 so we can probe it while
+# the main worker is still loading models (issue #64).
+_HEALTH_CONTROL_PORT = 5000
+
+
 @dataclass
 class WorkerSpec:
     """Specification for a GPU worker to provision."""
@@ -609,6 +647,12 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         _branch = "main"
     logger.info("VMs will clone branch: %s", _branch)
 
+    # Normalise worker_mode early so legacy aliases ("video") can't leak
+    # into the onstart command (issue #63 — gpu_worker.py only accepts
+    # "tts", "ltx", "both").  We mutate the spec so the normalised value
+    # is visible to the onstart formatter below.
+    spec.worker_mode = normalize_worker_mode(spec.worker_mode)
+
     # Resolve Docker image + torch wheel index from model manifest
     _docker_image, _torch_index = resolve_docker_image(spec.worker_mode)
     logger.info("Docker image for %s worker: %s", spec.role, _docker_image)
@@ -682,6 +726,17 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
     # NOTE: Do NOT use --raw here.  `vastai create instance --raw` returns
     # an empty string.  Without --raw it returns text like:
     #   Started. {'success': True, 'new_contract': 34856082, ...}
+    #
+    # Port mapping (issue #64):
+    # - spec.remote_port (8880): main worker API (TTS/LTX inference)
+    # - _HEALTH_CONTROL_PORT (5000): bootstrap/health control plane that
+    #   reports bootstrap phase (pulling image / loading model / ready)
+    #   while the main worker is still loading.  Previously only 8880 was
+    #   exposed, so the provisioner was blind until model load finished.
+    _env_ports = (
+        f"-p {spec.remote_port}:{spec.remote_port} "
+        f"-p {_HEALTH_CONTROL_PORT}:{_HEALTH_CONTROL_PORT}"
+    )
     create_result = _vast_cmd([
         "create", "instance",
         str(offer_id),
@@ -689,7 +744,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         "--disk", str(spec.disk_gb),
         "--ssh",
         "--direct",
-        "--env", f"-p {spec.remote_port}:{spec.remote_port}",
+        "--env", _env_ports,
         "--label", _label,  # GAP 2.3: VM labeling for identification
         "--onstart-cmd", onstart,
     ])
@@ -1052,9 +1107,20 @@ def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
         return None
 
 
+# Hard ceiling for wait_for_worker_healthy (issue #62).  15 minutes is a
+# generous upper bound for the slowest path (pull 80GB image + download
+# model weights + load into VRAM on a cold host).  Longer waits almost
+# always indicate a stuck host, so we fail loud instead of hanging forever.
+WORKER_HEALTH_TIMEOUT_MAX_SECONDS = 15 * 60
+# Heartbeat interval for wait_for_worker_healthy (issue #62).  The
+# pipeline operator sees elapsed time + last known bootstrap phase at
+# this cadence even when the phase hasn't changed.
+WORKER_HEALTH_HEARTBEAT_SECONDS = 30
+
+
 def wait_for_worker_healthy(
     spec: WorkerSpec,
-    timeout: int = 900,
+    timeout: int = WORKER_HEALTH_TIMEOUT_MAX_SECONDS,
     poll_interval: int = 15,
 ) -> bool:
     """Wait for a worker to become healthy after provisioning.
@@ -1067,18 +1133,38 @@ def wait_for_worker_healthy(
     The worker's /health endpoint reports structured bootstrap status so we
     can see exactly what's happening and escalate failures immediately
     rather than waiting for a blind timeout.
+
+    Issue #62: the caller-supplied ``timeout`` is clamped to
+    ``WORKER_HEALTH_TIMEOUT_MAX_SECONDS`` (15 minutes) so a bad caller
+    can't hang the pipeline forever.  A heartbeat is logged every
+    ``WORKER_HEALTH_HEARTBEAT_SECONDS`` (30s) showing elapsed time and
+    the last known bootstrap phase — the operator always knows whether
+    the VM is pulling the image, loading the model, or already ready.
+    On timeout a clear RuntimeError-equivalent ``False`` return is
+    produced and the provisioner logs a fatal summary.
     """
+    # Clamp to the hard ceiling.  Lower values (e.g. from tests) are
+    # respected; higher values are capped.
+    effective_timeout = max(1, min(int(timeout), WORKER_HEALTH_TIMEOUT_MAX_SECONDS))
+    if effective_timeout < timeout:
+        logger.warning(
+            "wait_for_worker_healthy: clamping timeout %ds -> %ds (hard ceiling, #62)",
+            timeout, effective_timeout,
+        )
+
     # Use resolved worker_url if available (direct connection), else legacy tunnel
     url = spec.worker_url or f"http://localhost:{spec.local_port}"
     logger.info(
         "Waiting for %s worker at %s to become healthy (timeout %ds)...",
-        spec.role, url, timeout,
+        spec.role, url, effective_timeout,
     )
 
     start = time.time()
     last_status = "unknown"
     last_bootstrap_phase = ""
-    while time.time() - start < timeout:
+    last_bootstrap_detail = ""
+    last_heartbeat = start
+    while time.time() - start < effective_timeout:
         elapsed = int(time.time() - start)
 
         # Check if tunnel is still alive (only relevant for SSH tunnel connections)
@@ -1098,6 +1184,7 @@ def wait_for_worker_healthy(
             # --- Bootstrap error escalation ---
             bootstrap = health_data.get("bootstrap") or {}
             bootstrap_phase = bootstrap.get("phase", "")
+            bootstrap_detail = bootstrap.get("detail", "")
             bootstrap_error = bootstrap.get("error", "")
             bootstrap_category = bootstrap.get("error_category", "")
 
@@ -1119,10 +1206,10 @@ def wait_for_worker_healthy(
             if bootstrap_phase and bootstrap_phase != last_bootstrap_phase:
                 logger.info(
                     "  %s worker bootstrap phase: %s — %s (%ds)",
-                    spec.role, bootstrap_phase,
-                    bootstrap.get("detail", ""), elapsed,
+                    spec.role, bootstrap_phase, bootstrap_detail, elapsed,
                 )
                 last_bootstrap_phase = bootstrap_phase
+                last_bootstrap_detail = bootstrap_detail
 
             # Check if model is loaded (healthy)
             if health_data.get("status") == "ok":
@@ -1148,12 +1235,38 @@ def wait_for_worker_healthy(
                 )
                 last_status = "unreachable"
 
+        # Issue #62: periodic heartbeat so operators see progress even
+        # when no phase transition has occurred for a while.
+        now = time.time()
+        if now - last_heartbeat >= WORKER_HEALTH_HEARTBEAT_SECONDS:
+            last_heartbeat = now
+            phase = last_bootstrap_phase or last_status
+            detail = last_bootstrap_detail or ""
+            logger.info(
+                "  heartbeat: %s worker still waiting — elapsed=%ds / %ds "
+                "(phase=%s%s)",
+                spec.role, elapsed, effective_timeout,
+                phase or "starting",
+                f", {detail}" if detail else "",
+            )
+
         time.sleep(poll_interval)
 
+    # Issue #62: fail loud with the last known state so the operator can
+    # see exactly where the worker got stuck.
     logger.error(
-        "%s worker at %s did not become healthy within %ds",
-        spec.role, url, timeout,
+        "%s worker at %s did NOT become healthy within %ds "
+        "(last phase=%s, last status=%s).  Fail-loud per #62.",
+        spec.role, url, effective_timeout,
+        last_bootstrap_phase or "unknown",
+        last_status,
     )
+    spec.bootstrap_error = (
+        f"timeout after {effective_timeout}s "
+        f"(last phase={last_bootstrap_phase or 'unknown'}, "
+        f"last status={last_status})"
+    )
+    spec.bootstrap_error_category = "timeout"
     return False
 
 
@@ -1287,13 +1400,68 @@ class WorkerProvisioner:
         self._specs_ready.set()
 
         # --- Credit-aware weighted budget ---
-        # Check which workers actually need provisioning
+        # Check which workers actually need provisioning.
+        #
+        # Issue #65: honour pre-set worker URLs.  If the operator exports
+        # ``TTS_WORKER_URL`` / ``GPU_WORKER_URL`` / ``VIDEO_WORKER_URLS``
+        # we trust those and skip provisioning entirely — even if the
+        # worker isn't *immediately* reachable (it may still be warming).
+        # Probing and re-provisioning on behalf of the user wastes
+        # credits and blows away their hand-pinned fleet.
         need_tts = False
         need_video = False
         for spec in specs_needed:
-            url = os.environ.get(spec.env_var, "")
-            if not url:
-                url = f"http://localhost:{spec.local_port}"
+            # Multi-URL takes precedence for video workers so a fleet
+            # configured via VIDEO_WORKER_URLS (#71) is also honoured.
+            video_fleet = ""
+            if spec.role == "video":
+                video_fleet = os.environ.get("VIDEO_WORKER_URLS", "").strip()
+
+            preset_url = os.environ.get(spec.env_var, "").strip()
+            # For video, fall through to the first VIDEO_WORKER_URLS entry
+            # if GPU_WORKER_URL wasn't set explicitly.
+            if not preset_url and video_fleet:
+                first = next(
+                    (u.strip() for u in video_fleet.split(",") if u.strip()),
+                    "",
+                )
+                preset_url = first
+
+            if preset_url or video_fleet:
+                logger.info(
+                    "%s worker: honouring pre-set env var %s=%s%s — "
+                    "skipping Vast.ai provisioning (#65)",
+                    spec.role, spec.env_var, preset_url,
+                    f" (fleet VIDEO_WORKER_URLS={video_fleet})" if video_fleet else "",
+                )
+                # Best-effort health probe for visibility in logs; we do
+                # NOT fall back to provisioning if it fails.  The pipeline
+                # contract check will surface unreachable pre-set workers
+                # as a loud failure downstream.
+                reachable = False
+                try:
+                    reachable = check_worker_health(preset_url, spec.capability)
+                except Exception as exc:
+                    logger.debug(
+                        "Pre-set %s worker health probe raised: %s — "
+                        "continuing without provisioning",
+                        spec.role, exc,
+                    )
+                logger.info(
+                    "  pre-set %s worker health probe: %s",
+                    spec.role, "healthy" if reachable else "not-yet-healthy (trusting env var)",
+                )
+                spec.worker_url = preset_url
+                spec.status = "healthy" if reachable else "externally_managed"
+                spec.ready_event.set()
+                if preset_url:
+                    os.environ[spec.env_var] = preset_url
+                continue
+
+            # No pre-set URL — fall back to the legacy behaviour of
+            # probing localhost:<local_port> (e.g. SSH tunnel) and
+            # queueing provisioning on miss.
+            url = f"http://localhost:{spec.local_port}"
             if check_worker_health(url, spec.capability):
                 logger.info(
                     "%s worker at %s already healthy — marking ready",
