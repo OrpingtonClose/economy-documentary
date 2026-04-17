@@ -260,6 +260,55 @@ _POST_INTERCEPT_HOOKS: Dict[str, Callable] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Response patchers — fix dynamic fields in static mock responses
+# ---------------------------------------------------------------------------
+# ADK InjectionConfig dicts are static (defined at scenario-creation time),
+# so fields like wav_path and duration always reflect the defaults passed to
+# _tts_success().  These patchers override dynamic fields using the actual
+# call_args so downstream code (deterministic_steps.py, gatekeeper) sees
+# paths and durations that match the real call.
+
+_SECONDS_PER_WORD = 0.45  # rough TTS estimate
+
+
+def _patch_generate_narration(call_args: Dict, result: dict) -> None:
+    """Patch wav_path and duration in the mock narration response."""
+    output_dir = call_args.get("output_dir", "") or "/tmp/documentary-pipeline/audio"
+    scene_num = int(call_args.get("scene_num", 0))
+    voice_role = call_args.get("voice_role", "V1")
+    text = call_args.get("text", "")
+
+    result["wav_path"] = os.path.join(
+        output_dir, f"scene_{scene_num:03d}_{voice_role}.wav"
+    )
+    if text:
+        word_count = len(text.split())
+        result["duration"] = round(word_count * _SECONDS_PER_WORD, 2)
+        result["text_length"] = len(text)
+        result["word_count"] = word_count
+
+
+def _patch_generate_video_clip(call_args: Dict, result: dict) -> None:
+    """Patch output_path and duration in the mock video response."""
+    output_path = call_args.get("output_path", "")
+    if output_path:
+        result["output_path"] = output_path
+    duration_sec = call_args.get("duration_sec", 5.0)
+    result["target_duration"] = round(float(duration_sec), 2)
+    result["actual_duration"] = round(float(duration_sec) * 1.15, 2)
+    lora_id = call_args.get("lora_id", "")
+    if lora_id:
+        result["lora_id"] = lora_id
+
+
+# Registry of response patchers keyed by tool_name
+_RESPONSE_PATCHERS: Dict[str, Callable] = {
+    "generate_narration": _patch_generate_narration,
+    "generate_video_clip": _patch_generate_video_clip,
+}
+
+
 def simulated(tool_name: str, *, description: str = ""):
     """Decorator that checks the simulation engine before calling the real function.
 
@@ -324,6 +373,18 @@ def simulated(tool_name: str, *, description: str = ""):
                     tool_name,
                     _truncate(str(result), 200),
                 )
+
+                # Patch dynamic fields in the static mock response
+                if isinstance(result, dict):
+                    patcher = _RESPONSE_PATCHERS.get(tool_name)
+                    if patcher:
+                        try:
+                            patcher(call_args, result)
+                        except Exception as patch_exc:
+                            logger.warning(
+                                "Response patcher failed for %s: %s",
+                                tool_name, patch_exc,
+                            )
 
                 # Run post-interception hook to create placeholder files
                 hook = _POST_INTERCEPT_HOOKS.get(tool_name)
