@@ -360,9 +360,6 @@ def _wire_simulation_callbacks(sim_callback) -> None:
     agents_to_wire = [
         scenario_director,
         timing_loop,
-        audio_agent,
-        timing_evaluator,
-        scenario_refiner,
         visual_director,
         production_supervisor,
         assembler_agent,

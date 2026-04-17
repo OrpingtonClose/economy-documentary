@@ -12,10 +12,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Lock for serializing read-modify-write on _clip_progress.json.
+# The production orchestrator generates clips in parallel via
+# ThreadPoolExecutor — without this lock, concurrent writes lose entries.
+_manifest_lock = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -150,22 +156,26 @@ def generate_one_clip(
     # Record clip completion in a progress manifest so recovery knows
     # exactly which clips are done.  The manifest is uploaded to B2
     # after each clip, enabling resume from exact point of failure.
+    #
+    # The read-modify-write is protected by _manifest_lock because the
+    # production orchestrator runs clips in parallel via ThreadPoolExecutor.
     try:
         _manifest_path = os.path.join(video_dir, "_clip_progress.json")
-        _manifest: dict = {}
-        if os.path.exists(_manifest_path):
-            with open(_manifest_path) as _mf:
-                _manifest = json.load(_mf)
-        clip_id = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
-        _manifest[clip_id] = {
-            "status": "completed" if not gen_result.get("error") else "failed",
-            "quality": gen_result.get("qa_quality", "unknown"),
-            "output_path": output_path,
-            "timestamp": time.time(),
-        }
-        with open(_manifest_path, "w") as _mf:
-            json.dump(_manifest, _mf, indent=2)
-        # Upload manifest to B2 for cross-machine resume
+        with _manifest_lock:
+            _manifest: dict = {}
+            if os.path.exists(_manifest_path):
+                with open(_manifest_path) as _mf:
+                    _manifest = json.load(_mf)
+            clip_id = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+            _manifest[clip_id] = {
+                "status": "completed" if not gen_result.get("error") else "failed",
+                "quality": gen_result.get("qa_quality", "unknown"),
+                "output_path": output_path,
+                "timestamp": time.time(),
+            }
+            with open(_manifest_path, "w") as _mf:
+                json.dump(_manifest, _mf, indent=2)
+        # Upload manifest to B2 for cross-machine resume (outside lock)
         from tools.b2_checkpoint import upload_file
         upload_file(_manifest_path, "video/_clip_progress.json")
     except Exception as _manifest_err:
