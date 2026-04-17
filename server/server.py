@@ -205,12 +205,13 @@ async def run_pipeline_endpoint(request: Request):
 
             # Send result
             serializable = {}
-            for k, v in result.items():
-                try:
-                    json.dumps(v)
-                    serializable[k] = v
-                except (TypeError, ValueError):
-                    serializable[k] = str(v)
+            if result and isinstance(result, dict):
+                for k, v in result.items():
+                    try:
+                        json.dumps(v)
+                        serializable[k] = v
+                    except (TypeError, ValueError):
+                        serializable[k] = str(v)
 
             yield f"data: {json.dumps({'type': 'run_complete', 'run_id': run_id, 'result': serializable})}\n\n"
 
