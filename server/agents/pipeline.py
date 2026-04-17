@@ -398,7 +398,8 @@ def _init_pipeline_state(
     # run (where _cleanup_pipeline_state never executed), causing this block
     # to be skipped entirely — leaving the pipeline with no workers.
     state["_workers_provisioned"] = False
-    if not state.get("_workers_provisioned"):
+    # Always provision — the reset above ensures stale B2 state can't skip this
+    if True:
         import threading
         from worker_provisioner import get_provisioner
 

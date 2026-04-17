@@ -207,7 +207,7 @@ def _visual_concepter_before_model(callback_context, llm_request):
     total_chunks = (total_scenes + chunk_size - 1) // chunk_size
     accumulated = []
 
-    from config import build_model
+    from agents.model_config import build_model
     model_name = build_model()
 
     for chunk_idx in range(total_chunks - 1):  # all except last
