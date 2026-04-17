@@ -37,7 +37,6 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from google.genai import types as genai_types
@@ -583,8 +582,10 @@ class ProductionOrchestrator:
                 "description": batch.description,
             })
 
-            # Execute batch (parallel clip generation)
-            batch_result, clip_gen_results = self._execute_batch(batch, batch_idx)
+            # Execute batch (parallel clip generation).  #67: _execute_batch
+            # is async so we don't block the event loop while workers
+            # crunch (each clip can take 30+ minutes on-GPU).
+            batch_result, clip_gen_results = await self._execute_batch(batch, batch_idx)
             batch_results.append(batch_result)
             all_results.extend(clip_gen_results)
 
@@ -705,80 +706,65 @@ class ProductionOrchestrator:
         # queries InfraAgent/FleetCoordinator for healthy workers instead of
         # blind round-robin. Failed clips are reported to the fleet coordinator
         # for retry-on-different-worker tracking.
-        if len(task_concepts) > 1 and self.num_workers > 1:
-            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                future_to_concept = {
-                    executor.submit(
-                        generate_one_clip,
-                        c,
-                        self.video_dir,
-                        self.default_negative,
-                        self.visual_style_str,
-                        self._feedback_store,
-                    ): c
-                    for c in task_concepts
-                }
-                for future in as_completed(future_to_concept):
-                    c = future_to_concept[future]
-                    clip_id = c["_clip_id"]
-                    try:
-                        result = future.result()
-                        gen_results.append(result)
-                        clip_results.append(self._result_to_clip_result(clip_id, result))
-                    except RuntimeError:
-                        raise  # Fatal errors — never swallow
-                    except Exception as e:
-                        logger.error("Error generating clip %s: %s", clip_id, e)
-                        gen_results.append({
-                            "status": "error",
-                            "error": str(e),
-                            "scene_num": c["scene_num"],
-                            "phrase_idx": c["phrase_idx"],
-                            "duration": c["duration"],
-                            "lora_id": c["lora_id"],
-                        })
-                        clip_results.append(ClipResult(
-                            clip_id=clip_id,
-                            status="failed",
-                            error=str(e),
-                            scene_num=c["scene_num"],
-                            phrase_idx=c["phrase_idx"],
-                            lora_id=c["lora_id"],
-                        ))
-        else:
-            # Sequential fallback
-            for c in task_concepts:
-                clip_id = c["_clip_id"]
-                try:
-                    result = generate_one_clip(
-                        c,
-                        self.video_dir,
-                        self.default_negative,
-                        self.visual_style_str,
-                        self._feedback_store,
-                    )
-                    gen_results.append(result)
-                    clip_results.append(self._result_to_clip_result(clip_id, result))
-                except RuntimeError:
-                    raise  # Fatal errors — never swallow
-                except Exception as e:
-                    logger.error("Error generating clip %s: %s", clip_id, e)
-                    gen_results.append({
-                        "status": "error",
-                        "error": str(e),
-                        "scene_num": c["scene_num"],
-                        "phrase_idx": c["phrase_idx"],
-                        "duration": c["duration"],
-                        "lora_id": c["lora_id"],
-                    })
-                    clip_results.append(ClipResult(
-                        clip_id=clip_id,
-                        status="failed",
-                        error=str(e),
-                        scene_num=c["scene_num"],
-                        phrase_idx=c["phrase_idx"],
-                        lora_id=c["lora_id"],
-                    ))
+        #
+        # #67: Dispatch with asyncio.to_thread + asyncio.gather so the
+        # event loop stays responsive while blocking HTTP calls run in
+        # worker threads.  For a single concept we still offload to a
+        # thread so the event loop doesn't stall.
+        if not task_concepts:
+            batch_result = BatchResult(batch_idx=batch_idx, clip_results=clip_results)
+            batch_result.compute_stats()
+            return batch_result, gen_results
+
+        async def _run_one(c: dict) -> dict:
+            return await asyncio.to_thread(
+                generate_one_clip,
+                c,
+                self.video_dir,
+                self.default_negative,
+                self.visual_style_str,
+                self._feedback_store,
+            )
+
+        max_parallel = max(1, self.num_workers) if len(task_concepts) > 1 else 1
+        # Concurrency cap: a semaphore keeps at most max_parallel in-flight
+        # without losing event-loop responsiveness.
+        sem = asyncio.Semaphore(max_parallel)
+
+        async def _bounded(c: dict) -> dict:
+            async with sem:
+                return await _run_one(c)
+
+        gathered = await asyncio.gather(
+            *[_bounded(c) for c in task_concepts],
+            return_exceptions=True,
+        )
+
+        for c, outcome in zip(task_concepts, gathered):
+            clip_id = c["_clip_id"]
+            if isinstance(outcome, RuntimeError):
+                raise outcome  # Fatal errors — never swallow
+            if isinstance(outcome, BaseException):
+                logger.error("Error generating clip %s: %s", clip_id, outcome)
+                gen_results.append({
+                    "status": "error",
+                    "error": str(outcome),
+                    "scene_num": c["scene_num"],
+                    "phrase_idx": c["phrase_idx"],
+                    "duration": c["duration"],
+                    "lora_id": c["lora_id"],
+                })
+                clip_results.append(ClipResult(
+                    clip_id=clip_id,
+                    status="failed",
+                    error=str(outcome),
+                    scene_num=c["scene_num"],
+                    phrase_idx=c["phrase_idx"],
+                    lora_id=c["lora_id"],
+                ))
+                continue
+            gen_results.append(outcome)
+            clip_results.append(self._result_to_clip_result(clip_id, outcome))
 
         batch_result = BatchResult(batch_idx=batch_idx, clip_results=clip_results)
         batch_result.compute_stats()
