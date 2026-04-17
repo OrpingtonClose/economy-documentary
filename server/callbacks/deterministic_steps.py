@@ -395,7 +395,7 @@ def clean_scenes_after_scenario(
             # Compute total gap overhead that audio stage will insert
             total_voice_gaps = 0.0
             for s in scenes:
-                voices = s.get("voices", [])
+                voices = s.get("voices") or []
                 active = sum(1 for v in voices if v.get("text", "").strip())
                 total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE
             total_scene_gaps = max(0, num_scenes - 1) * _INTER_SCENE_PAUSE
@@ -428,7 +428,7 @@ def clean_scenes_after_scenario(
         for s in scenes:
             sn = _safe_int(s.get("scene_num", 0))
             dur = float(s.get("duration_sec", 0))
-            voices = s.get("voices", [])
+            voices = s.get("voices") or []
             active = [v for v in voices if v.get("text", "").strip()]
             total_words = sum(len(v.get("text", "").split()) for v in active)
             if total_words <= 0:
@@ -654,7 +654,7 @@ def deterministic_audio_callback(
 
     for scene_idx, scene in enumerate(scenes):
         scene_num = _safe_int(scene.get("scene_num", 0))
-        voices = scene.get("voices", [])
+        voices = scene.get("voices") or []
         # Track which voice index we're on for interleaving gaps
         active_voices = [vb for vb in voices if vb.get("text", "").strip()]
         active_voice_count = len(active_voices)
@@ -991,7 +991,7 @@ def deterministic_audio_callback(
     for scene in scenes:
         sn = _safe_int(scene.get("scene_num", 0))
         scene_budget = float(scene.get("duration_sec", 0))
-        scene_voices = scene.get("voices", [])
+        scene_voices = scene.get("voices") or []
         active = [v for v in scene_voices if v.get("text", "").strip()]
         scene_voice_gaps = max(0, len(active) - 1) * INTER_VOICE_PAUSE_SEC
 
@@ -1014,7 +1014,7 @@ def deterministic_audio_callback(
     # Level 4: total assembled narration QA
     total_narration = sum(_actual_durations.values())
     total_voice_gaps = sum(
-        max(0, len([v for v in s.get("voices", []) if v.get("text", "").strip()]) - 1)
+        max(0, len([v for v in (s.get("voices") or []) if v.get("text", "").strip()]) - 1)
         * INTER_VOICE_PAUSE_SEC
         for s in scenes
     )
