@@ -500,6 +500,110 @@ class TestSceneAssembly:
 
 
 # ---------------------------------------------------------------------------
+# Multi-voice scene completeness (regression for PR #115 review finding)
+# ---------------------------------------------------------------------------
+
+def _multi_voice_scene_timeline(scene_num: int, num_voices: int,
+                                video_phrases: int, narr_dur: float = 10.0,
+                                video_dur: float = 10.0):
+    """Build a scene with ``num_voices`` narration clips and ``video_phrases``
+    video clips.  The initial placeholder gap is dropped once ``video_phrases
+    >= 1`` (mirroring the real add_video_clip behaviour on phrase_idx=0)."""
+    import opentimelineio as otio
+    tl = otio.schema.Timeline(name="t")
+    v = otio.schema.Track(name="V1_Video", kind="Video")
+    if video_phrases == 0:
+        v.append(_make_gap(scene_num, 0.0, status="empty"))
+    else:
+        for p in range(video_phrases):
+            clip = _make_clip(scene_num, "", video_dur, phrase_idx=p)
+            v.append(clip)
+    tl.tracks.append(v)
+    a = otio.schema.Track(name="A1_Narration", kind="Audio")
+    for i in range(num_voices):
+        a.append(_make_clip(scene_num, f"V{i+1}", narr_dur, phrase_idx=i))
+    tl.tracks.append(a)
+    return tl
+
+
+class TestSceneCompleteness:
+    """Regression for PR #115 review: multi-voice scenes must not fire
+    the assembly check after only phrase_idx=0 is persisted."""
+
+    def test_multi_voice_incomplete_after_phrase_0(self):
+        """3-voice scene with only phrase 0 video -> NOT complete."""
+        from tools.otio_tools import _scene_is_video_complete
+        tl = _multi_voice_scene_timeline(scene_num=5, num_voices=3, video_phrases=1)
+        assert _scene_is_video_complete(tl, scene_num=5) is False
+
+    def test_multi_voice_incomplete_after_phrase_1(self):
+        """3-voice scene with phrases 0,1 but not 2 -> NOT complete."""
+        from tools.otio_tools import _scene_is_video_complete
+        tl = _multi_voice_scene_timeline(scene_num=5, num_voices=3, video_phrases=2)
+        assert _scene_is_video_complete(tl, scene_num=5) is False
+
+    def test_multi_voice_complete_after_all_phrases(self):
+        """3-voice scene with all 3 phrases -> complete."""
+        from tools.otio_tools import _scene_is_video_complete
+        tl = _multi_voice_scene_timeline(scene_num=5, num_voices=3, video_phrases=3)
+        assert _scene_is_video_complete(tl, scene_num=5) is True
+
+    def test_single_voice_complete_after_phrase_0(self):
+        from tools.otio_tools import _scene_is_video_complete
+        tl = _multi_voice_scene_timeline(scene_num=1, num_voices=1, video_phrases=1)
+        assert _scene_is_video_complete(tl, scene_num=1) is True
+
+    def test_placeholder_gap_blocks_completeness(self):
+        """If the placeholder gap is still present, scene is not complete
+        regardless of clip counts."""
+        import opentimelineio as otio
+        from tools.otio_tools import _scene_is_video_complete
+        tl = otio.schema.Timeline(name="t")
+        v = otio.schema.Track(name="V1_Video", kind="Video")
+        v.append(_make_gap(1, 0.0, status="empty"))
+        tl.tracks.append(v)
+        a = otio.schema.Track(name="A1_Narration", kind="Audio")
+        a.append(_make_clip(1, "V1", 5.0))
+        tl.tracks.append(a)
+        assert _scene_is_video_complete(tl, scene_num=1) is False
+
+    def test_en_alternate_narration_ignored(self):
+        """V1_EN alternate-language clips don't count against the required
+        video-clip count (they share the primary's video phrase)."""
+        import opentimelineio as otio
+        from tools.otio_tools import _scene_is_video_complete
+        tl = otio.schema.Timeline(name="t")
+        v = otio.schema.Track(name="V1_Video", kind="Video")
+        v.append(_make_clip(1, "", 10.0, phrase_idx=0))
+        tl.tracks.append(v)
+        a = otio.schema.Track(name="A1_Narration", kind="Audio")
+        a.append(_make_clip(1, "V1", 10.0, phrase_idx=0))
+        a.append(_make_clip(1, "V1_EN", 10.0, phrase_idx=0))  # alternate lang
+        tl.tracks.append(a)
+        # Only one primary-language clip, one video clip -> complete.
+        assert _scene_is_video_complete(tl, scene_num=1) is True
+
+    def test_extension_sub_clips_do_not_inflate_count(self):
+        """Extension clips (sub_idx set) decorate phrases, not new phrases."""
+        import opentimelineio as otio
+        from tools.otio_tools import _scene_is_video_complete
+        tl = otio.schema.Timeline(name="t")
+        v = otio.schema.Track(name="V1_Video", kind="Video")
+        primary = _make_clip(1, "", 10.0, phrase_idx=0)
+        v.append(primary)
+        ext = _make_clip(1, "", 3.0, phrase_idx=0)
+        ext.metadata["documentary"]["sub_idx"] = 0
+        v.append(ext)
+        tl.tracks.append(v)
+        a = otio.schema.Track(name="A1_Narration", kind="Audio")
+        a.append(_make_clip(1, "V1", 10.0, phrase_idx=0))
+        a.append(_make_clip(1, "V2", 10.0, phrase_idx=1))
+        tl.tracks.append(a)
+        # 2 narration, 1 real video (ext ignored) -> NOT complete.
+        assert _scene_is_video_complete(tl, scene_num=1) is False
+
+
+# ---------------------------------------------------------------------------
 # B2 _meta.json sidecar round-trip (#70)
 # ---------------------------------------------------------------------------
 

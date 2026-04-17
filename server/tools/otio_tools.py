@@ -128,6 +128,77 @@ def _scene_has_empty_placeholder_gaps(timeline, scene_num: int) -> bool:
     return False
 
 
+def _count_primary_narration_clips(timeline, scene_num: int) -> int:
+    """Count narration clips for a scene on A1_Narration (primary language only).
+
+    ``*_EN`` voices are alternate-language siblings and do not have their
+    own video phrase, so they are excluded.
+    """
+    count = 0
+    for track in timeline.tracks:
+        if track.name != TRACK_A1:
+            continue
+        for item in track:
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            meta = item.metadata.get("documentary", {})
+            if meta.get("scene_num") != scene_num:
+                continue
+            voice = str(meta.get("voice", ""))
+            if voice.endswith("_EN"):
+                continue
+            count += 1
+    return count
+
+
+def _count_video_clips(timeline, scene_num: int) -> int:
+    """Count video clips on V1_Video for a scene, ignoring extension sub-clips.
+
+    Extension / sub-clips (``sub_idx`` set) are generated on top of an
+    existing phrase to lengthen it and do not introduce new phrase
+    indices, so they must not inflate the completeness count.
+    """
+    count = 0
+    for track in timeline.tracks:
+        if track.name != TRACK_V1:
+            continue
+        for item in track:
+            if not isinstance(item, otio.schema.Clip):
+                continue
+            meta = item.metadata.get("documentary", {})
+            if meta.get("scene_num") != scene_num:
+                continue
+            if meta.get("sub_idx") is not None:
+                # Extension clip — decorates an existing phrase.
+                continue
+            count += 1
+    return count
+
+
+def _scene_is_video_complete(timeline, scene_num: int) -> bool:
+    """Return True when every narration phrase in the scene has a video clip.
+
+    The naive "no empty placeholder gap remaining" check is insufficient
+    because ``create_timeline`` only creates ONE placeholder gap per
+    scene regardless of how many phrases (voices) will be generated.
+    After ``add_video_clip`` replaces that lone gap on phrase_idx=0, a
+    multi-voice scene would falsely look complete (see PR #115 review).
+
+    A scene is complete when:
+
+    * no ``status=empty`` placeholder gap remains for the scene, AND
+    * at least one narration clip and one video clip exist, AND
+    * video clip count >= primary-language narration clip count.
+    """
+    if _scene_has_empty_placeholder_gaps(timeline, scene_num):
+        return False
+    narration_count = _count_primary_narration_clips(timeline, scene_num)
+    video_count = _count_video_clips(timeline, scene_num)
+    if narration_count == 0 or video_count == 0:
+        return False
+    return video_count >= narration_count
+
+
 def _timeline_path(topic: str) -> str:
     os.makedirs(_TIMELINE_DIR, exist_ok=True)
     # Sanitise all characters that are problematic in file paths
@@ -1009,9 +1080,15 @@ def _run_per_moment_video_check(
 def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
     """Run the scene-level OTIO assembly check when the scene completes.
 
-    A scene is "complete" when V1_Video has no more ``status=empty``
-    placeholder gaps for that scene_num.  When complete, we persist a
-    standalone ``scene_NNN_assembly.otio`` artifact and validate it.
+    A scene is "complete" when ``_scene_is_video_complete`` returns True —
+    that is, every primary-language narration clip in the scene has a
+    corresponding video clip on V1_Video (not just the single placeholder
+    gap — multi-voice scenes only have one placeholder that's consumed
+    by phrase_idx=0, so relying on the placeholder alone would fire the
+    assembly check prematurely on phrase 0 of any multi-voice scene).
+
+    When complete, we persist a standalone ``scene_NNN_assembly.otio``
+    artifact and validate it.
     """
     from tools.otio_moments import (
         persist_scene_assembly_artifact,
@@ -1025,8 +1102,9 @@ def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
     with _otio_lock:
         timeline = otio.adapters.read_from_file(timeline_path)
 
-    if _scene_has_empty_placeholder_gaps(timeline, scene_num):
-        # Scene still has work to do; defer the assembly check.
+    if not _scene_is_video_complete(timeline, scene_num):
+        # Scene still has pending phrases; defer the assembly check
+        # until every narration clip has a matching video clip.
         return
 
     # Persist standalone scene artifact (paper trail for #70 — every
