@@ -136,7 +136,23 @@ CRITICAL RULES:
 - Each voice block should have natural sentence boundaries
 - Do NOT add or remove scenes — only adjust text length
 - Do NOT change visual_notes, dopamine_hook, or scene titles
-- Output the full revised scenes array as valid JSON
+- Do NOT drop or modify these structured fields — preserve them VERBATIM
+  on every scene they appear on:
+    * pronunciation_hints (dict of initialism → letter spelling)
+    * ssml (pre-rendered SSML, if present)
+    * hook_spec (scene 0 only — topic_specific_motif / motion_description / narrative_pull)
+    * outro_spec (final scene only — closing_shot / recap_sentence / cta / brand_card)
+  The downstream TTS & evaluator will reject scenes missing these.
+- When you shorten narration, KEEP every initialism that's listed in
+  pronunciation_hints. Dropping PAG/DBS/fMRI from the text does not remove
+  it from the scene's vocabulary; don't strip the hints.
+- NEVER introduce rhetorical questions. Forbidden: "What happens when...?",
+  "Can we harness...?", "What if...?", "How do we...?", "Imagine...",
+  "Consider...". Use declarative statements.
+- Do NOT change style_lock-related fields anywhere (if you see them, pass through).
+- Output the full revised scenes array as valid JSON with every field
+  from the input present — including pronunciation_hints, ssml,
+  hook_spec, and outro_spec.
 
 After adjusting, output the complete scenes JSON array.
 
