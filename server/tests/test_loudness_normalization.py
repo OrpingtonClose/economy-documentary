@@ -333,3 +333,31 @@ class TestFinalizeMaster:
         assert wav_stream["codec_name"].startswith("pcm_"), (
             f"Phase B intermediate must be PCM, got {wav_stream['codec_name']}"
         )
+
+        # Regression guard for the channel-count mismatch Devin Review
+        # finding: every segment (title, body, end) must have the same
+        # channel count as the profile, otherwise concat_clips with
+        # copy_audio=True stream-copies AAC packets with mismatched
+        # AudioSpecificConfig and the body plays back wrong.
+        assert int(audio_stream.get("channels", 0)) == YOUTUBE_1080P.audio_channels, (
+            f"final audio has {audio_stream.get('channels')} channels, "
+            f"profile pins {YOUTUBE_1080P.audio_channels}"
+        )
+        for seg_name in ("title_card.mp4", "body_muxed.mp4", "end_card.mp4"):
+            seg_path = parts_dir / seg_name
+            assert seg_path.exists(), seg_path
+            seg_probe = json.loads(subprocess.run(
+                [
+                    "ffprobe", "-v", "quiet", "-print_format", "json",
+                    "-show_streams", str(seg_path),
+                ],
+                capture_output=True, text=True, timeout=30,
+            ).stdout)
+            seg_audio = next(
+                s for s in seg_probe["streams"] if s["codec_type"] == "audio"
+            )
+            assert int(seg_audio.get("channels", 0)) == YOUTUBE_1080P.audio_channels, (
+                f"{seg_name} has {seg_audio.get('channels')} channels, "
+                f"profile pins {YOUTUBE_1080P.audio_channels} \u2014 concat "
+                f"-c:a copy will produce a broken stream"
+            )

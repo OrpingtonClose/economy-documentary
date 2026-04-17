@@ -226,11 +226,16 @@ def render_card(
         audio_src = ["-i", spec.audio_bed_path]
         audio_map = ["-map", "1:a:0", "-shortest"]
     else:
+        # Channel layout MUST match profile.audio_channels so that every
+        # segment emerging from render_card / mux has the same
+        # AudioSpecificConfig — required for concat_clips(copy_audio=True)
+        # to produce a valid stream.  Using ``stereo`` unconditionally
+        # (as we originally did) breaks when the body is mono.
         audio_src = [
             "-f", "lavfi",
             "-i",
-            f"anullsrc=channel_layout=stereo:sample_rate="
-            f"{profile.audio_sample_rate}",
+            f"anullsrc=channel_layout={profile.anullsrc_channel_layout()}:"
+            f"sample_rate={profile.audio_sample_rate}",
         ]
         audio_map = ["-map", "1:a:0", "-t", f"{spec.duration_sec}"]
 

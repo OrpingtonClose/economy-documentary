@@ -54,6 +54,15 @@ class MasterProfile:
     audio_codec: str = "aac"
     audio_bitrate: str = "256k"
     audio_sample_rate: int = 48000
+    # Channel count is part of the profile contract because concat with
+    # ``-c:a copy`` requires byte-identical AudioSpecificConfig across
+    # every segment (title card + body + end card).  TTS narration is
+    # mono, title/end-card silent beds are synthesised, and music beds
+    # may be stereo — the profile pins a single channel count and every
+    # segment encoder emits ``-ac N`` so they all match.  Default is
+    # stereo (2) which matches broadcast norms and upmixes mono
+    # narration losslessly.
+    audio_channels: int = 2
 
     # Loudness envelope (integrated + true peak)
     integrated_lufs: float = -14.0
@@ -107,7 +116,26 @@ class MasterProfile:
             "-c:a", self.audio_codec,
             "-b:a", self.audio_bitrate,
             "-ar", str(self.audio_sample_rate),
+            "-ac", str(self.audio_channels),
         ]
+
+    def anullsrc_channel_layout(self) -> str:
+        """Return the ``anullsrc`` channel_layout name for this profile.
+
+        ``ffmpeg`` only accepts layout names (``mono``, ``stereo``,
+        ``5.1``, …) — not raw channel counts — on the ``anullsrc``
+        source, so title/end cards need this mapping to emit silent
+        audio that matches the profile's ``audio_channels``.
+        """
+        return {
+            1: "mono",
+            2: "stereo",
+            3: "2.1",
+            4: "quad",
+            5: "4.1",
+            6: "5.1",
+            8: "7.1",
+        }.get(self.audio_channels, "stereo")
 
     def scale_filter(self) -> str:
         """Return the ffmpeg ``-vf`` scale expression using lanczos.
