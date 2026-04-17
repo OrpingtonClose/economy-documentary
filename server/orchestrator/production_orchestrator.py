@@ -723,6 +723,16 @@ class ProductionOrchestrator:
             batch_result.compute_stats()
             return batch_result, gen_results
 
+        # #67 follow-up: a fatal RuntimeError from one clip must stop
+        # subsequent clips from starting — otherwise a 10-clip batch
+        # where clip 1 fails fatally would waste 30–60 minutes per
+        # remaining clip before the error surfaces.  The old sequential
+        # fallback had this property via ``except RuntimeError: raise``
+        # inside the for-loop; with asyncio.gather + return_exceptions
+        # we need an explicit short-circuit.
+        cancel_event = asyncio.Event()
+        fatal_error: list[RuntimeError] = []
+
         async def _run_one(c: dict) -> dict:
             return await asyncio.to_thread(
                 generate_one_clip,
@@ -738,19 +748,62 @@ class ProductionOrchestrator:
         # without losing event-loop responsiveness.
         sem = asyncio.Semaphore(max_parallel)
 
+        class _CancelledByPolicy(Exception):
+            """Sentinel for clips skipped because a fatal error already fired."""
+
         async def _bounded(c: dict) -> dict:
+            if cancel_event.is_set():
+                raise _CancelledByPolicy(c["_clip_id"])
             async with sem:
-                return await _run_one(c)
+                if cancel_event.is_set():
+                    raise _CancelledByPolicy(c["_clip_id"])
+                try:
+                    return await _run_one(c)
+                except RuntimeError as exc:
+                    # Trip the short-circuit as soon as the first fatal
+                    # error surfaces so remaining clips don't start.
+                    if not fatal_error:
+                        fatal_error.append(exc)
+                    cancel_event.set()
+                    raise
 
         gathered = await asyncio.gather(
             *[_bounded(c) for c in task_concepts],
             return_exceptions=True,
         )
 
+        # Fatal RuntimeError wins over all other outcomes.
+        if fatal_error:
+            raise fatal_error[0]
+
         for c, outcome in zip(task_concepts, gathered):
             clip_id = c["_clip_id"]
+            if isinstance(outcome, _CancelledByPolicy):
+                # Emitted when an earlier clip's fatal error tripped
+                # the cancel_event; record as a skipped clip so the
+                # report stays consistent.
+                logger.warning(
+                    "Clip %s cancelled by fatal-error short-circuit", clip_id,
+                )
+                gen_results.append({
+                    "status": "cancelled",
+                    "error": "cancelled by fatal-error short-circuit",
+                    "scene_num": c["scene_num"],
+                    "phrase_idx": c["phrase_idx"],
+                    "duration": c["duration"],
+                    "lora_id": c["lora_id"],
+                })
+                clip_results.append(ClipResult(
+                    clip_id=clip_id,
+                    status="failed",
+                    error="cancelled by fatal-error short-circuit",
+                    scene_num=c["scene_num"],
+                    phrase_idx=c["phrase_idx"],
+                    lora_id=c["lora_id"],
+                ))
+                continue
             if isinstance(outcome, RuntimeError):
-                raise outcome  # Fatal errors — never swallow
+                raise outcome  # Defensive: should already be raised above.
             if isinstance(outcome, BaseException):
                 logger.error("Error generating clip %s: %s", clip_id, outcome)
                 gen_results.append({
