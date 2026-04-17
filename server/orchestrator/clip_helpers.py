@@ -79,7 +79,7 @@ def generate_one_clip(
             with open(status_path) as sf:
                 prev_status = json.load(sf)
             prev_quality = prev_status.get("quality", "unknown")
-            if prev_quality in ("good", "excellent"):
+            if prev_quality in ("good", "excellent", "acceptable", "rejected_accepted"):
                 logger.info(
                     "Skipping scene_%03d_phrase_%03d (already generated, quality=%s)",
                     scene_num, phrase_idx, prev_quality,

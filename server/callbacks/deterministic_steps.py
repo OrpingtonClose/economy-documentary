@@ -654,7 +654,7 @@ def deterministic_audio_callback(
 
     for scene_idx, scene in enumerate(scenes):
         scene_num = _safe_int(scene.get("scene_num", 0))
-        voices = scene.get("voices") or []
+        voices = scene.get("voices") or scene.get("voice_blocks") or []
         # Track which voice index we're on for interleaving gaps
         active_voices = [vb for vb in voices if vb.get("text", "").strip()]
         active_voice_count = len(active_voices)

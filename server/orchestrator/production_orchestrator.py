@@ -330,7 +330,7 @@ class ProductionOrchestrator:
                 try:
                     with open(status_path) as sf:
                         status = json.load(sf)
-                    if status.get("quality") in ("good", "excellent"):
+                    if status.get("quality") in ("good", "excellent", "acceptable", "rejected_accepted"):
                         # Derive clip_id from filename
                         # e.g. "scene_001_phrase_002_status.json" -> "s001_p002"
                         base = fname.replace("_status.json", "")
