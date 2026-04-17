@@ -163,9 +163,9 @@ class EscalationAction:
                 )
         if self.action == "trim_narration":
             assert self.max_cut_sec is not None
-            if self.max_cut_sec < 0:
+            if self.max_cut_sec <= 0:
                 raise EscalationActionError(
-                    "trim_narration: max_cut_sec must be >= 0"
+                    "trim_narration: max_cut_sec must be > 0"
                 )
         if self.action == "regenerate_clip":
             if self.seed_delta == 0:

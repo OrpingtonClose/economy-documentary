@@ -177,7 +177,7 @@ class RecoveryAgent:
 
                 # No tool calls — parse the final response as a decision
                 content = msg.content or ""
-                return self._parse_decision(content, tool_results)
+                return self._parse_decision(content, tool_results, context=context)
 
             except Exception as e:
                 logger.error(
@@ -288,7 +288,10 @@ class RecoveryAgent:
         return {"error": f"Unknown tool: {name}"}
 
     def _parse_decision(
-        self, content: str, tool_results: list[dict],
+        self,
+        content: str,
+        tool_results: list[dict],
+        context: Optional["RecoveryContext"] = None,
     ) -> RecoveryDecision:
         """Parse the LLM response into a RecoveryDecision."""
         # Try to extract JSON from the response
@@ -324,7 +327,7 @@ class RecoveryAgent:
             # Previously hardcoded "escalate" which was the round-robin
             # fall-through (#61, #73).  Ask the supervisor instead.
             return _supervisor_fallback_decision(
-                context=None,
+                context=context,
                 reason=f"Failed to parse agent response: {content[:500]}",
                 tool_results=tool_results,
             )
