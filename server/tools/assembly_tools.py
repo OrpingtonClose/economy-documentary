@@ -54,9 +54,12 @@ _CONCAT_TIMEOUT_BASE = 60
 _CONCAT_TIMEOUT_PER_CLIP = 20  # seconds per clip (re-encode overhead)
 _CONCAT_TIMEOUT_MAX = 1800     # 30-minute hard cap
 
-_TRIM_TIMEOUT_BASE = 30
-_TRIM_TIMEOUT_PER_MIN = 15
-_TRIM_TIMEOUT_MAX = 600
+# NOTE: ARCH-F3 (#164) removed ``trim_clip`` entirely.  The assembler no
+# longer extracts sub-ranges — OTIO Clips MUST be generated at their
+# declared exact length, and length-mismatched clips are REPLACEd via
+# the content ladder rather than trimmed at render time.  See
+# :mod:`callbacks.strict_assembler` for the structured errors raised
+# when the invariant is violated.
 
 
 def _estimate_file_duration_minutes(path: str) -> float:
@@ -500,81 +503,6 @@ def concat_clips(
             pass
 
 
-def trim_clip(
-    input_path: str,
-    start_sec: float,
-    duration_sec: float,
-    output_path: str,
-    tool_context=None,
-) -> str:
-    """Trim a clip using OTIO source_range parameters.
-
-    Args:
-        input_path: Path to the input video file.
-        start_sec: Start time in seconds.
-        duration_sec: Duration to extract in seconds.
-        output_path: Path for the trimmed output file.
-
-    Returns:
-        JSON string with trim result.
-    """
-    if not os.path.exists(input_path):
-        return json.dumps({"error": f"Input file not found: {input_path}"})
-
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-ss", f"{start_sec:.3f}",
-        "-i", input_path,
-        "-t", f"{duration_sec:.3f}",
-        "-c", "copy",
-        output_path,
-    ]
-
-    # Scale timeout by duration being extracted
-    dur_min = duration_sec / 60.0
-    timeout = _scaled_timeout(
-        _TRIM_TIMEOUT_BASE, _TRIM_TIMEOUT_PER_MIN, dur_min, _TRIM_TIMEOUT_MAX,
-    )
-
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            return json.dumps(
-                {
-                    "error": f"ffmpeg trim failed (rc={result.returncode})",
-                    "stderr": result.stderr[:500],
-                }
-            )
-
-        logger.info(
-            "Trimmed %s -> %s (start=%.2f, dur=%.2f)",
-            input_path,
-            output_path,
-            start_sec,
-            duration_sec,
-        )
-        return json.dumps(
-            {
-                "status": "trimmed",
-                "output_path": output_path,
-                "input_path": input_path,
-                "start_sec": start_sec,
-                "duration_sec": duration_sec,
-            }
-        )
-
-    except subprocess.TimeoutExpired:
-        return json.dumps({"error": f"ffmpeg trim timed out after {timeout}s"})
-
-
 # ---------------------------------------------------------------------------
 # Profile-aware helpers for final master assembly (#90, #91, #104, #105)
 # ---------------------------------------------------------------------------
@@ -782,17 +710,16 @@ def finalize_master(
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------
+# NOTE: ARCH-F3 (#164) removed ``trim_clip`` and its FunctionTool wrapper.
 mux_audio_video_tool = FunctionTool(mux_audio_video)
 concat_clips_tool = FunctionTool(concat_clips)
-trim_clip_tool = FunctionTool(trim_clip)
 
-assembly_tools = [mux_audio_video_tool, concat_clips_tool, trim_clip_tool]
+assembly_tools = [mux_audio_video_tool, concat_clips_tool]
 
 __all__ = [
     "normalize_audio_loudness",
     "mux_audio_video",
     "concat_clips",
-    "trim_clip",
     "upscale_to_profile",
     "finalize_master",
     "assembly_tools",

@@ -226,7 +226,9 @@ def process_results_to_otio(
             try:
                 probe_result_json = probe_clip(mp4_path=output_path)
                 probe_result = json.loads(probe_result_json)
-                actual_duration = probe_result.get("duration", duration * 1.15)
+                # ARCH-F3: exact-length clips; fallback mirrors the
+                # declared request, not the old 1.15x overshoot.
+                actual_duration = probe_result.get("duration", duration)
                 clip_result_json = add_video_clip(
                     scene_num=scene_num,
                     phrase_idx=phrase_idx,
@@ -262,7 +264,9 @@ def process_results_to_otio(
         try:
             probe_result_json = probe_clip(mp4_path=output_path)
             probe_result = json.loads(probe_result_json)
-            actual_duration = probe_result.get("duration", duration * 1.15)
+            # ARCH-F3: exact-length clips; fallback mirrors the declared
+            # request, not the old 1.15x overshoot.
+            actual_duration = probe_result.get("duration", duration)
 
             # B2 upload already happened inside generate_video_clip().
             # Gatekeeper runs AFTER all clips are in B2 + OTIO (audit trail).
