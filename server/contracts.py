@@ -24,13 +24,219 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
 from testing.simulation_bridge import is_simulation_active
+
+
+# ---------------------------------------------------------------------------
+# Scene-level schema (scenario creator is the intelligence layer)
+# ---------------------------------------------------------------------------
+#
+# These dataclasses document the structured fields that the scenario director
+# emits PER SCENE (pronunciation_hints, ssml) and PER DOCUMENTARY (style_lock).
+# They are intentionally lightweight — scenes move through the pipeline as
+# plain JSON dicts in state["scenes"], so these classes exist to:
+#   1. document the contract,
+#   2. provide `from_dict` / validation helpers used by
+#      ``server/tools/scenario_evaluator_checks.py`` and
+#      ``server/tools/tts_ssml_smoke.py``,
+#   3. keep prompt updates and structural checks in sync.
+#
+# The scenario director writes the FULL documentary's style_lock into
+# state["style_lock"] once, at scenario-creation time.  It is then applied to
+# every scene's visual prompt by downstream agents.  Scene 0 carries a
+# HookSpec; the final scene carries an OutroSpec.
+
+
+# Closed set of visual style families the documentary may lock to.  The
+# scenario director must pick exactly one at scenario-creation time.  This
+# prevents visual whiplash (PAG run mixed anime + watercolor + cyberpunk +
+# live-action + 3D brain in the same documentary).
+STYLE_FAMILIES: tuple[str, ...] = (
+    "cinematic_documentary",
+    "hand_drawn_animation",
+    "realistic_3d",
+    "stylized_2d_animation",
+    "live_action_interview",
+    "archival_footage",
+    "mixed_media_collage",
+    "painterly",
+)
+
+# Styles that are almost always disruptive when mixed with a serious
+# documentary lock.  The evaluator uses this as the default forbidden set
+# when a specific style_lock doesn't override it.
+DEFAULT_FORBIDDEN_STYLES: frozenset[str] = frozenset(
+    {
+        "anime",
+        "manga",
+        "watercolor",
+        "cyberpunk",
+        "vaporwave",
+        "pixel_art",
+        "chibi",
+        "cartoon_network",
+    }
+)
+
+
+@dataclass
+class StyleLock:
+    """Global visual style directive locked at scenario-creation time.
+
+    Applies to EVERY scene in the documentary.  The scenario director
+    picks ONE style family before writing scenes; every visual prompt
+    gets ``positive_fragment`` appended and ``negative_fragment`` fed
+    to the diffusion model as negative conditioning.
+    """
+
+    dominant_style: str  # one of STYLE_FAMILIES
+    forbidden_styles: frozenset[str] = field(default_factory=lambda: DEFAULT_FORBIDDEN_STYLES)
+    positive_fragment: str = ""
+    negative_fragment: str = ""
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "StyleLock":
+        if not isinstance(raw, dict):
+            raise ValueError(f"StyleLock must be a dict, got {type(raw).__name__}")
+        dominant = str(raw.get("dominant_style", "")).strip()
+        if not dominant:
+            raise ValueError("StyleLock.dominant_style is required and non-empty")
+        forbidden_raw = raw.get("forbidden_styles") or []
+        if isinstance(forbidden_raw, str):
+            forbidden_raw = [s.strip() for s in forbidden_raw.split(",") if s.strip()]
+        forbidden = frozenset(str(s).lower().strip() for s in forbidden_raw)
+        if not forbidden:
+            forbidden = DEFAULT_FORBIDDEN_STYLES
+        return cls(
+            dominant_style=dominant,
+            forbidden_styles=forbidden,
+            positive_fragment=str(raw.get("positive_fragment", "")).strip(),
+            negative_fragment=str(raw.get("negative_fragment", "")).strip(),
+        )
+
+    def is_valid(self) -> tuple[bool, str]:
+        if not self.dominant_style:
+            return False, "dominant_style empty"
+        if not self.positive_fragment:
+            return False, "positive_fragment empty (nothing to append to visual prompts)"
+        return True, ""
+
+
+@dataclass
+class HookSpec:
+    """Topic-specific opening hook for scene 0.
+
+    PAG run failure mode: opened on a generic blurry 3D brain with no
+    connection to the actual topic.  The hook must reference something
+    concrete about the documentary's subject matter (a specific artifact,
+    device, person, metric, date, etc.).
+    """
+
+    topic_specific_motif: str  # concrete thing: "a neurostimulator electrode array"
+    motion_description: str  # what camera/subject does: "slow push-in on..."
+    narrative_pull: str  # why the viewer stays: "because within 7 seconds..."
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "HookSpec":
+        if not isinstance(raw, dict):
+            raise ValueError(f"HookSpec must be a dict, got {type(raw).__name__}")
+        return cls(
+            topic_specific_motif=str(raw.get("topic_specific_motif", "")).strip(),
+            motion_description=str(raw.get("motion_description", "")).strip(),
+            narrative_pull=str(raw.get("narrative_pull", "")).strip(),
+        )
+
+    def is_valid(self, user_prompt: str = "") -> tuple[bool, str]:
+        if not self.topic_specific_motif:
+            return False, "topic_specific_motif empty"
+        if len(self.topic_specific_motif.split()) < 2:
+            return False, "topic_specific_motif too short (must be a concrete noun phrase)"
+        if not self.motion_description:
+            return False, "motion_description empty"
+        if not self.narrative_pull:
+            return False, "narrative_pull empty"
+        return True, ""
+
+
+@dataclass
+class OutroSpec:
+    """Explicit closing beat for the final scene.
+
+    PAG run failure mode: ended on a fade, no recap, no CTA, no brand.
+    The outro must be a concrete visual + one-sentence recap + CTA +
+    brand card — not silence.
+    """
+
+    closing_shot: str  # concrete visual: "wide shot of empty lab chair, fade"
+    recap_sentence: str  # one-sentence documentary summary
+    cta: str  # call to action: "subscribe", "read the paper", etc.
+    brand_card: str  # brand text overlay, e.g. documentary title + channel
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> "OutroSpec":
+        if not isinstance(raw, dict):
+            raise ValueError(f"OutroSpec must be a dict, got {type(raw).__name__}")
+        return cls(
+            closing_shot=str(raw.get("closing_shot", "")).strip(),
+            recap_sentence=str(raw.get("recap_sentence", "")).strip(),
+            cta=str(raw.get("cta", "")).strip(),
+            brand_card=str(raw.get("brand_card", "")).strip(),
+        )
+
+    def is_valid(self) -> tuple[bool, str]:
+        if not self.closing_shot:
+            return False, "closing_shot empty"
+        if not self.recap_sentence:
+            return False, "recap_sentence empty"
+        # cta and brand_card are allowed to be brief but must be non-empty
+        if not self.cta:
+            return False, "cta empty"
+        if not self.brand_card:
+            return False, "brand_card empty"
+        return True, ""
+
+
+# Scene schema extension
+#
+# Every scene dict in state["scenes"] MAY now carry:
+#   "pronunciation_hints": {"PAG": "P-A-G", "DBS": "D-B-S", ...}
+#       -> passed to TTS so initialisms are spoken letter-by-letter.
+#   "ssml": "<speak>...</speak>" | null
+#       -> optional pre-rendered SSML.  When present, the TTS adapter
+#          prefers this over plain text (falling back when the voice is
+#          flagged ssml_unsupported by tts_ssml_smoke).
+#
+# Scene 0 additionally carries:
+#   "hook_spec": { ... HookSpec fields ... }
+#
+# The final scene additionally carries:
+#   "outro_spec": { ... OutroSpec fields ... }
+#
+# The documentary-global style_lock lives at state["style_lock"] (dict form).
+# ``StyleLock.from_dict`` parses it.  It is NOT repeated per-scene.
+
+
+def scene_pronunciation_hints(scene: dict[str, Any]) -> dict[str, str]:
+    """Return a scene's pronunciation hints, tolerating missing keys."""
+    hints = scene.get("pronunciation_hints") or {}
+    if not isinstance(hints, dict):
+        return {}
+    return {str(k): str(v) for k, v in hints.items() if k and v}
+
+
+def scene_ssml(scene: dict[str, Any]) -> Optional[str]:
+    """Return the pre-rendered SSML for a scene, if any."""
+    ssml = scene.get("ssml")
+    if ssml is None:
+        return None
+    ssml_str = str(ssml).strip()
+    return ssml_str or None
 
 
 # ---------------------------------------------------------------------------
