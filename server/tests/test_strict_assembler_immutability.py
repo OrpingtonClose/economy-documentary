@@ -39,10 +39,13 @@ if _SERVER_DIR not in sys.path:
 
 from callbacks.strict_assembler import (  # noqa: E402
     CLIP_LENGTH_TOLERANCE_SEC,
+    TRACK_LENGTH_FLOOR_SEC,
     ClipLengthMismatchError,
     UnpluggedGapError,
     ensure_clip_length_matches,
     ensure_item_is_not_gap,
+    ensure_track_length_matches,
+    track_length_tolerance,
 )
 
 
@@ -120,6 +123,118 @@ class TestEnsureClipLengthMatches:
     def test_negative_duration_raises(self) -> None:
         with pytest.raises(ClipLengthMismatchError):
             ensure_clip_length_matches(clip_id="bad", declared=5.0, actual=-1.0)
+
+
+# ---------------------------------------------------------------------------
+# 2b. ``ensure_track_length_matches`` / ``track_length_tolerance`` --
+# per-clip drift accumulates across concat boundaries, so the track-level
+# budget scales with the clip count (regression guard for PR #174 review).
+# ---------------------------------------------------------------------------
+
+class TestTrackLengthTolerance:
+    """Track-level A/V alignment uses a clip-count-scaled tolerance."""
+
+    def test_short_track_honours_floor(self) -> None:
+        # A 1-clip track still gets at least TRACK_LENGTH_FLOOR_SEC of
+        # budget for muxer rounding.
+        assert track_length_tolerance(1) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+        assert track_length_tolerance(2) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+
+    def test_long_track_scales_with_clip_count(self) -> None:
+        # Past the floor the tolerance scales linearly with the number
+        # of concat boundaries: N * per-clip-tolerance.
+        for n in (10, 30, 100):
+            expected = max(TRACK_LENGTH_FLOOR_SEC, n * CLIP_LENGTH_TOLERANCE_SEC)
+            assert track_length_tolerance(n) == pytest.approx(expected)
+
+    def test_track_within_scaled_budget_passes(self) -> None:
+        # 30 clips × 16ms = 480ms budget.  A 200ms drift is fine.
+        ensure_track_length_matches(
+            track_id="combined_track (N=30)",
+            audio_dur=60.000,
+            video_dur=60.200,
+            num_clips=30,
+        )
+
+    def test_track_over_budget_raises(self) -> None:
+        # 3-clip track → 50ms floor; 200ms drift blows it.
+        with pytest.raises(ClipLengthMismatchError) as excinfo:
+            ensure_track_length_matches(
+                track_id="combined_track (N=3)",
+                audio_dur=10.0,
+                video_dur=10.200,
+                num_clips=3,
+            )
+        assert excinfo.value.declared == pytest.approx(10.0)
+        assert excinfo.value.actual == pytest.approx(10.200)
+
+    def test_zero_or_negative_clip_count_falls_back_to_floor(self) -> None:
+        # Defensive: 0 and negative clip counts must not yield a zero
+        # tolerance -- fall back to the floor.
+        assert track_length_tolerance(0) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+        assert track_length_tolerance(-3) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+
+
+# ---------------------------------------------------------------------------
+# 2c. LTX 8k+1 frame quantization -- ``generate_video_clip`` must round the
+# request to the nearest grid point and use the quantized duration for both
+# the worker payload and the length gate (regression guard for PR #174
+# review: without this the gate fires on every retry for any off-grid
+# duration, because creative amendments don't touch num_frames).
+# ---------------------------------------------------------------------------
+
+class TestLtxFrameQuantization:
+    """The client snaps duration_sec to the 8k+1 frame grid at 24fps."""
+
+    def test_generate_video_clip_source_quantizes_to_8k_plus_1(self) -> None:
+        # Source-level assertion: the function body must compute
+        # num_frames via a nearest-grid-point rule AND use the resulting
+        # actual_duration as the length-gate reference, not the raw
+        # ``duration_sec`` passed in by the caller.
+        from tools import video_tools
+        src = inspect.getsource(video_tools.generate_video_clip)
+        assert "8k+1" in src or "8k + 1" in src, (
+            "ARCH-F3 follow-up: generate_video_clip must document the "
+            "LTX 8k+1 frame-grid quantization."
+        )
+        # The grid-quantized duration must be what the length gate
+        # reads as 'declared' -- otherwise the gate fires on every
+        # off-grid request.
+        assert "declared=actual_duration" in src, (
+            "ARCH-F3 follow-up: the length gate must use the quantized "
+            "actual_duration, not the raw caller-supplied duration_sec."
+        )
+
+    @pytest.mark.parametrize(
+        "duration_sec, expected_frames",
+        [
+            (0.1, 9),      # sub-grid -> minimum 9
+            (0.375, 9),    # exact grid point
+            (0.708, 17),   # 17/24
+            (5.0, 121),    # 120 frames at 24fps rounds to 121 (5 vs 17)
+            (10.0, 241),
+        ],
+    )
+    def test_grid_quantization_is_nearest(
+        self, duration_sec: float, expected_frames: int
+    ) -> None:
+        # Mirror the production quantization formula to lock the
+        # rounding rule down: nearest 8k+1, floor=9.
+        fps = 24
+        raw = max(9, int(round(duration_sec * fps)))
+        k_floor = (raw - 1) // 8
+        k_ceil = k_floor + 1
+        ff = k_floor * 8 + 1
+        fc = k_ceil * 8 + 1
+        num_frames = max(9, ff if abs(raw - ff) <= abs(raw - fc) else fc)
+        assert num_frames == expected_frames
+        # The resulting effective duration is what the worker renders.
+        effective = num_frames / fps
+        # Within half a grid step (4/24s ≈ 167ms) of the nearest grid
+        # point, except for requests below the 9-frame minimum where
+        # the quantum is structurally larger.
+        if duration_sec >= 9 / fps:
+            assert abs(effective - duration_sec) <= (4 / fps) + 1e-9
 
 
 # ---------------------------------------------------------------------------

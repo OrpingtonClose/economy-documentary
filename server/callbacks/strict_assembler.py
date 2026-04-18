@@ -119,6 +119,23 @@ CLIP_LENGTH_TOLERANCE_SEC: float = 0.016
 
 
 # ---------------------------------------------------------------------------
+# Track-level tolerance scaling.
+# ---------------------------------------------------------------------------
+#
+# ``CLIP_LENGTH_TOLERANCE_SEC`` applies to a single clip measured against
+# its declared ``source_range``.  When the renderer concatenates ``N``
+# clips into a track and compares the resulting audio and video track
+# durations, per-clip rounding / container-boundary drift can accumulate.
+# The track-level tolerance therefore scales with the number of clips
+# involved on either track (we take the max, since drift is dominated by
+# whichever side has more concat boundaries).  ``TRACK_LENGTH_FLOOR_SEC``
+# is the minimum tolerance for a very short track (e.g. one- or two-clip
+# tracks still need a non-zero budget for muxer rounding).
+
+TRACK_LENGTH_FLOOR_SEC: float = 0.050
+
+
+# ---------------------------------------------------------------------------
 # Module-level helpers shared by the renderer, the video generator, and the
 # test-suite.  Keeping the assertions out of the renderer's closure makes
 # them trivially testable without having to drive the whole assembly
@@ -140,6 +157,44 @@ def ensure_clip_length_matches(
     """
     if actual <= 0 or abs(actual - declared) > tolerance:
         raise ClipLengthMismatchError(clip_id=clip_id, declared=declared, actual=actual)
+
+
+def track_length_tolerance(num_clips: int) -> float:
+    """Return the length-mismatch budget for a concatenated track.
+
+    A track made of ``num_clips`` concatenated clips can drift by up to
+    ``num_clips * CLIP_LENGTH_TOLERANCE_SEC`` relative to the sum of the
+    per-clip declarations, purely from per-clip rounding and concat-
+    container bookkeeping -- even when every individual clip passed the
+    per-clip length gate.  We therefore scale the tolerance with the
+    clip count, with a floor of :data:`TRACK_LENGTH_FLOOR_SEC` for very
+    short tracks.
+    """
+    n = max(int(num_clips), 1)
+    return max(TRACK_LENGTH_FLOOR_SEC, n * CLIP_LENGTH_TOLERANCE_SEC)
+
+
+def ensure_track_length_matches(
+    track_id: str,
+    audio_dur: float,
+    video_dur: float,
+    num_clips: int,
+) -> None:
+    """Raise :class:`ClipLengthMismatchError` when track A/V drift exceeds budget.
+
+    ``num_clips`` should be the maximum of the narration and video
+    segment counts for the track; the tolerance scales with it via
+    :func:`track_length_tolerance`.  The assembler never trims to
+    reconcile audio/video drift -- a mismatch beyond the budget is a
+    structural problem that must be REPLACEd upstream.
+    """
+    tolerance = track_length_tolerance(num_clips)
+    if abs(video_dur - audio_dur) > tolerance:
+        raise ClipLengthMismatchError(
+            clip_id=track_id,
+            declared=audio_dur,
+            actual=video_dur,
+        )
 
 
 def ensure_item_is_not_gap(
@@ -180,6 +235,9 @@ __all__ = [
     "UnpluggedGapError",
     "ClipLengthMismatchError",
     "CLIP_LENGTH_TOLERANCE_SEC",
+    "TRACK_LENGTH_FLOOR_SEC",
     "ensure_clip_length_matches",
+    "ensure_track_length_matches",
+    "track_length_tolerance",
     "ensure_item_is_not_gap",
 ]

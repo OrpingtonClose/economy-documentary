@@ -151,7 +151,42 @@ def generate_video_clip(
         JSON string with generation results.
     """
     # ARCH-F3: exact target duration. No _TRIM_MARGIN overshoot.
-    actual_duration = duration_sec
+    #
+    # LTX-2.3 requires num_frames to be of the form 8k+1 at 24 fps, which
+    # means the set of durations the generator can actually produce is
+    # {9/24, 17/24, 25/24, 33/24, ...} -- a grid with 8/24 ≈ 0.333s
+    # spacing.  An arbitrary request such as 5.0s would otherwise floor
+    # to 113 frames = 4.708s, a 292ms delta that blows the per-clip
+    # length gate on every retry (creative amendments do not change
+    # num_frames).  Quantizing the request to the nearest LTX grid
+    # point here means the client and the worker agree on the exact
+    # duration BEFORE generation, the worker produces a clip at exactly
+    # that duration, and the length gate verifies the match within
+    # CLIP_LENGTH_TOLERANCE_SEC (16ms) of the grid point rather than of
+    # the original caller request.  Upstream callers that care about
+    # the total timeline duration should request grid-aligned durations;
+    # otherwise the per-clip quantization delta is absorbed into the
+    # narration/video timing budget by the assembler.
+    fps = 24
+    _raw_frames = max(9, int(round(float(duration_sec) * fps)))
+    # Round to the NEAREST 8k+1, not floor, so a request halfway
+    # between two grid points does not systematically undershoot.
+    _k_floor = (_raw_frames - 1) // 8
+    _k_ceil = _k_floor + 1
+    _frames_floor = _k_floor * 8 + 1
+    _frames_ceil = _k_ceil * 8 + 1
+    if abs(_raw_frames - _frames_floor) <= abs(_raw_frames - _frames_ceil):
+        num_frames = max(9, _frames_floor)
+    else:
+        num_frames = max(9, _frames_ceil)
+    actual_duration = num_frames / fps
+    if abs(actual_duration - float(duration_sec)) > 0.001:
+        logger.info(
+            "Quantized requested duration %.4fs to LTX 8k+1 grid: "
+            "num_frames=%d, effective=%.4fs (delta=%+.3fs)",
+            float(duration_sec), num_frames, actual_duration,
+            actual_duration - float(duration_sec),
+        )
 
     # Production mode: call LTX-2.3 on GPU worker
     # ARCHITECTURE INVARIANT: Video generation MUST use a real GPU worker.
@@ -180,10 +215,9 @@ def generate_video_clip(
             "error": "Video generation skipped — no GPU worker available",
         })
 
-    # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
-    fps = 24
-    raw_frames = int(actual_duration * fps)
-    num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
+    # ``num_frames`` and ``actual_duration`` were quantized to the LTX
+    # 8k+1 grid above -- the values flow directly into the worker call
+    # and the length gate.
 
     # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
     seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
@@ -290,9 +324,15 @@ def generate_video_clip(
                     "treating as zero): %s", _probe_exc,
                 )
                 _measured = 0.0
+            # NB: ``actual_duration`` (not the caller's ``duration_sec``)
+            # is the declared reference here -- it is the LTX-grid-
+            # quantized duration that the worker was actually asked to
+            # render, so the length gate catches genuine generator
+            # failures without tripping on the inherent 8k+1 frame
+            # quantization delta.
             ensure_clip_length_matches(
                 clip_id=output_path,
-                declared=duration_sec,
+                declared=actual_duration,
                 actual=_measured,
             )
 

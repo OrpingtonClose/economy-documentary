@@ -2500,6 +2500,7 @@ def deterministic_assembly_callback(
         UnpluggedGapError,
         ensure_clip_length_matches,
         ensure_item_is_not_gap,
+        ensure_track_length_matches,
     )
 
     # --- Local helper for assembly OTIO violations -----------------------
@@ -2632,7 +2633,7 @@ def deterministic_assembly_callback(
     def _render_audio_track(
         narration_track_items: list,
         lang_suffix: str,
-    ) -> str:
+    ) -> tuple[str, int]:
         """Render the A1_Narration track into a single WAV file.
 
         Walks every OTIO item in order:
@@ -2642,7 +2643,9 @@ def deterministic_assembly_callback(
                    :data:`CLIP_LENGTH_TOLERANCE_SEC`.
           - Gap  → raise :class:`UnpluggedGapError`.
 
-        Returns path to the combined audio file.
+        Returns ``(combined_audio_path, num_segments)`` so the caller
+        can size the track-level tolerance via
+        :func:`track_length_tolerance`.
         """
         audio_segments = []
         for idx, item in enumerate(narration_track_items):
@@ -2686,7 +2689,7 @@ def deterministic_assembly_callback(
             )
 
         if len(audio_segments) == 1:
-            return audio_segments[0]
+            return audio_segments[0], 1
 
         combined_audio = os.path.join(
             assembly_dir, f"otio_audio_combined{lang_suffix}.wav",
@@ -2703,12 +2706,12 @@ def deterministic_assembly_callback(
             "Rendered %d audio items into %s",
             len(audio_segments), combined_audio,
         )
-        return combined_audio
+        return combined_audio, len(audio_segments)
 
     def _render_video_track(
         video_track_items: list,
         lang_suffix: str,
-    ) -> str:
+    ) -> tuple[str, int]:
         """Render the V1_Video track into a single MP4 file.
 
         Walks every OTIO item in order:
@@ -2771,7 +2774,7 @@ def deterministic_assembly_callback(
             )
 
         if len(video_segments) == 1:
-            return video_segments[0]
+            return video_segments[0], 1
 
         combined_video = os.path.join(
             assembly_dir, f"otio_video_combined{lang_suffix}.mp4",
@@ -2788,7 +2791,7 @@ def deterministic_assembly_callback(
             "Rendered %d video items into %s",
             len(video_segments), combined_video,
         )
-        return combined_video
+        return combined_video, len(video_segments)
 
     def _assemble_language_track(
         narration_items: list,
@@ -2805,8 +2808,12 @@ def deterministic_assembly_callback(
         """
         track_errors = []
         try:
-            combined_audio_raw = _render_audio_track(narration_items, lang_suffix)
-            combined_video = _render_video_track(video_items, lang_suffix)
+            combined_audio_raw, audio_segment_count = _render_audio_track(
+                narration_items, lang_suffix,
+            )
+            combined_video, video_segment_count = _render_video_track(
+                video_items, lang_suffix,
+            )
 
             # Loudness normalization (EBU R128) — different TTS voices
             # produce clips at varying volume levels.  Without normalization,
@@ -2839,21 +2846,24 @@ def deterministic_assembly_callback(
             # post-hoc.  Under ARCH-F3, clip-level ClipLengthMismatchError
             # catches per-clip drift earlier; this track-level check is
             # a belt-and-braces guard against concat-level surprises.
+            # The track-level tolerance scales with the number of concat
+            # boundaries (see strict_assembler.track_length_tolerance) --
+            # the 16ms per-clip budget is far too tight once N clips are
+            # stitched together.
             audio_probe = json.loads(probe_clip(mp4_path=combined_audio))
             video_probe = json.loads(probe_clip(mp4_path=combined_video))
             audio_dur = float(audio_probe.get("duration", 0.0))
             video_dur = float(video_probe.get("duration", 0.0))
-            diff = video_dur - audio_dur
 
-            if abs(diff) > CLIP_LENGTH_TOLERANCE_SEC:
-                raise ClipLengthMismatchError(
-                    clip_id=(
-                        f"combined_track{lang_suffix} "
-                        f"(video={combined_video}, audio={combined_audio})"
-                    ),
-                    declared=audio_dur,
-                    actual=video_dur,
-                )
+            ensure_track_length_matches(
+                track_id=(
+                    f"combined_track{lang_suffix} "
+                    f"(video={combined_video}, audio={combined_audio})"
+                ),
+                audio_dur=audio_dur,
+                video_dur=video_dur,
+                num_clips=max(audio_segment_count, video_segment_count),
+            )
 
             combined_video_for_mux = combined_video
 
