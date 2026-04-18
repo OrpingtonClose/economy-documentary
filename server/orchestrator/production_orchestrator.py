@@ -37,7 +37,6 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 from google.genai import types as genai_types
@@ -583,8 +582,10 @@ class ProductionOrchestrator:
                 "description": batch.description,
             })
 
-            # Execute batch (parallel clip generation)
-            batch_result, clip_gen_results = self._execute_batch(batch, batch_idx)
+            # Execute batch (parallel clip generation).  #67: _execute_batch
+            # is async so we don't block the event loop while workers
+            # crunch (each clip can take 30+ minutes on-GPU).
+            batch_result, clip_gen_results = await self._execute_batch(batch, batch_idx)
             batch_results.append(batch_result)
             all_results.extend(clip_gen_results)
 
@@ -648,14 +649,21 @@ class ProductionOrchestrator:
             replan_count=replan_count,
         )
 
-    def _execute_batch(
+    async def _execute_batch(
         self, batch: ClipBatch, batch_idx: int
     ) -> tuple[BatchResult, list[dict]]:
         """Execute a single batch of clips in parallel.
 
-        Uses existing generate_video_clip() from server/tools/video_tools.py
-        with the existing recovery middleware (VIDEO_POLICY from server/recovery.py).
-        Uses ThreadPoolExecutor like the current implementation for GPU I/O.
+        Issue #67: The previous implementation used ThreadPoolExecutor +
+        ``as_completed`` + ``future.result()`` inside an async function,
+        which blocks the event loop while waiting on HTTP calls to GPU
+        workers (each call can take 60 minutes for LTX video generation
+        with QA retries).
+
+        New design: dispatch each ``generate_one_clip`` call as an
+        ``asyncio.to_thread`` coroutine and await them concurrently via
+        ``asyncio.gather``.  The event loop stays responsive so SSE /
+        dashboard / heartbeat consumers keep getting fed.
         """
         clip_results: list[ClipResult] = []
         gen_results: list[dict] = []
@@ -705,80 +713,118 @@ class ProductionOrchestrator:
         # queries InfraAgent/FleetCoordinator for healthy workers instead of
         # blind round-robin. Failed clips are reported to the fleet coordinator
         # for retry-on-different-worker tracking.
-        if len(task_concepts) > 1 and self.num_workers > 1:
-            with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-                future_to_concept = {
-                    executor.submit(
-                        generate_one_clip,
-                        c,
-                        self.video_dir,
-                        self.default_negative,
-                        self.visual_style_str,
-                        self._feedback_store,
-                    ): c
-                    for c in task_concepts
-                }
-                for future in as_completed(future_to_concept):
-                    c = future_to_concept[future]
-                    clip_id = c["_clip_id"]
-                    try:
-                        result = future.result()
-                        gen_results.append(result)
-                        clip_results.append(self._result_to_clip_result(clip_id, result))
-                    except RuntimeError:
-                        raise  # Fatal errors — never swallow
-                    except Exception as e:
-                        logger.error("Error generating clip %s: %s", clip_id, e)
-                        gen_results.append({
-                            "status": "error",
-                            "error": str(e),
-                            "scene_num": c["scene_num"],
-                            "phrase_idx": c["phrase_idx"],
-                            "duration": c["duration"],
-                            "lora_id": c["lora_id"],
-                        })
-                        clip_results.append(ClipResult(
-                            clip_id=clip_id,
-                            status="failed",
-                            error=str(e),
-                            scene_num=c["scene_num"],
-                            phrase_idx=c["phrase_idx"],
-                            lora_id=c["lora_id"],
-                        ))
-        else:
-            # Sequential fallback
-            for c in task_concepts:
-                clip_id = c["_clip_id"]
+        #
+        # #67: Dispatch with asyncio.to_thread + asyncio.gather so the
+        # event loop stays responsive while blocking HTTP calls run in
+        # worker threads.  For a single concept we still offload to a
+        # thread so the event loop doesn't stall.
+        if not task_concepts:
+            batch_result = BatchResult(batch_idx=batch_idx, clip_results=clip_results)
+            batch_result.compute_stats()
+            return batch_result, gen_results
+
+        # #67 follow-up: a fatal RuntimeError from one clip must stop
+        # subsequent clips from starting — otherwise a 10-clip batch
+        # where clip 1 fails fatally would waste 30–60 minutes per
+        # remaining clip before the error surfaces.  The old sequential
+        # fallback had this property via ``except RuntimeError: raise``
+        # inside the for-loop; with asyncio.gather + return_exceptions
+        # we need an explicit short-circuit.
+        cancel_event = asyncio.Event()
+        fatal_error: list[RuntimeError] = []
+
+        async def _run_one(c: dict) -> dict:
+            return await asyncio.to_thread(
+                generate_one_clip,
+                c,
+                self.video_dir,
+                self.default_negative,
+                self.visual_style_str,
+                self._feedback_store,
+            )
+
+        max_parallel = max(1, self.num_workers) if len(task_concepts) > 1 else 1
+        # Concurrency cap: a semaphore keeps at most max_parallel in-flight
+        # without losing event-loop responsiveness.
+        sem = asyncio.Semaphore(max_parallel)
+
+        class _CancelledByPolicy(Exception):
+            """Sentinel for clips skipped because a fatal error already fired."""
+
+        async def _bounded(c: dict) -> dict:
+            if cancel_event.is_set():
+                raise _CancelledByPolicy(c["_clip_id"])
+            async with sem:
+                if cancel_event.is_set():
+                    raise _CancelledByPolicy(c["_clip_id"])
                 try:
-                    result = generate_one_clip(
-                        c,
-                        self.video_dir,
-                        self.default_negative,
-                        self.visual_style_str,
-                        self._feedback_store,
-                    )
-                    gen_results.append(result)
-                    clip_results.append(self._result_to_clip_result(clip_id, result))
-                except RuntimeError:
-                    raise  # Fatal errors — never swallow
-                except Exception as e:
-                    logger.error("Error generating clip %s: %s", clip_id, e)
-                    gen_results.append({
-                        "status": "error",
-                        "error": str(e),
-                        "scene_num": c["scene_num"],
-                        "phrase_idx": c["phrase_idx"],
-                        "duration": c["duration"],
-                        "lora_id": c["lora_id"],
-                    })
-                    clip_results.append(ClipResult(
-                        clip_id=clip_id,
-                        status="failed",
-                        error=str(e),
-                        scene_num=c["scene_num"],
-                        phrase_idx=c["phrase_idx"],
-                        lora_id=c["lora_id"],
-                    ))
+                    return await _run_one(c)
+                except RuntimeError as exc:
+                    # Trip the short-circuit as soon as the first fatal
+                    # error surfaces so remaining clips don't start.
+                    if not fatal_error:
+                        fatal_error.append(exc)
+                    cancel_event.set()
+                    raise
+
+        gathered = await asyncio.gather(
+            *[_bounded(c) for c in task_concepts],
+            return_exceptions=True,
+        )
+
+        # Fatal RuntimeError wins over all other outcomes.
+        if fatal_error:
+            raise fatal_error[0]
+
+        for c, outcome in zip(task_concepts, gathered):
+            clip_id = c["_clip_id"]
+            if isinstance(outcome, _CancelledByPolicy):
+                # Emitted when an earlier clip's fatal error tripped
+                # the cancel_event; record as a skipped clip so the
+                # report stays consistent.
+                logger.warning(
+                    "Clip %s cancelled by fatal-error short-circuit", clip_id,
+                )
+                gen_results.append({
+                    "status": "cancelled",
+                    "error": "cancelled by fatal-error short-circuit",
+                    "scene_num": c["scene_num"],
+                    "phrase_idx": c["phrase_idx"],
+                    "duration": c["duration"],
+                    "lora_id": c["lora_id"],
+                })
+                clip_results.append(ClipResult(
+                    clip_id=clip_id,
+                    status="failed",
+                    error="cancelled by fatal-error short-circuit",
+                    scene_num=c["scene_num"],
+                    phrase_idx=c["phrase_idx"],
+                    lora_id=c["lora_id"],
+                ))
+                continue
+            if isinstance(outcome, RuntimeError):
+                raise outcome  # Defensive: should already be raised above.
+            if isinstance(outcome, BaseException):
+                logger.error("Error generating clip %s: %s", clip_id, outcome)
+                gen_results.append({
+                    "status": "error",
+                    "error": str(outcome),
+                    "scene_num": c["scene_num"],
+                    "phrase_idx": c["phrase_idx"],
+                    "duration": c["duration"],
+                    "lora_id": c["lora_id"],
+                })
+                clip_results.append(ClipResult(
+                    clip_id=clip_id,
+                    status="failed",
+                    error=str(outcome),
+                    scene_num=c["scene_num"],
+                    phrase_idx=c["phrase_idx"],
+                    lora_id=c["lora_id"],
+                ))
+                continue
+            gen_results.append(outcome)
+            clip_results.append(self._result_to_clip_result(clip_id, outcome))
 
         batch_result = BatchResult(batch_idx=batch_idx, clip_results=clip_results)
         batch_result.compute_stats()
@@ -1073,6 +1119,72 @@ class ProductionOrchestrator:
             estimated_gpu_minutes=len(self.concepts) * 2.0,
             risk_assessment="Fallback plan — no LLM optimization applied",
         )
+
+    # -- Supervisor escalation bridge (new, additive) -----------------------
+    #
+    # Closes #61, #73, #76, #77, #102, #103.  Provides a single entry point
+    # for any production-stage decision point (round-robin fall-through,
+    # batch failure, partial plan) to consult the canonical supervisor
+    # action menu instead of silently degrading.  Existing methods are NOT
+    # modified — callers opt in explicitly.
+
+    def supervisor_decide(
+        self,
+        failing_artifact: str,
+        artifact_descriptor: Optional[dict] = None,
+        high_cost: bool = False,
+    ):
+        """Ask the production supervisor for a canonical EscalationAction.
+
+        Returns an ``EscalationAction`` from the 8-item canonical menu.
+        Never returns ``None``: on LLM/parse failure the supervisor returns
+        a deterministic ``abort_run`` action and still increments the LLM
+        call counter, so the #102 invariant holds by construction.
+        """
+        from agents.production_supervisor import supervisor_escalate
+        from orchestrator.escalation_menu import EscalationContext
+
+        context = EscalationContext(
+            failing_artifact=failing_artifact,
+            artifact_descriptor=artifact_descriptor or {},
+            timeline_state_snapshot=self._snapshot_timeline_state(),
+            user_original_prompt=self.state.get("user_prompt", "")
+                if isinstance(self.state, dict) else "",
+            budget_remaining=float(
+                self.state.get("budget_remaining", 0.0)
+                if isinstance(self.state, dict) else 0.0
+            ),
+            escalation_history=(
+                self.state.get("escalation_history", [])
+                if isinstance(self.state, dict) else []
+            ),
+            high_cost=high_cost,
+        )
+        return supervisor_escalate(context)
+
+    def _snapshot_timeline_state(self) -> dict:
+        """Cheap timeline-state snapshot for the supervisor prompt.
+
+        Pulls lightweight fields (counts, durations) out of ``self.state``
+        without pulling in the full OTIO object — the supervisor LLM only
+        needs aggregate signal.
+        """
+        if not isinstance(self.state, dict):
+            return {}
+        snap: dict = {}
+        for key in (
+            "scene_count",
+            "total_duration",
+            "visual_concepts_count",
+            "pipeline_phase",
+            "batches_completed",
+        ):
+            if key in self.state:
+                snap[key] = self.state[key]
+        concepts = self.state.get("visual_concepts") or []
+        if isinstance(concepts, list):
+            snap["visual_concepts_count"] = len(concepts)
+        return snap
 
     # -- AG-UI event emission -----------------------------------------------
 
