@@ -153,6 +153,16 @@ class RecoveryPolicy:
     #          2: RecoveryBudget.NARROW_MULTI, 3: RecoveryBudget.BOUNDED,
     #          4: RecoveryBudget.SINGLE}
 
+    ladder_config: Optional[Any] = None
+    # ^-- ARCH-D3: optional reference to a ``LadderBudgetConfig`` carrying
+    #     the canonical per-tier budgets + discipline for this medium.
+    #     When set, it is the authoritative source for per-level budget
+    #     labels AND for the strict-one-shot / permissive discipline.
+    #     Typed as ``Any`` to avoid importing ``escalation_policy`` here
+    #     (``escalation_policy`` imports from this module).  Run-time
+    #     duck-typing checks ``discipline.value`` against the
+    #     ``STRICT_DISCIPLINE_VALUE`` string constant.
+
     # ── Legacy fields (backward compat) ───────────────────────────────
     # Level 1: retry
     max_retries: int = 3
@@ -181,11 +191,21 @@ class RecoveryPolicy:
         """Get the attempt budget for a recovery level.
 
         Resolution order:
-            1. ``level_budgets[level]`` — explicit numeric override.
-            2. ``level_budget_labels[level]`` — canonical budget label
+            1. ARCH-D2: if ``ladder_config`` declares ``STRICT_ONE_SHOT``
+               discipline, always return 1 -- every tier gets exactly
+               one attempt, regardless of numeric overrides.  This is
+               the runtime enforcement that "a second failure at the
+               same tier is not permitted" (diagram 3).
+            2. ``level_budgets[level]`` — explicit numeric override.
+            3. ``level_budget_labels[level]`` — canonical budget label
                (ARCH-D / diagrams 2 + 4); the IntEnum value is used.
-            3. Hard-coded defaults ``{0: 5, 1: 3, 2: 2, 3: 1}``.
+            4. Hard-coded defaults ``{0: 5, 1: 3, 2: 2, 3: 1}``.
         """
+        # ARCH-D2: strict one-shot wins over every other source.  We
+        # duck-type the discipline attribute to avoid importing
+        # ``escalation_policy`` at module load (it imports from here).
+        if self._is_strict_one_shot():
+            return 1
         defaults = {0: 5, 1: 3, 2: 2, 3: 1}
         if self.level_budgets and level in self.level_budgets:
             return int(self.level_budgets[level])
@@ -198,11 +218,33 @@ class RecoveryPolicy:
 
         Used by the dashboard / escalation menu to surface the permissive
         vs. strict asymmetry between audio and video content ladders
-        (diagram 4).
+        (diagram 4).  ``ladder_config`` takes precedence when set
+        (ARCH-D3).
         """
+        if self.ladder_config is not None:
+            budgets = getattr(self.ladder_config, "budgets", None)
+            if budgets is not None and level in budgets:
+                return budgets[level]
         if self.level_budget_labels and level in self.level_budget_labels:
             return self.level_budget_labels[level]
         return None
+
+    def _is_strict_one_shot(self) -> bool:
+        """True when ``ladder_config`` declares STRICT_ONE_SHOT discipline.
+
+        Uses duck-typing on ``.discipline.value`` to avoid a circular
+        import on ``escalation_policy``.  Callers (policy execution
+        loops) should escalate immediately after a single attempt at
+        any tier when this returns True.
+        """
+        cfg = self.ladder_config
+        if cfg is None:
+            return False
+        discipline = getattr(cfg, "discipline", None)
+        if discipline is None:
+            return False
+        value = getattr(discipline, "value", discipline)
+        return value == "strict_one_shot"
 
     def get_agent(self, level: int):
         """Get the agent for a recovery level, or None."""
@@ -349,6 +391,22 @@ B2_POLICY = RecoveryPolicy(
 # These use LLM-powered agents at every level of the ladder.
 # Import agents lazily to avoid circular imports at module load time.
 
+def _ladder_config_audio():
+    """Lazy accessor for the shared audio ladder config (ARCH-D3).
+
+    Imported at function scope to avoid circular imports -- see
+    ``escalation_policy.py`` docstring.
+    """
+    from escalation_policy import AUDIO_LADDER_CONFIG
+    return AUDIO_LADDER_CONFIG
+
+
+def _ladder_config_video():
+    """Lazy accessor for the shared video ladder config (ARCH-D3)."""
+    from escalation_policy import VIDEO_LADDER_CONFIG
+    return VIDEO_LADDER_CONFIG
+
+
 def _make_audio_agent_policy() -> RecoveryPolicy:
     """Audio operations: L0 rewrites narration text to fix timing.
 
@@ -359,20 +417,36 @@ def _make_audio_agent_policy() -> RecoveryPolicy:
     the timeline of narration, so low tiers are deliberately generous.
     """
     from recovery_agents import AUDIO_AGENTS
+    config = _ladder_config_audio()
     return RecoveryPolicy(
         agents=AUDIO_AGENTS,
-        level_budget_labels=dict(AUDIO_PERMISSIVE_BUDGETS),
+        ladder_config=config,
+        # D1 back-compat: keep ``level_budget_labels`` populated so any
+        # dashboard wiring that reads it directly still sees the
+        # permissive label set.  Policies without a ladder_config fall
+        # back to this field as before.
+        level_budget_labels=dict(config.budgets),
         retry_backoff_base=3.0,
         escalate_to_human=True,
     )
 
 
 def _make_video_agent_policy() -> RecoveryPolicy:
-    """Video operations: L0 rewrites visual prompts based on QA feedback."""
+    """Video operations: L0 rewrites visual prompts based on QA feedback.
+
+    Per ARCH-D2 (diagram 3) the video content ladder is **strict
+    one-shot per tier**: every tier gets exactly one attempt, and a
+    second failure at the same tier is forbidden -- it escalates
+    immediately.  The budget shape is pinned by ``VIDEO_LADDER_CONFIG``
+    (ARCH-D3) and enforced at runtime by
+    ``RecoveryPolicy._is_strict_one_shot``; no numeric overrides here.
+    """
     from recovery_agents import VIDEO_AGENTS
+    config = _ladder_config_video()
     return RecoveryPolicy(
         agents=VIDEO_AGENTS,
-        level_budgets={0: 3, 1: 3, 2: 2, 3: 1},
+        ladder_config=config,
+        level_budget_labels=dict(config.budgets),
         retry_backoff_base=5.0,
         escalate_to_human=True,
     )
@@ -975,10 +1049,26 @@ def _execute_with_agents(
 
         budget = policy.get_level_budget(level)
         level_name = _level_names.get(level, f"Level {level}")
+        strict = policy._is_strict_one_shot()
+
+        # ARCH-D2: strict ladders MUST NOT grant more than one attempt
+        # per tier.  ``get_level_budget`` already clamps to 1 for strict
+        # policies, but we assert here so that a regression (e.g. a
+        # future refactor that bypasses ``get_level_budget``) fails loud
+        # instead of silently granting second attempts.
+        if strict and budget != 1:
+            raise RuntimeError(
+                f"ARCH-D2 violation: strict one-shot ladder returned "
+                f"budget={budget} at tier L{level} for operation "
+                f"'{operation_name}'. Each tier must get exactly one "
+                f"attempt; a second failure at the same tier is not "
+                f"permitted."
+            )
 
         logger.info(
-            "Recovery L%d (%s): '%s' — agent '%s' (budget: %d)",
+            "Recovery L%d (%s): '%s' — agent '%s' (budget: %d%s)",
             level, level_name, operation_name, agent.name, budget,
+            ", STRICT" if strict else "",
         )
 
         for attempt_num in range(1, budget + 1):
@@ -1644,10 +1734,22 @@ def _run_agent_ladder(
 
         budget = policy.get_level_budget(level)
         level_name = _level_names.get(level, f"Level {level}")
+        strict = policy._is_strict_one_shot()
+
+        # ARCH-D2 enforcement: same as _execute_with_agents.
+        if strict and budget != 1:
+            raise RuntimeError(
+                f"ARCH-D2 violation: strict one-shot ladder returned "
+                f"budget={budget} at tier L{level} for operation "
+                f"'{operation_name}'. Each tier must get exactly one "
+                f"attempt; a second failure at the same tier is not "
+                f"permitted."
+            )
 
         logger.info(
-            "Agent ladder L%d (%s): '%s' — agent '%s' (budget: %d)",
+            "Agent ladder L%d (%s): '%s' — agent '%s' (budget: %d%s)",
             level, level_name, operation_name, agent.name, budget,
+            ", STRICT" if strict else "",
         )
 
         for attempt_num in range(1, budget + 1):
