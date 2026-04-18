@@ -483,7 +483,9 @@ def _parse_scenario_rating(text: str) -> str:
     for token in ("RATING: EXCELLENT", "RATING: GOOD", "RATING: FAIR", "RATING: POOR"):
         if token in upper:
             return token.split(":", 1)[1].strip()
-    for candidate in ("EXCELLENT", "GOOD", "FAIR", "POOR"):
+    # Fail-safe order: scan most-severe first so that a POOR review whose
+    # prose mentions "GOOD variety was not maintained" still returns POOR.
+    for candidate in ("POOR", "FAIR", "GOOD", "EXCELLENT"):
         if candidate in upper:
             return candidate
     return ""
