@@ -197,12 +197,30 @@ class TestLtxFrameQuantization:
             "ARCH-F3 follow-up: generate_video_clip must document the "
             "LTX 8k+1 frame-grid quantization."
         )
-        # The grid-quantized duration must be what the length gate
-        # reads as 'declared' -- otherwise the gate fires on every
-        # off-grid request.
-        assert "declared=actual_duration" in src, (
+        # The grid-quantized duration must be what flows into the
+        # length gate -- either as ``actual_duration`` (the outer
+        # scope's quantized value) or as ``duration_sec`` (the nested
+        # ``_call_gpu_worker``'s own parameter, whose default is bound
+        # to the quantized value).  What MUST NOT happen is the
+        # renderer or the nested worker reading the un-quantized outer
+        # caller input, because ~90% of off-grid requests would fail
+        # the 16 ms gate.
+        assert (
+            "declared=actual_duration" in src
+            or "declared=duration_sec" in src
+        ), (
             "ARCH-F3 follow-up: the length gate must use the quantized "
-            "actual_duration, not the raw caller-supplied duration_sec."
+            "duration (either the outer actual_duration or the nested "
+            "_call_gpu_worker duration_sec parameter, which defaults to "
+            "it), never the raw caller input."
+        )
+        # _call_gpu_worker must bind its duration_sec default to the
+        # grid-quantized ``actual_duration`` so the length gate stays
+        # in sync with the worker request even if a future creative
+        # amendment passes a different duration_sec.
+        assert "duration_sec=actual_duration" in src, (
+            "ARCH-F3 follow-up: _call_gpu_worker must default "
+            "duration_sec to the grid-quantized actual_duration."
         )
 
     @pytest.mark.parametrize(
@@ -235,6 +253,52 @@ class TestLtxFrameQuantization:
         # the quantum is structurally larger.
         if duration_sec >= 9 / fps:
             assert abs(effective - duration_sec) <= (4 / fps) + 1e-9
+
+
+# ---------------------------------------------------------------------------
+# 2d. OTIO ``source_range`` must equal the on-disk file duration (the
+# grid-quantized ``actual_duration``) at ``add_video_clip`` call sites --
+# otherwise the renderer's per-clip length gate compares the narration-slot
+# duration to the file's ffprobe duration and trips on every off-grid
+# clip (PR #174 review bug).
+# ---------------------------------------------------------------------------
+
+class TestSourceRangeMatchesFileDuration:
+    """``add_video_clip`` must be called with source_range = actual_duration."""
+
+    def test_deterministic_steps_passes_actual_duration_as_source_range(
+        self,
+    ) -> None:
+        from callbacks import deterministic_steps
+        src = inspect.getsource(deterministic_steps)
+        # Every add_video_clip call site in this module must bind
+        # source_range to actual_duration (the probed file duration),
+        # not to the caller-supplied narration slot ``duration``.
+        assert "source_range=actual_duration" in src, (
+            "ARCH-F3 follow-up: add_video_clip must declare "
+            "source_range from the probed actual_duration so the "
+            "renderer's length gate sees source_range == file duration."
+        )
+        # Regression guard: catch accidental reintroduction of the
+        # narration-slot-as-source_range pattern.
+        assert "source_range=duration,\n" not in src, (
+            "ARCH-F3 follow-up: add_video_clip must not pass the raw "
+            "narration-slot ``duration`` as source_range -- the renderer "
+            "would then compare the narration slot (off-grid) to the "
+            "file's grid-quantized duration and fire the 16 ms gate."
+        )
+
+    def test_clip_helpers_passes_actual_duration_as_source_range(self) -> None:
+        from orchestrator import clip_helpers
+        src = inspect.getsource(clip_helpers)
+        assert "source_range=actual_duration" in src, (
+            "ARCH-F3 follow-up: clip_helpers.add_video_clip must declare "
+            "source_range from the probed actual_duration."
+        )
+        assert "source_range=duration,\n" not in src, (
+            "ARCH-F3 follow-up: clip_helpers must not pass the narration "
+            "slot ``duration`` as source_range."
+        )
 
 
 # ---------------------------------------------------------------------------

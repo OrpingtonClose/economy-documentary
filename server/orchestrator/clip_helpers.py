@@ -229,12 +229,17 @@ def process_results_to_otio(
                 # ARCH-F3: exact-length clips; fallback mirrors the
                 # declared request, not the old 1.15x overshoot.
                 actual_duration = probe_result.get("duration", duration)
+                # ARCH-F3: source_range is the OTIO-declared clip length.
+                # Under strict immutability it must equal the on-disk
+                # file duration (the renderer refuses to trim), so we
+                # feed both source_range and available_range from the
+                # probed actual_duration.
                 clip_result_json = add_video_clip(
                     scene_num=scene_num,
                     phrase_idx=phrase_idx,
                     mp4_path=output_path,
                     duration=duration,
-                    source_range=duration,
+                    source_range=actual_duration,
                     available_range=actual_duration,
                     lora_id=lora_id,
                     tool_context=mock_ctx,
@@ -284,12 +289,17 @@ def process_results_to_otio(
                 "expected_duration": expected_dur,
             })
 
+            # ARCH-F3: source_range is the OTIO-declared clip length.
+            # Under strict immutability it must equal the on-disk file
+            # duration (the renderer refuses to trim), so we feed both
+            # source_range and available_range from the probed
+            # actual_duration.
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
                 mp4_path=output_path,
                 duration=duration,
-                source_range=duration,
+                source_range=actual_duration,
                 available_range=actual_duration,
                 lora_id=lora_id,
                 tool_context=mock_ctx,

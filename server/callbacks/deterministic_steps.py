@@ -2193,12 +2193,21 @@ def deterministic_production_callback(
                 # length.
                 actual_duration = probe_result.get("duration", duration)
                 skip_sub_idx = result.get("_sub_idx")
+                # ARCH-F3: the OTIO ``source_range`` is the clip's
+                # *declared length*, which under the immutability
+                # invariant MUST equal the on-disk file duration -- the
+                # renderer's per-clip length gate compares these two
+                # within CLIP_LENGTH_TOLERANCE_SEC and refuses to trim.
+                # The narration slot (``duration``) is a separate
+                # upstream constraint that the pipeline enforces via
+                # the narration/video slot sizing, not via post-hoc
+                # trimming at render time.
                 clip_result_json = add_video_clip(
                     scene_num=scene_num,
                     phrase_idx=phrase_idx,
                     mp4_path=output_path,
                     duration=duration,
-                    source_range=duration,
+                    source_range=actual_duration,
                     available_range=actual_duration,
                     lora_id=lora_id,
                     sub_idx=skip_sub_idx,
@@ -2276,12 +2285,21 @@ def deterministic_production_callback(
                 "expected_duration": expected_dur,
             })
 
+            # ARCH-F3: ``source_range`` is the OTIO-declared clip
+            # length; the renderer's per-clip length gate will compare
+            # it to the on-disk file duration within
+            # CLIP_LENGTH_TOLERANCE_SEC and refuse to trim.  Set both
+            # source_range and available_range from the probed
+            # actual_duration so the declaration matches reality.  The
+            # narration-slot budget (``duration``) is enforced upstream
+            # by the grid-quantized generator request, not by render-
+            # time trimming.
             clip_result_json = add_video_clip(
                 scene_num=scene_num,
                 phrase_idx=phrase_idx,
                 mp4_path=output_path,
                 duration=duration,
-                source_range=duration,
+                source_range=actual_duration,
                 available_range=actual_duration,
                 lora_id=lora_id,
                 sub_idx=result_sub_idx,

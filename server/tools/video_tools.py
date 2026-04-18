@@ -324,15 +324,17 @@ def generate_video_clip(
                     "treating as zero): %s", _probe_exc,
                 )
                 _measured = 0.0
-            # NB: ``actual_duration`` (not the caller's ``duration_sec``)
-            # is the declared reference here -- it is the LTX-grid-
-            # quantized duration that the worker was actually asked to
-            # render, so the length gate catches genuine generator
-            # failures without tripping on the inherent 8k+1 frame
-            # quantization delta.
+            # NB: the length gate compares the on-disk duration against
+            # ``_call_gpu_worker``'s own ``duration_sec`` parameter --
+            # i.e. the LTX-grid-quantized duration that this particular
+            # invocation actually asked the worker to render.  Using the
+            # parameter (rather than the outer ``generate_video_clip``
+            # closure's ``actual_duration``) keeps the gate correct even
+            # if a future creative amendment swaps the duration for a
+            # retry, which current amendments do not do.
             ensure_clip_length_matches(
                 clip_id=output_path,
-                declared=actual_duration,
+                declared=duration_sec,
                 actual=_measured,
             )
 
