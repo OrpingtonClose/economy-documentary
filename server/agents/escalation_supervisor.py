@@ -729,6 +729,7 @@ def _push_fallback(scope: EscalationScope, model: str) -> EscalationAction:
             llm_reasoning="Decision layer unavailable; deterministic fallback.",
         )
 
+    legacy = scope.metadata.get("legacy_context") or {}
     context = EscalationContext(
         failing_artifact=scope.trigger_message,
         artifact_descriptor={
@@ -740,12 +741,10 @@ def _push_fallback(scope: EscalationScope, model: str) -> EscalationAction:
             "primary_artifact_id": scope.primary_artifact_id or "",
             "primary_artifact_type": scope.primary_artifact_type or "",
         },
-        timeline_state_snapshot={},
-        escalation_history=list(
-            (scope.metadata.get("legacy_context") or {}).get(
-                "escalation_history", []
-            )
-        ),
+        timeline_state_snapshot=dict(legacy.get("timeline_state_snapshot", {}) or {}),
+        user_original_prompt=str(legacy.get("user_original_prompt", "") or ""),
+        budget_remaining=float(legacy.get("budget_remaining", 0.0) or 0.0),
+        escalation_history=list(legacy.get("escalation_history", []) or []),
         high_cost=scope.high_cost,
     )
     return supervisor_escalate(context, model=model)
