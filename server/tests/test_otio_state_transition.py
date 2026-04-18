@@ -487,6 +487,51 @@ def test_audio_agent_chained_callback_crystallises_after_guardian(tmp_timeline):
     assert get_otio_state(state) == OTIO_STATE_AUTHORITATIVE
 
 
+def test_timing_loop_reiteration_resets_state_to_draft(tmp_timeline):
+    """Regression for Devin Review finding on PR #167.
+
+    The timing feedback loop (``LoopAgent`` wrapping
+    ``audio_agent → timing_evaluator → scenario_refiner``) re-runs
+    ``audio_agent`` on each iteration.  After iteration 1 the OTIO
+    crystallises to ``authoritative``; on iteration 2, the deterministic
+    audio callback must reset state back to ``draft`` BEFORE calling
+    narration mutators, or the mutation guard fires mid-loop.
+
+    This test exercises the ``_audio_needs_regeneration`` branch of
+    ``deterministic_audio_callback`` to confirm the reset happens.
+    """
+    state, path = tmp_timeline
+    state["pipeline_phase"] = "audio"
+    state["otio_violation"] = None
+    # Iteration 1: crystallise to authoritative.
+    authoritative_transition_callback(_make_callback_context(state))
+    assert get_otio_state(state) == OTIO_STATE_AUTHORITATIVE
+
+    # Iteration 2: timing evaluator flagged a budget miss and refiner
+    # set the regen flag.  Now the audio callback runs again and must
+    # not explode on the mutation guard.
+    state["_audio_needs_regeneration"] = True
+    state["scenes"] = "[]"  # skip the rest of the callback quickly
+    state["_b2_stages_complete"] = []
+
+    from callbacks import deterministic_steps as det_mod
+    import contracts as contracts_mod
+    import infra_agent as infra_mod
+
+    # Stub contracts + infra so the callback reaches the reset branch.
+    ctx = _make_callback_context(state)
+    ctx.state["_timeline_path"] = path
+
+    with patch.object(contracts_mod, "validate_preconditions", return_value=None), \
+         patch.object(infra_mod, "get_infra_agent", return_value=None), \
+         patch.object(infra_mod, "check_infra_pause", return_value=None):
+        # Must not raise OtioStateViolation — reset happens first.
+        det_mod.deterministic_audio_callback(ctx)
+
+    assert get_otio_state(state) == OTIO_STATE_DRAFT
+    assert state["_audio_needs_regeneration"] is False
+
+
 def test_audio_agent_chained_callback_does_not_crystallise_on_guardian_raise(tmp_timeline):
     """If the guardian raises, the transition never runs (exception
     propagates first), and the timeline stays draft."""

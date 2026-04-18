@@ -643,6 +643,24 @@ def deterministic_audio_callback(
     if isinstance(_audio_regen, str):
         _audio_regen = _audio_regen.lower() in ("true", "1", "yes")
     if _audio_regen:
+        # ARCH-E1: the previous audio iteration crystallised the OTIO to
+        # ``authoritative`` via ``authoritative_transition_callback``.
+        # Before re-deriving narration we MUST revert to ``draft``
+        # otherwise the mutation guard on ``clear_narration_track`` and
+        # ``add_narration_clip`` would fire.  This is a legitimate
+        # timing-loop re-iteration, not a downstream mutation.
+        from callbacks.otio_state import (
+            OTIO_STATE_AUTHORITATIVE,
+            get_otio_state,
+            reset_to_draft,
+        )
+        if get_otio_state(state) == OTIO_STATE_AUTHORITATIVE:
+            reset_to_draft(
+                state,
+                reason="timing_loop_reiteration",
+                timeline_path=state.get("_timeline_path", ""),
+            )
+
         from tools.otio_tools import clear_narration_track
         _tl_path = state.get("_timeline_path", "")
         _removed = clear_narration_track(_tl_path)
