@@ -351,10 +351,47 @@ Level 3 (structural / terminal -- last resort):
   - abort_run(reason)
       Stop the pipeline entirely. Only when no safe recovery is possible.
 
+OPS ACTIONS (fleet / deployment — pick these when the root cause is
+infrastructural rather than artifact-level; e.g. worker OOM, stage
+timeout, cost burn, capacity shortfall).  The pipeline routes infra
+failures via the diagnostic classifier (ARCH-C / diagram 8); when the
+failure class is `infra`, prefer an ops action over a creative action.
+
+Level 1 (cheapest ops — just wait):
+  - wait_for_worker_recovery(worker_url, timeout_sec)
+      Pause and poll ``infra_agent`` until the given worker becomes
+      healthy again, or until ``timeout_sec`` elapses (hard-capped at
+      1800s).  Correct choice when telemetry suggests a transient
+      disruption (network blip, brief thermal throttle).
+
+Level 2 (targeted fleet mutation):
+  - recycle_worker(worker_url, reason)
+      Destroy + reprovision a single degraded worker.  Use when a
+      specific worker has accumulated multiple independent failure
+      signals (see ARCH-C4 / #143 — two signals required before
+      condemning).  ``reason`` is a short human-readable tag.
+  - provision_extra_worker(role, count)
+      Add ``count`` extra workers of the given ``role`` to the fleet.
+      ``role`` must be one of ``tts``, ``video``, or ``whisperx``;
+      ``count`` is bounded to [1, 4] to prevent runaway provisioning.
+      Use when the stage is capacity-starved but existing workers are
+      healthy.
+
+Level 3 (structural — halt + replan):
+  - freeze_batch_and_replan(reason)
+      Halt in-flight batch work via ``infra_agent.pause`` and ask the
+      orchestrator to regenerate the remaining scenes.  Use when the
+      infrastructure condition is too broad for per-worker fixes (fleet
+      saturation, budget exhausted, provider outage with no fallback).
+
 Decision rule: pick the cheapest action that resolves the failure while
-preserving the narrative.  Prefer L1 over L2 over L3.  Do NOT abort
-unless no L1/L2 action is viable -- round-robin fall-through with an
-abort is exactly the #102 regression.
+preserving the narrative.  Prefer L1 over L2 over L3 within each
+family.  When the root cause is clearly artifact-level (QA fail, critic
+reject, prompt mismatch), pick a creative action.  When the root cause
+is clearly infra-level (worker unreachable, OOM, cost exceeded, stage
+timeout), pick an ops action.  When uncertain, prefer the cheaper
+family first.  Do NOT abort unless no L1/L2 action is viable --
+round-robin fall-through with an abort is exactly the #102 regression.
 """
 
 

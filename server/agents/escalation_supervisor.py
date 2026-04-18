@@ -24,7 +24,9 @@ Why pull-based:
 
 Both creative and ops actions are available; the supervisor prompt
 (assembled from :data:`orchestrator.escalation_menu.ACTION_MENU_DESCRIPTION`)
-already describes both families.
+describes both families with level-tiered sub-sections and a decision
+rule that routes by root-cause class (artifact-level → creative,
+infra-level → ops).
 
 The LLM backend is dependency-injected behind
 :func:`set_supervisor_runner` so tests can replace it with a deterministic
