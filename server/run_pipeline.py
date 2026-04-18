@@ -246,6 +246,20 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     initial_state["corpus_path"] = corpus_path
     initial_state["language"] = language
 
+    # ARCH-A3 (#133): stage the original user brief so the Preference
+    # Ledger R0 seed can parse it into baseline records before the
+    # pipeline's first producer agent runs. The actual seeding lives
+    # in _init_pipeline_state; staging the text here (rather than the
+    # full corpus) keeps R0 records short and traceable to the user's
+    # original ask.
+    _original_brief = f"Create an ADHD-friendly documentary about: {topic}"
+    if language == "ru":
+        _original_brief += " (narration in Russian)"
+    elif language == "dual_ru_en":
+        _original_brief += " (dual Russian primary / English subtitle narration)"
+    from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
+    initial_state[ORIGINAL_BRIEF_KEY] = _original_brief
+
     # Quick-test mode: inject constraints into state for LLM prompt templates
     if quick_test:
         from agents.scenario_director import _QUICK_TEST_RULES
