@@ -196,13 +196,10 @@ def _make_read_tools() -> list[ReadToolSpec]:
             description=(
                 "Return the pipeline timeline state snapshot (durations, "
                 "gaps, per-scene completion) from the most recent B2 "
-                "checkpoint, falling back to the injected run_dir."
+                "checkpoint."
             ),
-            parameters={
-                "type": "object",
-                "properties": {"run_dir": {"type": "string"}},
-            },
-            fn=lambda run_dir=None: _tools.read_timeline_state(),
+            parameters={"type": "object", "properties": {}},
+            fn=lambda: _tools.read_timeline_state(),
         ),
         ReadToolSpec(
             name="read_artifact_record",
