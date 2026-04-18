@@ -279,25 +279,26 @@ _FORBID_TOKENS: tuple[str, ...] = (
     "do not ever",
 )
 _REQUIRE_TOKENS: tuple[str, ...] = (
-    "must ",
+    "must",
     "has to",
     "have to",
+    "require",
     "required",
     "require that",
     "required to",
     "ensure that",
-    "always ",
+    "always",
 )
 _AVOID_TOKENS: tuple[str, ...] = (
     "avoid",
     "don't",
     "do not",
     "no more",
-    "less ",
-    "stop ",
+    "less",
+    "stop",
     "sounds flat",
     "feels flat",
-    "too ",
+    "too",
 )
 
 # Subject hints -- (subject, token) pairs searched in directive order.
@@ -313,26 +314,44 @@ _SUBJECT_HINTS: tuple[tuple[Subject, tuple[str, ...]], ...] = (
 )
 
 
+def _compile_token_pattern(tokens: Iterable[str]) -> re.Pattern[str]:
+    """Compile a word-boundary alternation pattern for ``tokens``.
+
+    Plain substring matching (``token in lower``) produces false positives
+    where a short token appears embedded in an unrelated word -- e.g.
+    ``"never"`` inside ``"whenever"`` or ``"avoid"`` inside ``"unavoidable"``
+    (Devin Review flag on PR #171).  Using word boundaries around the
+    alternation avoids that while still letting multi-word phrases
+    (``"must not"``, ``"sounds flat"``) match cleanly.  ``re.escape``
+    handles punctuation like apostrophes in ``"don't"``.
+    """
+    alternation = "|".join(re.escape(tok) for tok in tokens)
+    return re.compile(rf"\b(?:{alternation})\b", re.IGNORECASE)
+
+
+_FORBID_PATTERN = _compile_token_pattern(_FORBID_TOKENS)
+_REQUIRE_PATTERN = _compile_token_pattern(_REQUIRE_TOKENS)
+_AVOID_PATTERN = _compile_token_pattern(_AVOID_TOKENS)
+_SUBJECT_PATTERNS: tuple[tuple[Subject, re.Pattern[str]], ...] = tuple(
+    (subject, _compile_token_pattern(tokens))
+    for subject, tokens in _SUBJECT_HINTS
+)
+
+
 def _detect_polarity(directive: str) -> Polarity:
-    lower = directive.lower()
-    for token in _FORBID_TOKENS:
-        if token in lower:
-            return Polarity.FORBID
-    for token in _REQUIRE_TOKENS:
-        if token in lower:
-            return Polarity.REQUIRE
-    for token in _AVOID_TOKENS:
-        if token in lower:
-            return Polarity.AVOID
+    if _FORBID_PATTERN.search(directive):
+        return Polarity.FORBID
+    if _REQUIRE_PATTERN.search(directive):
+        return Polarity.REQUIRE
+    if _AVOID_PATTERN.search(directive):
+        return Polarity.AVOID
     return Polarity.PREFER
 
 
 def _detect_subject(directive: str) -> Subject:
-    lower = directive.lower()
-    for subject, tokens in _SUBJECT_HINTS:
-        for token in tokens:
-            if token in lower:
-                return subject
+    for subject, pattern in _SUBJECT_PATTERNS:
+        if pattern.search(directive):
+            return subject
     # Default bucket: tone is the most generic.
     return Subject.TONE
 

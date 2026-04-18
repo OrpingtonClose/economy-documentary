@@ -204,6 +204,35 @@ def test_heuristic_infers_speaker_scope_from_cassandra_example():
     assert rec.subject is Subject.SPEAKER_ROLE
 
 
+def test_heuristic_polarity_detection_uses_word_boundaries():
+    """Regression: ``"never"`` inside ``"whenever"`` must NOT trigger FORBID,
+    and ``"avoid"`` inside ``"unavoidable"`` must NOT trigger AVOID.
+
+    Flagged by Devin Review on PR #171 -- bare substring matching was
+    causing polarity false-positives on common English words.
+    """
+    state: dict = {}
+    records = interpret_directive(
+        "whenever possible, use a warmer tone",
+        state=state,
+        use_llm=False,
+        **_kwargs(),
+    )
+    assert records[0].polarity is Polarity.PREFER  # not FORBID
+
+    state2: dict = {}
+    records2 = interpret_directive(
+        "unavoidable constraints require a warmer tone",
+        state=state2,
+        use_llm=False,
+        reviewer="alice",
+        l4_event_id="L4-002",
+        timestamp="2026-04-18T12:00:00Z",
+    )
+    # "require" IS a word in the directive here, so REQUIRE wins -- not AVOID.
+    assert records2[0].polarity is Polarity.REQUIRE
+
+
 def test_heuristic_default_scope_is_global():
     state: dict = {}
     records = interpret_directive(
