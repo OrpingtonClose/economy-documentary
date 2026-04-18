@@ -52,6 +52,7 @@ from failure_orchestrator import (  # noqa: E402
     ROUTE_HUMAN_ESCALATION,
     ROUTE_INFRA_LADDER,
     _assert_no_silent_downgrade,
+    _default_enrich_telemetry,
     _infer_infra_signature,
     route_failure,
 )
@@ -732,3 +733,91 @@ def test_route_failure_propagates_classifier_errors():
     deps = _make_deps(classify=boom)
     with pytest.raises(Exception, match="LLM offline"):
         route_failure(_mk_event(error_message="anything"), deps=deps, use_llm=False)
+
+
+# ---------------------------------------------------------------------------
+# Default telemetry enrichment
+# ---------------------------------------------------------------------------
+
+
+class _StubInfraAgent:
+    def __init__(self, snapshot: dict):
+        self._snapshot = snapshot
+
+    def get_worker_snapshot(self, worker_id: str):
+        return dict(self._snapshot)
+
+
+def test_default_enrich_telemetry_respects_zero_consecutive_failures(monkeypatch):
+    """Recovered worker reporting consecutive_failures=0 must override a stale count.
+
+    Regression guard for the ``or``-fallback bug: ``0 or 5`` evaluates to ``5``,
+    so a falsy-but-valid ``0`` snapshot value was being discarded and the
+    classifier would fire ``infra.telemetry_consecutive_failures`` on a ghost
+    count.  Same concern for an empty ``systemic_patterns=[]`` overriding a
+    stale non-empty list.
+    """
+
+    stub = _StubInfraAgent(
+        {
+            "status": "healthy",
+            "last_error": "",
+            "consecutive_failures": 0,
+            "systemic_patterns": [],
+            "vm_escalation_severity": "",
+            "model_loaded": True,
+        }
+    )
+
+    import types
+
+    fake_module = types.ModuleType("infra_agent")
+    fake_module.get_infra_agent = lambda: stub  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "infra_agent", fake_module)
+
+    existing = InfraTelemetry(
+        worker_status="degraded",
+        worker_last_error="old error",
+        consecutive_failures=5,
+        systemic_patterns=["stale_oom"],
+        vm_escalation_severity="high",
+        model_loaded=False,
+    )
+    event = _mk_event(worker_id="worker-xyz")
+    enriched = _default_enrich_telemetry(event, existing)
+    assert enriched is not None
+    assert enriched.consecutive_failures == 0
+    assert enriched.systemic_patterns == []
+    assert enriched.worker_status == "healthy"
+    assert enriched.worker_last_error == ""
+    assert enriched.vm_escalation_severity == ""
+    assert enriched.model_loaded is True
+
+
+def test_default_enrich_telemetry_keeps_existing_when_key_absent(monkeypatch):
+    """Missing keys in the snapshot must fall back to the existing telemetry."""
+
+    stub = _StubInfraAgent({"status": "unresponsive"})
+
+    import types
+
+    fake_module = types.ModuleType("infra_agent")
+    fake_module.get_infra_agent = lambda: stub  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "infra_agent", fake_module)
+
+    existing = InfraTelemetry(
+        worker_status="degraded",
+        worker_last_error="old error",
+        consecutive_failures=5,
+        systemic_patterns=["stale_oom"],
+        vm_escalation_severity="high",
+        model_loaded=False,
+    )
+    enriched = _default_enrich_telemetry(_mk_event(worker_id="w-1"), existing)
+    assert enriched is not None
+    assert enriched.worker_status == "unresponsive"  # fresh
+    assert enriched.worker_last_error == "old error"  # preserved
+    assert enriched.consecutive_failures == 5  # preserved
+    assert enriched.systemic_patterns == ["stale_oom"]  # preserved
+    assert enriched.vm_escalation_severity == "high"  # preserved
+    assert enriched.model_loaded is False  # preserved

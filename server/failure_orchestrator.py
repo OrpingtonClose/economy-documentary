@@ -323,22 +323,39 @@ def _default_enrich_telemetry(
         snapshot = agent.get_worker_snapshot(event.worker_id)
         if snapshot is None:
             return existing
+        # Use ``"key" in snapshot`` (not ``snapshot.get(key) or …``) to
+        # distinguish "not present in this snapshot" from "present but
+        # falsy".  A recovered worker reporting ``consecutive_failures=0``
+        # or an empty ``systemic_patterns=[]`` must override the stale
+        # values — otherwise the classifier would fire
+        # ``infra.telemetry_consecutive_failures`` on a ghost count and
+        # misroute the failure.
         return InfraTelemetry(
-            worker_status=str(snapshot.get("status") or (
-                existing.worker_status if existing else ""
-            )),
-            worker_last_error=str(snapshot.get("last_error") or (
-                existing.worker_last_error if existing else ""
-            )),
-            consecutive_failures=int(snapshot.get("consecutive_failures") or (
-                existing.consecutive_failures if existing else 0
-            )),
-            systemic_patterns=list(snapshot.get("systemic_patterns") or (
-                existing.systemic_patterns if existing else []
-            )),
-            vm_escalation_severity=str(snapshot.get("vm_escalation_severity") or (
-                existing.vm_escalation_severity if existing else ""
-            )),
+            worker_status=(
+                str(snapshot["status"])
+                if "status" in snapshot
+                else (existing.worker_status if existing else "")
+            ),
+            worker_last_error=(
+                str(snapshot["last_error"])
+                if "last_error" in snapshot
+                else (existing.worker_last_error if existing else "")
+            ),
+            consecutive_failures=(
+                int(snapshot["consecutive_failures"])
+                if "consecutive_failures" in snapshot
+                else (existing.consecutive_failures if existing else 0)
+            ),
+            systemic_patterns=(
+                list(snapshot["systemic_patterns"])
+                if "systemic_patterns" in snapshot
+                else (list(existing.systemic_patterns) if existing else [])
+            ),
+            vm_escalation_severity=(
+                str(snapshot["vm_escalation_severity"])
+                if "vm_escalation_severity" in snapshot
+                else (existing.vm_escalation_severity if existing else "")
+            ),
             model_loaded=(
                 snapshot["model_loaded"]
                 if "model_loaded" in snapshot
