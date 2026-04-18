@@ -543,6 +543,7 @@ def _default_runner(
     ]
 
     last_error: Optional[Exception] = None
+    parse_retries = 0
     for _step in range(_MAX_TOOL_STEPS):
         _counters.incr("llm_calls")
         try:
@@ -592,7 +593,15 @@ def _default_runner(
                 return _parse_action_text(text)
             except EscalationActionError as exc:
                 last_error = exc
-                # One retry with an explicit "return only JSON" nudge.
+                parse_retries += 1
+                if parse_retries > _MAX_PARSE_RETRIES:
+                    logger.warning(
+                        "supervisor pull-loop exceeded %d parse retries — "
+                        "push fallback",
+                        _MAX_PARSE_RETRIES,
+                    )
+                    break
+                # Retry with an explicit "return only JSON" nudge.
                 contents.append(
                     genai_types.Content(role="model", parts=list(parts))
                 )
