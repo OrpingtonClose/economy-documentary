@@ -501,12 +501,65 @@ Store feedback in state["coherence_evaluation"].
 
 
 def _check_coherence_approval(callback_context):
-    """After evaluator: log when visuals are approved."""
+    """After evaluator: log when visuals are approved and mirror QA verdict."""
     state = callback_context.state
     eval_output = state.get("coherence_evaluation", "")
-    if "APPROVED: true" in str(eval_output):
+    eval_text = str(eval_output or "")
+    if "APPROVED: true" in eval_text:
         logger.info("Visual concepts approved by coherence evaluator")
+
+    # Mirror the coherence evaluator rating to the critique store so the
+    # pull-based escalation supervisor can read it.  Fail-closed: if
+    # parsing / store access fails, log and continue — this must never
+    # break the live pipeline.
+    try:
+        from critique.qa_storage import mirror_coherence_evaluator_result
+
+        rating = _parse_coherence_rating(eval_text)
+        if rating:
+            artifact_id = (
+                state.get("run_id")
+                or state.get("session_id")
+                or state.get("documentary_id")
+                or "current_run"
+            )
+            mirror_coherence_evaluator_result(
+                rating,
+                artifact_type="visual_concept",
+                artifact_id=str(artifact_id),
+                rationale=eval_text[:2000],
+                produced_by="coherence_evaluator",
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("coherence evaluator: critique mirror skipped: %s", exc)
     return None
+
+
+def _parse_coherence_rating(text: str) -> str:
+    """Extract an EXCELLENT/GOOD/FAIR/POOR rating from evaluator output.
+
+    The coherence evaluator emits free-form text; ``RATING: GOOD`` is the
+    documented convention but agents sometimes drop the prefix.  We look
+    for the token anywhere in the output and return the first match, or
+    an empty string if none is found (in which case the store is not
+    written to).
+    """
+
+    if not text:
+        return ""
+    upper = text.upper()
+    # Fail-safe order in BOTH loops: scan most-severe first.  The structured
+    # loop handles the case where an evaluator emits ``RATING: POOR`` but the
+    # surrounding prose mentions "to reach RATING: GOOD fix X" --- POOR wins.
+    # The fallback handles bare-word prose like "GOOD consistency" in a POOR
+    # review's feedback --- again POOR wins.
+    for token in ("RATING: POOR", "RATING: FAIR", "RATING: GOOD", "RATING: EXCELLENT"):
+        if token in upper:
+            return token.split(":", 1)[1].strip()
+    for candidate in ("POOR", "FAIR", "GOOD", "EXCELLENT"):
+        if candidate in upper:
+            return candidate
+    return ""
 
 
 def _evaluator_before_tool(callback_context, tool_name, tool_input):
