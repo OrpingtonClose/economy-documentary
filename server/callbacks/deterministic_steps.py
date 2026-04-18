@@ -1298,7 +1298,8 @@ def _normalize_concept_durations(
        enforces 1:1 mapping between concepts and phrases.
     2. The sum of video concept durations for a scene MUST equal the sum
        of VIDEO SLOT durations (narration + following gap) for that scene,
-       ensuring continuous video with no freeze-frames during pauses.
+       ensuring continuous video during pauses (no freeze-frames: they
+       are forbidden by the Media Immutability Invariant).
 
     The LLM visual director may generate more concepts than narration
     phrases (e.g. 7 concepts for 3 phrases).  This function:
@@ -1312,7 +1313,7 @@ def _normalize_concept_durations(
         concepts: List of visual concept dicts from the LLM.
         narr_durations: Dict from get_video_slot_durations() — each voice's
             full time slot (narration + following gap) so video clips cover
-            the entire timeline with no freeze-frames.
+            the entire timeline (freeze-frames are forbidden).
 
     Returns:
         New list of concepts with normalized durations and counts.
@@ -1499,7 +1500,8 @@ def write_visual_metadata_to_otio(
     # ── ARCHITECTURE: normalize concept durations to match VIDEO slots ──
     # The LLM controls WHERE visual breaks happen.  This normalizer
     # scales durations so each concept covers the narration PLUS the
-    # following silence gap — ensuring continuous video with no freeze-frames.
+    # following silence gap — ensuring continuous video (freeze-frames
+    # are forbidden by the Media Immutability Invariant).
     from tools.otio_tools import get_video_slot_durations
     slot_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
@@ -1810,8 +1812,8 @@ def deterministic_production_callback(
         raise RuntimeError("GATEKEEPER: user halted pipeline at production start")
 
     # Read VIDEO SLOT durations (narration + following gap) for cross-validation.
-    # This is what each video clip must cover — continuous footage with no
-    # freeze-frames during narrator pauses.
+    # This is what each video clip must cover — continuous footage (freeze-frames
+    # are forbidden by the Media Immutability Invariant).
     narr_durations = get_video_slot_durations(
         tool_context=_MockToolContext(state),
     )
@@ -2510,9 +2512,9 @@ def deterministic_assembly_callback(
     # by item, rendering each OTIO item (Clip or Gap) faithfully:
     #
     #   Clip  → trim media to source_range
-    #   Gap   → render as silence (audio) / freeze-frame (video)
+    #   Gap   → render as silence (audio) / black frames (video)
     #
-    # NO ad-hoc pauses, NO ad-hoc black frames, NO duration
+    # NO ad-hoc pauses, NO freeze-frames, NO duration
     # calculations.  The OTIO is the immutable contract created
     # during the audio stage.  This assembler merely renders it.
     # ──────────────────────────────────────────────────────────────
@@ -2598,13 +2600,12 @@ def deterministic_assembly_callback(
 
         Walks every OTIO item in order:
           - Clip → trim to source_range
-          - Gap  → render as freeze-frame (hold last frame of
-                   preceding clip) for a natural visual hold
+          - Gap  → render as black frames (Media Immutability Invariant
+                   forbids freeze-frames / last-frame holds)
 
         Returns path to the combined video file.
         """
         video_segments = []
-        last_clip_path = None  # for freeze-frame generation
 
         for idx, item in enumerate(video_track_items):
             if isinstance(item, otio.schema.Clip):
@@ -2664,46 +2665,26 @@ def deterministic_assembly_callback(
                     )
 
                 video_segments.append(trimmed_path)
-                last_clip_path = trimmed_path
 
             elif isinstance(item, otio.schema.Gap):
                 gap_dur = item.source_range.duration.to_seconds() if item.source_range else 0
                 if gap_dur > 0:
-                    gap_meta = item.metadata.get("documentary", {})
-                    gap_render_type = gap_meta.get("type", "freeze_frame")
-
+                    # Media Immutability Invariant: Gaps MUST render as black.
+                    # Freeze-frames / last-frame holds are forbidden (they
+                    # stretch existing media). See docs/ARCHITECTURE.md.
                     gap_video_path = os.path.join(
                         assembly_dir,
                         f"otio_vgap{lang_suffix}_{idx:03d}.mp4",
                     )
-
-                    if gap_render_type == "freeze_frame" and last_clip_path:
-                        # Hold the last frame of the preceding clip
-                        freeze_path = _generate_freeze_frame_video(
-                            last_clip_path, gap_dur, gap_video_path,
+                    black_path = _generate_black_video(
+                        gap_dur, gap_video_path,
+                    )
+                    if not black_path:
+                        _escalate_otio(
+                            f"OTIO VIOLATION: failed to generate black video "
+                            f"gap {item.name} ({gap_dur:.2f}s)"
                         )
-                        if not freeze_path:
-                            # Fallback to black if freeze-frame fails
-                            freeze_path = _generate_black_video(
-                                gap_dur, gap_video_path,
-                            )
-                        if not freeze_path:
-                            _escalate_otio(
-                                f"OTIO VIOLATION: failed to generate video gap "
-                                f"{item.name} ({gap_dur:.2f}s)"
-                            )
-                        video_segments.append(freeze_path)
-                    else:
-                        # No preceding clip or explicit black type
-                        black_path = _generate_black_video(
-                            gap_dur, gap_video_path,
-                        )
-                        if not black_path:
-                            _escalate_otio(
-                                f"OTIO VIOLATION: failed to generate black video "
-                                f"gap {item.name} ({gap_dur:.2f}s)"
-                            )
-                        video_segments.append(black_path)
+                    video_segments.append(black_path)
 
         if not video_segments:
             _escalate_otio(
@@ -2933,65 +2914,6 @@ def deterministic_assembly_callback(
 # ---------------------------------------------------------------------------
 # Silence generation helper for inter-voice / inter-scene pauses
 # ---------------------------------------------------------------------------
-
-def _generate_freeze_frame_video(
-    source_clip_path: str,
-    duration_sec: float,
-    output_path: str,
-) -> str:
-    """Generate a video that holds the last frame of the source clip.
-
-    This is used for rendering video Gaps in the OTIO timeline — instead
-    of a jarring black screen, the viewer sees a natural freeze-frame
-    hold of the preceding clip's final frame.
-
-    Returns the output path on success, empty string on failure.
-    """
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    # Step 1: Extract the last frame from the source clip
-    last_frame_path = output_path.replace(".mp4", "_lastframe.png")
-    extract_cmd = [
-        "ffmpeg", "-y",
-        "-sseof", "-0.1",  # seek to 0.1s before end
-        "-i", source_clip_path,
-        "-frames:v", "1",
-        "-update", "1",
-        last_frame_path,
-    ]
-    try:
-        result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=10)
-        if result.returncode != 0 or not os.path.exists(last_frame_path):
-            logger.warning("Last-frame extraction failed: %s", result.stderr[:200])
-            return ""
-    except Exception as e:
-        logger.warning("Last-frame extraction error: %s", e)
-        return ""
-
-    # Step 2: Create a video from the still frame
-    loop_cmd = [
-        "ffmpeg", "-y",
-        "-loop", "1",
-        "-i", last_frame_path,
-        "-c:v", "libx264",
-        "-t", str(duration_sec),
-        "-pix_fmt", "yuv420p",
-        "-r", "24",
-        output_path,
-    ]
-    try:
-        result = subprocess.run(loop_cmd, capture_output=True, text=True, timeout=15)
-        if result.returncode == 0 and os.path.exists(output_path):
-            # Clean up temp frame
-            try:
-                os.remove(last_frame_path)
-            except OSError:
-                pass
-            return output_path
-        logger.warning("Freeze-frame video generation failed: %s", result.stderr[:200])
-    except Exception as e:
-        logger.warning("Freeze-frame video generation error: %s", e)
-    return ""
-
 
 def _generate_silence(duration_sec: float, output_path: str) -> str:
     """Generate a silent WAV file of the given duration using ffmpeg.

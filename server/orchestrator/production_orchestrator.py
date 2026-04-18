@@ -313,7 +313,7 @@ class ProductionOrchestrator:
         # Uses get_video_slot_durations() which includes narration + following
         # gap — the AUTHORITATIVE source for how long each video clip must be.
         # (Previously used get_narration_durations_by_scene which excluded gaps,
-        # causing freeze-frame mismatches.)
+        # causing visible duration mismatches at scene boundaries.)
         self._narr_durations = get_video_slot_durations(
             tool_context=_MockToolContext(state),
         )

@@ -192,7 +192,6 @@ exactly one `EscalationAction` from the canonical menu defined in
 | L1 | `regenerate_clip(clip_id, prompt_delta, seed_delta)` | Cheap, targeted retry with corrective guidance and/or seed perturbation (replace). |
 | L1 | `generate_extension_clip(scene_id, duration_needed)` | Fill remaining narration time with a short newly-generated clip (extend; 0.5–3.0s typical). |
 | L2 | `trim_narration(scene_id, max_cut_sec)` | Cut up to `max_cut_sec` seconds off the end of narration. |
-| L2 | `freeze_frame_fill(scene_id, duration_needed)` | (Deprecated — violates Media Immutability Invariant; retained for backward compat, should not be selected.) |
 | L2 | `replace_with_brand_card(scene_id)` | Static brand/title card in place of the scene (replace). Heavy narrative cost. |
 | L3 | `rewrite_scene(scene_id, guidance)` | Regenerate narration + visual brief via scenario director (replace). |
 | L3 | `abort_run(reason)` | Stop the pipeline. Last resort. |
@@ -202,11 +201,10 @@ preserving narrative. Prefer L1 > L2 > L3. Every tier is either a
 replace or an extend — never a stretch, loop, or freeze. Signatures
 are enforced in `EscalationAction.__post_init__`.
 
-> **Note:** `speed_up_narration` has been removed from the canonical
-> menu in accordance with the Media Immutability Invariant above.
-> `freeze_frame_fill` also violates the invariant and is deprecated;
-> it remains defined for backward compatibility but must not be
-> selected by the supervisor.
+> **Note:** `speed_up_narration` and `freeze_frame_fill` have both
+> been removed from the canonical menu in accordance with the Media
+> Immutability Invariant above. Narration pauses are rendered as black
+> gaps in the assembly pipeline (no last-frame holds).
 
 ### Hard invariant
 

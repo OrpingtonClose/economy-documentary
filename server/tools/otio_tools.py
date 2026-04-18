@@ -568,9 +568,9 @@ def add_video_gap(
     """Add an intentional visual Gap to the V1_Video track.
 
     These gaps correspond to planned pauses on the narration track.
-    During assembly they are rendered as freeze-frames (holding the last
-    frame of the preceding clip) so the viewer sees a static hold instead
-    of a jarring black screen.
+    During assembly they are rendered as black frames. Freeze-frames
+    (holding the last frame of the preceding clip) are forbidden by the
+    Media Immutability Invariant.
 
     The gap is inserted in sorted position by scene_num (matching the
     narration track order) rather than blindly appended, because
@@ -634,7 +634,7 @@ def add_video_gap(
         gap.metadata["documentary"] = {
             "scene_num": scene_num,
             "gap_type": gap_type,
-            "type": "freeze_frame",
+            "type": "black",
             "phrase_idx": gap_sort_phrase,
         }
         # Insert in sorted position by (scene_num, phrase_idx) so gaps

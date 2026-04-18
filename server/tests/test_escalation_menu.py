@@ -65,11 +65,6 @@ def test_action_menu_parses_all_signatures():
             "scene_id": "s005",
             "max_cut_sec": 0.75,
         },
-        "freeze_frame_fill": {
-            "action": "freeze_frame_fill",
-            "scene_id": "s006",
-            "duration_needed": 0.8,
-        },
         "replace_with_brand_card": {
             "action": "replace_with_brand_card",
             "scene_id": "s007",

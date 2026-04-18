@@ -1664,7 +1664,6 @@ _CANONICAL_TO_CALLER: dict[str, str] = {
     "regenerate_clip": "retry_with_fix",
     "generate_extension_clip": "retry_with_fix",
     "trim_narration": "retry_with_fix",
-    "freeze_frame_fill": "retry_with_fix",
     "replace_with_brand_card": "skip",
     "rewrite_scene": "retry_with_fix",
     "abort_run": "abort",

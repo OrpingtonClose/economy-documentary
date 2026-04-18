@@ -37,7 +37,6 @@ ActionName = Literal[
     "regenerate_clip",
     "generate_extension_clip",
     "trim_narration",
-    "freeze_frame_fill",
     "replace_with_brand_card",
     "rewrite_scene",
     "abort_run",
@@ -50,7 +49,6 @@ ACTION_LEVELS: dict[str, int] = {
     "regenerate_clip": 1,
     "generate_extension_clip": 1,
     "trim_narration": 2,
-    "freeze_frame_fill": 2,
     "replace_with_brand_card": 2,
     "rewrite_scene": 3,
     "abort_run": 3,
@@ -61,7 +59,6 @@ ACTION_SIGNATURES: dict[str, dict[str, type]] = {
     "regenerate_clip": {"clip_id": str, "prompt_delta": str, "seed_delta": int},
     "generate_extension_clip": {"scene_id": str, "duration_needed": float},
     "trim_narration": {"scene_id": str, "max_cut_sec": float},
-    "freeze_frame_fill": {"scene_id": str, "duration_needed": float},
     "replace_with_brand_card": {"scene_id": str},
     "rewrite_scene": {"scene_id": str, "guidance": str},
     "abort_run": {"reason": str},
@@ -146,12 +143,6 @@ class EscalationAction:
             if self.duration_needed <= 0:
                 raise EscalationActionError(
                     "generate_extension_clip: duration_needed must be > 0"
-                )
-        if self.action == "freeze_frame_fill":
-            assert self.duration_needed is not None
-            if self.duration_needed <= 0:
-                raise EscalationActionError(
-                    "freeze_frame_fill: duration_needed must be > 0"
                 )
         if self.action == "trim_narration":
             assert self.max_cut_sec is not None
@@ -270,8 +261,6 @@ Level 1 (cheap, targeted fixes -- prefer these):
 Level 2 (surgical edits, acceptable quality cost):
   - trim_narration(scene_id, max_cut_sec)
       Cut up to ``max_cut_sec`` seconds from the end of narration.
-  - freeze_frame_fill(scene_id, duration_needed)
-      Hold the last frame for ``duration_needed`` seconds.
   - replace_with_brand_card(scene_id)
       Replace scene with a static brand/title card. Heavy narrative cost.
 
