@@ -557,8 +557,19 @@ def add_narration_gap(
 
     Returns:
         JSON string with gap details.
+
+    Raises:
+        OtioStateViolation: If the timeline is ``authoritative`` and no
+            REPLACE/EXTEND escalation window is open.  Gaps on the
+            narration track are part of the timing law; once the timeline
+            has crystallised, downstream stages must not insert silence.
     """
     state = tool_context.state if tool_context else {}
+
+    if tool_context is not None:
+        from callbacks.otio_state import guard_authoritative_mutation
+        guard_authoritative_mutation(state, operation="add_narration_gap")
+
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})

@@ -420,6 +420,32 @@ def test_clear_narration_track_blocked_post_authoritative(tmp_timeline):
         otio_tools_mod.clear_narration_track(path, tool_context=tool_context)
 
 
+def test_add_narration_gap_blocked_post_authoritative(tmp_timeline):
+    """Gaps on A1_Narration are part of the timing law; once the
+    timeline crystallises, downstream stages must not insert silence.
+    Mirrors add_narration_clip / clear_narration_track enforcement.
+    """
+    state, _path = tmp_timeline
+    state["pipeline_phase"] = "audio"
+    state["otio_violation"] = None
+    authoritative_transition_callback(_make_callback_context(state))
+
+    import tools.otio_tools as otio_tools_mod
+
+    tool_context = MagicMock()
+    tool_context.state = state
+
+    with pytest.raises(OtioStateViolation) as excinfo:
+        otio_tools_mod.add_narration_gap(
+            scene_num=1,
+            duration=0.5,
+            gap_type="inter_voice",
+            gap_index=0,
+            tool_context=tool_context,
+        )
+    assert excinfo.value.details["operation"] == "add_narration_gap"
+
+
 def test_add_narration_clip_allowed_under_escalation(tmp_timeline, monkeypatch):
     state, _path = tmp_timeline
     state["pipeline_phase"] = "audio"
