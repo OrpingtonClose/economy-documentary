@@ -29,9 +29,9 @@ import threading
 from typing import Any, Optional
 
 from orchestrator.escalation_menu import (
-    ACTION_MENU_DESCRIPTION,
-    ACTION_NAMES,
-    ESCALATION_ACTION_JSON_SCHEMA,
+    CREATIVE_ACTION_MENU_DESCRIPTION,
+    CREATIVE_ACTION_NAMES,
+    CREATIVE_ESCALATION_ACTION_JSON_SCHEMA,
     EscalationAction,
     EscalationActionError,
     EscalationContext,
@@ -138,6 +138,15 @@ _PRO_MODEL = os.environ.get(
 
 _MAX_PARSE_RETRIES = 2  # Retry stricter prompt up to 2x on parse failure.
 
+# The push-based supervisor only sees the creative subset of actions.
+# ``recovery._CANONICAL_TO_CALLER`` (the downstream mapping consumed by
+# every push-path caller: video_tools, audio_tools, otio_tools,
+# orchestrator) only covers creative actions; any ops action returned
+# here would be silently mapped to ``"abort"`` -- the exact #102
+# round-robin-with-abort regression.  Ops actions are exclusively the
+# domain of the pull-based supervisor in
+# ``agents/escalation_supervisor.py``, which wires them to
+# ``orchestrator.ops_executors.execute_ops_action``.
 _SUPERVISOR_SYSTEM_INSTRUCTION = (
     "You are the Production Supervisor for a documentary pipeline. "
     "When something fails, you must pick EXACTLY ONE canonical recovery "
@@ -145,7 +154,7 @@ _SUPERVISOR_SYSTEM_INSTRUCTION = (
     "object matching the action schema -- no markdown, no commentary "
     "outside the JSON.  Prefer cheaper actions (L1 > L2 > L3).  Never "
     "abort unless there is no viable L1/L2 action.\n\n"
-    + ACTION_MENU_DESCRIPTION
+    + CREATIVE_ACTION_MENU_DESCRIPTION
 )
 
 
@@ -298,7 +307,7 @@ def _build_escalate_prompt(
         "Pick exactly ONE action from the menu above.",
         "Respond with a SINGLE JSON OBJECT -- no prose, no markdown fences.",
         "The JSON MUST have an 'action' field with one of these values: "
-        + ", ".join(ACTION_NAMES),
+        + ", ".join(CREATIVE_ACTION_NAMES),
         "Include all required fields for the chosen action (see signatures).",
         "Include an 'llm_reasoning' field with a 1-2 sentence rationale.",
     ]
@@ -357,6 +366,21 @@ def _parse_llm_response(text: str) -> EscalationAction:
             f"Expected JSON object, got {type(data).__name__}"
         )
 
+    # Defence-in-depth: the push-based path is restricted to the creative
+    # family via prompt + ``CREATIVE_ESCALATION_ACTION_JSON_SCHEMA``.
+    # If a model still returns an ops action (schema ignored, manual test
+    # injection, etc.) reject it here rather than letting
+    # ``recovery._CANONICAL_TO_CALLER.get(..., "abort")`` silently
+    # downgrade it to a terminal abort.
+    action_name = data.get("action")
+    if isinstance(action_name, str) and action_name not in CREATIVE_ACTION_NAMES:
+        raise EscalationActionError(
+            f"Push-based supervisor received non-creative action "
+            f"{action_name!r}; only {CREATIVE_ACTION_NAMES} are permitted "
+            f"on this path. Ops actions belong to the pull-based "
+            f"escalation supervisor."
+        )
+
     return EscalationAction.from_dict(data)
 
 
@@ -392,7 +416,7 @@ def _default_llm_call(model: str, system: str, prompt: str) -> str:
     config = genai_types.GenerateContentConfig(
         system_instruction=system,
         response_mime_type="application/json",
-        response_schema=ESCALATION_ACTION_JSON_SCHEMA,
+        response_schema=CREATIVE_ESCALATION_ACTION_JSON_SCHEMA,
         temperature=0.2,
     )
     response = client.models.generate_content(

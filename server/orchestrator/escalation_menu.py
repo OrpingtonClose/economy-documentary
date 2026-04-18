@@ -317,7 +317,20 @@ class EscalationContext:
 # Menu prompt (rendered into the supervisor LLM prompt)
 # ---------------------------------------------------------------------------
 
-ACTION_MENU_DESCRIPTION = """\
+# The action menu is assembled in two parts so callers that only
+# support a subset of the action family (e.g. the push-based supervisor
+# in ``agents/production_supervisor.py``, whose downstream mapping in
+# ``recovery._CANONICAL_TO_CALLER`` only covers creative actions) can
+# render a creative-only prompt without ops-action leakage.
+#
+#   * CREATIVE_ACTION_MENU_DESCRIPTION -- creative actions + decision rule.
+#     Use this when the caller can only act on creative actions.
+#   * OPS_ACTION_MENU_SECTION -- the ops-family subsection.
+#   * ACTION_MENU_DESCRIPTION -- full menu (creative + ops). Use this
+#     when the caller has deployment / ops-executor capability (the
+#     pull-based escalation supervisor in
+#     ``agents/escalation_supervisor.py``).
+CREATIVE_ACTION_MENU_DESCRIPTION = """\
 CANONICAL ESCALATION ACTIONS -- you MUST choose EXACTLY ONE.
 
 Per the Media Immutability Invariant (ARCH-F / #128), once media is
@@ -350,6 +363,15 @@ Level 3 (structural / terminal -- last resort):
       failure is clearly structural.
   - abort_run(reason)
       Stop the pipeline entirely. Only when no safe recovery is possible.
+
+Decision rule: pick the cheapest action that resolves the failure while
+preserving the narrative.  Prefer L1 over L2 over L3.  Do NOT abort
+unless no L1/L2 action is viable -- round-robin fall-through with an
+abort is exactly the #102 regression.
+"""
+
+
+OPS_ACTION_MENU_SECTION = """\
 
 OPS ACTIONS (fleet / deployment — pick these when the root cause is
 infrastructural rather than artifact-level; e.g. worker OOM, stage
@@ -384,20 +406,45 @@ Level 3 (structural — halt + replan):
       infrastructure condition is too broad for per-worker fixes (fleet
       saturation, budget exhausted, provider outage with no fallback).
 
-Decision rule: pick the cheapest action that resolves the failure while
-preserving the narrative.  Prefer L1 over L2 over L3 within each
-family.  When the root cause is clearly artifact-level (QA fail, critic
-reject, prompt mismatch), pick a creative action.  When the root cause
-is clearly infra-level (worker unreachable, OOM, cost exceeded, stage
-timeout), pick an ops action.  When uncertain, prefer the cheaper
-family first.  Do NOT abort unless no L1/L2 action is viable --
-round-robin fall-through with an abort is exactly the #102 regression.
+Cross-family decision rule: when the root cause is clearly
+artifact-level (QA fail, critic reject, prompt mismatch), pick a
+creative action.  When the root cause is clearly infra-level (worker
+unreachable, OOM, cost exceeded, stage timeout), pick an ops action.
+When uncertain, prefer the cheaper family first.
 """
+
+
+ACTION_MENU_DESCRIPTION = (
+    CREATIVE_ACTION_MENU_DESCRIPTION + OPS_ACTION_MENU_SECTION
+)
 
 
 # JSON schema for Gemini structured output.  Kept flat (Gemini's
 # structured-output API does not support oneOf); per-action signature
 # validation happens in ``EscalationAction.__post_init__`` after parsing.
+#
+# Two variants: ``CREATIVE_ESCALATION_ACTION_JSON_SCHEMA`` restricts the
+# ``action`` enum to creative actions only (for the push-based
+# supervisor whose downstream mapping cannot honour ops actions), and
+# ``ESCALATION_ACTION_JSON_SCHEMA`` is the full schema for the
+# pull-based supervisor which owns ops-executor delegation.
+CREATIVE_ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": list(CREATIVE_ACTION_NAMES)},
+        "clip_id": {"type": "string"},
+        "scene_id": {"type": "string"},
+        "prompt_delta": {"type": "string"},
+        "seed_delta": {"type": "integer"},
+        "duration_needed": {"type": "number"},
+        "guidance": {"type": "string"},
+        "reason": {"type": "string"},
+        "llm_reasoning": {"type": "string"},
+    },
+    "required": ["action"],
+}
+
+
 ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -464,7 +511,10 @@ __all__ = [
     "ACTION_LEVELS",
     "ACTION_SIGNATURES",
     "ACTION_MENU_DESCRIPTION",
+    "CREATIVE_ACTION_MENU_DESCRIPTION",
+    "OPS_ACTION_MENU_SECTION",
     "ESCALATION_ACTION_JSON_SCHEMA",
+    "CREATIVE_ESCALATION_ACTION_JSON_SCHEMA",
     "EscalationAction",
     "EscalationActionError",
     "EscalationContext",
