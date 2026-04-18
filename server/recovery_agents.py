@@ -177,24 +177,31 @@ class RecoveryAgent:
 
                 # No tool calls — parse the final response as a decision
                 content = msg.content or ""
-                return self._parse_decision(content, tool_results)
+                return self._parse_decision(content, tool_results, context=context)
 
             except Exception as e:
                 logger.error(
                     "RecoveryAgent '%s' LLM call failed (round %d): %s",
                     self.name, _round, str(e)[:300],
                 )
-                # If LLM itself fails, escalate to next level
-                return RecoveryDecision(
-                    action="escalate",
-                    explanation=f"Recovery agent LLM call failed: {e}",
+                # Previously this silently returned "escalate", which was the
+                # L1 fall-through that caused the PAG round-robin regression
+                # (#76, #77).  Consult the production supervisor instead so
+                # at least one LLM-backed canonical decision is made.
+                return _supervisor_fallback_decision(
+                    context=context,
+                    reason=f"Recovery agent LLM call failed: {e}",
                     tool_results=tool_results,
                 )
 
-        # Ran out of tool rounds — return whatever we have
-        return RecoveryDecision(
-            action="escalate",
-            explanation="Recovery agent exhausted tool call rounds without reaching a decision",
+        # Ran out of tool rounds — same story: don't pass the buck, ask
+        # the supervisor for a canonical action (#61 closes this gap).
+        return _supervisor_fallback_decision(
+            context=context,
+            reason=(
+                "Recovery agent exhausted tool call rounds without reaching "
+                "a decision"
+            ),
             tool_results=tool_results,
         )
 
@@ -281,7 +288,10 @@ class RecoveryAgent:
         return {"error": f"Unknown tool: {name}"}
 
     def _parse_decision(
-        self, content: str, tool_results: list[dict],
+        self,
+        content: str,
+        tool_results: list[dict],
+        context: Optional["RecoveryContext"] = None,
     ) -> RecoveryDecision:
         """Parse the LLM response into a RecoveryDecision."""
         # Try to extract JSON from the response
@@ -294,10 +304,11 @@ class RecoveryAgent:
             elif content.strip().startswith("{"):
                 json_str = content.strip()
             else:
-                # No JSON found — treat as escalation
-                return RecoveryDecision(
-                    action="escalate",
-                    explanation=f"Agent response (no JSON): {content[:500]}",
+                # No JSON found — route to the supervisor instead of
+                # passing the buck up the ladder (#61, #73 round-robin fix).
+                return _supervisor_fallback_decision(
+                    context=context,
+                    reason=f"Agent response (no JSON): {content[:500]}",
                     tool_results=tool_results,
                 )
 
@@ -314,9 +325,11 @@ class RecoveryAgent:
                 "RecoveryAgent '%s' response parse failed: %s. Raw: %s",
                 self.name, e, content[:300],
             )
-            return RecoveryDecision(
-                action="escalate",
-                explanation=f"Failed to parse agent response: {content[:500]}",
+            # Previously hardcoded "escalate" which was the round-robin
+            # fall-through (#61, #73).  Ask the supervisor instead.
+            return _supervisor_fallback_decision(
+                context=context,
+                reason=f"Failed to parse agent response: {content[:500]}",
                 tool_results=tool_results,
             )
 
@@ -1326,3 +1339,107 @@ GENERIC_AGENTS = {
     2: CreativeAgent(),
     3: CollaborativeAgent(),
 }
+
+
+# ---------------------------------------------------------------------------
+# Supervisor consultation for recovery agents
+# ---------------------------------------------------------------------------
+#
+# Closes #61/#73/#76/#77/#103: when a recovery agent can't reach a decision
+# (LLM failure, tool-round exhaustion, parse failure) it used to silently
+# return ``action="escalate"`` — the round-robin fall-through that led to
+# five extension-clip decisions and nine regenerations being handed to the
+# human during the PAG run.  We now consult the production supervisor so
+# the canonical ``EscalationAction`` menu is applied instead.
+
+def _supervisor_fallback_decision(
+    context: "RecoveryContext | None",
+    reason: str,
+    tool_results: list[dict],
+) -> RecoveryDecision:
+    """Consult supervisor_escalate when a recovery agent cannot decide.
+
+    Returns a ``RecoveryDecision`` with the canonical action, mapped to
+    the recovery agent vocabulary (``fix``/``retry``/``skip``/``abort``).
+    ``escalate`` is intentionally NEVER returned here — the supervisor
+    IS the escalation target; passing the buck would reintroduce #61.
+    """
+    try:
+        from agents.production_supervisor import supervisor_escalate
+        from orchestrator.escalation_menu import EscalationContext
+    except Exception as exc:  # pragma: no cover — import safety net
+        logger.warning(
+            "Supervisor unavailable in recovery agent fallback: %s — "
+            "passing to next recovery level",
+            exc,
+        )
+        return RecoveryDecision(
+            action="escalate",
+            explanation=(
+                f"{reason} (supervisor module unavailable: {exc})"
+            ),
+            tool_results=tool_results,
+        )
+
+    # Build descriptor/history from context if present.
+    descriptor: dict = {"reason": reason}
+    history: list[dict] = []
+    op_name = "recovery_agent_fallback"
+    pipeline_state: dict = {}
+    if context is not None:
+        op_name = context.operation_name
+        pipeline_state = context.pipeline_state or {}
+        descriptor.update({
+            "operation_name": context.operation_name,
+            "error_msg": context.error_msg[:500],
+            "current_level": context.current_level,
+            "level_name": context.level_name,
+        })
+        for prev in (context.previous_attempts or [])[-10:]:
+            history.append({
+                "action": f"L{prev.get('level', '?')}:{prev.get('agent', '?')}",
+                "outcome": prev.get("explanation", "")[:200],
+                "timestamp": time.time(),
+            })
+
+    esc_context = EscalationContext(
+        failing_artifact=op_name,
+        artifact_descriptor=descriptor,
+        timeline_state_snapshot=pipeline_state,
+        escalation_history=history,
+    )
+
+    try:
+        action = supervisor_escalate(esc_context)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.error(
+            "supervisor_escalate raised in recovery fallback: %s", exc,
+        )
+        return RecoveryDecision(
+            action="escalate",
+            explanation=f"{reason} (supervisor raised: {exc})",
+            tool_results=tool_results,
+        )
+
+    # Map canonical action → recovery vocabulary.
+    _CANONICAL_TO_RECOVERY = {
+        "regenerate_clip": "fix",
+        "generate_extension_clip": "fix",
+        "speed_up_narration": "fix",
+        "trim_narration": "fix",
+        "freeze_frame_fill": "fix",
+        "replace_with_brand_card": "skip",
+        "rewrite_scene": "fix",
+        "abort_run": "abort",
+    }
+    mapped = _CANONICAL_TO_RECOVERY.get(action.action, "abort")
+    return RecoveryDecision(
+        action=mapped,
+        state_patches=action.to_dict(),
+        explanation=(
+            f"supervisor_escalate → {action.action} (L{action.level}): "
+            f"{action.llm_reasoning or 'no rationale'}"
+        ),
+        tool_results=tool_results,
+        confidence=0.6,
+    )
