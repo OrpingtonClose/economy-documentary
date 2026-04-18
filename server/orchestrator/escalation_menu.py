@@ -287,9 +287,9 @@ Decision rule: pick the cheapest action that resolves the failure while
 preserving the narrative. Prefer L1 over L2 over L3. Media is immutable
 once created: permitted operations are REPLACE (regenerate_clip,
 rewrite_scene, replace_with_brand_card) or EXTEND (generate_extension_clip).
-NEVER loop or time-stretch existing media. Do NOT abort unless no L1/L2
-action is viable -- round-robin fall-through with an abort is exactly
-the #102 regression.
+NEVER loop, time-stretch, or freeze-frame existing media. Do NOT abort
+unless no L1/L2 action is viable -- round-robin fall-through with an
+abort is exactly the #102 regression.
 """
 
 
