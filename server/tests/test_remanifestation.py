@@ -328,6 +328,52 @@ def test_execute_plan_wraps_runner_exceptions_as_remanifestation_error():
     assert hist[-1]["plan_id"] == "p-fail"
 
 
+def test_execute_plan_forwards_state_to_reconstruction_gate(monkeypatch):
+    """The reconstruction gate must receive ``state`` so the ARCH-B2 per-poll
+    consistency check runs while a human reviews the plan (issue #138).
+    Without this, drift that appears during reconstruction approval would
+    not be dispatched to B3 until the next stage boundary.
+
+    Unit tests cannot import ``callbacks.approval_gate`` directly (its
+    module-level ``from google.adk.agents.callback_context import ...``
+    fails in the hermetic test env), so we patch the inner local import
+    inside ``_gate_reconstruction`` via a fake module.
+    """
+    import sys
+    import types
+
+    captured: dict[str, Any] = {}
+
+    def fake_wait(stage_name, *, state=None):
+        captured["stage"] = stage_name
+        captured["state_is"] = state
+        return True
+
+    def fake_mark_ready(stage_name):
+        captured["marked"] = stage_name
+
+    fake_mod = types.ModuleType("callbacks.approval_gate")
+    fake_mod.wait_for_approval = fake_wait
+    fake_mod.mark_stage_ready = fake_mark_ready
+    monkeypatch.setitem(sys.modules, "callbacks.approval_gate", fake_mod)
+
+    state = _tagged_state()
+    plan = DictRemanifestationPlan(
+        plan_id="p-gate-fwd",
+        triggered_by={},
+        stages_to_rerun=("scenario",),
+        artifact_keys_to_clear=(),
+        rationale="state-forward test",
+    )
+
+    execute_plan(state, plan, gate=True)
+
+    assert captured["marked"] == "reconstruct"
+    assert captured["stage"] == "reconstruct"
+    # The critical invariant: state was forwarded, not ``None``.
+    assert captured["state_is"] is state
+
+
 def test_execute_plan_skips_untagged_artifacts_quietly():
     """Clearing an artifact that was never tagged must not raise."""
     state = _tagged_state()

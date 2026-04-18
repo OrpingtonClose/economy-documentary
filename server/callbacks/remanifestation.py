@@ -499,13 +499,23 @@ class RemanifestationError(RuntimeError):
 StageRunner = Callable[[MutableMapping[str, Any], str], None]
 
 
-def _gate_reconstruction(plan: RemanifestationPlan) -> bool:
+def _gate_reconstruction(
+    plan: RemanifestationPlan,
+    state: Optional[MutableMapping[str, Any]] = None,
+) -> bool:
     """Pause for reconstruction approval before executing ``plan``.
 
     Reconstruct is itself gated (per #139 DoD). This mirrors the
     primary-stage approval gate: ``DOCUMENTARY_AUTO_APPROVE`` /
     simulation mode both bypass the pause. Returns ``True`` if approved
     (including auto-approve), ``False`` on timeout.
+
+    When ``state`` is provided, :func:`wait_for_approval` runs the
+    ARCH-B2 per-poll consistency check while the human reviews the
+    reconstruction plan -- matching the pattern used by the primary
+    pipeline gates in ``agents.pipeline`` so drift observed during a
+    reconstruction wait is dispatched to B3 immediately rather than
+    deferred to the next stage boundary.
 
     The import is local so the callbacks package does not hard-depend on
     the approval-gate file at import time (some unit tests stub state
@@ -522,7 +532,7 @@ def _gate_reconstruction(plan: RemanifestationPlan) -> bool:
         "waiting for human approval",
         plan.plan_id,
     )
-    return wait_for_approval(RECONSTRUCT_GATE_STAGE)
+    return wait_for_approval(RECONSTRUCT_GATE_STAGE, state=state)
 
 
 def _clear_plan_targets(
@@ -612,7 +622,7 @@ def execute_plan(
         )
 
     if gate:
-        approved = _gate_reconstruction(plan)
+        approved = _gate_reconstruction(plan, state=state)
         if not approved:
             _append_history(
                 state,
