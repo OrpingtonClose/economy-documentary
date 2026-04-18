@@ -280,6 +280,15 @@ def create_timeline(
         timeline.tracks.append(narration_track)
         timeline.tracks.append(music_track)
 
+        # ARCH-E1: every newly-minted timeline starts its lifecycle in
+        # the ``draft`` state.  The crystallisation to ``authoritative``
+        # happens at the end of the audio stage once narration
+        # reconciliation locks pacing (see
+        # ``callbacks.otio_state.authoritative_transition_callback``).
+        timeline.metadata.setdefault("documentary", {})
+        timeline.metadata["documentary"]["state"] = "draft"
+        timeline.metadata["documentary"]["state_reason"] = "timeline_created"
+
         path = _timeline_path(topic)
         _ensure_dir(path)
         otio.adapters.write_to_file(timeline, path)
@@ -287,6 +296,16 @@ def create_timeline(
     # Store path in tool_context state if available
     if tool_context:
         tool_context.state["_timeline_path"] = path
+        # Mirror onto the blackboard for in-process enforcement.
+        try:
+            from callbacks.otio_state import mark_timeline_draft
+
+            mark_timeline_draft(tool_context.state, timeline_path=path)
+        except Exception as exc:  # noqa: BLE001 — on-disk stamp is the SSOT
+            logger.warning(
+                "create_timeline: failed to mark blackboard otio_state=draft: %r",
+                exc,
+            )
 
     logger.info("Created OTIO timeline: %s (%d scenes)", path, num_scenes)
 
@@ -300,18 +319,40 @@ def create_timeline(
     )
 
 
-def clear_narration_track(timeline_path: str) -> int:
+def clear_narration_track(timeline_path: str, tool_context=None) -> int:
     """Remove all clips and gaps from the A1_Narration track.
 
     Called at the start of a timing loop re-iteration to prevent
     duplicate narration clips from accumulating across iterations.
 
+    ARCH-E1 mutation guard: clearing narration is a mutation of the
+    authoritative baseline.  Once the timeline has crystallised
+    (state == ``authoritative``) this operation is forbidden unless a
+    REPLACE/EXTEND escalation is open on the blackboard.  Callers that
+    legitimately need to re-derive audio (dual-axis escalation) must
+    open the escalation window via
+    :func:`callbacks.otio_state.begin_escalation` (or reset the state
+    to draft via :func:`callbacks.otio_state.reset_to_draft`) before
+    calling this function.
+
     Args:
         timeline_path: Path to the OTIO timeline file.
+        tool_context: Optional ADK ``ToolContext`` carrying blackboard
+            state.  When provided, the mutation guard runs against
+            ``tool_context.state``.  When absent (legacy callers), the
+            guard is skipped — callers in that path are responsible for
+            running during the draft phase only.
 
     Returns:
         Number of items removed.
     """
+    if tool_context is not None:
+        from callbacks.otio_state import guard_authoritative_mutation
+
+        guard_authoritative_mutation(
+            tool_context.state, operation="clear_narration_track"
+        )
+
     if not timeline_path or not os.path.exists(timeline_path):
         return 0
 
@@ -361,6 +402,16 @@ def add_narration_clip(
         JSON string with clip details.
     """
     state = tool_context.state if tool_context else {}
+
+    # ARCH-E1 mutation guard: adding a narration clip mutates the
+    # authoritative baseline (the narration track IS the timing law).
+    # Forbidden once the timeline has crystallised unless a REPLACE/EXTEND
+    # escalation is open.
+    if tool_context is not None:
+        from callbacks.otio_state import guard_authoritative_mutation
+
+        guard_authoritative_mutation(state, operation="add_narration_clip")
+
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})
@@ -506,8 +557,19 @@ def add_narration_gap(
 
     Returns:
         JSON string with gap details.
+
+    Raises:
+        OtioStateViolation: If the timeline is ``authoritative`` and no
+            REPLACE/EXTEND escalation window is open.  Gaps on the
+            narration track are part of the timing law; once the timeline
+            has crystallised, downstream stages must not insert silence.
     """
     state = tool_context.state if tool_context else {}
+
+    if tool_context is not None:
+        from callbacks.otio_state import guard_authoritative_mutation
+        guard_authoritative_mutation(state, operation="add_narration_gap")
+
     timeline_path = state.get("_timeline_path", "")
     if not timeline_path or not os.path.exists(timeline_path):
         return json.dumps({"error": "Timeline not found. Create one first."})

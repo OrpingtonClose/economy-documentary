@@ -6,7 +6,13 @@ Generates video clips using LTX-2.3 on GPU VM.  In simulation mode
 intercepts calls and returns mock responses.
 
 Rules:
-- Duration should be target_duration * 1.15 (15% longer for trim margin)
+- ARCH-F3 (#164): ``duration_sec`` is honoured EXACTLY. No trim margin,
+  no overshoot. On the worker side the GPU renders at the requested
+  duration; on the client side we verify the file's measured length is
+  within :data:`callbacks.strict_assembler.CLIP_LENGTH_TOLERANCE_SEC`
+  of the request and raise :class:`ClipLengthMismatchError` INSIDE
+  ``_call_gpu_worker`` otherwise so ``execute_with_recovery`` routes
+  through REPLACE (regenerate). The assembler never trims.
 - bf16 only, no FP8, no quantization
 - All subprocess calls use list form (no shell=True)
 """
@@ -30,7 +36,12 @@ _OUTPUT_BASE = os.environ.get(
 )
 from testing.simulation_bridge import simulated
 
-_TRIM_MARGIN = 1.15  # 15% longer for trim margin
+# ARCH-F3 (#164): ``_TRIM_MARGIN`` was removed. Video generation now
+# honours the exact target ``duration_sec`` requested by the timeline;
+# no 15% overshoot, no trim pass.  Length mismatches at probe time are
+# raised as ``ClipLengthMismatchError`` inside ``_call_gpu_worker`` so
+# the recovery ladder triggers REPLACE (regenerate) rather than a
+# silent trim.
 
 # Round-robin state for distributing work across multiple GPU workers
 _worker_lock = threading.Lock()
@@ -125,7 +136,11 @@ def generate_video_clip(
 
     Args:
         prompt: Visual description prompt for video generation.
-        duration_sec: Target duration in seconds (will be extended by 15%).
+        duration_sec: Target duration in seconds.  ARCH-F3 (#164): this
+            is honoured EXACTLY -- the generator does not overshoot and
+            the assembler does not trim.  A measured duration outside
+            :data:`callbacks.strict_assembler.CLIP_LENGTH_TOLERANCE_SEC`
+            of this value triggers REPLACE via the recovery ladder.
         lora_id: LoRA style identifier.
         lora_weight: LoRA weight (0.0-1.0).
         output_path: Path for the output MP4 file.
@@ -135,7 +150,43 @@ def generate_video_clip(
     Returns:
         JSON string with generation results.
     """
-    actual_duration = duration_sec * _TRIM_MARGIN
+    # ARCH-F3: exact target duration. No _TRIM_MARGIN overshoot.
+    #
+    # LTX-2.3 requires num_frames to be of the form 8k+1 at 24 fps, which
+    # means the set of durations the generator can actually produce is
+    # {9/24, 17/24, 25/24, 33/24, ...} -- a grid with 8/24 ≈ 0.333s
+    # spacing.  An arbitrary request such as 5.0s would otherwise floor
+    # to 113 frames = 4.708s, a 292ms delta that blows the per-clip
+    # length gate on every retry (creative amendments do not change
+    # num_frames).  Quantizing the request to the nearest LTX grid
+    # point here means the client and the worker agree on the exact
+    # duration BEFORE generation, the worker produces a clip at exactly
+    # that duration, and the length gate verifies the match within
+    # CLIP_LENGTH_TOLERANCE_SEC (16ms) of the grid point rather than of
+    # the original caller request.  Upstream callers that care about
+    # the total timeline duration should request grid-aligned durations;
+    # otherwise the per-clip quantization delta is absorbed into the
+    # narration/video timing budget by the assembler.
+    fps = 24
+    _raw_frames = max(9, int(round(float(duration_sec) * fps)))
+    # Round to the NEAREST 8k+1, not floor, so a request halfway
+    # between two grid points does not systematically undershoot.
+    _k_floor = (_raw_frames - 1) // 8
+    _k_ceil = _k_floor + 1
+    _frames_floor = _k_floor * 8 + 1
+    _frames_ceil = _k_ceil * 8 + 1
+    if abs(_raw_frames - _frames_floor) <= abs(_raw_frames - _frames_ceil):
+        num_frames = max(9, _frames_floor)
+    else:
+        num_frames = max(9, _frames_ceil)
+    actual_duration = num_frames / fps
+    if abs(actual_duration - float(duration_sec)) > 0.001:
+        logger.info(
+            "Quantized requested duration %.4fs to LTX 8k+1 grid: "
+            "num_frames=%d, effective=%.4fs (delta=%+.3fs)",
+            float(duration_sec), num_frames, actual_duration,
+            actual_duration - float(duration_sec),
+        )
 
     # Production mode: call LTX-2.3 on GPU worker
     # ARCHITECTURE INVARIANT: Video generation MUST use a real GPU worker.
@@ -164,10 +215,9 @@ def generate_video_clip(
             "error": "Video generation skipped — no GPU worker available",
         })
 
-    # Calculate frame count: LTX-2.3 works with 8k+1 frames at 24fps
-    fps = 24
-    raw_frames = int(actual_duration * fps)
-    num_frames = max(9, ((raw_frames - 1) // 8) * 8 + 1)
+    # ``num_frames`` and ``actual_duration`` were quantized to the LTX
+    # 8k+1 grid above -- the values flow directly into the worker call
+    # and the length gate.
 
     # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
     seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
@@ -256,6 +306,37 @@ def generate_video_clip(
                 upload_video_clip(output_path, _status_path)
             except Exception as _b2_err:
                 logger.warning("B2 upload failed for %s: %s", output_path, _b2_err)
+
+            # ── ARCH-F3 (#164) LENGTH GATE ──────────────────────────
+            # Verify the generated clip honours the exact requested
+            # duration within CLIP_LENGTH_TOLERANCE_SEC. A mismatch is
+            # a generation-time bug, NOT a render-time fixup: we raise
+            # ClipLengthMismatchError INSIDE the recovery context so
+            # execute_with_recovery routes through REPLACE (regenerate)
+            # rather than letting a wrong-length clip into the timeline.
+            from callbacks.strict_assembler import ensure_clip_length_matches
+            try:
+                _probe_json = json.loads(probe_clip(output_path))
+                _measured = float(_probe_json.get("duration", 0.0))
+            except Exception as _probe_exc:  # noqa: BLE001 - probe is best-effort here
+                logger.warning(
+                    "probe_clip failed during length gate (non-fatal signal, "
+                    "treating as zero): %s", _probe_exc,
+                )
+                _measured = 0.0
+            # NB: the length gate compares the on-disk duration against
+            # ``_call_gpu_worker``'s own ``duration_sec`` parameter --
+            # i.e. the LTX-grid-quantized duration that this particular
+            # invocation actually asked the worker to render.  Using the
+            # parameter (rather than the outer ``generate_video_clip``
+            # closure's ``actual_duration``) keeps the gate correct even
+            # if a future creative amendment swaps the duration for a
+            # retry, which current amendments do not do.
+            ensure_clip_length_matches(
+                clip_id=output_path,
+                declared=duration_sec,
+                actual=_measured,
+            )
 
             # ── QA GATE ── raise INSIDE recovery context so
             # non_retryable_patterns routes to human escalation (L4).

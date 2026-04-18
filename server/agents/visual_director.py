@@ -30,6 +30,7 @@ from callbacks.before_model import before_model_callback
 from callbacks.after_model import after_model_callback
 from callbacks.before_tool import before_tool_callback
 from callbacks.after_tool import after_tool_callback
+from callbacks.artifact_revision_tag import make_revision_tagging_callback
 from callbacks.deterministic_steps import write_visual_metadata_to_otio
 from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
@@ -80,6 +81,16 @@ content_analyst = Agent(
     after_model_callback=after_model_callback,
     before_tool_callback=before_tool_callback,
     after_tool_callback=after_tool_callback,
+    # ARCH-B1 proof-of-pattern: the universal producer-side callback tags
+    # ``state["content_analysis"]`` with the ledger revision at derivation.
+    # content_analyst lives inside the visual_director LoopAgent (up to
+    # 3 iterations), so the tag refreshes per iteration rather than
+    # failing immutability on the second pass.
+    after_agent_callback=make_revision_tagging_callback(
+        "content_analysis",
+        stage="content_analyst",
+        retag_on_reproduce=True,
+    ),
 )
 
 # -- Visual Concepter ----------------------------------------------------------

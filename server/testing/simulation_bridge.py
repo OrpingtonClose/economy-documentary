@@ -348,7 +348,9 @@ def _patch_generate_video_clip(call_args: Dict, result: dict) -> None:
         result["output_path"] = output_path
     duration_sec = call_args.get("duration_sec", 5.0)
     result["target_duration"] = round(float(duration_sec), 2)
-    result["actual_duration"] = round(float(duration_sec) * 1.15, 2)
+    # ARCH-F3 (#164): simulated clips honour the exact target duration
+    # — no 15% overshoot, no trim pass.
+    result["actual_duration"] = round(float(duration_sec), 2)
     lora_id = call_args.get("lora_id", "")
     if lora_id:
         result["lora_id"] = lora_id

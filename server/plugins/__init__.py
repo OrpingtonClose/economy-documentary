@@ -91,8 +91,10 @@ _GLOBAL_INSTRUCTION = """\
 DOCUMENTARY PIPELINE RULES (apply to every agent):
 1. All timeline operations MUST go through the OTIO tools. Never manipulate
    timeline files directly.
-2. Every video clip MUST be at least as long as its corresponding audio.
-   Use the 15% margin rule: generate video at target_duration * 1.15.
+2. Every video clip MUST be generated at its declared exact length
+   (ARCH-F3 / #164). No 15% margin, no overshoot, no trim pass. A
+   measured duration outside CLIP_LENGTH_TOLERANCE_SEC of the request
+   triggers REPLACE via the recovery ladder.
 3. LoRA selections are creative decisions. The Content Analyst reads the
    narration semantics and queries the LoRA catalog to choose styles that
    deeply connect to the narrative content.
