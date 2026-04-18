@@ -52,6 +52,7 @@ from callbacks.approval_gate import (
     mark_stage_ready,
     wait_for_approval,
 )
+from callbacks.consistency_gate import wire_consistency_checks_into_agents
 from callbacks.state_manager import build_pipeline_state, safe_state_dict
 from contracts import (
     ASSEMBLY_CONTRACT,
@@ -170,7 +171,7 @@ def _scenario_after_with_gate(callback_context):
     _validate_postconditions_and_log(SCENARIO_CONTRACT, callback_context)
     mark_stage_ready("scenario")
     logger.info("APPROVAL GATE: scenario stage ready — waiting for human approval")
-    approved = wait_for_approval("scenario")
+    approved = wait_for_approval("scenario", state=callback_context.state)
     if not approved:
         logger.error("APPROVAL GATE: timed out waiting for scenario approval")
     return result
@@ -190,7 +191,7 @@ def _timing_loop_before_with_gate(callback_context):
     """
     if not is_stage_approved("scenario"):
         logger.info("APPROVAL GATE: audio waiting for scenario approval...")
-        approved = wait_for_approval("scenario")
+        approved = wait_for_approval("scenario", state=callback_context.state)
         if not approved:
             return genai_types.Content(
                 role="model",
@@ -236,7 +237,7 @@ def _timing_loop_after_with_gate(callback_context):
     _validate_postconditions_and_log(AUDIO_CONTRACT, callback_context)
     mark_stage_ready("audio")
     logger.info("APPROVAL GATE: audio stage ready — waiting for human approval")
-    approved = wait_for_approval("audio")
+    approved = wait_for_approval("audio", state=callback_context.state)
     if not approved:
         logger.error("APPROVAL GATE: timed out waiting for audio approval")
     return result
@@ -250,7 +251,7 @@ def _visual_after_with_gate(callback_context):
     _validate_postconditions_and_log(VISUAL_DIRECTION_CONTRACT, callback_context)
     mark_stage_ready("prompts")
     logger.info("APPROVAL GATE: prompts stage ready — waiting for human approval")
-    approved = wait_for_approval("prompts")
+    approved = wait_for_approval("prompts", state=callback_context.state)
     if not approved:
         logger.error("APPROVAL GATE: timed out waiting for prompts approval")
     return result
@@ -267,7 +268,7 @@ def _production_before_with_gate(callback_context):
     """
     if not is_stage_approved("prompts"):
         logger.info("APPROVAL GATE: production waiting for prompts approval...")
-        approved = wait_for_approval("prompts")
+        approved = wait_for_approval("prompts", state=callback_context.state)
         if not approved:
             return genai_types.Content(
                 role="model",
@@ -313,7 +314,7 @@ def _production_after_with_gate(callback_context):
     _validate_postconditions_and_log(PRODUCTION_CONTRACT, callback_context)
     mark_stage_ready("clips")
     logger.info("APPROVAL GATE: clips stage ready — waiting for human approval")
-    approved = wait_for_approval("clips")
+    approved = wait_for_approval("clips", state=callback_context.state)
     if not approved:
         logger.error("APPROVAL GATE: timed out waiting for clips approval")
     return result
@@ -328,7 +329,7 @@ def _assembly_before_with_gate(callback_context):
 
     if not is_stage_approved("clips"):
         logger.info("APPROVAL GATE: assembly waiting for clips approval...")
-        approved = wait_for_approval("clips")
+        approved = wait_for_approval("clips", state=callback_context.state)
         if not approved:
             return genai_types.Content(
                 role="model",
@@ -349,6 +350,40 @@ visual_director.after_agent_callback = _visual_after_with_gate
 production_supervisor.before_agent_callback = _production_before_with_gate
 production_supervisor.after_agent_callback = _production_after_with_gate
 assembler_agent.before_agent_callback = _assembly_before_with_gate
+
+
+# ---------------------------------------------------------------------------
+# ARCH-B2 (#138) -- wire the A5 consistency checker into every stage
+# boundary, every before-agent entry, and every tool call.
+#
+# Invocation points (per issue #138): "stage transitions, approval-gate
+# polling, tool calls that mutate artifacts". A stage that starts with a
+# stale ``ledger_revision_at_birth`` triggers a drift signal which the
+# ARCH-B3 (#139) re-manifestation executor consumes; on exhaustion it
+# re-escalates to human L4 through :mod:`recovery`. No silent degradation.
+#
+# The wiring composes with the approval-gate wrappers above so gate logic
+# (and contract validation) runs first, then A5 checks for drift, then B3
+# drains the drift queue. Idempotent -- a second import does not double-
+# chain (see ``_WIRED_ATTR`` in ``callbacks.consistency_gate``).
+# ---------------------------------------------------------------------------
+_b2_wired_agents = wire_consistency_checks_into_agents(
+    SequentialAgent(  # ephemeral holder; we wire the real sub-agents below
+        name="_arch_b2_wiring_root",
+        sub_agents=[
+            scenario_director,
+            timing_loop,
+            visual_director,
+            production_supervisor,
+            assembler_agent,
+        ],
+    )
+)
+logger.info(
+    "ARCH-B2: consistency checks wired into %d sub-agent(s): %s",
+    len(_b2_wired_agents),
+    _b2_wired_agents,
+)
 
 
 # ---------------------------------------------------------------------------

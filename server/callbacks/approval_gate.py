@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import time
-from typing import Optional
+from typing import Any, MutableMapping, Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types as genai_types
@@ -117,11 +117,25 @@ def approve_stage(stage: str) -> None:
     logger.info("Stage '%s' programmatically approved (quick-test)", stage)
 
 
-def wait_for_approval(stage: str) -> bool:
+def wait_for_approval(
+    stage: str,
+    *,
+    state: Optional[MutableMapping[str, Any]] = None,
+) -> bool:
     """Block until the human approves the given stage.
 
     Returns True if approved, False if timed out.
     In test mode, returns immediately.
+
+    Args:
+        stage: The stage name being gated.
+        state: Optional ADK session state. When provided, ARCH-B2 (issue
+            #138) runs a consistency check against the Preference Ledger
+            every poll interval so drift observed *during* human review
+            is dispatched to ARCH-B3 (#139) immediately, rather than
+            waiting for the next stage boundary. When ``None`` the poll
+            loop skips the drift check (preserves the pre-B2 behaviour
+            for callers that lack a handle on ``state``).
     """
     if _should_auto_approve():
         logger.info("Stage '%s' auto-approved (auto-approve/simulation mode)", stage)
@@ -129,11 +143,44 @@ def wait_for_approval(stage: str) -> bool:
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)
 
+    # Local import: consistency_gate imports approval_gate at module level
+    # (for reconstruction gating), so importing it at top-level would form
+    # a circular import. Deferring it to first poll breaks the cycle.
+    _gate_poll_check = None
+    if state is not None:
+        try:
+            from callbacks.consistency_gate import gate_poll_consistency_check
+
+            _gate_poll_check = gate_poll_consistency_check
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.warning(
+                "wait_for_approval: consistency_gate unavailable (%s); "
+                "skipping per-poll drift check for stage %r",
+                exc,
+                stage,
+            )
+
     while time.time() - start < _MAX_WAIT:
         if is_stage_approved(stage):
             elapsed = time.time() - start
             logger.info("Stage '%s' approved after %.1fs", stage, elapsed)
             return True
+        # ARCH-B2: run A5 consistency check every poll so drift that
+        # appears while humans review is caught and dispatched to B3.
+        if _gate_poll_check is not None and state is not None:
+            try:
+                _gate_poll_check(state, stage)
+            except RuntimeError:
+                # Invariant violation (missing ledger, rev decrease) --
+                # propagate so the pipeline stops loud, not silent.
+                raise
+            except Exception as exc:  # pragma: no cover -- defensive
+                logger.warning(
+                    "wait_for_approval: gate-poll consistency check raised "
+                    "non-invariant error for stage %r: %s",
+                    stage,
+                    exc,
+                )
         time.sleep(_POLL_INTERVAL)
 
     logger.warning("Timed out waiting for approval of stage '%s' (%.0fs)", stage, _MAX_WAIT)
