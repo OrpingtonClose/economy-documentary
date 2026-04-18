@@ -480,11 +480,13 @@ def _parse_scenario_rating(text: str) -> str:
     if not text:
         return ""
     upper = text.upper()
-    for token in ("RATING: EXCELLENT", "RATING: GOOD", "RATING: FAIR", "RATING: POOR"):
+    # Fail-safe order in BOTH loops: scan most-severe first so an evaluator
+    # that emits ``RATING: POOR`` but whose prose says "to reach RATING: GOOD
+    # fix X" still returns POOR.  Same rationale for the bare-word fallback:
+    # a POOR review mentioning "GOOD variety was not maintained" stays POOR.
+    for token in ("RATING: POOR", "RATING: FAIR", "RATING: GOOD", "RATING: EXCELLENT"):
         if token in upper:
             return token.split(":", 1)[1].strip()
-    # Fail-safe order: scan most-severe first so that a POOR review whose
-    # prose mentions "GOOD variety was not maintained" still returns POOR.
     for candidate in ("POOR", "FAIR", "GOOD", "EXCELLENT"):
         if candidate in upper:
             return candidate

@@ -548,14 +548,14 @@ def _parse_coherence_rating(text: str) -> str:
     if not text:
         return ""
     upper = text.upper()
-    # Prefer the structured ``RATING: X`` token so prose words like
-    # "GOOD consistency" in a POOR rating's feedback don't cause a
-    # false positive.
-    for token in ("RATING: EXCELLENT", "RATING: GOOD", "RATING: FAIR", "RATING: POOR"):
+    # Fail-safe order in BOTH loops: scan most-severe first.  The structured
+    # loop handles the case where an evaluator emits ``RATING: POOR`` but the
+    # surrounding prose mentions "to reach RATING: GOOD fix X" --- POOR wins.
+    # The fallback handles bare-word prose like "GOOD consistency" in a POOR
+    # review's feedback --- again POOR wins.
+    for token in ("RATING: POOR", "RATING: FAIR", "RATING: GOOD", "RATING: EXCELLENT"):
         if token in upper:
             return token.split(":", 1)[1].strip()
-    # Fail-safe order: scan most-severe first so that a POOR review whose
-    # prose mentions "GOOD consistency" still returns POOR.
     for candidate in ("POOR", "FAIR", "GOOD", "EXCELLENT"):
         if candidate in upper:
             return candidate
