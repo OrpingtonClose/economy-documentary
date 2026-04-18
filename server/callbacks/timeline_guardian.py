@@ -363,12 +363,49 @@ def _validate_assembly(timeline, state: dict) -> Optional[str]:
     return "; ".join(errors) if errors else None
 
 
-# Phase -> validator mapping
+def _validate_scene_assembly_phase(timeline, state: dict) -> Optional[str]:
+    """Per-scene OTIO assembly validator (#84 — OTIO compliance at ALL moments).
+
+    Runs a scene-level compliance check for every scene currently on the
+    timeline.  Invoked between stages when ``state["pipeline_phase"] ==
+    "scene_assembly"`` (e.g. the per-moment hook in
+    :func:`tools.otio_tools._maybe_run_scene_assembly_check` uses the
+    individual validator directly; this phase entry exists so a batch
+    rough-cut checkpoint — act1, midpoint, full — can re-validate every
+    scene that has been closed out so far).
+    """
+    from tools.otio_moments import validate_scene_assembly
+
+    errors = []
+    seen_scenes: set[int] = set()
+    for track in timeline.tracks:
+        for item in track:
+            meta = item.metadata.get("documentary", {})
+            sn = meta.get("scene_num")
+            if isinstance(sn, int) and sn > 0:
+                seen_scenes.add(sn)
+
+    for sn in sorted(seen_scenes):
+        err = validate_scene_assembly(timeline, sn)
+        if err is not None:
+            errors.append(err)
+
+    return "; ".join(errors) if errors else None
+
+
+# Phase -> validator mapping.
+#
+# ``scene_assembly`` is the new per-scene validator introduced by #84.
+# It can be invoked either by the per-moment hook in otio_tools (which
+# calls :func:`tools.otio_moments.validate_scene_assembly` directly) or
+# by a stage-boundary callback that sets pipeline_phase="scene_assembly"
+# before Timeline Guardian runs (e.g. cumulative rough-cut checkpoints).
 _VALIDATORS = {
     "scenario": _validate_scenario,
     "audio": _validate_audio,
     "visual_direction": _validate_visual_direction,
     "production": _validate_production,
+    "scene_assembly": _validate_scene_assembly_phase,
     "assembly": _validate_assembly,
 }
 
