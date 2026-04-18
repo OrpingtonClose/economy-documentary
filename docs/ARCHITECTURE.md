@@ -1,5 +1,7 @@
 # Architecture
 
+See also [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) for the eleven companion flow diagrams (top-level flow, narration reconciliation, Preference Ledger, production stage, escalation ladder, RecoveryDecision shape, critique substrate, human gates, GPU fleet + infra escalation, intermediate preview assemblies, dashboard).
+
 ## Overview
 
 The documentary pipeline is a **SequentialAgent** orchestration built on
