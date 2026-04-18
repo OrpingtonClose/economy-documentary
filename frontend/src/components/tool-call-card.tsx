@@ -16,6 +16,7 @@ export function ToolCallCard({ event }: { event: PipelineEvent }) {
     tool_start: "border-l-orange-500",
     tool_end: "border-l-purple-500",
     force_end: "border-l-red-500",
+    stage_event: "border-l-cyan-500",
   };
 
   const typeIcons: Record<string, string> = {
@@ -24,6 +25,7 @@ export function ToolCallCard({ event }: { event: PipelineEvent }) {
     tool_start: "->",
     tool_end: "<-",
     force_end: "!!",
+    stage_event: "~~",
   };
 
   const hasDetail =
@@ -50,6 +52,16 @@ export function ToolCallCard({ event }: { event: PipelineEvent }) {
             {event.type === "tool_end" &&
               `Tool done: ${event.tool} (${event.duration?.toFixed(1)}s, ${event.result_chars} chars)`}
             {event.type === "force_end" && "Context window limit reached"}
+            {event.type === "stage_event" && (
+              <span className={
+                (event as any).status === "error" ? "text-red-400" :
+                (event as any).status === "recovered" ? "text-yellow-400" :
+                (event as any).status === "clip_done" ? "text-green-400" :
+                "text-cyan-400"
+              }>
+                {(event as any).detail || `${(event as any).stage}: ${(event as any).status}`}
+              </span>
+            )}
           </span>
         </div>
         {hasDetail && (

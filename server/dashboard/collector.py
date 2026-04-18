@@ -158,6 +158,20 @@ class PipelineCollector:
                     le.status = "completed"
                     break
 
+    def stage_event(self, stage: str, status: str, scene_id: str = "", detail: str = "") -> None:
+        """Record a structured stage progress event for dashboard display."""
+        with self._lock:
+            self._events.append(
+                {
+                    "type": "stage_event",
+                    "stage": stage,
+                    "status": status,
+                    "scene_id": scene_id,
+                    "detail": detail,
+                    "time": time.time(),
+                }
+            )
+
     def force_end(self, token_estimate: int) -> None:
         with self._lock:
             self._force_end = True

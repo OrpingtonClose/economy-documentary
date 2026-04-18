@@ -134,9 +134,28 @@ export function PipelineDashboard() {
         ))}
       </div>
 
+      {/* Error Banner — pipeline crashed */}
+      {snapshot.status === "error" && (
+        <div className="bg-red-900/80 border border-red-500 rounded-lg p-4">
+          <div className="text-red-200 font-semibold text-lg">
+            Pipeline crashed
+          </div>
+          <div className="text-red-300 text-sm mt-1">
+            The pipeline encountered an unrecoverable error during the{" "}
+            <span className="font-mono">{snapshot.active_phase ?? "unknown"}</span> phase
+            after {snapshot.elapsed_sec}s. Check the Recent Events and Escalations
+            tabs for details.
+          </div>
+        </div>
+      )}
+
       {/* KPI Cards (always visible) */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <KPICard label="Status" value={snapshot.status} />
+        <KPICard
+          label="Status"
+          value={snapshot.status}
+          highlight={snapshot.status === "error" ? "error" : undefined}
+        />
         <KPICard label="Elapsed" value={`${snapshot.elapsed_sec}s`} />
         <KPICard label="Tool Calls" value={String(snapshot.total_tools)} />
         <KPICard label="LLM Calls" value={String(snapshot.total_llm_calls)} />
@@ -151,11 +170,14 @@ export function PipelineDashboard() {
           {phaseNames.map((phase, idx) => {
             const isActive = snapshot.active_phase === phase;
             const isCompleted = idx < snapshot.phases_completed;
+            const isCrashed = isActive && snapshot.status === "error";
             return (
               <div
                 key={phase}
                 className={`flex-1 rounded-md p-3 text-center text-sm font-medium transition-colors ${
-                  isActive
+                  isCrashed
+                    ? "bg-red-800 text-red-200 border border-red-500"
+                    : isActive
                     ? "bg-pipeline-accent text-white"
                     : isCompleted
                     ? "bg-green-800 text-green-200"
@@ -163,6 +185,7 @@ export function PipelineDashboard() {
                 }`}
               >
                 {phase.replace("_", " ")}
+                {isCrashed && " (crashed)"}
               </div>
             );
           })}
@@ -530,10 +553,14 @@ function EscalationCard({ escalation }: { escalation: Escalation }) {
 // KPI Card
 // ---------------------------------------------------------------------------
 
-function KPICard({ label, value }: { label: string; value: string }) {
+function KPICard({ label, value, highlight }: { label: string; value: string; highlight?: "error" }) {
   return (
-    <div className="bg-pipeline-card rounded-lg p-4 text-center">
-      <div className="text-2xl font-bold text-pipeline-accent">{value}</div>
+    <div className={`rounded-lg p-4 text-center ${
+      highlight === "error" ? "bg-red-900/60 border border-red-600" : "bg-pipeline-card"
+    }`}>
+      <div className={`text-2xl font-bold ${
+        highlight === "error" ? "text-red-300" : "text-pipeline-accent"
+      }`}>{value}</div>
       <div className="text-sm text-pipeline-muted">{label}</div>
     </div>
   );
