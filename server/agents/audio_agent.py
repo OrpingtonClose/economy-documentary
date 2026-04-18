@@ -33,6 +33,7 @@ from google.genai import types as genai_types
 
 from agents.model_config import build_model
 from callbacks.deterministic_steps import deterministic_audio_callback
+from callbacks.otio_state import authoritative_transition_callback
 from callbacks.timeline_guardian import timeline_guardian_callback
 
 logger = logging.getLogger(__name__)
@@ -185,16 +186,26 @@ def whisperx_oracle_callback(
 def _chained_after_agent_callback(
     callback_context: CallbackContext,
 ) -> Optional[genai_types.Content]:
-    """Run the oracle THEN the timeline guardian.
+    """Run the oracle, then the timeline guardian, then the OTIO state transition.
 
-    Keeps the original contract that ``timeline_guardian_callback`` is
-    the last thing to run so its RuntimeError (on OTIO violation) is the
-    authoritative stage verdict.  The oracle only fires escalations — it
-    does not raise.
+    Order matters:
+
+    1. ``whisperx_oracle_callback`` — advisory reconciliation check that
+       may fire a reflection event.  Never raises.
+    2. ``timeline_guardian_callback`` — authoritative structural gate.
+       Raises ``RuntimeError`` on OTIO violation; that is the audio
+       stage's verdict.  Clears ``state["otio_violation"]`` on pass.
+    3. ``authoritative_transition_callback`` — ARCH-E1 Draft → Authoritative
+       crystallisation.  Runs ONLY after the guardian has passed (a
+       raised guardian skips it by propagation).  Sets the blackboard's
+       ``otio_state`` from ``draft`` to ``authoritative`` and mirrors
+       the transition onto the timeline-file root metadata.  From this
+       point forward, downstream mutation attempts are blocked by
+       :func:`callbacks.otio_state.guard_authoritative_mutation`.
 
     The oracle call is wrapped in a best-effort try/except so that any
-    unexpected error (e.g. malformed scenes list, alignment dict shape
-    drift, supervisor import path changes) can NEVER short-circuit the
+    unexpected error (malformed scenes list, alignment dict shape drift,
+    supervisor import path changes) can NEVER short-circuit the
     guardian.  An OTIO violation must be caught even if the oracle is
     buggy — the guardian is the authoritative gate.
     """
@@ -206,7 +217,11 @@ def _chained_after_agent_callback(
             "continuing to timeline_guardian_callback: %r",
             e,
         )
-    return timeline_guardian_callback(callback_context)
+    guardian_result = timeline_guardian_callback(callback_context)
+    # The guardian raises on failure; if we reach here it passed (or a
+    # human-approved skip cleared the gate).  Crystallise to authoritative.
+    authoritative_transition_callback(callback_context)
+    return guardian_result
 
 
 audio_agent = Agent(
