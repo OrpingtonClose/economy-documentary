@@ -269,6 +269,96 @@ class EscalationScope:
             created_at=float(data.get("created_at", 0.0) or 0.0),
         )
 
+    # ------------------------------------------------------------------
+    # Bridge from the legacy push-based EscalationContext
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_context(
+        cls,
+        context: Any,
+        *,
+        failure_kind: FailureKind = "unknown",
+        stage_name: str = "",
+        primary_artifact_id: Optional[str] = None,
+        primary_artifact_type: Optional[ArtifactType] = None,
+        scope_tags: Optional[list[str]] = None,
+    ) -> "EscalationScope":
+        """Build an :class:`EscalationScope` from a legacy ``EscalationContext``.
+
+        The legacy context packs ``failing_artifact`` (a free-form short
+        string), ``artifact_descriptor`` (arbitrary dict),
+        ``timeline_state_snapshot``, ``user_original_prompt``,
+        ``budget_remaining``, ``escalation_history``, and ``high_cost``.
+        None of those map 1:1 onto a pull-based scope; this classmethod
+        does the best reasonable translation so callers can route through
+        the new agent without rewriting their call-sites.
+
+        The scope receives:
+
+        * ``trigger_message`` <- ``context.failing_artifact`` (short label).
+        * ``high_cost`` <- ``context.high_cost`` passthrough.
+        * ``scope_tags`` <- ``scope_tags`` arg if provided.
+        * ``summary_counters`` populated with the prior-escalation count
+          so the supervisor can notice escalation loops without pulling
+          the full history.
+        * ``metadata`` <- the raw push-side fields, so nothing is lost;
+          the new agent *may* decide to read them directly, but is
+          expected to call read-tools first.
+        """
+        if context is None:
+            raise EscalationScopeError("from_context: context is None")
+
+        trigger = str(getattr(context, "failing_artifact", "") or "").strip()
+        if not trigger:
+            trigger = "unknown failure"
+
+        history = list(getattr(context, "escalation_history", []) or [])
+        counters: dict[str, int] = {
+            "prior_escalations": len(history),
+        }
+
+        # Infer a default stage from the context descriptor if we can —
+        # ``recovery.py`` passes operation names like ``"production"``,
+        # ``"scenario"``, etc. via ``failing_artifact``.
+        if not stage_name:
+            first_token = trigger.split()[0].lower() if trigger else ""
+            if first_token in {
+                "scenario", "audio", "visual_direction", "visual",
+                "production", "assembly", "gatekeeper",
+            }:
+                stage_name = first_token
+
+        metadata: dict[str, Any] = {
+            "legacy_context": {
+                "artifact_descriptor": dict(
+                    getattr(context, "artifact_descriptor", {}) or {}
+                ),
+                "timeline_state_snapshot": dict(
+                    getattr(context, "timeline_state_snapshot", {}) or {}
+                ),
+                "user_original_prompt": str(
+                    getattr(context, "user_original_prompt", "") or ""
+                ),
+                "budget_remaining": float(
+                    getattr(context, "budget_remaining", 0.0) or 0.0
+                ),
+                "escalation_history": history,
+            }
+        }
+
+        return cls(
+            failure_kind=failure_kind,
+            trigger_message=trigger[:200],
+            stage_name=stage_name,
+            primary_artifact_id=primary_artifact_id,
+            primary_artifact_type=primary_artifact_type,
+            scope_tags=list(scope_tags or []),
+            summary_counters=counters,
+            high_cost=bool(getattr(context, "high_cost", False)),
+            metadata=metadata,
+        )
+
 
 __all__ = [
     "FAILURE_KINDS",

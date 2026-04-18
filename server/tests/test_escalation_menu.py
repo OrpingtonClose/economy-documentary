@@ -89,6 +89,26 @@ def test_action_menu_parses_all_signatures():
             "action": "abort_run",
             "reason": "Budget exhausted — no safe recovery.",
         },
+        # Ops / deployment menu (PR-2)
+        "recycle_worker": {
+            "action": "recycle_worker",
+            "worker_url": "http://127.0.0.1:8000",
+            "reason": "vram_pressure + 3 consecutive QA fails",
+        },
+        "provision_extra_worker": {
+            "action": "provision_extra_worker",
+            "role": "video",
+            "count": 2,
+        },
+        "wait_for_worker_recovery": {
+            "action": "wait_for_worker_recovery",
+            "worker_url": "http://127.0.0.1:8000",
+            "timeout_sec": 120.0,
+        },
+        "freeze_batch_and_replan": {
+            "action": "freeze_batch_and_replan",
+            "reason": "fleet saturated, cost burn > budget",
+        },
     }
 
     # Every canonical action must have a valid payload in this test.

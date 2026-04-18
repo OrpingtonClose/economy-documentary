@@ -34,6 +34,7 @@ from typing import Any, Literal, Optional, get_args
 # ---------------------------------------------------------------------------
 
 ActionName = Literal[
+    # Creative / timeline actions (PR-0 menu)
     "regenerate_clip",
     "generate_extension_clip",
     "speed_up_narration",
@@ -42,9 +43,33 @@ ActionName = Literal[
     "replace_with_brand_card",
     "rewrite_scene",
     "abort_run",
+    # Ops / deployment actions (PR-2 — deployment planner participation)
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
 ]
 
 ACTION_NAMES: tuple[str, ...] = tuple(get_args(ActionName))
+
+# Canonical subsets so callers / tests can reason about the two families
+# without re-listing them.
+CREATIVE_ACTION_NAMES: tuple[str, ...] = (
+    "regenerate_clip",
+    "generate_extension_clip",
+    "speed_up_narration",
+    "trim_narration",
+    "freeze_frame_fill",
+    "replace_with_brand_card",
+    "rewrite_scene",
+    "abort_run",
+)
+OPS_ACTION_NAMES: tuple[str, ...] = (
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
+)
 
 # Which escalation level each action belongs to (per spec).
 ACTION_LEVELS: dict[str, int] = {
@@ -56,6 +81,11 @@ ACTION_LEVELS: dict[str, int] = {
     "replace_with_brand_card": 2,
     "rewrite_scene": 3,
     "abort_run": 3,
+    # Ops actions
+    "wait_for_worker_recovery": 1,    # cheapest — just wait
+    "recycle_worker": 2,              # destroy + reprovision a single worker
+    "provision_extra_worker": 2,      # add capacity
+    "freeze_batch_and_replan": 3,     # structural — halt in-flight work + replan
 }
 
 # Required parameter names and expected types per action.
@@ -68,10 +98,18 @@ ACTION_SIGNATURES: dict[str, dict[str, type]] = {
     "replace_with_brand_card": {"scene_id": str},
     "rewrite_scene": {"scene_id": str, "guidance": str},
     "abort_run": {"reason": str},
+    # Ops actions
+    "recycle_worker": {"worker_url": str, "reason": str},
+    "provision_extra_worker": {"role": str, "count": int},
+    "wait_for_worker_recovery": {"worker_url": str, "timeout_sec": float},
+    "freeze_batch_and_replan": {"reason": str},
 }
 
 # Hard bounds enforced in __post_init__.
 MAX_SPEED_FACTOR: float = 1.15
+MAX_PROVISION_COUNT: int = 4          # don't let the agent spin up a farm
+MAX_WAIT_TIMEOUT_SEC: float = 1800.0  # 30 minutes — hard cap on "just wait"
+OPS_VALID_ROLES: tuple[str, ...] = ("tts", "video", "whisperx")
 
 
 class EscalationActionError(ValueError):
@@ -98,7 +136,7 @@ class EscalationAction:
     clip_id: Optional[str] = None
     scene_id: Optional[str] = None
 
-    # Per-action parameters.
+    # Per-action parameters (creative menu).
     prompt_delta: Optional[str] = None
     seed_delta: Optional[int] = None
     duration_needed: Optional[float] = None
@@ -106,6 +144,12 @@ class EscalationAction:
     max_cut_sec: Optional[float] = None
     guidance: Optional[str] = None
     reason: Optional[str] = None
+
+    # Per-action parameters (ops menu).
+    worker_url: Optional[str] = None
+    role: Optional[str] = None
+    count: Optional[int] = None
+    timeout_sec: Optional[float] = None
 
     # Audit metadata populated by ``supervisor_escalate``.
     llm_model: str = ""
@@ -179,6 +223,26 @@ class EscalationAction:
             if self.seed_delta == 0:
                 raise EscalationActionError(
                     "regenerate_clip: seed_delta must be non-zero"
+                )
+        if self.action == "provision_extra_worker":
+            assert self.count is not None
+            if self.count <= 0 or self.count > MAX_PROVISION_COUNT:
+                raise EscalationActionError(
+                    f"provision_extra_worker: count must be in "
+                    f"[1, {MAX_PROVISION_COUNT}], got {self.count}"
+                )
+            assert self.role is not None
+            if self.role not in OPS_VALID_ROLES:
+                raise EscalationActionError(
+                    f"provision_extra_worker: role must be one of "
+                    f"{OPS_VALID_ROLES}, got {self.role!r}"
+                )
+        if self.action == "wait_for_worker_recovery":
+            assert self.timeout_sec is not None
+            if self.timeout_sec <= 0 or self.timeout_sec > MAX_WAIT_TIMEOUT_SEC:
+                raise EscalationActionError(
+                    f"wait_for_worker_recovery: timeout_sec must be in "
+                    f"(0, {MAX_WAIT_TIMEOUT_SEC}], got {self.timeout_sec}"
                 )
 
     @property
@@ -302,6 +366,28 @@ Level 3 (structural / terminal -- last resort):
   - abort_run(reason)
       Stop the pipeline entirely. Only when no safe recovery is possible.
 
+Ops / deployment actions (use when the failure root-cause is infra --
+worker VRAM, stage timeouts, cost overruns, etc.  Consult the
+read-tools ``read_worker_health`` / ``read_stage_timing`` /
+``read_vast_cost_snapshot`` before picking these.):
+  - wait_for_worker_recovery(worker_url, timeout_sec)  [L1]
+      Pause the escalating caller and wait for an in-flight worker's
+      self-healing retry to land. ``timeout_sec`` must be in
+      (0, 1800]. Cheapest ops action; prefer this when a worker just
+      went briefly unresponsive.
+  - recycle_worker(worker_url, reason)  [L2]
+      Destroy + reprovision a single degraded worker.  Use when the
+      worker is consistently failing (repeated consecutive QA fails,
+      VRAM pressure, OOM) and waiting will not help.
+  - provision_extra_worker(role, count)  [L2]
+      Add capacity for a stage (``role`` in {"tts", "video", "whisperx"},
+      ``count`` in [1, 4]).  Use when stage timing says the fleet is
+      saturated rather than broken.
+  - freeze_batch_and_replan(reason)  [L3]
+      Halt in-flight video/audio/production work and ask the orchestrator
+      to replan remaining scenes.  Structural ops intervention.  Use
+      only when no per-worker action can rescue the batch.
+
 Decision rule: pick the cheapest action that resolves the failure while
 preserving the narrative. Prefer L1 over L2 over L3. If a ``speed_factor``
 of 1.14 would reach the target duration, use ``speed_up_narration`` rather
@@ -317,6 +403,7 @@ ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "action": {"type": "string", "enum": list(ACTION_NAMES)},
+        # Creative menu fields.
         "clip_id": {"type": "string"},
         "scene_id": {"type": "string"},
         "prompt_delta": {"type": "string"},
@@ -326,6 +413,12 @@ ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
         "max_cut_sec": {"type": "number"},
         "guidance": {"type": "string"},
         "reason": {"type": "string"},
+        # Ops menu fields.
+        "worker_url": {"type": "string"},
+        "role": {"type": "string", "enum": list(OPS_VALID_ROLES)},
+        "count": {"type": "integer"},
+        "timeout_sec": {"type": "number"},
+        # Audit.
         "llm_reasoning": {"type": "string"},
     },
     "required": ["action"],
@@ -372,11 +465,16 @@ def assert_escalation_invariant(
 __all__ = [
     "ActionName",
     "ACTION_NAMES",
+    "CREATIVE_ACTION_NAMES",
+    "OPS_ACTION_NAMES",
     "ACTION_LEVELS",
     "ACTION_SIGNATURES",
     "ACTION_MENU_DESCRIPTION",
     "ESCALATION_ACTION_JSON_SCHEMA",
     "MAX_SPEED_FACTOR",
+    "MAX_PROVISION_COUNT",
+    "MAX_WAIT_TIMEOUT_SEC",
+    "OPS_VALID_ROLES",
     "EscalationAction",
     "EscalationActionError",
     "EscalationContext",

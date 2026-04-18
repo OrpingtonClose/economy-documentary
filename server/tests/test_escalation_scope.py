@@ -11,6 +11,7 @@ _SERVER_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
+from orchestrator.escalation_menu import EscalationContext  # noqa: E402
 from orchestrator.escalation_scope import (  # noqa: E402
     FAILURE_KINDS,
     EscalationScope,
@@ -148,3 +149,57 @@ def test_to_prompt_contains_expected_fields():
     assert "regen_count=2" in prompt
     assert "qa_fail_streak=3" in prompt
     assert "high_cost" in prompt
+
+
+# ---------------------------------------------------------------------------
+# EscalationScope.from_context bridge (PR-2)
+# ---------------------------------------------------------------------------
+
+def test_from_context_translates_legacy_fields():
+    ctx = EscalationContext(
+        failing_artifact="production clip c-7 failed jury",
+        artifact_descriptor={"clip_id": "c-7", "seed": 42},
+        timeline_state_snapshot={"total_sec": 120.0},
+        escalation_history=[{"action": "regenerate_clip"}],
+        high_cost=True,
+    )
+    scope = EscalationScope.from_context(
+        ctx,
+        failure_kind="qa_fail",
+        primary_artifact_id="c-7",
+        primary_artifact_type="clip",
+        scope_tags=["jury_split"],
+    )
+
+    assert scope.failure_kind == "qa_fail"
+    assert scope.trigger_message == ctx.failing_artifact
+    assert scope.primary_artifact_id == "c-7"
+    assert scope.primary_artifact_type == "clip"
+    assert scope.high_cost is True
+    assert "jury_split" in scope.scope_tags
+    # Default stage_name inferred from the first token of failing_artifact.
+    assert scope.stage_name == "production"
+    assert scope.summary_counters["prior_escalations"] == 1
+    # Legacy push-side fields are preserved (not lost) in metadata.
+    legacy = scope.metadata.get("legacy_context")
+    assert isinstance(legacy, dict)
+    assert legacy["artifact_descriptor"]["clip_id"] == "c-7"
+
+
+def test_from_context_rejects_none():
+    with pytest.raises(EscalationScopeError):
+        EscalationScope.from_context(None)  # type: ignore[arg-type]
+
+
+def test_from_context_defaults_when_minimal():
+    ctx = EscalationContext(
+        failing_artifact="",
+        artifact_descriptor={},
+        timeline_state_snapshot={},
+        escalation_history=[],
+        high_cost=False,
+    )
+    scope = EscalationScope.from_context(ctx)
+    assert scope.trigger_message == "unknown failure"
+    assert scope.primary_artifact_id is None
+    assert scope.high_cost is False
