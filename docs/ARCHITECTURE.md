@@ -19,3 +19,22 @@ hold occurs at the start, middle, or end of a clip and regardless of
 the mechanism (decoder hold, still-image insert, last-frame repeat).
 If a slot needs more visual duration, generate a new clip; do not
 hold a frame.
+
+## Escalation Pattern
+
+Every pipeline operation is wrapped by the recovery middleware in
+server/recovery.py. The intended design is a graduated ladder of
+LLM-powered agents, one per rung, with increasing authority and
+scope.
+
+The ladder has five rungs. L0 is FIX: a domain specialist agent
+rewrites inputs to repair the specific problem — for example, the
+audio timing agent rewrites narration to fix duration overruns and
+the visual prompt agent rewrites a visual prompt from QA feedback.
+L1 is RETRY: an intelligent retry agent analyses error patterns and
+adjusts parameters; it is not dumb exponential backoff. L2 is
+CREATIVE: an alternative-strategy agent brainstorms a different
+model or a different approach. L3 is COLLABORATIVE: an inter-agent
+agent talks to other pipeline agents to coordinate a fix. L4 is
+HUMAN: AG-UI escalation with the full diagnostic chain presented;
+last resort.
