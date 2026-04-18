@@ -40,104 +40,90 @@ for the frontend.
 └──────────────────────────────────────────────────────┘
 ```
 
-## Data Flow
+## Flow of Work
 
-1. **Scenario Director**: Topic → SCENARIO JSON with V1/V2/V3 voice blocks
-2. **Audio Agent**: Scene scripts → WAV files + WhisperX word-level timing
-3. **Visual Director**: WhisperX timing → Content analysis → Visual concepts
-4. **Production Supervisor**: Visual concepts → GPU-generated video clips
-5. **Assembler Agent**: OTIO timeline → Trimmed/muxed/concatenated final MP4
+A run starts when a user submits a prompt through the dashboard. The
+prompt lands in a session whose identity governs every artifact path
+on disk and in B2, so the same prompt submitted twice produces
+distinct, resumable runs.
 
-## ADK Patterns Used
+**1. Scenario.** The Scenario Director turns the prompt into a
+scenario: a list of scenes, each decomposed into voice blocks (V1
+anchor, V2 elaboration, V3 stinger). A generator proposes; an
+evaluator grades; the loop runs until the scenario rates GOOD. The
+approved scenario is written to the blackboard and surfaced at an
+approval gate. The reviewer may approve, halt, or request a rewrite.
 
-### EvaluatorOptimizer (Scenario Director)
-Generator creates content, evaluator grades it. Loop until GOOD rating.
+**2. Narration.** The Audio Agent synthesizes every voice block
+through TTS and runs WhisperX over the output to extract word-level
+timing. **Narration is the pipeline's timing master:** the measured
+audio durations plus their trailing silences define the video slots
+that every downstream stage is bound to. The OTIO timeline is
+populated with narration clips at this point. A second approval gate
+reviews the generated audio.
 
-### LoopAgent (Visual Director)
-Three sub-agents iterate: Content Analyst → Visual Concepter → Coherence
-Evaluator. Loops until coherence rating ≥ GOOD.
+**3. Visual plan.** The Visual Director reads WhisperX timing and
+runs a three-agent loop: a Content Analyst extracts the semantic
+beats of each voice block, a Visual Concepter writes one visual
+phrase (the cinematography paragraph) per beat, and a Coherence
+Evaluator checks cross-scene visual consistency. The loop runs until
+coherence rates at least GOOD. The approved visual plan is attached
+to the OTIO timeline as per-slot visual concepts. A third approval
+gate reviews the plan as a storyboard.
 
-### SequentialAgent (Master Pipeline)
-Agents execute in strict order. State flows via session blackboard.
+**4. Clip production.** The Production Supervisor dispatches video
+generation across a fleet of GPU workers. Workers are provisioned
+lazily in the background during earlier CPU-bound phases so the
+pipeline is never idle waiting on boot. Clips generate in parallel,
+one per visual phrase. Each returned clip flows through a two-pass
+QA — structural (duration, codec, anti-cheat against frozen or
+stretched frames) and semantic (does the clip match its visual
+concept). Clips that fail enter the recovery ladder; the main flow
+is not blocked on individual recoveries until the batch is complete.
+A fourth approval gate reviews the assembled set of clips against
+the timeline.
 
-## Plugin Stack
+**5. Assembly.** The Assembler Agent walks the approved OTIO
+timeline and ffmpeg-trims, muxes, and concatenates the final MP4.
+Narration and music tracks are composited against the video track.
+Gaps render as black. The final file uploads to B2; the run ends.
 
-- **ContextFilterPlugin**: Keeps only recent tool results in the LLM context window
-- **ReflectAndRetryToolPlugin**: Auto-retries failed tool calls (max 2)
-- **GlobalInstructionPlugin**: Injects documentary-specific instructions
-- **LoggingPlugin / DebugLoggingPlugin**: Observability
+## Handoffs and Contracts
 
-## Callback Stack
+Stages never hand partial state across boundaries. Each stage must
+complete its contract — produce the expected state keys, populate
+the OTIO mutations it owns, and pass Timeline Guardian validation —
+before the next stage starts. If the contract fails, the stage
+escalates rather than hand off degraded state.
 
-- **before_model**: LLM concurrency semaphore + context-length safety
-- **after_model**: Dashboard tracking
-- **before_tool**: Per-provider rate limiting + dashboard tracking
-- **after_tool**: Result truncation + dashboard tracking
-- **timeline_guardian**: Phase-specific OTIO validation (after_agent)
+The blackboard is the only cross-stage communication channel inside
+a run. OTIO is the only cross-stage media contract: every sample of
+audio and every frame of video in the final render traces to an
+OTIO entry.
 
-## OTIO Timeline
+## Parallelism
 
-OpenTimelineIO is the single source of truth for media assembly. Three tracks:
+Inside a stage, the pipeline parallelises aggressively: GPU workers
+run concurrently, critique agents run fire-and-forget alongside the
+main flow, worker provisioning overlaps with CPU-bound script work.
+Between stages, the pipeline is strictly sequential; a downstream
+stage never starts on partial upstream output.
 
-- **V1_Video**: Video clips (LTX-2.3 generated)
-- **A1_Narration**: Narration audio clips (Qwen3-TTS generated)
-- **A2_Music**: Background music clips
+## Recovery In-Line
 
-All timeline operations are idempotent. Gaps render as black; never as
-held frames.
+Every pipeline operation is wrapped by the recovery middleware. When
+an operation fails, the recovery ladder fires immediately, in-line
+with the main flow, and only surfaces to the main flow if it cannot
+resolve the failure within its budget. See **Escalation Pattern**
+below.
 
-## GPU Fleet
+## Resumability
 
-Video generation (LTX-2.3) and TTS (Qwen3) run on remote GPU workers
-provisioned on demand (Vast.ai). Workers require a VRAM floor of
-48–80GB depending on the model tier. The fleet coordinator dispatches
-work by observed worker health, never by inference from job outcomes;
-a single failed clip does not condemn a worker, and a single good clip
-does not exonerate one. Workers are provisioned lazily in the
-background during CPU-bound script phases so the pipeline is never
-idle waiting on boot. Models are loaded sequentially through a
-state-dict registry to keep VRAM spikes bounded.
-
-## Dashboard
-
-Real-time pipeline instrumentation with:
-
-- SQLite-backed event store (WAL mode for concurrent reads)
-- SSE streaming for live updates
-- Self-contained HTML reports for post-mortem analysis
-- Per-run collectors with async context isolation
-
-## Human Gates
-
-Every stage boundary emits an approval gate to the AG-UI dashboard
-with a 10-second intervention window during which a reviewer may
-halt. Once a gate is approved, the approval is binding: downstream
-stages may not silently re-run or invalidate approved upstream
-artifacts; they may only escalate fresh.
-
-## Quality Gates
-
-Generated clips pass through a two-pass visual QA (Bearnaise
-pattern): a structural pass checks technical validity (duration,
-codec, resolution, anti-cheat — frozen-frame and temporal-stretch
-detection), and a semantic pass checks that the clip matches its
-visual concept. Narration passes through a timing-accuracy gate
-comparing WhisperX-aligned duration against the OTIO slot.
-Cross-scene coherence is checked by the Visual Director's Coherence
-Evaluator loop. If any gate is unreachable, ambiguous, or errors,
-the pipeline treats that as a failure and escalates; it never
-defaults to pass.
-
-## Scripting Rules
-
-Scenarios must comply with the ADHD rule set: open with a hook,
-avoid rhetorical questions, keep single-sentence voice blocks at or
-below a fixed word budget, and structure each scene around a single
-claim. Each scene decomposes into voice blocks (V1 anchor, V2
-elaboration, V3 stinger) and the audio durations of those blocks
-plus their trailing silences define the video slots. A visual
-phrase is the cinematography paragraph for one semantic narration
-unit; there is one visual phrase per voice block.
+Every stage checkpoints its outputs to local disk and to B2. A run
+interrupted mid-pipeline resumes from the last valid checkpoint; no
+stage regenerates work that already succeeded. Artifact paths are
+stable across resumes so the blackboard can be rehydrated
+deterministically.
 
 ## Media Immutability Invariant
 
@@ -177,57 +163,3 @@ model or a different approach. L3 is COLLABORATIVE: an inter-agent
 agent talks to other pipeline agents to coordinate a fix. L4 is
 HUMAN: AG-UI escalation with the full diagnostic chain presented;
 last resort.
-
-## Pipeline Invariants
-
-The following invariants hold across every stage, recovery path, and
-assembly step. A violation of any one is a regression.
-
-**Single Source of Truth.** Every audio sample, video frame, and
-music segment in the final render must trace to an OTIO entry.
-Side-channel media inserted between stages is forbidden.
-
-**Idempotency.** Every operation that touches persistent state (B2,
-OTIO, status files, artifacts) is safe to re-run with identical
-inputs. Wall-clock timestamps in artifact IDs and unguarded appends
-are forbidden.
-
-**Fail-Closed.** When a QA gate, validator, or external service is
-unreachable, ambiguous, or errors out, the pipeline treats that as
-failure and escalates. Default-to-pass fallbacks and swallowed
-exceptions are forbidden.
-
-**Escalation Has Reasoning.** Every recovery decision carries an
-LLM-backed reasoning trace. Round-robin recovery and default
-actions selected without consulting the supervisor are regressions.
-
-**Provenance.** Every artifact carries full lineage: scene, agent,
-model, seed, prompt revision, worker, stage, attempt number.
-Anonymous artifacts are forbidden.
-
-**Narration Is Timing Master.** Video durations, music cues, and
-visual concepts derive from WhisperX-aligned narration timing.
-Video-first timing, audio retimed to fit video, and music tracks of
-independent length are forbidden.
-
-**Budget Is Real.** Every cost-incurring operation checks remaining
-budget before starting and aborts cleanly when exceeded. Infinite
-retry on paid operations is forbidden.
-
-**Single Writer Per Slot.** Only one agent or worker at a time may
-write to a given timeline slot. Parallel regeneration of the same
-slot is forbidden.
-
-**Stage Boundary Is Hard.** Each SequentialAgent stage must complete
-its contract (including Timeline Guardian validation) before the
-next stage starts. Partial-state hand-offs are forbidden.
-
-**Resumability.** Every checkpointed artifact (local plus B2) allows
-the pipeline to resume from any prior stage without regenerating
-downstream-of-checkpoint work. Implicit RAM-only dependencies and
-run-id-coupled paths that change on resume are forbidden.
-
-**No Hidden Tools.** Every tool an LLM agent can invoke is declared
-in its tool list, traceable in the dashboard, and gated by
-before_tool. Shell-outs from inside prompts and untraceable side
-effects are forbidden.
