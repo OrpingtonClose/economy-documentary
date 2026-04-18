@@ -523,9 +523,16 @@ def _gate_reconstruction(
     """
     from callbacks.approval_gate import (
         mark_stage_ready,
+        reset_stage_approval,
         wait_for_approval,
     )
 
+    # Clear any stale approval from a previous reconstruction in this
+    # pipeline run. Without this, the ``approved`` flag for
+    # ``RECONSTRUCT_GATE_STAGE`` persists on disk and every subsequent
+    # plan would short-circuit through ``is_stage_approved`` --
+    # silently auto-approving reconstructions after the first.
+    reset_stage_approval(RECONSTRUCT_GATE_STAGE)
     mark_stage_ready(RECONSTRUCT_GATE_STAGE)
     logger.info(
         "APPROVAL GATE: reconstruction plan %r ready -- "

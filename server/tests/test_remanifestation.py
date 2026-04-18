@@ -355,6 +355,7 @@ def test_execute_plan_forwards_state_to_reconstruction_gate(monkeypatch):
     fake_mod = types.ModuleType("callbacks.approval_gate")
     fake_mod.wait_for_approval = fake_wait
     fake_mod.mark_stage_ready = fake_mark_ready
+    fake_mod.reset_stage_approval = lambda stage: None  # noqa: ARG005
     monkeypatch.setitem(sys.modules, "callbacks.approval_gate", fake_mod)
 
     state = _tagged_state()
@@ -372,6 +373,44 @@ def test_execute_plan_forwards_state_to_reconstruction_gate(monkeypatch):
     assert captured["stage"] == "reconstruct"
     # The critical invariant: state was forwarded, not ``None``.
     assert captured["state_is"] is state
+
+
+def test_execute_plan_resets_approval_before_marking_ready(monkeypatch):
+    """Each reconstruction plan must reset the ``reconstruct`` approval
+    before marking the stage ready; otherwise a stale ``approved=True``
+    flag from a previous plan silently short-circuits ``wait_for_approval``
+    and auto-approves every subsequent reconstruction (issue #139 DoD:
+    reconstruct is itself gated)."""
+    import sys
+    import types
+
+    call_order: list[str] = []
+
+    fake_mod = types.ModuleType("callbacks.approval_gate")
+    fake_mod.wait_for_approval = lambda *a, **kw: (  # noqa: ARG005
+        call_order.append("wait") or True
+    )
+    fake_mod.mark_stage_ready = lambda stage: call_order.append(f"ready:{stage}")
+    fake_mod.reset_stage_approval = lambda stage: call_order.append(f"reset:{stage}")
+    monkeypatch.setitem(sys.modules, "callbacks.approval_gate", fake_mod)
+
+    state = _tagged_state()
+    plan = DictRemanifestationPlan(
+        plan_id="p-reset",
+        triggered_by={},
+        stages_to_rerun=("scenario",),
+        artifact_keys_to_clear=(),
+        rationale="reset-before-ready test",
+    )
+
+    execute_plan(state, plan, gate=True)
+
+    # reset MUST happen before mark_ready -- otherwise the UI briefly
+    # exposes a stage that is both "ready" and already-"approved".
+    assert call_order.index("reset:reconstruct") < call_order.index(
+        "ready:reconstruct"
+    )
+    assert call_order.index("ready:reconstruct") < call_order.index("wait")
 
 
 def test_execute_plan_skips_untagged_artifacts_quietly():
