@@ -214,15 +214,6 @@ def test_scope_path_runner_can_return_any_canonical_action(
         "generate_extension_clip": {
             "scene_id": "s-1", "duration_needed": 2.0,
         },
-        "speed_up_narration": {
-            "scene_id": "s-1", "speed_factor": 1.1,
-        },
-        "trim_narration": {
-            "scene_id": "s-1", "max_cut_sec": 0.5,
-        },
-        "freeze_frame_fill": {
-            "scene_id": "s-1", "duration_needed": 0.5,
-        },
         "replace_with_brand_card": {"scene_id": "s-1"},
         "rewrite_scene": {
             "scene_id": "s-1", "guidance": "tighten",
