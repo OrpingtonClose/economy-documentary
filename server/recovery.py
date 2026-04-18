@@ -71,6 +71,51 @@ class RecoveryLevel(IntEnum):
 
 
 # ---------------------------------------------------------------------------
+# Canonical per-tier budget labels (ARCH-D / diagrams 2 + 4)
+# ---------------------------------------------------------------------------
+
+class RecoveryBudget(IntEnum):
+    """Canonical budget labels for per-tier retry attempt allowances.
+
+    Diagrams 2 and 4 of ``docs/ARCHITECTURE_DIAGRAMS.md`` define this
+    vocabulary.  The audio content ladder is deliberately permissive at
+    the low tiers because narration reconciliation **is** the mechanism by
+    which the authoritative OTIO is born — abandoning L0 early starves
+    the timeline of the narration it needs.
+
+    Members are IntEnum so the value doubles as the attempt count for
+    that tier; the name carries the semantic label that appears in the
+    spec and on the dashboard.
+
+        WIDE          many attempts per block (TTS seed rolls, reference
+                      samples, breath phrasing, tiny script-local rewrites)
+        GENEROUS      multi-shot consultation across audio-understanding
+                      models and bounded parameter perturbations
+        NARROW_MULTI  bounded exploration of alternative voices, TTS
+                      providers, and speaker-role recasting
+        BOUNDED       small budget; coordination across directors costs
+                      real agent time
+        SINGLE        single decision (human-gate L4)
+    """
+    WIDE = 8
+    GENEROUS = 5
+    NARROW_MULTI = 3
+    BOUNDED = 2
+    SINGLE = 1
+
+
+# Canonical audio content ladder — permissive at low tiers (diagram 2).
+# This is the ARCH-D1 encoding: budget labels on the audio ladder.
+AUDIO_PERMISSIVE_BUDGETS: dict[int, RecoveryBudget] = {
+    RecoveryLevel.FIX: RecoveryBudget.WIDE,
+    RecoveryLevel.RETRY: RecoveryBudget.GENEROUS,
+    RecoveryLevel.CREATIVE: RecoveryBudget.NARROW_MULTI,
+    RecoveryLevel.COLLABORATIVE: RecoveryBudget.BOUNDED,
+    RecoveryLevel.HUMAN: RecoveryBudget.SINGLE,
+}
+
+
+# ---------------------------------------------------------------------------
 # Recovery policy (configurable per operation type)
 # ---------------------------------------------------------------------------
 
@@ -95,6 +140,18 @@ class RecoveryPolicy:
     level_budgets: Optional[dict] = None
     # ^-- dict[int, int] mapping level number to max attempts.
     #     Default: {0: 5, 1: 3, 2: 2, 3: 1}
+
+    level_budget_labels: Optional[dict] = None
+    # ^-- dict[int, RecoveryBudget] mapping level number to canonical
+    #     budget label (ARCH-D / diagrams 2 + 4).  When set, it is the
+    #     authoritative source for per-level attempt counts — the label's
+    #     IntEnum value is used as the attempt budget.  Existing
+    #     ``level_budgets`` entries override individual labels when both
+    #     are supplied (escape hatch for one-off tuning).
+    #     Example (audio permissive ladder):
+    #         {0: RecoveryBudget.WIDE, 1: RecoveryBudget.GENEROUS,
+    #          2: RecoveryBudget.NARROW_MULTI, 3: RecoveryBudget.BOUNDED,
+    #          4: RecoveryBudget.SINGLE}
 
     # ── Legacy fields (backward compat) ───────────────────────────────
     # Level 1: retry
@@ -121,11 +178,31 @@ class RecoveryPolicy:
     non_retryable_patterns: tuple[str, ...] = ()
 
     def get_level_budget(self, level: int) -> int:
-        """Get the attempt budget for a recovery level."""
+        """Get the attempt budget for a recovery level.
+
+        Resolution order:
+            1. ``level_budgets[level]`` — explicit numeric override.
+            2. ``level_budget_labels[level]`` — canonical budget label
+               (ARCH-D / diagrams 2 + 4); the IntEnum value is used.
+            3. Hard-coded defaults ``{0: 5, 1: 3, 2: 2, 3: 1}``.
+        """
         defaults = {0: 5, 1: 3, 2: 2, 3: 1}
-        if self.level_budgets:
-            return self.level_budgets.get(level, defaults.get(level, 1))
+        if self.level_budgets and level in self.level_budgets:
+            return int(self.level_budgets[level])
+        if self.level_budget_labels and level in self.level_budget_labels:
+            return int(self.level_budget_labels[level])
         return defaults.get(level, 1)
+
+    def get_level_budget_label(self, level: int) -> Optional[RecoveryBudget]:
+        """Return the canonical ``RecoveryBudget`` label for a level, if any.
+
+        Used by the dashboard / escalation menu to surface the permissive
+        vs. strict asymmetry between audio and video content ladders
+        (diagram 4).
+        """
+        if self.level_budget_labels and level in self.level_budget_labels:
+            return self.level_budget_labels[level]
+        return None
 
     def get_agent(self, level: int):
         """Get the agent for a recovery level, or None."""
@@ -273,11 +350,18 @@ B2_POLICY = RecoveryPolicy(
 # Import agents lazily to avoid circular imports at module load time.
 
 def _make_audio_agent_policy() -> RecoveryPolicy:
-    """Audio operations: L0 rewrites narration text to fix timing."""
+    """Audio operations: L0 rewrites narration text to fix timing.
+
+    Budget shape is the canonical **permissive** audio ladder from ARCH-D
+    (diagrams 2 + 4): L0 WIDE, L1 GENEROUS, L2 NARROW-MULTI, L3 BOUNDED,
+    L4 SINGLE.  Narration reconciliation IS the mechanism by which the
+    authoritative OTIO is born — starving L0 of attempts would starve
+    the timeline of narration, so low tiers are deliberately generous.
+    """
     from recovery_agents import AUDIO_AGENTS
     return RecoveryPolicy(
         agents=AUDIO_AGENTS,
-        level_budgets={0: 5, 1: 3, 2: 2, 3: 1},
+        level_budget_labels=dict(AUDIO_PERMISSIVE_BUDGETS),
         retry_backoff_base=3.0,
         escalate_to_human=True,
     )

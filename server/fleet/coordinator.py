@@ -21,6 +21,11 @@ from fleet.cost_tracker import CostTracker
 from fleet.scaler import FleetScaler
 from fleet.systemic_detector import SystemicDetector
 from fleet.work_queue import QueuedClip, WorkQueue
+from fleet.worker_bad_rule import (
+    DEFAULT_CORROBORATION_WINDOW_SEC,
+    WorkerHealthTracker,
+    WorkerVerdict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +62,7 @@ class FleetCoordinator:
         self,
         budget_ceiling: float = 0.0,
         clip_timeout: float = WorkQueue.DEFAULT_TIMEOUT,
+        worker_bad_window_sec: float = DEFAULT_CORROBORATION_WINDOW_SEC,
     ) -> None:
         self._cost_tracker = CostTracker(budget_ceiling=budget_ceiling)
         self._queue = WorkQueue(clip_timeout=clip_timeout)
@@ -67,6 +73,14 @@ class FleetCoordinator:
         self._detector = SystemicDetector(
             cost_tracker=self._cost_tracker,
         )
+        # ARCH-C4 / issue #143: two-signal worker-bad rule.  Job-outcome
+        # signals are NEVER the sole input — infra_agent telemetry is the
+        # gating second signal.  See server/fleet/worker_bad_rule.py and
+        # diagram 8 in docs/ARCHITECTURE_DIAGRAMS.md.
+        self._worker_health = WorkerHealthTracker(
+            corroboration_window_sec=worker_bad_window_sec,
+        )
+        self._last_infra_scan_ts: float = 0.0
         self._lock = threading.Lock()
         self._shutdown_event = threading.Event()
         self._completion_event = threading.Event()
@@ -137,6 +151,14 @@ class FleetCoordinator:
                 logger.debug("FleetCoordinator: no healthy video workers available")
                 return None
 
+            # Skip workers condemned by the two-signal worker-bad rule.
+            healthy = [w for w in healthy if not self.is_worker_bad(w)]
+            if not healthy:
+                logger.debug(
+                    "FleetCoordinator: all healthy video workers are condemned by worker-bad rule"
+                )
+                return None
+
             # Try each healthy worker (least-recently-used first)
             for worker_url in healthy:
                 clip = self._queue.pull_work(worker_id=worker_url)
@@ -183,7 +205,12 @@ class FleetCoordinator:
         error: str,
         category: str = "unknown",
     ) -> None:
-        """Report a clip generation failure."""
+        """Report a clip generation failure.
+
+        Records signal A (job_failure) for the worker-bad rule.  This signal
+        alone NEVER condemns the worker — corroborating ``infra_agent``
+        telemetry is required.  See diagram 8.
+        """
         self._queue.mark_failed(
             clip_id=clip_id,
             worker_id=worker_id,
@@ -191,6 +218,12 @@ class FleetCoordinator:
             category=category,
         )
         self._detector.record_failure(worker_id, error, category)
+        if worker_id:
+            self._worker_health.record_job_failure(
+                worker_id=worker_id,
+                error=error,
+                clip_id=clip_id,
+            )
 
         # Check if all done (might have dead-lettered the last clip)
         if self._queue.is_complete():
@@ -232,23 +265,54 @@ class FleetCoordinator:
         self._thread.start()
 
     def _monitor_loop(self) -> None:
-        """Background loop: check scale-down, systemic patterns, completion."""
+        """Background loop: check scale-down, systemic patterns, completion.
+
+        Each per-cycle step is wrapped in try/except so a single bad
+        external input (malformed escalation, flaky scaler call, ...) cannot
+        kill the monitoring thread and silently stop the entire pipeline's
+        health, scale-down, and completion tracking.
+        """
         logger.info("FleetCoordinator: monitoring started")
         while not self._shutdown_event.is_set():
             if self._shutdown_event.wait(timeout=COORDINATOR_POLL_INTERVAL):
                 break
 
+            # Pull infra_agent telemetry to feed signal B of the worker-bad
+            # rule (ARCH-C4).  Done before pattern detection so a freshly
+            # corroborated condemnation is visible to escalation handlers.
+            try:
+                self._scan_infra_for_anomalies()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: _scan_infra_for_anomalies raised; continuing"
+                )
+
             # Check systemic patterns
-            queue_clips = self._queue.get_all_clips()
-            patterns = self._detector.check_patterns(queue_clips=queue_clips)
-            self._handle_patterns(patterns)
+            try:
+                queue_clips = self._queue.get_all_clips()
+                patterns = self._detector.check_patterns(queue_clips=queue_clips)
+                self._handle_patterns(patterns)
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: systemic pattern check raised; continuing"
+                )
 
             # Check scale-down
-            self._scaler.check_and_scale_down()
+            try:
+                self._scaler.check_and_scale_down()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: scale-down check raised; continuing"
+                )
 
             # Check completion
-            if self._queue.is_complete():
-                self._completion_event.set()
+            try:
+                if self._queue.is_complete():
+                    self._completion_event.set()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: completion check raised; continuing"
+                )
 
         logger.info("FleetCoordinator: monitoring stopped")
 
@@ -384,6 +448,132 @@ class FleetCoordinator:
     def systemic_detector(self) -> SystemicDetector:
         return self._detector
 
+    @property
+    def worker_health(self) -> WorkerHealthTracker:
+        """The two-signal worker-bad health tracker (ARCH-C4, issue #143)."""
+        return self._worker_health
+
+    # ------------------------------------------------------------------
+    # Worker-bad rule (ARCH-C4, issue #143; absorbs #78)
+    # ------------------------------------------------------------------
+
+    def record_infra_anomaly(
+        self,
+        worker_id: str,
+        kind: str,
+        message: str = "",
+    ) -> WorkerVerdict:
+        """Record signal B (``infra_agent`` telemetry anomaly) for *worker_id*.
+
+        Called by the infra-monitoring loop when it observes a CUDA error,
+        OOM, process crash, GPU driver fault, or similar telemetry anomaly.
+        This signal alone NEVER condemns the worker — corroboration with a
+        job failure within the worker-bad window is required.
+        """
+        return self._worker_health.record_infra_anomaly(
+            worker_id=worker_id, kind=kind, message=message,
+        )
+
+    def is_worker_bad(self, worker_id: str) -> bool:
+        """Return True iff *worker_id* has been condemned by the two-signal rule.
+
+        A single bad clip does not condemn (the prompt could be the problem).
+        A single passing clip does not exonerate (the worker may be about to
+        die).  Both job_failure AND infra_agent telemetry anomaly are
+        required, within the configured corroboration window.
+        """
+        return self._worker_health.is_worker_bad(worker_id)
+
+    def _scan_infra_for_anomalies(self) -> None:
+        """Pull recent ``infra_agent`` escalations and feed any anomaly-shaped
+        ones into the worker-bad rule as signal B.
+
+        Only escalations whose source identifies a specific worker URL are
+        attributable; generic pipeline-level escalations are ignored — they
+        cannot be the gating second signal for any one worker.
+        """
+        try:
+            from infra_agent import get_infra_agent
+        except ImportError:
+            return
+        agent = get_infra_agent()
+        if agent is None:
+            return
+        try:
+            status = agent.get_status()
+        except Exception:
+            return
+
+        last_seen = self._last_infra_scan_ts
+        max_ts_seen = last_seen
+        for esc in status.get("recent_escalations", []) or []:
+            # Per-entry guard: a single malformed escalation must never
+            # break the scan or kill the monitor thread.
+            try:
+                if not isinstance(esc, dict):
+                    continue
+                try:
+                    ts = float(esc.get("timestamp") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if ts <= last_seen:
+                    continue
+                if ts > max_ts_seen:
+                    max_ts_seen = ts
+                source = str(esc.get("source") or "")
+                message = str(esc.get("message") or "")
+                worker_id = self._extract_worker_id_from_source(source, status)
+                if not worker_id:
+                    continue
+                self._worker_health.ingest_infra_message(
+                    worker_id=worker_id, message=message, timestamp=ts,
+                )
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: skipping malformed infra escalation entry"
+                )
+                continue
+        self._last_infra_scan_ts = max_ts_seen
+
+    @staticmethod
+    def _extract_worker_id_from_source(source: str, status: dict) -> str:
+        """Map an escalation ``source`` field to a worker URL when possible.
+
+        Sources from ``infra_agent`` look like ``"worker:video"`` or
+        ``"vm:video:gpu_worker"``; the URL itself isn't always embedded.
+        For role-only sources we attribute the anomaly to the single
+        consecutive-failing worker of that role, if exactly one exists.
+        Ambiguous attributions return ``""`` so the rule stays conservative.
+        """
+        if not source:
+            return ""
+        # Direct URL form: e.g. "worker:http://1.2.3.4:8000"
+        for prefix in ("worker:", "vm:"):
+            if source.startswith(prefix):
+                tail = source[len(prefix):]
+                if tail.startswith(("http://", "https://")):
+                    return tail
+        # Role-only form: pick the unique unhealthy worker of that role.
+        parts = source.split(":")
+        if len(parts) < 2:
+            return ""
+        role = parts[1].strip().lower()
+        candidates = []
+        for w in status.get("workers", []) or []:
+            if not isinstance(w, dict):
+                continue
+            if str(w.get("role", "")).lower() != role:
+                continue
+            try:
+                cf = int(w.get("consecutive_failures") or 0)
+            except (TypeError, ValueError):
+                continue
+            if cf > 0:
+                candidates.append(w)
+        if len(candidates) == 1:
+            return str(candidates[0].get("url") or "")
+        return ""
+
     def get_summary(self) -> dict:
         """Return a comprehensive fleet status summary."""
         return {
@@ -397,6 +587,11 @@ class FleetCoordinator:
                 }
                 for p in self._detector.get_active_patterns()
             ],
+            "worker_health": {
+                "corroboration_window_sec": self._worker_health.corroboration_window_sec,
+                "condemned_workers": self._worker_health.condemned_workers(),
+                "tracked": self._worker_health.snapshot(),
+            },
             "paused": self._paused,
             "pause_reason": self._pause_reason,
         }

@@ -643,6 +643,24 @@ def deterministic_audio_callback(
     if isinstance(_audio_regen, str):
         _audio_regen = _audio_regen.lower() in ("true", "1", "yes")
     if _audio_regen:
+        # ARCH-E1: the previous audio iteration crystallised the OTIO to
+        # ``authoritative`` via ``authoritative_transition_callback``.
+        # Before re-deriving narration we MUST revert to ``draft``
+        # otherwise the mutation guard on ``clear_narration_track`` and
+        # ``add_narration_clip`` would fire.  This is a legitimate
+        # timing-loop re-iteration, not a downstream mutation.
+        from callbacks.otio_state import (
+            OTIO_STATE_AUTHORITATIVE,
+            get_otio_state,
+            reset_to_draft,
+        )
+        if get_otio_state(state) == OTIO_STATE_AUTHORITATIVE:
+            reset_to_draft(
+                state,
+                reason="timing_loop_reiteration",
+                timeline_path=state.get("_timeline_path", ""),
+            )
+
         from tools.otio_tools import clear_narration_track
         _tl_path = state.get("_timeline_path", "")
         _removed = clear_narration_track(_tl_path)
@@ -769,6 +787,10 @@ def deterministic_audio_callback(
     # Deferred gatekeeper: collect clip info for batch validation AFTER
     # all artifacts are uploaded to B2 and written to OTIO (audit trail).
     _deferred_gk_clips: list[dict] = []
+    # ARCH-E3 (#149): spec entries for the stylistic QA invariant battery.
+    # Populated alongside _deferred_gk_clips, evaluated after the timing
+    # gatekeeper has passed.
+    _stylistic_qa_blocks: list[dict] = []
 
     for scene_idx, scene in enumerate(scenes):
         scene_num = _safe_int(scene.get("scene_num", 0))
@@ -857,6 +879,22 @@ def deterministic_audio_callback(
                                 "voice": voice_suffix,
                                 "duration": duration,
                                 "budget": voice_budget if lang_code == "ru" else 0,
+                            })
+
+                            # ARCH-E3 (#149): accumulate stylistic QA block spec
+                            # for post-gatekeeper invariant checks. voice_id is
+                            # derived from the voice-role stem so that every
+                            # block of voice V1 maps to the same identity —
+                            # character_voice_consistency then trips when the
+                            # TTS worker drifts (e.g. a reseed returning a
+                            # different voice pack for the same role).
+                            _stylistic_qa_blocks.append({
+                                "block_id": f"scene_{scene_num:03d}_{voice_suffix}",
+                                "wav_path": wav_path,
+                                "scene_num": scene_num,
+                                "voice_role": voice,
+                                "language": lang_code,
+                                "voice_id": result.get("voice_id", voice),
                             })
 
                             # AG-UI: update narration artifact
@@ -978,6 +1016,15 @@ def deterministic_audio_callback(
                             "voice": voice,
                             "duration": duration,
                             "budget": voice_budget,
+                        })
+                        # ARCH-E3 (#149): queue for stylistic QA invariants.
+                        _stylistic_qa_blocks.append({
+                            "block_id": f"scene_{scene_num:03d}_{voice}",
+                            "wav_path": wav_path,
+                            "scene_num": scene_num,
+                            "voice_role": voice,
+                            "language": "",
+                            "voice_id": result.get("voice_id", voice),
                         })
 
                         clip_result_json = add_narration_clip(
@@ -1197,6 +1244,49 @@ def deterministic_audio_callback(
             "Audio gatekeeper rejection escalated and resolved with action=%s — continuing pipeline",
             response.get("action"),
         )
+
+    # ARCH-E3 (#149): stylistic invariants run AFTER the timing gatekeeper.
+    # A block that passes timing but fails a stylistic invariant re-enters
+    # the audio ladder with the violation as the failure signal.
+    # Invariants enforced: uniform LUFS, voice continuity, character-voice
+    # consistency, peak-limiter compliance, clicks / truncated plosives /
+    # hiss-floor changes. See server/critique/audio_invariants.py.
+    state["_stylistic_qa_blocks"] = json.dumps(_stylistic_qa_blocks)
+    if not _gk_rejected and _stylistic_qa_blocks:
+        from critique.stylistic_qa_agent import (
+            STYLISTIC_QA_OPERATION,
+            StylisticInvariantFailure,
+            run_stylistic_qa,
+        )
+        try:
+            run_stylistic_qa(state, raise_on_failure=True)
+        except StylisticInvariantFailure as style_fail:
+            from recovery import escalate_pipeline_error
+            response = escalate_pipeline_error(
+                operation_name=STYLISTIC_QA_OPERATION,
+                error_msg=str(style_fail),
+                severity="critical",
+                default_action="abort",
+                diagnosis_hint=(
+                    "A narration block passed timing but failed a stylistic "
+                    "invariant (uniform LUFS, voice continuity, character-voice "
+                    "consistency, peak limiter, clicks/plosives, or hiss floor). "
+                    "Re-enter the audio ladder with the invariant violation as "
+                    "the failure signal — do NOT trim, stretch, or pad the "
+                    "block; regenerate the offending clip."
+                ),
+                agent_policy_type="audio",
+                pipeline_state=safe_state_dict(state),
+                diagnostic_data=style_fail.diagnostic_data(),
+            )
+            if response.get("action") not in ("skip", "retry_with_fix", "amend"):
+                raise
+            logger.warning(
+                "Stylistic QA violation escalated and resolved with "
+                "action=%s — audio ladder will regenerate affected block(s)",
+                response.get("action"),
+            )
+            _gk_rejected = True
 
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
