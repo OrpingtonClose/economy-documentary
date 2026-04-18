@@ -14,7 +14,7 @@ Falls back to the plain Agent + orchestrated_production_callback when
 ProductionAgent cannot be initialised.
 
 Also owns ``supervisor_escalate()`` -- the LLM-powered decision layer
-that picks one of the 8 canonical ``EscalationAction`` variants whenever
+that picks one of the canonical ``EscalationAction`` variants whenever
 the pipeline hits an escalation point.  Closes #61, #73, #76, #77, #102,
 #103: every escalation MUST go through this function (enforced by the
 hard invariant in ``escalation_menu.assert_escalation_invariant``).
@@ -122,7 +122,7 @@ production_supervisor = _build_production_supervisor()
 # and fell back to round-robin, which required full human intervention to
 # handle 5 extension-clip decisions and 9 regenerations.  The code below
 # replaces that behaviour with a formal LLM-backed decision layer that
-# picks one of the 8 canonical ``EscalationAction`` variants.
+# picks one of the canonical ``EscalationAction`` variants.
 # ---------------------------------------------------------------------------
 
 # Default Gemini models for the supervisor.  Overridable via env vars so we
