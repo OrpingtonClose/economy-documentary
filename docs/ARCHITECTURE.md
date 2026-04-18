@@ -111,8 +111,13 @@ assembly):
 - **Looping** — repeating existing media to fill time.
 - **Time-stretching** — speeding up or slowing down existing media to
   fit a target duration.
-- **Freeze-frame padding** — holding a single frame to extend visible
-  duration.
+- **Frozen frames / freeze-frame padding** — holding a single frame
+  (or any static image derived from existing media) to extend visible
+  duration is forbidden. This applies whether the freeze occurs at the
+  start, middle, or end of a clip, and regardless of the mechanism
+  (decoder hold, still-image insert, last-frame repeat, etc.). If a
+  slot needs more visual duration, generate a new clip — do not hold
+  a frame.
 
 This invariant is the reason the canonical escalation menu offers
 `generate_extension_clip` (extend) and `regenerate_clip` / `rewrite_scene`
