@@ -43,7 +43,7 @@ from orchestrator.escalation_menu import (  # noqa: E402
 def test_action_menu_parses_all_signatures():
     """Every canonical action round-trips through the dataclass + from_dict.
 
-    - Valid payloads for all 7 actions construct successfully.
+    - Valid payloads for all 6 actions construct successfully.
     - Missing required fields raise EscalationActionError.
     - Type mismatches raise EscalationActionError.
     - Bounds (non-zero seed_delta, positive duration_needed, etc.) are enforced.
@@ -85,7 +85,7 @@ def test_action_menu_parses_all_signatures():
         "Test payloads drift from ACTION_NAMES — update valid_payloads."
     )
 
-    # All 7 parse cleanly via from_dict AND round-trip via to_dict.
+    # All 6 parse cleanly via from_dict AND round-trip via to_dict.
     for name, payload in valid_payloads.items():
         action = EscalationAction.from_dict(payload)
         assert action.action == name

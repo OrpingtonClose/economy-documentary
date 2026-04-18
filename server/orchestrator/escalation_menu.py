@@ -10,10 +10,10 @@ handle 5 extension-clip decisions and 9 regenerations.
 
 Core types::
 
-    EscalationAction   -- dataclass + Literal enum of 7 canonical actions
+    EscalationAction   -- dataclass + Literal enum of 6 canonical actions
     EscalationContext  -- diagnostic snapshot passed to supervisor_escalate
 
-Every escalation path in the pipeline must resolve to one of the 7 typed
+Every escalation path in the pipeline must resolve to one of the 6 typed
 actions.  The ``supervisor_escalate(context)`` helper in
 ``agents.production_supervisor`` consults Gemini (via google-genai with
 structured output) to pick the right action and validates the response
