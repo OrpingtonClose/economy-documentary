@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from google.adk.tools import ToolContext
 
+from callbacks.media_immutability import check_media_immutability
 from dashboard import get_active_collector
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,13 @@ def before_tool_callback(
     """
     tool_name: str = tool.name if hasattr(tool, "name") else str(tool)
     call_id = getattr(tool_context, "function_call_id", "") or tool_name
+
+    # -- Media Immutability Invariant enforcement (ARCH-F2, #128/#152) --------
+    # Refuse any tool call that would trim, time-stretch, or fill gaps with
+    # frozen frames / silence.  Fails loud with MediaImmutabilityViolation --
+    # no silent pass-through.  Runs FIRST so forbidden calls never acquire
+    # rate-limit semaphores or emit dashboard events.
+    check_media_immutability(tool_name, args)
 
     # -- Per-provider rate limiting --------------------------------------------
     provider = _get_provider(tool_name)
