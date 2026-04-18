@@ -48,6 +48,20 @@ from critique.record import (
     artifact_type_and_id,
     worst_status,
 )
+from critique.critic_squad import (
+    CriticSpec,
+    CriticSquad,
+    build_critic_squad,
+    make_critic_squad_callback,
+)
+from critique.qa_storage import (
+    mirror_coherence_evaluator_result,
+    mirror_gatekeeper_check,
+    mirror_gatekeeper_checks,
+    mirror_jury_verdict,
+    mirror_scenario_evaluator_result,
+    mirror_timeline_guardian_result,
+)
 from critique.store import ArtifactCritiqueStore, get_critique_store
 
 __all__ = [
@@ -56,12 +70,22 @@ __all__ = [
     "ArtifactCritiqueStore",
     "ArtifactType",
     "Critique",
+    "CriticSpec",
+    "CriticSquad",
     "CritiqueRating",
     "EscalationRef",
     "QA_VERDICTS",
     "QaVerdict",
     "QaVerdictStatus",
     "artifact_type_and_id",
+    "build_critic_squad",
     "get_critique_store",
+    "make_critic_squad_callback",
+    "mirror_coherence_evaluator_result",
+    "mirror_gatekeeper_check",
+    "mirror_gatekeeper_checks",
+    "mirror_jury_verdict",
+    "mirror_scenario_evaluator_result",
+    "mirror_timeline_guardian_result",
     "worst_status",
 ]

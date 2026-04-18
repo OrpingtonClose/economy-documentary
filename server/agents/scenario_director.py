@@ -442,7 +442,60 @@ def _check_scenario_approval(callback_context):
                 logger.info(
                     "Saved approved scenes backup: %d scenes", len(scenes)
                 )
+
+    # Mirror the evaluator rating to the critique store so the
+    # pull-based escalation supervisor can read it.  Best-effort; a
+    # failure here must never break the live scenario loop.
+    try:
+        from critique.qa_storage import mirror_scenario_evaluator_result
+
+        rating = _parse_scenario_rating(str(eval_output))
+        structural_cap = _parse_structural_cap(str(eval_output))
+        if rating:
+            artifact_id = (
+                state.get("run_id")
+                or state.get("session_id")
+                or state.get("documentary_id")
+                or "current_run"
+            )
+            mirror_scenario_evaluator_result(
+                rating,
+                artifact_type="scenario",
+                artifact_id=str(artifact_id),
+                structural_cap=structural_cap,
+                report=str(eval_output)[:2000],
+                produced_by="scenario_evaluator",
+            )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("scenario evaluator: critique mirror skipped: %s", exc)
     return None
+
+
+def _parse_scenario_rating(text: str) -> str:
+    """Extract an EXCELLENT/GOOD/FAIR/POOR rating from evaluator output."""
+
+    if not text:
+        return ""
+    upper = text.upper()
+    for token in ("RATING: EXCELLENT", "RATING: GOOD", "RATING: FAIR", "RATING: POOR"):
+        if token in upper:
+            return token.split(":", 1)[1].strip()
+    for candidate in ("EXCELLENT", "GOOD", "FAIR", "POOR"):
+        if candidate in upper:
+            return candidate
+    return ""
+
+
+def _parse_structural_cap(text: str) -> str:
+    """Extract the OVERALL_CAP verdict surfaced by structural checks."""
+
+    if not text:
+        return ""
+    upper = text.upper()
+    for cap in ("OVERALL_CAP=EXCELLENT", "OVERALL_CAP=GOOD", "OVERALL_CAP=FAIR", "OVERALL_CAP=POOR"):
+        if cap in upper:
+            return cap.split("=", 1)[1]
+    return ""
 
 
 def _scenario_phase_setup(callback_context):
