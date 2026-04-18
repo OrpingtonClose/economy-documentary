@@ -32,7 +32,6 @@ from orchestrator.escalation_menu import (  # noqa: E402
     EscalationActionError,
     EscalationContext,
     EscalationInvariantViolation,
-    MAX_SPEED_FACTOR,
     assert_escalation_invariant,
 )
 
@@ -44,10 +43,10 @@ from orchestrator.escalation_menu import (  # noqa: E402
 def test_action_menu_parses_all_signatures():
     """Every canonical action round-trips through the dataclass + from_dict.
 
-    - Valid payloads for all 8 actions construct successfully.
+    - Valid payloads for all 7 actions construct successfully.
     - Missing required fields raise EscalationActionError.
     - Type mismatches raise EscalationActionError.
-    - Bounds (speed_factor <= 1.15, non-zero seed_delta, etc.) are enforced.
+    - Bounds (non-zero seed_delta, positive duration_needed, etc.) are enforced.
     """
     valid_payloads: dict[str, dict] = {
         "regenerate_clip": {
@@ -60,11 +59,6 @@ def test_action_menu_parses_all_signatures():
             "action": "generate_extension_clip",
             "scene_id": "s003",
             "duration_needed": 1.4,
-        },
-        "speed_up_narration": {
-            "action": "speed_up_narration",
-            "scene_id": "s004",
-            "speed_factor": 1.1,
         },
         "trim_narration": {
             "action": "trim_narration",
@@ -96,7 +90,7 @@ def test_action_menu_parses_all_signatures():
         "Test payloads drift from ACTION_NAMES — update valid_payloads."
     )
 
-    # All 8 parse cleanly via from_dict AND round-trip via to_dict.
+    # All 7 parse cleanly via from_dict AND round-trip via to_dict.
     for name, payload in valid_payloads.items():
         action = EscalationAction.from_dict(payload)
         assert action.action == name
@@ -121,21 +115,13 @@ def test_action_menu_parses_all_signatures():
     with pytest.raises(EscalationActionError):
         EscalationAction.from_dict({"action": "nuke_everything"})
 
-    # Type mismatch: speed_factor as str.
+    # Type mismatch: duration_needed as str.
     with pytest.raises(EscalationActionError):
         EscalationAction.from_dict({
-            "action": "speed_up_narration",
+            "action": "generate_extension_clip",
             "scene_id": "s001",
-            "speed_factor": "fast",
+            "duration_needed": "fast",
         })
-
-    # Bounds: speed_factor > MAX_SPEED_FACTOR.
-    with pytest.raises(EscalationActionError):
-        EscalationAction(
-            action="speed_up_narration",
-            scene_id="s001",
-            speed_factor=MAX_SPEED_FACTOR + 0.01,
-        )
 
     # Bounds: seed_delta must be non-zero.
     with pytest.raises(EscalationActionError):
@@ -252,9 +238,9 @@ def test_supervisor_escalate_recovers_after_first_parse_failure(supervisor_modul
     responses = iter([
         "garbage-not-json",
         json.dumps({
-            "action": "speed_up_narration",
+            "action": "generate_extension_clip",
             "scene_id": "s003",
-            "speed_factor": 1.1,
+            "duration_needed": 1.2,
         }),
     ])
 
@@ -264,7 +250,7 @@ def test_supervisor_escalate_recovers_after_first_parse_failure(supervisor_modul
     supervisor_module.set_llm_client_factory(fake_llm)
 
     action = supervisor_module.supervisor_escalate(_fake_context())
-    assert action.action == "speed_up_narration"
+    assert action.action == "generate_extension_clip"
     snap = supervisor_module.get_run_counters()
     # One escalation, two LLM calls (first failed, second succeeded).
     assert snap["escalations_per_run"] == 1
@@ -326,9 +312,9 @@ def test_supervisor_invariant_fires_on_escalation_without_llm(supervisor_module)
 
     def fake_llm(model, system, prompt):
         return json.dumps({
-            "action": "speed_up_narration",
+            "action": "generate_extension_clip",
             "scene_id": "s001",
-            "speed_factor": 1.05,
+            "duration_needed": 1.0,
         })
 
     supervisor_module.set_llm_client_factory(fake_llm)
