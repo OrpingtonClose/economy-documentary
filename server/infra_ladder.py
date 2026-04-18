@@ -578,9 +578,11 @@ def _default_budget_guard() -> dict[str, Any]:
             }
         tracker = coord._cost_tracker  # noqa: SLF001
         should_stop = tracker.should_stop_provisioning()
+        remaining = getattr(tracker, "remaining_budget", None)
+        remaining_usd = float(remaining) if remaining is not None else -1.0
         return {
             "ok_to_continue": not should_stop,
-            "remaining_usd": float(getattr(tracker, "remaining_budget", -1.0) or -1.0),
+            "remaining_usd": remaining_usd,
             "note": (
                 "Budget ceiling hit" if should_stop else "Budget ok"
             ),
