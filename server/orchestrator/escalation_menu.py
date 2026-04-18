@@ -10,10 +10,10 @@ handle 5 extension-clip decisions and 9 regenerations.
 
 Core types::
 
-    EscalationAction   -- dataclass + Literal enum of 6 canonical actions
+    EscalationAction   -- dataclass + Literal enum of 8 canonical actions
     EscalationContext  -- diagnostic snapshot passed to supervisor_escalate
 
-Every escalation path in the pipeline must resolve to one of the 6 typed
+Every escalation path in the pipeline must resolve to one of the 8 typed
 actions.  The ``supervisor_escalate(context)`` helper in
 ``agents.production_supervisor`` consults Gemini (via google-genai with
 structured output) to pick the right action and validates the response
@@ -33,10 +33,22 @@ from typing import Any, Literal, Optional, get_args
 # Canonical action names (Literal enum) + signatures
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Canonical actions
+# ---------------------------------------------------------------------------
+#
+# Per the Media Immutability Invariant (#128 / ARCH-F), only REPLACE
+# (regenerate from scratch) and EXTEND (append new media, keeping prior
+# content byte-identical) operations are permitted.  The prior
+# ``speed_up_narration`` (atempo time-stretch), ``trim_narration`` (audio
+# sub-range cut), and ``freeze_frame_fill`` (tpad hold-last-frame) actions
+# were mutating already-emitted media and have been removed.  Callers that
+# previously requested those actions now fall back to ``regenerate_clip``
+# or ``generate_extension_clip`` (both REPLACE / EXTEND) or escalate to
+# ``rewrite_scene`` / ``abort_run``.
 ActionName = Literal[
     "regenerate_clip",
     "generate_extension_clip",
-    "trim_narration",
     "replace_with_brand_card",
     "rewrite_scene",
     "abort_run",
@@ -48,7 +60,6 @@ ACTION_NAMES: tuple[str, ...] = tuple(get_args(ActionName))
 ACTION_LEVELS: dict[str, int] = {
     "regenerate_clip": 1,
     "generate_extension_clip": 1,
-    "trim_narration": 2,
     "replace_with_brand_card": 2,
     "rewrite_scene": 3,
     "abort_run": 3,
@@ -58,11 +69,11 @@ ACTION_LEVELS: dict[str, int] = {
 ACTION_SIGNATURES: dict[str, dict[str, type]] = {
     "regenerate_clip": {"clip_id": str, "prompt_delta": str, "seed_delta": int},
     "generate_extension_clip": {"scene_id": str, "duration_needed": float},
-    "trim_narration": {"scene_id": str, "max_cut_sec": float},
     "replace_with_brand_card": {"scene_id": str},
     "rewrite_scene": {"scene_id": str, "guidance": str},
     "abort_run": {"reason": str},
 }
+
 
 class EscalationActionError(ValueError):
     """Raised when an EscalationAction fails signature/bounds validation."""
@@ -92,7 +103,6 @@ class EscalationAction:
     prompt_delta: Optional[str] = None
     seed_delta: Optional[int] = None
     duration_needed: Optional[float] = None
-    max_cut_sec: Optional[float] = None
     guidance: Optional[str] = None
     reason: Optional[str] = None
 
@@ -143,12 +153,6 @@ class EscalationAction:
             if self.duration_needed <= 0:
                 raise EscalationActionError(
                     "generate_extension_clip: duration_needed must be > 0"
-                )
-        if self.action == "trim_narration":
-            assert self.max_cut_sec is not None
-            if self.max_cut_sec <= 0:
-                raise EscalationActionError(
-                    "trim_narration: max_cut_sec must be > 0"
                 )
         if self.action == "regenerate_clip":
             if self.seed_delta == 0:
@@ -248,35 +252,39 @@ class EscalationContext:
 ACTION_MENU_DESCRIPTION = """\
 CANONICAL ESCALATION ACTIONS -- you MUST choose EXACTLY ONE.
 
+Per the Media Immutability Invariant (ARCH-F / #128), once media is
+emitted it is immutable.  Only REPLACE (regenerate from scratch) and
+EXTEND (append new media, keeping prior content byte-identical) are
+permitted.  Trim, time-stretch, frozen-frame fill, and silent-fill
+gap-plugging are forbidden and are rejected up-front by the
+before_tool_callback enforcer in ``server/callbacks/media_immutability.py``.
+
 Level 1 (cheap, targeted fixes -- prefer these):
   - regenerate_clip(clip_id, prompt_delta, seed_delta)
-      Regenerate a single clip. ``prompt_delta`` is natural-language
+      REPLACE a single clip. ``prompt_delta`` is natural-language
       corrective guidance (e.g. "emphasise kitchen setting, avoid
       outdoor landscapes"). ``seed_delta`` is a non-zero integer to
       perturb the seed (e.g. +7, -13).
   - generate_extension_clip(scene_id, duration_needed)
-      Create a short clip to fill remaining narration time in a scene
-      (typical use: 0.5-3.0 seconds).
+      EXTEND a scene by generating a new clip appended to the existing
+      media.  Prior content is kept byte-identical.  Typical use:
+      0.5-3.0 seconds.
 
 Level 2 (surgical edits, acceptable quality cost):
-  - trim_narration(scene_id, max_cut_sec)
-      Cut up to ``max_cut_sec`` seconds from the end of narration.
   - replace_with_brand_card(scene_id)
-      Replace scene with a static brand/title card. Heavy narrative cost.
+      REPLACE scene with a static brand/title card. Heavy narrative cost.
 
 Level 3 (structural / terminal -- last resort):
   - rewrite_scene(scene_id, guidance)
       Ask the scenario director to regenerate the scene's narration +
-      visual brief. Expensive -- use only when cheaper actions have
-      failed OR the failure is clearly structural.
+      visual brief, then REPLACE the emitted media for that scene.
+      Expensive -- use only when cheaper actions have failed OR the
+      failure is clearly structural.
   - abort_run(reason)
       Stop the pipeline entirely. Only when no safe recovery is possible.
 
 Decision rule: pick the cheapest action that resolves the failure while
-preserving the narrative. Prefer L1 over L2 over L3. Media is immutable
-once created: permitted operations are REPLACE (regenerate_clip,
-rewrite_scene, replace_with_brand_card) or EXTEND (generate_extension_clip).
-NEVER loop, time-stretch, or freeze-frame existing media. Do NOT abort
+preserving the narrative.  Prefer L1 over L2 over L3.  Do NOT abort
 unless no L1/L2 action is viable -- round-robin fall-through with an
 abort is exactly the #102 regression.
 """
@@ -294,7 +302,6 @@ ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
         "prompt_delta": {"type": "string"},
         "seed_delta": {"type": "integer"},
         "duration_needed": {"type": "number"},
-        "max_cut_sec": {"type": "number"},
         "guidance": {"type": "string"},
         "reason": {"type": "string"},
         "llm_reasoning": {"type": "string"},

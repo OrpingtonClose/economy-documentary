@@ -43,11 +43,14 @@ from orchestrator.escalation_menu import (  # noqa: E402
 def test_action_menu_parses_all_signatures():
     """Every canonical action round-trips through the dataclass + from_dict.
 
-    - Valid payloads for all 6 actions construct successfully.
+    - Valid payloads for all 8 actions construct successfully.
     - Missing required fields raise EscalationActionError.
     - Type mismatches raise EscalationActionError.
-    - Bounds (non-zero seed_delta, positive duration_needed, etc.) are enforced.
+    - Bounds (non-zero seed_delta, duration_needed > 0, etc.) are enforced.
     """
+    # Per #128 (Media Immutability Invariant), the former
+    # ``speed_up_narration``, ``trim_narration`` and ``freeze_frame_fill``
+    # actions have been removed.  Only REPLACE / EXTEND actions remain.
     valid_payloads: dict[str, dict] = {
         "regenerate_clip": {
             "action": "regenerate_clip",
@@ -59,11 +62,6 @@ def test_action_menu_parses_all_signatures():
             "action": "generate_extension_clip",
             "scene_id": "s003",
             "duration_needed": 1.4,
-        },
-        "trim_narration": {
-            "action": "trim_narration",
-            "scene_id": "s005",
-            "max_cut_sec": 0.75,
         },
         "replace_with_brand_card": {
             "action": "replace_with_brand_card",
@@ -85,7 +83,7 @@ def test_action_menu_parses_all_signatures():
         "Test payloads drift from ACTION_NAMES — update valid_payloads."
     )
 
-    # All 6 parse cleanly via from_dict AND round-trip via to_dict.
+    # All 8 parse cleanly via from_dict AND round-trip via to_dict.
     for name, payload in valid_payloads.items():
         action = EscalationAction.from_dict(payload)
         assert action.action == name
@@ -116,6 +114,14 @@ def test_action_menu_parses_all_signatures():
             "action": "generate_extension_clip",
             "scene_id": "s001",
             "duration_needed": "fast",
+        })
+
+    # Forbidden action (removed per #128 Media Immutability Invariant).
+    with pytest.raises(EscalationActionError):
+        EscalationAction.from_dict({
+            "action": "speed_up_narration",
+            "scene_id": "s001",
+            "speed_factor": 1.1,
         })
 
     # Bounds: seed_delta must be non-zero.

@@ -1425,7 +1425,6 @@ def _supervisor_fallback_decision(
     _CANONICAL_TO_RECOVERY = {
         "regenerate_clip": "fix",
         "generate_extension_clip": "fix",
-        "trim_narration": "fix",
         "replace_with_brand_card": "skip",
         "rewrite_scene": "fix",
         "abort_run": "abort",
