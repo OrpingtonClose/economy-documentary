@@ -93,7 +93,14 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 "properties": {
                     "artifact_type": {
                         "type": "string",
-                        "enum": ["scene", "visual_concept", "clip", "audio", "assembly"],
+                        "enum": [
+                            "scenario",
+                            "scene",
+                            "visual_concept",
+                            "clip",
+                            "audio",
+                            "assembly",
+                        ],
                     },
                     "artifact_id": {"type": "string"},
                 },
