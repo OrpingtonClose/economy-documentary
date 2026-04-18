@@ -89,7 +89,8 @@ def _video_success(
         "mode": "simulated",
         "output_path": output_path or f"{_VIDEO_DIR}/sim_clip.mp4",
         "target_duration": round(duration_sec, 2),
-        "actual_duration": round(duration_sec * 1.15, 2),
+        # ARCH-F3 (#164): exact duration, no margin.
+        "actual_duration": round(duration_sec, 2),
         "lora_id": lora_id,
         "lora_weight": 0.7,
         "resolution": "1280x720",
