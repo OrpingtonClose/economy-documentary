@@ -241,7 +241,13 @@ def make_before_stage_callback(requires_stage: str):
             logger.info(
                 "Stage requires '%s' approval — waiting...", requires_stage
             )
-            approved = wait_for_approval(requires_stage)
+            # ARCH-B2 (#138): forward session state so the per-poll
+            # consistency check fires while humans review. Matches the
+            # pattern used by every direct gate-wrapper in pipeline.py
+            # and by _gate_reconstruction in remanifestation.py.
+            approved = wait_for_approval(
+                requires_stage, state=callback_context.state
+            )
             if not approved:
                 return genai_types.Content(
                     role="model",
