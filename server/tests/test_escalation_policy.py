@@ -432,6 +432,35 @@ class TestRecoveryPolicyReadsConfig:
         )
         assert policy.get_level_budget(RecoveryLevel.FIX) == 99
 
+    def test_ladder_config_alone_yields_consistent_budgets(self) -> None:
+        """Regression guard (Devin Review #176): a policy that only has
+        ``ladder_config`` set (no ``level_budget_labels``, no numeric
+        overrides) must return identical budgets from
+        ``get_level_budget`` and ``get_level_budget_label``.  Previously
+        the two methods disagreed -- labels read from the config but
+        numbers fell through to hard-coded defaults."""
+        policy = RecoveryPolicy(ladder_config=AUDIO_LADDER_CONFIG)
+        for level, label in AUDIO_LADDER_CONFIG.budgets.items():
+            assert policy.get_level_budget_label(level) is label
+            assert policy.get_level_budget(level) == int(label), (
+                f"ladder_config alone must drive get_level_budget at "
+                f"L{int(level)}: expected {int(label)}, got "
+                f"{policy.get_level_budget(level)}"
+            )
+
+    def test_numeric_override_still_beats_ladder_config(self) -> None:
+        """The escape-hatch contract from D1 is preserved: an explicit
+        numeric entry in ``level_budgets`` wins over ``ladder_config``."""
+        policy = RecoveryPolicy(
+            ladder_config=AUDIO_LADDER_CONFIG,
+            level_budgets={int(RecoveryLevel.FIX): 42},
+        )
+        assert policy.get_level_budget(RecoveryLevel.FIX) == 42
+        # Other tiers still come from the config.
+        assert policy.get_level_budget(RecoveryLevel.RETRY) == int(
+            AUDIO_LADDER_CONFIG.label_for(RecoveryLevel.RETRY)
+        )
+
     def test_policy_without_config_preserves_legacy_defaults(self) -> None:
         """Regression guard: policies that don't opt in behave as before."""
         policy = RecoveryPolicy()

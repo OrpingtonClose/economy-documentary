@@ -196,10 +196,16 @@ class RecoveryPolicy:
                one attempt, regardless of numeric overrides.  This is
                the runtime enforcement that "a second failure at the
                same tier is not permitted" (diagram 3).
-            2. ``level_budgets[level]`` — explicit numeric override.
-            3. ``level_budget_labels[level]`` — canonical budget label
-               (ARCH-D / diagrams 2 + 4); the IntEnum value is used.
-            4. Hard-coded defaults ``{0: 5, 1: 3, 2: 2, 3: 1}``.
+            2. ``level_budgets[level]`` — explicit numeric override
+               (escape hatch for one-off tuning; beats the typed config
+               to preserve the D1 back-compat contract).
+            3. ``ladder_config.budgets[level]`` — typed escalation-policy
+               config (ARCH-D3); authoritative when set, and kept in
+               lock-step with ``get_level_budget_label``.
+            4. ``level_budget_labels[level]`` — legacy D1 canonical
+               label path, still honoured for policies that pre-date the
+               typed config.
+            5. Hard-coded defaults ``{0: 5, 1: 3, 2: 2, 3: 1}``.
         """
         # ARCH-D2: strict one-shot wins over every other source.  We
         # duck-type the discipline attribute to avoid importing
@@ -209,6 +215,10 @@ class RecoveryPolicy:
         defaults = {0: 5, 1: 3, 2: 2, 3: 1}
         if self.level_budgets and level in self.level_budgets:
             return int(self.level_budgets[level])
+        if self.ladder_config is not None:
+            budgets = getattr(self.ladder_config, "budgets", None)
+            if budgets is not None and level in budgets:
+                return int(budgets[level])
         if self.level_budget_labels and level in self.level_budget_labels:
             return int(self.level_budget_labels[level])
         return defaults.get(level, 1)
