@@ -2637,16 +2637,48 @@ def deterministic_assembly_callback(
     #           ARCH-F3 tolerance, raise ClipLengthMismatchError so
     #           the content ladder triggers REPLACE.  The assembler
     #           does NOT extract sub-ranges, does NOT trim.
-    #   Gap   → raise UnpluggedGapError.  Gaps must be plugged
-    #           upstream via generate_extension_clip (video) or
-    #           regenerated narration (audio); the assembler does
-    #           NOT fabricate filler media (no freeze-frame, no
-    #           silent-fill, no black video).
+    #
+    #   Video-track Gap      → raise UnpluggedGapError.  V1_Video
+    #           has NO intentional gaps (production sizes each clip
+    #           to cover narration + following pause, see
+    #           ``get_video_slot_durations``).  Any Gap on V1_Video
+    #           is an upstream bug and must be plugged via
+    #           generate_extension_clip.  The assembler does NOT
+    #           fabricate filler video (no freeze-frame, no black).
+    #
+    #   Narration-track Gap  → if ``metadata.documentary.type`` is
+    #           ``"silence"`` (written by ``add_narration_gap`` for
+    #           inter-voice / inter-scene pauses), emit a real
+    #           silent WAV of the Gap's declared duration via
+    #           :func:`_generate_silence` — the declared content IS
+    #           silence, not missing media.  Any other narration
+    #           Gap is unplugged and raises UnpluggedGapError; the
+    #           assembler does NOT synthesise narration to fill it.
     #
     # The OTIO is the immutable contract created during the audio
     # stage.  This assembler merely renders it — and refuses to if
     # the contract was not honoured by upstream generation.
     # ──────────────────────────────────────────────────────────────
+    _PLANNED_SILENCE_GAP_TYPES = frozenset({"inter_voice", "inter_scene"})
+
+    def _is_planned_silence_gap(item: otio.schema.Gap) -> bool:
+        """Return True for narration Gaps that represent declared silence.
+
+        ``add_narration_gap`` tags these Gaps with
+        ``metadata.documentary.type == "silence"`` and
+        ``gap_type in {"inter_voice", "inter_scene"}``.  The OTIO
+        contract declares their content to be silence of the Gap's
+        source_range duration, so the renderer emits a real silent
+        WAV rather than raising :class:`UnpluggedGapError`.
+        """
+        try:
+            meta = item.metadata.get("documentary", {}) or {}
+        except Exception:  # noqa: BLE001 - defensive: malformed metadata
+            return False
+        return (
+            meta.get("type") == "silence"
+            and meta.get("gap_type") in _PLANNED_SILENCE_GAP_TYPES
+        )
 
     def _render_audio_track(
         narration_track_items: list,
@@ -2659,7 +2691,15 @@ def deterministic_assembly_callback(
                    verifying the file's measured duration matches the
                    declared source_range within
                    :data:`CLIP_LENGTH_TOLERANCE_SEC`.
-          - Gap  → raise :class:`UnpluggedGapError`.
+          - Gap with ``metadata.documentary.type == "silence"`` and
+            ``gap_type`` in {inter_voice, inter_scene} →
+                   render a real silent WAV of the Gap's declared
+                   duration via :func:`_generate_silence`.  These are
+                   planned pauses written by ``add_narration_gap``;
+                   the OTIO contract declares their content to be
+                   silence so rendering them faithfully is NOT filler
+                   synthesis.
+          - Any other Gap → :class:`UnpluggedGapError`.
 
         Returns ``(combined_audio_path, num_segments)`` so the caller
         can size the track-level tolerance via
@@ -2693,7 +2733,42 @@ def deterministic_assembly_callback(
                 )
                 audio_segments.append(a_path)
 
+            elif (
+                isinstance(item, otio.schema.Gap)
+                and _is_planned_silence_gap(item)
+            ):
+                # Planned-pause Gap: render as real silence.  This is
+                # NOT gap-filler fabrication -- the OTIO contract
+                # declared the content to BE silence of this duration.
+                if not item.source_range:
+                    _escalate_otio(
+                        f"OTIO VIOLATION: narration silence gap {item.name} "
+                        f"has no source_range — timeline is damaged"
+                    )
+                gap_dur = item.source_range.duration.to_seconds()
+                if gap_dur <= 0:
+                    _escalate_otio(
+                        f"OTIO VIOLATION: narration silence gap {item.name} "
+                        f"has non-positive duration {gap_dur:.3f}s"
+                    )
+                silence_path = _generate_silence(
+                    gap_dur,
+                    os.path.join(
+                        assembly_dir,
+                        f"otio_silence{lang_suffix}_{idx:03d}.wav",
+                    ),
+                )
+                if not silence_path:
+                    _escalate_otio(
+                        f"OTIO VIOLATION: failed to render planned silence "
+                        f"gap {item.name} ({gap_dur:.2f}s) on A1_Narration"
+                    )
+                audio_segments.append(silence_path)
+
             else:
+                # Any non-planned-silence item on the narration track
+                # (unknown Gap, Transition, Stack, ...) is unplugged
+                # and must be filled upstream, not at render time.
                 ensure_item_is_not_gap(
                     item,
                     track="A1_Narration",
@@ -3012,13 +3087,49 @@ def deterministic_assembly_callback(
 # Mock tool context for direct function calls
 # ---------------------------------------------------------------------------
 #
-# ARCH-F3 (#164) NOTE: the legacy gap-filler helpers -- ``_generate_silence``,
-# ``_generate_freeze_frame_video``, and ``_generate_black_video`` -- were
-# removed along with their call sites in ``_render_audio_track`` /
-# ``_render_video_track``.  The assembler no longer fabricates filler media;
-# OTIO Gaps must be plugged upstream (``generate_extension_clip`` for video,
-# regenerated narration for audio) and raise :class:`UnpluggedGapError`
-# if encountered at render time.
+# ARCH-F3 (#164) NOTE: the legacy video-side gap-filler helpers --
+# ``_generate_freeze_frame_video`` and ``_generate_black_video`` -- were
+# removed along with their call sites in ``_render_video_track``.  The
+# assembler no longer fabricates filler video; OTIO video-track Gaps
+# must be plugged upstream (``generate_extension_clip``) and raise
+# :class:`UnpluggedGapError` if encountered at render time.
+#
+# ``_generate_silence`` is RETAINED because the audio track legitimately
+# contains planned-pause Gaps: ``add_narration_gap`` writes inter-voice
+# (1.5 s) and inter-scene (2.5 s) silence Gaps into A1_Narration with
+# ``metadata.documentary.type == "silence"``.  Those Gaps are first-
+# class OTIO items -- the declared content IS silence -- not filler
+# for a missing clip, so the renderer honours them by emitting a silent
+# WAV.  An audio Gap that is NOT one of the planned-silence types is
+# still treated as unplugged and raises :class:`UnpluggedGapError`.
+
+
+def _generate_silence(duration_sec: float, output_path: str) -> str:
+    """Generate a silent WAV file of the given duration using ffmpeg.
+
+    Used by :func:`_render_audio_track` to realise planned-pause Gaps
+    (inter-voice / inter-scene) on the A1_Narration track into real
+    silent samples.  Returns the output path on success, empty string
+    on failure so the caller can escalate via ``_escalate_otio``.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", f"anullsrc=r=24000:cl=mono:d={duration_sec}",
+        "-t", str(duration_sec),
+        output_path,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0 and os.path.exists(output_path):
+            return output_path
+        logger.warning("Silence generation failed: %s", result.stderr[:200])
+    except Exception as e:  # noqa: BLE001 -- best-effort silence synthesis
+        logger.warning("Silence generation error: %s", e)
+    return ""
 
 
 class _MockToolContext:
