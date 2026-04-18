@@ -290,6 +290,67 @@ class TestRunNarrationReconciliation:
         assert len(results) == 1
         assert results[0].verdict is NarrationTimingVerdict.PASS
 
+    def test_dual_lang_secondary_language_blocks_are_skipped_not_failed(self):
+        # Regression: in ``dual_ru_en`` mode the scenario emits both
+        # a RU and an EN clip per voice role, but ``_voice_budgets``
+        # is keyed only by ``scene_NNN_VOICE`` and carries the RU
+        # pacing. The gatekeeper at deterministic_steps.py sets
+        # ``budget = 0`` for EN clips so they aren't enforced against
+        # the RU budget. The reconciliation loop must mirror that:
+        # SKIP EN blocks rather than failing them for mismatching the
+        # RU budget.
+        state = _build_state(
+            scripted={"scene_001_V1": 10.0},
+            measured={
+                "scene_001_V1_RU": 10.1,
+                "scene_001_V1_EN": 6.0,  # would FAIL against RU budget
+            },
+            blocks=[
+                {
+                    "block_id": "scene_001_V1_RU",
+                    "scene_num": 1,
+                    "voice_role": "V1",
+                    "language": "ru",
+                },
+                {
+                    "block_id": "scene_001_V1_EN",
+                    "scene_num": 1,
+                    "voice_role": "V1",
+                    "language": "en",
+                },
+            ],
+        )
+        state["language"] = "dual_ru_en"
+
+        results = run_narration_reconciliation(state)
+
+        assert len(results) == 2
+        by_block = {r.block_id: r for r in results}
+        assert by_block["scene_001_V1_RU"].verdict is NarrationTimingVerdict.PASS
+        assert by_block["scene_001_V1_EN"].verdict is NarrationTimingVerdict.SKIP
+        assert "secondary-language" in by_block["scene_001_V1_EN"].message
+        # Gate must stay True — EN is intentionally unbudgeted, not failing.
+        assert state[NARRATION_RECONCILIATION_PASSED_KEY] is True
+
+    def test_single_lang_mode_does_not_skip_by_language(self):
+        # In single-lang mode there's no ``language`` key on state
+        # (or it's ``"ru"``/``"en"``). Every block should be reconciled
+        # — we must not accidentally skip blocks just because they
+        # carry a language tag.
+        state = _build_state(
+            scripted={"scene_001_V1": 10.0},
+            measured={"scene_001_V1": 6.0},
+            blocks=[{
+                "block_id": "scene_001_V1",
+                "scene_num": 1,
+                "voice_role": "V1",
+                "language": "en",
+            }],
+        )
+        state["language"] = "en"
+        results = run_narration_reconciliation(state, raise_on_failure=False)
+        assert results[0].verdict is NarrationTimingVerdict.FAIL
+
     def test_missing_alignment_for_block_is_skip_not_fail(self):
         # The block is in the QA list but WhisperX didn't align it.
         # Reconciliation should mark it SKIP (cannot judge) — not

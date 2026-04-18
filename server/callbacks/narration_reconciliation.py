@@ -528,8 +528,49 @@ def run_narration_reconciliation(
     voice_budgets = _parse_json_mapping(state, "_voice_budgets")
     alignment = _parse_json_mapping(state, "whisperx_alignment")
 
+    # Dual-language budget handling. In ``dual_ru_en`` mode the
+    # scenario produces BOTH RU and EN clips for every voice role,
+    # but ``_voice_budgets`` is keyed only by ``scene_NNN_VOICE`` and
+    # carries the RU timing. The existing gatekeeper at
+    # ``deterministic_steps.py`` neutralises this by setting
+    # ``budget = voice_budget if lang_code == 'ru' else 0`` before
+    # enforcement — EN clips are intentionally unbudgeted. Mirror
+    # that contract here: SKIP non-primary-language blocks rather
+    # than reconciling them against the wrong (RU) budget.
+    language_mode = str(state.get("language", "")).strip().lower()
+    primary_language: Optional[str] = None
+    if language_mode == "dual_ru_en":
+        primary_language = "ru"
+
     results: list[NarrationTimingResult] = []
     for spec in block_specs:
+        block_language = spec["language"].strip().lower()
+        if (
+            primary_language is not None
+            and block_language
+            and block_language != primary_language
+        ):
+            results.append(NarrationTimingResult(
+                block_id=spec["block_id"],
+                scene_num=spec["scene_num"],
+                voice_role=spec["voice_role"],
+                language=spec["language"],
+                scripted_sec=0.0,
+                measured_sec=0.0,
+                delta_sec=0.0,
+                ratio=0.0,
+                tolerance_sec=0.0,
+                verdict=NarrationTimingVerdict.SKIP,
+                message=(
+                    f"{spec['block_id']}: secondary-language block in "
+                    f"{language_mode!r} mode (primary={primary_language!r}); "
+                    f"voice_budgets carries only primary-language pacing, "
+                    f"so secondary-language blocks are intentionally "
+                    f"unbudgeted (mirrors gatekeeper at "
+                    f"deterministic_steps.py)"
+                ),
+            ))
+            continue
         scripted = _scripted_duration_for_block(
             voice_budgets,
             spec["scene_num"],
