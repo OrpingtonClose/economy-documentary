@@ -1288,6 +1288,50 @@ def deterministic_audio_callback(
             )
             _gk_rejected = True
 
+    # ARCH-E2 (#148): narration reconciliation loop. For each narration
+    # block, compare the WhisperX-measured speech duration against the
+    # scripted pacing declared by the scenario (voice-budget slice of
+    # scene.duration_sec). If the drift exceeds tolerance, re-enter
+    # the audio ladder via escalate_pipeline_error with the timing
+    # violation as the failure signal. Retries are the mechanism, not
+    # a terminal failure mode (ARCH-D1 permissive budgets).
+    if not _gk_rejected and _stylistic_qa_blocks:
+        from callbacks.narration_reconciliation import (
+            NARRATION_RECONCILIATION_OPERATION,
+            NarrationReconciliationFailure,
+            run_narration_reconciliation,
+        )
+        try:
+            run_narration_reconciliation(state, raise_on_failure=True)
+        except NarrationReconciliationFailure as recon_fail:
+            from recovery import escalate_pipeline_error
+            response = escalate_pipeline_error(
+                operation_name=NARRATION_RECONCILIATION_OPERATION,
+                error_msg=str(recon_fail),
+                severity="critical",
+                default_action="abort",
+                diagnosis_hint=(
+                    "A narration block's WhisperX-measured duration "
+                    "deviates from the scripted pacing beyond tolerance. "
+                    "Re-enter the audio ladder with the timing violation "
+                    "as the failure signal — short blocks need more text, "
+                    "long blocks need shorter text. Do NOT pad / stretch; "
+                    "regenerate the offending block from the scenario."
+                ),
+                agent_policy_type="audio",
+                pipeline_state=safe_state_dict(state),
+                diagnostic_data=recon_fail.diagnostic_data(),
+            )
+            if response.get("action") not in ("skip", "retry_with_fix", "amend"):
+                raise
+            logger.warning(
+                "Narration reconciliation violation escalated and resolved "
+                "with action=%s — audio ladder will regenerate affected "
+                "block(s)",
+                response.get("action"),
+            )
+            _gk_rejected = True
+
     # Stage marker AFTER gatekeeper passes — rejected stages must NOT be
     # marked complete, otherwise they'd be skipped on pipeline restart.
     if _b2_ok and not _gk_rejected:
