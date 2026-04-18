@@ -46,6 +46,8 @@ from callbacks.strict_assembler import (  # noqa: E402
     ensure_item_is_not_gap,
     ensure_track_length_matches,
     track_length_tolerance,
+    GRID_QUANTIZATION_BUDGET_SEC,
+    LTX_GRID_STEP_SEC,
 )
 
 
@@ -132,47 +134,101 @@ class TestEnsureClipLengthMatches:
 # ---------------------------------------------------------------------------
 
 class TestTrackLengthTolerance:
-    """Track-level A/V alignment uses a clip-count-scaled tolerance."""
+    """Track-level A/V alignment uses a grid-quantization-aware tolerance.
+
+    The dominant source of track-level A/V drift is LTX 2.3 grid
+    quantization (~167 ms per video clip), not container rounding.
+    :func:`track_length_tolerance` therefore scales by
+    ``GRID_QUANTIZATION_BUDGET_SEC + CLIP_LENGTH_TOLERANCE_SEC`` per
+    clip, with :data:`TRACK_LENGTH_FLOOR_SEC` as a short-track floor.
+
+    Regression guard for Devin-review BUG
+    ``pr-review-job-360f6e5a46ce4ee09a50657fa8966af3_0001`` on #174.
+    """
 
     def test_short_track_honours_floor(self) -> None:
         # A 1-clip track still gets at least TRACK_LENGTH_FLOOR_SEC of
-        # budget for muxer rounding.
-        assert track_length_tolerance(1) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
-        assert track_length_tolerance(2) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+        # budget.  The per-clip budget for N=1 is now
+        # ~0.167 + 0.016 = 0.183s which is already well above the
+        # 0.050 floor, so short tracks actually sit on the scaled
+        # branch; we just verify the floor still dominates when it
+        # matters (e.g. a nonsensical N<=0 -- covered separately).
+        assert track_length_tolerance(1) >= TRACK_LENGTH_FLOOR_SEC
 
     def test_long_track_scales_with_clip_count(self) -> None:
         # Past the floor the tolerance scales linearly with the number
-        # of concat boundaries: N * per-clip-tolerance.
+        # of concat boundaries: N * (grid-budget + concat-budget).
+        per_clip = GRID_QUANTIZATION_BUDGET_SEC + CLIP_LENGTH_TOLERANCE_SEC
         for n in (10, 30, 100):
-            expected = max(TRACK_LENGTH_FLOOR_SEC, n * CLIP_LENGTH_TOLERANCE_SEC)
+            expected = max(TRACK_LENGTH_FLOOR_SEC, n * per_clip)
             assert track_length_tolerance(n) == pytest.approx(expected)
 
-    def test_track_within_scaled_budget_passes(self) -> None:
-        # 30 clips × 16ms = 480ms budget.  A 200ms drift is fine.
+    def test_grid_quantization_drift_fits_in_budget(self) -> None:
+        """Reviewer's scenario: 5-clip documentary with grid-sized drift.
+
+        Before the grid-aware scaling, 5 clips × 16 ms = 80 ms, well
+        below the measured grid drift std-dev of ~215 ms for 5 clips
+        (producing ~33% false-failure rate).  The new budget is
+        5 × (167 + 16) ms = 915 ms, so even a worst-case 5 × 167 ms
+        = 835 ms drift still fits comfortably.
+        """
+        worst_case_drift = 5 * GRID_QUANTIZATION_BUDGET_SEC
+        ensure_track_length_matches(
+            track_id="combined_track (N=5)",
+            audio_dur=15.000,
+            video_dur=15.000 + worst_case_drift,
+            num_clips=5,
+        )
+
+    def test_thirty_clip_drift_fits_in_budget(self) -> None:
+        """30-clip documentary: old budget 480 ms, new budget ~5.49 s.
+
+        Real-world measured std-dev is ~528 ms; the new budget is an
+        order of magnitude larger, matching the reviewer's analysis.
+        """
         ensure_track_length_matches(
             track_id="combined_track (N=30)",
-            audio_dur=60.000,
-            video_dur=60.200,
+            audio_dur=300.000,
+            video_dur=300.500,  # was 200 ms, now a more realistic 500 ms
             num_clips=30,
         )
 
     def test_track_over_budget_raises(self) -> None:
-        # 3-clip track → 50ms floor; 200ms drift blows it.
+        # Structural mismatch: N=3 track, ~550 ms budget, 5 s drift
+        # blows through.  This is the "missing clip" / "concat bug"
+        # case that should still fail loud.
         with pytest.raises(ClipLengthMismatchError) as excinfo:
             ensure_track_length_matches(
                 track_id="combined_track (N=3)",
                 audio_dur=10.0,
-                video_dur=10.200,
+                video_dur=15.000,
                 num_clips=3,
             )
         assert excinfo.value.declared == pytest.approx(10.0)
-        assert excinfo.value.actual == pytest.approx(10.200)
+        assert excinfo.value.actual == pytest.approx(15.000)
 
     def test_zero_or_negative_clip_count_falls_back_to_floor(self) -> None:
         # Defensive: 0 and negative clip counts must not yield a zero
-        # tolerance -- fall back to the floor.
-        assert track_length_tolerance(0) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
-        assert track_length_tolerance(-3) == pytest.approx(TRACK_LENGTH_FLOOR_SEC)
+        # tolerance -- fall back to at-least-the-floor.
+        for n in (0, -3):
+            tol = track_length_tolerance(n)
+            assert tol >= TRACK_LENGTH_FLOOR_SEC
+            # For nonsensical N the implementation clamps to N=1, so
+            # the budget ends up at a single-clip grid+concat budget.
+            assert tol == pytest.approx(
+                max(
+                    TRACK_LENGTH_FLOOR_SEC,
+                    GRID_QUANTIZATION_BUDGET_SEC + CLIP_LENGTH_TOLERANCE_SEC,
+                )
+            )
+
+    def test_grid_step_matches_ltx_8k_plus_1_contract(self) -> None:
+        # Sanity: the grid step is 8 frames at 24 fps, i.e. one
+        # ``8k + 1`` quantum.  The budget is exactly half of that.
+        assert LTX_GRID_STEP_SEC == pytest.approx(8.0 / 24.0)
+        assert GRID_QUANTIZATION_BUDGET_SEC == pytest.approx(
+            LTX_GRID_STEP_SEC / 2.0
+        )
 
 
 # ---------------------------------------------------------------------------

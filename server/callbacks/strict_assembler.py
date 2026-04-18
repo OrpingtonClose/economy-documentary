@@ -123,14 +123,46 @@ CLIP_LENGTH_TOLERANCE_SEC: float = 0.016
 # ---------------------------------------------------------------------------
 #
 # ``CLIP_LENGTH_TOLERANCE_SEC`` applies to a single clip measured against
-# its declared ``source_range``.  When the renderer concatenates ``N``
-# clips into a track and compares the resulting audio and video track
-# durations, per-clip rounding / container-boundary drift can accumulate.
-# The track-level tolerance therefore scales with the number of clips
-# involved on either track (we take the max, since drift is dominated by
-# whichever side has more concat boundaries).  ``TRACK_LENGTH_FLOOR_SEC``
-# is the minimum tolerance for a very short track (e.g. one- or two-clip
-# tracks still need a non-zero budget for muxer rounding).
+# its declared ``source_range`` -- it is a container-rounding /
+# muxer-boundary budget (one frame at 60 fps).
+#
+# The track-level check compares the CONCATENATED audio-track duration
+# against the CONCATENATED video-track duration.  Two independent drift
+# sources accumulate here:
+#
+# 1. LTX 2.3 grid quantization.  Every video clip's duration is snapped
+#    UPFRONT to the nearest LTX ``8k + 1`` frame grid point
+#    (``LTX_GRID_STEP_SEC = 8 / 24 ≈ 0.333 s``); see
+#    :func:`video_tools.generate_video_clip`.  Nearest-rounding means a
+#    single video clip can differ from its requested narration-slot
+#    duration by up to one HALF grid step, i.e.
+#    ``LTX_GRID_STEP_SEC / 2 ≈ 0.167 s``.  Audio clips carry their
+#    original TTS duration and are NOT grid-quantized, so the grid
+#    error lives entirely on the video side of the comparison.
+#    Summed across ``N`` video clips the drift budget is
+#    ``N * GRID_QUANTIZATION_BUDGET_SEC``.
+#
+# 2. Concat / container rounding.  Each concat boundary contributes up
+#    to ``CLIP_LENGTH_TOLERANCE_SEC`` of muxer drift even when the
+#    per-clip length gate passed.  Summed across the larger of the two
+#    tracks this is ``N * CLIP_LENGTH_TOLERANCE_SEC``.
+#
+# The track-level tolerance therefore scales with ``N`` by summing both
+# per-clip budgets.  ``TRACK_LENGTH_FLOOR_SEC`` is the minimum tolerance
+# for a very short track (one- or two-clip tracks still need a non-zero
+# budget for muxer rounding).  A track-level mismatch that exceeds the
+# budget is a STRUCTURAL failure (e.g. a missing clip, a concat-list
+# bug) and must be REPLACEd upstream, not trimmed away.
+
+# LTX 2.3 renders at 24 fps in 8-frame groups of ``8k + 1`` frames.
+# The worker snaps any requested frame count to the nearest grid point
+# BEFORE generation, so a clip's delivered duration is the requested
+# ``duration_sec`` rounded to the nearest multiple of ``8 / 24`` s.
+LTX_GRID_STEP_SEC: float = 8.0 / 24.0
+
+# Half the grid step: the worst-case per-clip delta introduced by
+# nearest-neighbour snapping.  Used at the track-level check below.
+GRID_QUANTIZATION_BUDGET_SEC: float = LTX_GRID_STEP_SEC / 2.0
 
 TRACK_LENGTH_FLOOR_SEC: float = 0.050
 
@@ -160,18 +192,36 @@ def ensure_clip_length_matches(
 
 
 def track_length_tolerance(num_clips: int) -> float:
-    """Return the length-mismatch budget for a concatenated track.
+    """Return the A/V length-mismatch budget for a concatenated track.
 
-    A track made of ``num_clips`` concatenated clips can drift by up to
-    ``num_clips * CLIP_LENGTH_TOLERANCE_SEC`` relative to the sum of the
-    per-clip declarations, purely from per-clip rounding and concat-
-    container bookkeeping -- even when every individual clip passed the
-    per-clip length gate.  We therefore scale the tolerance with the
-    clip count, with a floor of :data:`TRACK_LENGTH_FLOOR_SEC` for very
+    The concatenated audio-track and video-track durations drift apart
+    via two independent mechanisms:
+
+    * **LTX grid quantization** (dominant).  Each of the ``N`` video
+      clips has been snapped to the nearest ``8k + 1`` frame grid
+      point, introducing up to :data:`GRID_QUANTIZATION_BUDGET_SEC`
+      (``≈ 167 ms``) of per-clip delta relative to the narration-slot
+      duration it was asked to cover.  Audio is NOT grid-quantized, so
+      this delta appears entirely on the video side of the comparison.
+
+    * **Concat / muxer rounding** (secondary).  Each concat boundary
+      contributes up to :data:`CLIP_LENGTH_TOLERANCE_SEC` (``16 ms``).
+
+    The track-level budget therefore sums both per-clip budgets scaled
+    by ``N`` (we use the larger of the narration-segment and video-
+    segment counts, since drift is dominated by the more granular
+    side), with :data:`TRACK_LENGTH_FLOOR_SEC` as a minimum for very
     short tracks.
+
+    Before this scaling the budget was ``N * 16 ms``, which under-
+    sized the grid-quantization drift by roughly an order of magnitude
+    and produced spurious :class:`ClipLengthMismatchError` track
+    failures on otherwise healthy assemblies.  See Devin-review
+    BUG_pr-review-job-360f6e5a46ce4ee09a50657fa8966af3_0001 on #174.
     """
     n = max(int(num_clips), 1)
-    return max(TRACK_LENGTH_FLOOR_SEC, n * CLIP_LENGTH_TOLERANCE_SEC)
+    per_clip_budget = GRID_QUANTIZATION_BUDGET_SEC + CLIP_LENGTH_TOLERANCE_SEC
+    return max(TRACK_LENGTH_FLOOR_SEC, n * per_clip_budget)
 
 
 def ensure_track_length_matches(
