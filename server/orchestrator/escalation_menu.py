@@ -47,14 +47,36 @@ from typing import Any, Literal, Optional, get_args
 # or ``generate_extension_clip`` (both REPLACE / EXTEND) or escalate to
 # ``rewrite_scene`` / ``abort_run``.
 ActionName = Literal[
+    # Creative / timeline actions (PR-0 menu; ARCH-F-trimmed)
     "regenerate_clip",
     "generate_extension_clip",
     "replace_with_brand_card",
     "rewrite_scene",
     "abort_run",
+    # Ops / deployment actions (PR-2 — deployment planner participation)
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
 ]
 
 ACTION_NAMES: tuple[str, ...] = tuple(get_args(ActionName))
+
+# Canonical subsets so callers / tests can reason about the two families
+# without re-listing them.
+CREATIVE_ACTION_NAMES: tuple[str, ...] = (
+    "regenerate_clip",
+    "generate_extension_clip",
+    "replace_with_brand_card",
+    "rewrite_scene",
+    "abort_run",
+)
+OPS_ACTION_NAMES: tuple[str, ...] = (
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
+)
 
 # Which escalation level each action belongs to (per spec).
 ACTION_LEVELS: dict[str, int] = {
@@ -63,6 +85,11 @@ ACTION_LEVELS: dict[str, int] = {
     "replace_with_brand_card": 2,
     "rewrite_scene": 3,
     "abort_run": 3,
+    # Ops actions
+    "wait_for_worker_recovery": 1,    # cheapest — just wait
+    "recycle_worker": 2,              # destroy + reprovision a single worker
+    "provision_extra_worker": 2,      # add capacity
+    "freeze_batch_and_replan": 3,     # structural — halt in-flight + replan
 }
 
 # Required parameter names and expected types per action.
@@ -72,7 +99,17 @@ ACTION_SIGNATURES: dict[str, dict[str, type]] = {
     "replace_with_brand_card": {"scene_id": str},
     "rewrite_scene": {"scene_id": str, "guidance": str},
     "abort_run": {"reason": str},
+    # Ops actions
+    "recycle_worker": {"worker_url": str, "reason": str},
+    "provision_extra_worker": {"role": str, "count": int},
+    "wait_for_worker_recovery": {"worker_url": str, "timeout_sec": float},
+    "freeze_batch_and_replan": {"reason": str},
 }
+
+# Hard bounds enforced in __post_init__ for ops actions.
+MAX_PROVISION_COUNT: int = 4          # don't let the agent spin up a farm
+MAX_WAIT_TIMEOUT_SEC: float = 1800.0  # 30 minutes — hard cap on "just wait"
+OPS_VALID_ROLES: tuple[str, ...] = ("tts", "video", "whisperx")
 
 
 class EscalationActionError(ValueError):
@@ -99,12 +136,18 @@ class EscalationAction:
     clip_id: Optional[str] = None
     scene_id: Optional[str] = None
 
-    # Per-action parameters.
+    # Per-action parameters (creative menu).
     prompt_delta: Optional[str] = None
     seed_delta: Optional[int] = None
     duration_needed: Optional[float] = None
     guidance: Optional[str] = None
     reason: Optional[str] = None
+
+    # Per-action parameters (ops menu).
+    worker_url: Optional[str] = None
+    role: Optional[str] = None
+    count: Optional[int] = None
+    timeout_sec: Optional[float] = None
 
     # Audit metadata populated by ``supervisor_escalate``.
     llm_model: str = ""
@@ -159,11 +202,36 @@ class EscalationAction:
                 raise EscalationActionError(
                     "regenerate_clip: seed_delta must be non-zero"
                 )
+        if self.action == "provision_extra_worker":
+            assert self.count is not None
+            if self.count <= 0 or self.count > MAX_PROVISION_COUNT:
+                raise EscalationActionError(
+                    f"provision_extra_worker: count must be in "
+                    f"[1, {MAX_PROVISION_COUNT}], got {self.count}"
+                )
+            assert self.role is not None
+            if self.role not in OPS_VALID_ROLES:
+                raise EscalationActionError(
+                    f"provision_extra_worker: role must be one of "
+                    f"{OPS_VALID_ROLES}, got {self.role!r}"
+                )
+        if self.action == "wait_for_worker_recovery":
+            assert self.timeout_sec is not None
+            if self.timeout_sec <= 0 or self.timeout_sec > MAX_WAIT_TIMEOUT_SEC:
+                raise EscalationActionError(
+                    f"wait_for_worker_recovery: timeout_sec must be in "
+                    f"(0, {MAX_WAIT_TIMEOUT_SEC}], got {self.timeout_sec}"
+                )
 
     @property
     def level(self) -> int:
         """Escalation level (1, 2, or 3)."""
         return ACTION_LEVELS[self.action]
+
+    @property
+    def is_ops(self) -> bool:
+        """True if this action targets the fleet rather than an artifact."""
+        return self.action in OPS_ACTION_NAMES
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a compact dict (drops None / empty values)."""
@@ -304,6 +372,10 @@ ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
         "duration_needed": {"type": "number"},
         "guidance": {"type": "string"},
         "reason": {"type": "string"},
+        "worker_url": {"type": "string"},
+        "role": {"type": "string"},
+        "count": {"type": "integer"},
+        "timeout_sec": {"type": "number"},
         "llm_reasoning": {"type": "string"},
     },
     "required": ["action"],
@@ -350,6 +422,8 @@ def assert_escalation_invariant(
 __all__ = [
     "ActionName",
     "ACTION_NAMES",
+    "CREATIVE_ACTION_NAMES",
+    "OPS_ACTION_NAMES",
     "ACTION_LEVELS",
     "ACTION_SIGNATURES",
     "ACTION_MENU_DESCRIPTION",
@@ -358,5 +432,8 @@ __all__ = [
     "EscalationActionError",
     "EscalationContext",
     "EscalationInvariantViolation",
+    "MAX_PROVISION_COUNT",
+    "MAX_WAIT_TIMEOUT_SEC",
+    "OPS_VALID_ROLES",
     "assert_escalation_invariant",
 ]

@@ -411,21 +411,38 @@ def execute_ops_action(action: EscalationAction) -> dict[str, Any]:
         )
 
     if action.action == "wait_for_worker_recovery":
-        assert action.worker_url is not None
-        assert action.timeout_sec is not None
+        if action.worker_url is None or action.timeout_sec is None:
+            return _result(
+                False,
+                action.action,
+                detail="missing worker_url or timeout_sec",
+            )
         return execute_wait_for_worker_recovery(
             action.worker_url, action.timeout_sec
         )
     if action.action == "recycle_worker":
-        assert action.worker_url is not None
-        assert action.reason is not None
+        if action.worker_url is None or action.reason is None:
+            return _result(
+                False,
+                action.action,
+                detail="missing worker_url or reason",
+            )
         return execute_recycle_worker(action.worker_url, action.reason)
     if action.action == "provision_extra_worker":
-        assert action.role is not None
-        assert action.count is not None
+        if action.role is None or action.count is None:
+            return _result(
+                False,
+                action.action,
+                detail="missing role or count",
+            )
         return execute_provision_extra_worker(action.role, action.count)
     if action.action == "freeze_batch_and_replan":
-        assert action.reason is not None
+        if action.reason is None:
+            return _result(
+                False,
+                action.action,
+                detail="missing reason",
+            )
         return execute_freeze_batch_and_replan(action.reason)
 
     # Unreachable under the OPS_ACTION_NAMES guard above; kept for mypy
