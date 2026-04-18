@@ -206,6 +206,32 @@ def _virtual_brief_imports():
     return assemble_virtual_brief, Scope, Subject
 
 
+#: Scope specificity ranks (keep in sync with
+#: :data:`server.callbacks.virtual_brief._SPECIFICITY`). Used below so
+#: :func:`_check_scope_override` can detect when a returned decision
+#: comes from a strictly broader scope than the one we queried at.
+_SCOPE_SPECIFICITY: dict[str, int] = {
+    "global": 0,
+    "stage": 1,
+    "scene": 2,
+    "voice_block": 3,
+    "artifact_type": 4,
+    "element": 5,
+}
+
+
+def _scope_rank(scope: Any) -> int:
+    """Return the specificity rank for ``scope`` (enum or string).
+
+    Unknown scopes fall back to ``0`` (GLOBAL) so we never raise from
+    inside an invariant-checker hot path.
+    """
+    scope_value = getattr(scope, "value", scope)
+    if not isinstance(scope_value, str):
+        return 0
+    return _SCOPE_SPECIFICITY.get(scope_value.lower(), 0)
+
+
 def _check_scope_override(
     assemble_fn,
     state: Mapping[str, Any],
@@ -217,11 +243,17 @@ def _check_scope_override(
     a given ``(scope, scope_ref)``.
 
     Returns:
-        * ``True`` — a suppressing loudness record wins at this scope.
-        * ``False`` — the scope has records but none suppress (e.g.
-          AVOID/FORBID, or a non-loudness VOICE decision).
-        * ``None`` — no applicable record at this scope; caller
-          should continue walking.
+        * ``True`` — a suppressing loudness record at this scope (or
+          the final ``scope_enum is None`` STAGE/GLOBAL step) wins.
+        * ``False`` — a record at this scope wins but does not
+          suppress (AVOID/FORBID, or a non-loudness VOICE decision).
+        * ``None`` — no record at this scope drove the decision;
+          either nothing applied at all or the winner came from a
+          strictly broader scope than the one we asked about. The
+          caller continues walking; a narrower record at a later
+          (broader) step can still override the broader winner via
+          dominance, and broader-only decisions are picked up at the
+          final ``scope_enum is None`` step.
 
     Raises ``RuntimeError`` when the virtual brief surfaces a hard
     conflict on the VOICE subject — the invariant checker must
@@ -256,6 +288,24 @@ def _check_scope_override(
     decision = brief.decision_for(subject_enum.VOICE)
     if decision is None:
         return None
+
+    # Scope-specificity guard. ``assemble_virtual_brief`` with
+    # ``scope=VOICE_BLOCK`` / ``scope=SCENE`` still pulls in broader
+    # records (GLOBAL, unrefed STAGE, unrefed SCENE…), so a STAGE
+    # PREFER leaks into the VOICE_BLOCK / SCENE query and wins there
+    # even when a more-specific ref'd SCENE record exists (the
+    # ref'd-at-broader-level record is excluded from the narrower
+    # query by :func:`virtual_brief._record_applies`, line 227).
+    # Skip broader-than-queried winners and let a later narrower
+    # query in the walk surface the ref'd record — or, if none
+    # exists, let the final ``scope_enum is None`` step pick the
+    # broad record up authoritatively.
+    if scope_enum is not None:
+        queried_rank = _scope_rank(scope_enum)
+        decision_rank = _scope_rank(decision.record.scope)
+        if decision_rank < queried_rank:
+            return None
+
     # Only polarity=PREFER/REQUIRE suppress the invariant. AVOID/FORBID
     # on VOICE do NOT suppress (they say "keep voice uniform").
     if not _record_polarity_suppresses(decision.record):

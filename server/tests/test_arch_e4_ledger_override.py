@@ -542,6 +542,48 @@ class TestSpecificity:
         block = _block(tmp_path, "scene_001_V1", scene_num=1)
         assert is_lufs_override_active(state, block) is True
 
+    def test_stage_prefer_does_not_leak_past_refed_scene_avoid(self, tmp_path):
+        # Regression (Devin Review): ``assemble_virtual_brief`` with
+        # ``scope=VOICE_BLOCK`` pulls in broader GLOBAL / STAGE records
+        # but excludes ref'd records from broader levels (e.g. a
+        # ``SCENE scope_ref="3"`` record is NOT visible at a
+        # VOICE_BLOCK query). Before the fix a STAGE PREFER would win
+        # at the first VOICE_BLOCK query and the walk would stop —
+        # the SCENE AVOID for scene 3 was never consulted, so the
+        # override was wrongly active for blocks that the scene-level
+        # AVOID explicitly said to keep uniform.
+        state: dict = {}
+        append_preference(
+            state,
+            scope=Scope.STAGE,
+            scope_ref="audio",
+            polarity=Polarity.PREFER,
+            subject=Subject.VOICE,
+            content="make this film LOUDER overall",
+            origin=_origin("evt-1"),
+            metadata={LOUDNESS_ASPECT_KEY: LOUDNESS_ASPECT_VALUE},
+        )
+        append_preference(
+            state,
+            scope=Scope.SCENE,
+            scope_ref="3",
+            polarity=Polarity.AVOID,
+            subject=Subject.VOICE,
+            content="but keep scene 3 uniform",
+            origin=_origin("evt-2"),
+            metadata={LOUDNESS_ASPECT_KEY: LOUDNESS_ASPECT_VALUE},
+        )
+        # Block in scene 3 — SCENE AVOID must dominate the STAGE
+        # PREFER, so the override is SUPPRESSED.
+        block_in_scene_3 = _block(tmp_path, "scene_003_V1", scene_num=3)
+        assert is_lufs_override_active(state, block_in_scene_3) is False
+
+        # Control: block in a different scene (no ref'd SCENE record
+        # applies) — the STAGE PREFER wins and the override IS
+        # active.
+        block_in_scene_1 = _block(tmp_path, "scene_001_V1", scene_num=1)
+        assert is_lufs_override_active(state, block_in_scene_1) is True
+
     def test_block_avoid_beats_scene_prefer(self, tmp_path):
         # Scene-wide PREFER + block-specific AVOID → the block wins;
         # override is SUPPRESSED at that scope.
