@@ -450,7 +450,10 @@ def _check_scenario_approval(callback_context):
         from critique.qa_storage import mirror_scenario_evaluator_result
 
         rating = _parse_scenario_rating(str(eval_output))
-        structural_cap = _parse_structural_cap(str(eval_output))
+        # The structural cap is produced deterministically by the
+        # pre-evaluator checks and written to state; the LLM is not
+        # instructed to echo it, so parsing eval_output is unreliable.
+        structural_cap = str(state.get("_structural_report_overall_cap", "") or "")
         if rating:
             artifact_id = (
                 state.get("run_id")
@@ -483,18 +486,6 @@ def _parse_scenario_rating(text: str) -> str:
     for candidate in ("EXCELLENT", "GOOD", "FAIR", "POOR"):
         if candidate in upper:
             return candidate
-    return ""
-
-
-def _parse_structural_cap(text: str) -> str:
-    """Extract the OVERALL_CAP verdict surfaced by structural checks."""
-
-    if not text:
-        return ""
-    upper = text.upper()
-    for cap in ("OVERALL_CAP=EXCELLENT", "OVERALL_CAP=GOOD", "OVERALL_CAP=FAIR", "OVERALL_CAP=POOR"):
-        if cap in upper:
-            return cap.split("=", 1)[1]
     return ""
 
 

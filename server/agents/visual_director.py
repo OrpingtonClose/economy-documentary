@@ -548,6 +548,12 @@ def _parse_coherence_rating(text: str) -> str:
     if not text:
         return ""
     upper = text.upper()
+    # Prefer the structured ``RATING: X`` token so prose words like
+    # "GOOD consistency" in a POOR rating's feedback don't cause a
+    # false positive.
+    for token in ("RATING: EXCELLENT", "RATING: GOOD", "RATING: FAIR", "RATING: POOR"):
+        if token in upper:
+            return token.split(":", 1)[1].strip()
     for candidate in ("EXCELLENT", "GOOD", "FAIR", "POOR"):
         if candidate in upper:
             return candidate
