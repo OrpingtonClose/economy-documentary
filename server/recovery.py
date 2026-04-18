@@ -1390,6 +1390,30 @@ def escalate_pipeline_error(
             )
             return {"action": "abort", **agent_decision}
 
+    # ── Step 1.5: Consult the Production Supervisor LLM ──────────────
+    # The agent ladder returned "escalate" (or no agents were available).
+    # Before falling through to human intervention, the supervisor MUST
+    # make at least one LLM call — this is the hard invariant for #102.
+    # Closes #61 (ladder passes buck), #73 (zero LLM reasoning),
+    # #77 (inter-agent communication via supervisor).
+    supervisor_decision = _consult_supervisor(
+        operation_name=operation_name,
+        error_msg=error_msg,
+        diagnosis_hint=diagnosis_hint,
+        pipeline_state=pipeline_state,
+        diagnostic_data=diagnostic_data,
+        agent_chain=(agent_decision or {}).get("agent_chain"),
+    )
+    if supervisor_decision is not None:
+        logger.info(
+            "Supervisor LLM resolved '%s': caller_action=%s (canonical=%s, level=L%s)",
+            operation_name,
+            supervisor_decision.get("action"),
+            supervisor_decision.get("canonical_action"),
+            supervisor_decision.get("level"),
+        )
+        return supervisor_decision
+
     # ── Step 2: Agent ladder exhausted — fall back to human (L4) ─────
     if proposed_actions is None:
         proposed_actions = [
@@ -1620,3 +1644,131 @@ def _run_agent_ladder(
         len(set(a["level"] for a in agent_chain)),
     )
     return {"action": "escalate", "agent_chain": agent_chain}
+
+
+# ---------------------------------------------------------------------------
+# Production Supervisor consultation (bridges agent ladder to canonical menu)
+# ---------------------------------------------------------------------------
+#
+# Closes #61, #73, #76, #77, #102, #103: when the agent ladder returns
+# "escalate" we consult the Production Supervisor via
+# ``supervisor_escalate(context) -> EscalationAction``.  This GUARANTEES
+# at least one supervisor LLM call per escalation, which is the hard
+# invariant asserted at end-of-run by
+# ``agents.production_supervisor.assert_supervisor_invariant_at_end_of_run``.
+
+# Canonical EscalationAction → caller-vocabulary mapping used by
+# escalate_pipeline_error's callers (video_tools, audio_tools, otio_tools,
+# orchestrator).
+_CANONICAL_TO_CALLER: dict[str, str] = {
+    "regenerate_clip": "retry_with_fix",
+    "generate_extension_clip": "retry_with_fix",
+    "speed_up_narration": "retry_with_fix",
+    "trim_narration": "retry_with_fix",
+    "freeze_frame_fill": "retry_with_fix",
+    "replace_with_brand_card": "skip",
+    "rewrite_scene": "retry_with_fix",
+    "abort_run": "abort",
+}
+
+
+def _consult_supervisor(
+    operation_name: str,
+    error_msg: str,
+    diagnosis_hint: Optional[str] = None,
+    pipeline_state: Optional[dict] = None,
+    diagnostic_data: Optional[dict] = None,
+    agent_chain: Optional[list[dict]] = None,
+) -> Optional[dict]:
+    """Consult the production supervisor for a canonical escalation action.
+
+    Returns a dict in the caller's vocabulary (``{"action": ..., ...}``)
+    or ``None`` if the supervisor cannot be consulted (e.g. module not
+    importable in a minimal test harness).
+
+    Notes:
+        - The supervisor ALWAYS makes at least one LLM call per invocation
+          — even parse failures increment the counter — so the #102
+          invariant is satisfied by construction.
+        - On terminal parse failure the supervisor returns ``abort_run``,
+          which we map to the caller's ``abort``.
+    """
+    try:
+        from agents.production_supervisor import (
+            supervisor_escalate,
+        )
+        from orchestrator.escalation_menu import EscalationContext
+    except Exception as exc:  # pragma: no cover — import-time safety net
+        logger.warning(
+            "Supervisor unavailable for '%s': %s — skipping supervisor layer",
+            operation_name, exc,
+        )
+        return None
+
+    # Infer high-cost from diagnostic data (e.g. long clips, rewrites).
+    high_cost = False
+    if diagnostic_data:
+        dur = diagnostic_data.get("duration") or diagnostic_data.get("duration_needed")
+        if isinstance(dur, (int, float)) and dur >= 8.0:
+            high_cost = True
+        if diagnostic_data.get("high_cost"):
+            high_cost = True
+
+    descriptor: dict[str, Any] = {
+        "error": error_msg[:500],
+        "diagnosis_hint": diagnosis_hint or "",
+    }
+    if diagnostic_data:
+        descriptor.update(
+            {k: v for k, v in diagnostic_data.items() if _is_jsonable(v)}
+        )
+
+    history: list[dict[str, Any]] = []
+    for attempt in (agent_chain or [])[-10:]:
+        history.append({
+            "action": f"L{attempt.get('level', '?')}:{attempt.get('action', '?')}",
+            "outcome": attempt.get("explanation", "")[:200],
+            "timestamp": time.time(),
+        })
+
+    context = EscalationContext(
+        failing_artifact=operation_name,
+        artifact_descriptor=descriptor,
+        timeline_state_snapshot=(pipeline_state or {}),
+        user_original_prompt=(pipeline_state or {}).get("user_prompt", "")
+            if isinstance(pipeline_state, dict) else "",
+        budget_remaining=0.0,
+        escalation_history=history,
+        high_cost=high_cost,
+    )
+
+    try:
+        action = supervisor_escalate(context)
+    except Exception as exc:
+        logger.error(
+            "Supervisor escalate raised for '%s': %s — falling through to human",
+            operation_name, exc,
+        )
+        return None
+
+    caller_action = _CANONICAL_TO_CALLER.get(action.action, "abort")
+    return {
+        "action": caller_action,
+        "canonical_action": action.action,
+        "level": action.level,
+        "supervisor_reasoning": action.llm_reasoning,
+        "supervisor_model": action.llm_model,
+        "state_patches": action.to_dict(),
+        "agent": "production_supervisor",
+    }
+
+
+def _is_jsonable(value: Any) -> bool:
+    """Cheap check — is ``value`` safe to include in the supervisor prompt?"""
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_jsonable(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_jsonable(v) for k, v in value.items())
+    return False
