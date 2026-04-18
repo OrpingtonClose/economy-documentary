@@ -1,9 +1,15 @@
 """
-Assembly tools -- ffmpeg wrappers for muxing, concat, and trim.
+Assembly tools -- ffmpeg wrappers for muxing, concat, trim, and final
+master rendering.
 
 Rules:
 - mux_audio_video: NO -shortest flag (video must be >= audio)
 - All subprocess calls use list form (no shell=True)
+- Final deliverables (filename contains 'final') MUST use a non-preview
+  :class:`MasterProfile` — ``PREVIEW_512P`` is rejected by
+  :func:`guard_profile_for_filename` unless ``preview_final_ok=True``.
+- Upscaling is done here at assembly time via lanczos; LTX clips stay at
+  their native low resolution during generation.
 """
 
 from __future__ import annotations
@@ -11,11 +17,24 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
-from typing import List
+from typing import List, Optional
 
 from google.adk.tools import FunctionTool
+
+from .master_profiles import (
+    DEFAULT_PROFILE,
+    MasterProfile,
+    PreviewProfileForbidden,
+    guard_profile_for_filename,
+)
+from .loudness_normalization import (
+    LoudnessOutOfSpec,
+    normalize_master,
+)
+from .title_cards import CardSpec, render_card
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +220,8 @@ def mux_audio_video(
     video_path: str,
     output_path: str,
     tool_context=None,
+    master_profile: Optional[MasterProfile] = None,
+    preview_final_ok: bool = False,
 ) -> str:
     """Mux audio and video into a single file.
 
@@ -210,6 +231,15 @@ def mux_audio_video(
         audio_path: Path to the audio file (WAV/AAC).
         video_path: Path to the video file (MP4).
         output_path: Path for the muxed output file.
+        master_profile: Optional :class:`MasterProfile` — when supplied,
+            the encoder is driven off the profile (codec, preset, crf,
+            pix_fmt, color space, audio codec/bitrate/sample rate) AND
+            the source video is upscaled to ``profile.width`` x
+            ``profile.height`` via lanczos during mux.  Downstream LTX
+            clips stay at their native low resolution at generation
+            time; upscaling only happens here at assembly.
+        preview_final_ok: explicit override for the preview-profile
+            guard on final-named filenames (maps to ``--preview-final-ok``).
 
     Returns:
         JSON string with mux result.
@@ -218,28 +248,50 @@ def mux_audio_video(
         if not os.path.exists(path):
             return json.dumps({"error": f"{label} file not found: {path}"})
 
+    if master_profile is not None:
+        try:
+            guard_profile_for_filename(
+                master_profile, output_path, preview_final_ok=preview_final_ok,
+            )
+        except PreviewProfileForbidden as exc:
+            return json.dumps({"error": str(exc)})
+
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    # Re-encode video to H.264 during mux.  Source clips from
-    # diffusers' export_to_video use mpeg4 Part 2 which most players
-    # cannot render.  Re-encoding here normalises everything to H.264
-    # before concat, eliminating mixed-codec glitches.
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "18",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-movflags", "+faststart",
-        output_path,
-    ]
+    if master_profile is not None:
+        # Profile-driven encode: upscale source to the target resolution
+        # with lanczos and use the profile's codec / audio settings.
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", audio_path,
+            "-vf", master_profile.scale_filter(),
+            *master_profile.video_encode_args(),
+            *master_profile.audio_encode_args(),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+    else:
+        # Legacy path — kept so scene-level mux (per-phrase) isn't
+        # forced to re-encode into full 1080p.
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", video_path,
+            "-i", audio_path,
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-movflags", "+faststart",
+            output_path,
+        ]
 
     # Scale timeout by input duration (a 5-min movie re-encode takes much
     # longer than the old hardcoded 120s allowed)
@@ -287,6 +339,8 @@ def concat_clips(
     clip_paths: str,
     output_path: str,
     tool_context=None,
+    master_profile: Optional[MasterProfile] = None,
+    copy_audio: bool = False,
 ) -> str:
     """Concatenate a list of clips using ffmpeg concat demuxer.
 
@@ -303,6 +357,19 @@ def concat_clips(
     Args:
         clip_paths: Comma-separated list of clip file paths.
         output_path: Path for the concatenated output file.
+        master_profile: Optional :class:`MasterProfile` — when supplied,
+            the video re-encode uses the profile's codec / preset / crf /
+            pix_fmt / colour tags / fps and the profile's audio codec /
+            bitrate / sample rate.  Without it, the legacy H.264 fast
+            crf18 + AAC 192k defaults are used (safe for mixed-codec
+            inputs from diffusers / transitions).
+        copy_audio: When ``True`` (only meaningful with ``master_profile``),
+            the audio stream is copied verbatim (``-c:a copy``) instead of
+            being re-encoded.  Use this when every input segment already
+            has AAC audio at the profile's bitrate / sample rate (e.g. in
+            :func:`finalize_master` where all segments come out of the
+            same profile-driven mux) — it avoids a redundant lossy AAC
+            generation.
 
     Returns:
         JSON string with concat result.
@@ -344,10 +411,36 @@ def concat_clips(
                 "-c", "copy",
                 output_path,
             ]
+        elif master_profile is not None:
+            # Video + profile: re-encode with the profile's codec settings
+            # so the final deliverable keeps its bt709 tags, fps lock,
+            # slow preset, and 256k aac.  Without this the hardcoded
+            # legacy settings below would silently downgrade quality for
+            # every finalize_master() call (see #90).  When copy_audio is
+            # True the caller has guaranteed every segment already has
+            # matching AAC audio, so we stream-copy it to avoid a third
+            # lossy generation (Phase B WAV → mux AAC → concat AAC would
+            # otherwise be two AAC transcodes on the same samples).
+            audio_args = (
+                ["-c:a", "copy"] if copy_audio
+                else list(master_profile.audio_encode_args())
+            )
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_path,
+                *master_profile.video_encode_args(),
+                *audio_args,
+                "-movflags", "+faststart",
+                output_path,
+            ]
         else:
-            # Video: re-encode to H.264 + AAC for universal compatibility.
-            # -c copy would be faster but breaks when source codecs differ
-            # (e.g. mpeg4 Part 2 from LTX + libx264 from black transitions).
+            # Video, no profile: re-encode to H.264 + AAC for universal
+            # compatibility.  -c copy would be faster but breaks when
+            # source codecs differ (e.g. mpeg4 Part 2 from LTX + libx264
+            # from black transitions).
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -482,9 +575,225 @@ def trim_clip(
         return json.dumps({"error": f"ffmpeg trim timed out after {timeout}s"})
 
 
+# ---------------------------------------------------------------------------
+# Profile-aware helpers for final master assembly (#90, #91, #104, #105)
+# ---------------------------------------------------------------------------
+
+def upscale_to_profile(
+    input_path: str,
+    output_path: str,
+    master_profile: MasterProfile,
+    preview_final_ok: bool = False,
+) -> str:
+    """Re-encode ``input_path`` to the profile's resolution + codec.
+
+    Uses lanczos scaling (documentary-grade) and the profile's H.264
+    settings + colour tags.  Preserves the audio stream via ``-c:a copy``
+    since audio is normalised separately in Phase B.
+
+    Returns JSON describing the result (status or error).
+    """
+    if not os.path.exists(input_path):
+        return json.dumps({"error": f"Input not found: {input_path}"})
+
+    try:
+        guard_profile_for_filename(
+            master_profile, output_path, preview_final_ok=preview_final_ok,
+        )
+    except PreviewProfileForbidden as exc:
+        return json.dumps({"error": str(exc)})
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-vf", master_profile.scale_filter(),
+        *master_profile.video_encode_args(),
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+
+    dur_min = _estimate_file_duration_minutes(input_path)
+    timeout = _scaled_timeout(
+        _MUX_TIMEOUT_BASE, _MUX_TIMEOUT_PER_MIN, dur_min, _MUX_TIMEOUT_MAX,
+    )
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            "error": f"upscale timed out after {timeout}s",
+        })
+    if result.returncode != 0:
+        return json.dumps({
+            "error": f"upscale failed (rc={result.returncode})",
+            "stderr": result.stderr[-500:],
+        })
+    logger.info(
+        "Upscaled %s -> %s (%dx%d, %s)",
+        input_path, output_path,
+        master_profile.width, master_profile.height, master_profile.name,
+    )
+    return json.dumps({
+        "status": "upscaled",
+        "output_path": output_path,
+        "profile": master_profile.name,
+        "width": master_profile.width,
+        "height": master_profile.height,
+    })
+
+
+def finalize_master(
+    body_video_path: str,
+    body_audio_path: str,
+    output_path: str,
+    master_profile: MasterProfile = DEFAULT_PROFILE,
+    title_card: Optional[CardSpec] = None,
+    end_card: Optional[CardSpec] = None,
+    preview_final_ok: bool = False,
+) -> str:
+    """Render a full final deliverable: title → body → end + Phase B loudnorm.
+
+    Steps:
+      1. Guard: refuse ``PREVIEW_512P`` for filenames containing ``final``.
+      2. Render title/end cards (if supplied) at the profile geometry.
+      3. Phase B loudnorm the body audio to the profile envelope.
+      4. Mux body audio+video at the profile resolution (lanczos upscale).
+      5. Concat title → muxed body → end into ``output_path``.
+
+    All intermediate artifacts are written next to ``output_path`` in a
+    ``_final_parts`` sibling directory so they are easy to inspect.
+
+    Returns a JSON string describing the result.
+    """
+    for path, label in [
+        (body_video_path, "body_video"),
+        (body_audio_path, "body_audio"),
+    ]:
+        if not os.path.exists(path):
+            return json.dumps({"error": f"{label} not found: {path}"})
+
+    try:
+        guard_profile_for_filename(
+            master_profile, output_path, preview_final_ok=preview_final_ok,
+        )
+    except PreviewProfileForbidden as exc:
+        return json.dumps({"error": str(exc)})
+
+    out_dir = os.path.dirname(output_path) or "."
+    parts_dir = os.path.join(out_dir, "_final_parts")
+    os.makedirs(parts_dir, exist_ok=True)
+
+    # 1. Phase B — normalize full narration stream to profile target.
+    # Keep the intermediate as lossless PCM WAV so there is exactly one
+    # AAC encode in the whole pipeline (the mux step below).  Previously
+    # this wrote an .m4a, which meant the body audio went WAV -> AAC
+    # (Phase B) -> AAC (mux) -> AAC (concat) — three lossy generations
+    # on every deliverable.  See the Devin Review finding on #112.
+    normalized_audio = os.path.join(parts_dir, "body_audio_master.wav")
+    try:
+        normalize_master(
+            input_path=body_audio_path,
+            output_path=normalized_audio,
+            profile=master_profile,
+            pcm_intermediate=True,
+        )
+    except LoudnessOutOfSpec as exc:
+        return json.dumps({
+            "error": f"Phase B loudnorm out of spec: {exc}",
+        })
+    except Exception as exc:
+        return json.dumps({
+            "error": f"Phase B loudnorm failed: {exc}",
+        })
+
+    # 2. Mux body at profile resolution (this also upscales via lanczos).
+    muxed_body = os.path.join(parts_dir, "body_muxed.mp4")
+    mux_result = json.loads(mux_audio_video(
+        audio_path=normalized_audio,
+        video_path=body_video_path,
+        output_path=muxed_body,
+        master_profile=master_profile,
+        preview_final_ok=preview_final_ok,
+    ))
+    if "error" in mux_result:
+        return json.dumps({"error": f"body mux failed: {mux_result['error']}"})
+
+    segments: List[str] = []
+
+    # 3. Render title card (if any).
+    if title_card is not None:
+        title_path = os.path.join(parts_dir, "title_card.mp4")
+        try:
+            render_card(title_card, master_profile, title_path)
+        except Exception as exc:
+            return json.dumps({"error": f"title card render failed: {exc}"})
+        segments.append(title_path)
+
+    segments.append(muxed_body)
+
+    # 4. Render end card (if any).
+    if end_card is not None:
+        end_path = os.path.join(parts_dir, "end_card.mp4")
+        try:
+            render_card(end_card, master_profile, end_path)
+        except Exception as exc:
+            return json.dumps({"error": f"end card render failed: {exc}"})
+        segments.append(end_path)
+
+    # 5. Concat everything — if there's nothing to prepend/append, just
+    # copy the muxed body to the final output.  All segments were
+    # rendered with the same master_profile, so we pass it through to
+    # concat_clips so the final re-encode keeps the profile's codec /
+    # bitrate / colour tags / fps rather than the legacy defaults.
+    if len(segments) == 1:
+        shutil.copy2(segments[0], output_path)
+    else:
+        concat_result = json.loads(concat_clips(
+            clip_paths=",".join(segments),
+            output_path=output_path,
+            master_profile=master_profile,
+            # All segments (title card, muxed body, end card) had their
+            # audio encoded via the same profile.audio_encode_args(), so
+            # AudioSpecificConfig is identical across them and we can
+            # stream-copy audio without a redundant lossy AAC pass.
+            copy_audio=True,
+        ))
+        if "error" in concat_result:
+            return json.dumps({
+                "error": f"final concat failed: {concat_result['error']}",
+            })
+
+    logger.info(
+        "Finalized master %s (%s, title=%s, end=%s)",
+        output_path, master_profile.name,
+        bool(title_card), bool(end_card),
+    )
+    return json.dumps({
+        "status": "finalized",
+        "output_path": output_path,
+        "profile": master_profile.name,
+        "has_title_card": title_card is not None,
+        "has_end_card": end_card is not None,
+    })
+
+
 # -- ADK FunctionTool wrappers -------------------------------------------------
 mux_audio_video_tool = FunctionTool(mux_audio_video)
 concat_clips_tool = FunctionTool(concat_clips)
 trim_clip_tool = FunctionTool(trim_clip)
 
 assembly_tools = [mux_audio_video_tool, concat_clips_tool, trim_clip_tool]
+
+__all__ = [
+    "normalize_audio_loudness",
+    "mux_audio_video",
+    "concat_clips",
+    "trim_clip",
+    "upscale_to_profile",
+    "finalize_master",
+    "assembly_tools",
+]
