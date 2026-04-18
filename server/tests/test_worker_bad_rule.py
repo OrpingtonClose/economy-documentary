@@ -450,6 +450,65 @@ def test_fleet_coordinator_report_failed_alone_does_not_condemn() -> None:
         coord.shutdown()
 
 
+def test_fleet_coordinator_scan_survives_malformed_escalations(monkeypatch) -> None:
+    """Malformed entries in ``infra_agent.get_status()['recent_escalations']``
+    must be skipped, not crash the scan or kill the monitor thread.
+
+    This guards against the Devin Review finding on PR #166: a non-numeric
+    timestamp, a non-dict entry, or a bogus ``consecutive_failures`` string
+    used to propagate out of the loop and terminate the monitoring thread.
+    """
+    import time
+
+    from fleet import coordinator as coordinator_module
+    from fleet.coordinator import FleetCoordinator
+
+    now = time.time()
+
+    class _FakeAgent:
+        def get_status(self):
+            return {
+                "recent_escalations": [
+                    None,  # non-dict
+                    {"timestamp": "not-a-number", "source": "worker:video",
+                     "message": "CUDA out of memory"},
+                    {"timestamp": now, "source": "worker:video",
+                     "message": "CUDA out of memory"},
+                    "a string, not a dict",
+                ],
+                "workers": [
+                    {"role": "video", "url": "http://vm-A:8000",
+                     "consecutive_failures": "oops"},
+                    {"role": "video", "url": "http://vm-B:8000",
+                     "consecutive_failures": 2},
+                ],
+            }
+
+    fake_module = type(coordinator_module)("_fake_infra_agent")
+    fake_module.get_infra_agent = lambda: _FakeAgent()
+    monkeypatch.setitem(sys.modules, "infra_agent", fake_module)
+
+    coord = FleetCoordinator(worker_bad_window_sec=60.0)
+    try:
+        coord.report_failed(
+            clip_id="clip-1",
+            worker_id="http://vm-B:8000",
+            error="LTX call returned non-zero",
+            category="infra",
+        )
+        # Scan must not raise even though the escalation list is full of junk.
+        coord._scan_infra_for_anomalies()
+
+        # The one valid CUDA escalation for role=video should have been
+        # attributed to vm-B (the unique consecutive-failing vm-B worker;
+        # vm-A's bogus consecutive_failures is skipped) and corroborate
+        # the job failure → condemnation.
+        assert coord.is_worker_bad("http://vm-B:8000") is True
+        assert coord.is_worker_bad("http://vm-A:8000") is False
+    finally:
+        coord.shutdown()
+
+
 def test_fleet_coordinator_corroborated_signals_condemn() -> None:
     """``FleetCoordinator.record_infra_anomaly`` + ``report_failed`` within
     the window mark the worker bad via the public API."""

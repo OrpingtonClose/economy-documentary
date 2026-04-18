@@ -265,7 +265,13 @@ class FleetCoordinator:
         self._thread.start()
 
     def _monitor_loop(self) -> None:
-        """Background loop: check scale-down, systemic patterns, completion."""
+        """Background loop: check scale-down, systemic patterns, completion.
+
+        Each per-cycle step is wrapped in try/except so a single bad
+        external input (malformed escalation, flaky scaler call, ...) cannot
+        kill the monitoring thread and silently stop the entire pipeline's
+        health, scale-down, and completion tracking.
+        """
         logger.info("FleetCoordinator: monitoring started")
         while not self._shutdown_event.is_set():
             if self._shutdown_event.wait(timeout=COORDINATOR_POLL_INTERVAL):
@@ -274,19 +280,39 @@ class FleetCoordinator:
             # Pull infra_agent telemetry to feed signal B of the worker-bad
             # rule (ARCH-C4).  Done before pattern detection so a freshly
             # corroborated condemnation is visible to escalation handlers.
-            self._scan_infra_for_anomalies()
+            try:
+                self._scan_infra_for_anomalies()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: _scan_infra_for_anomalies raised; continuing"
+                )
 
             # Check systemic patterns
-            queue_clips = self._queue.get_all_clips()
-            patterns = self._detector.check_patterns(queue_clips=queue_clips)
-            self._handle_patterns(patterns)
+            try:
+                queue_clips = self._queue.get_all_clips()
+                patterns = self._detector.check_patterns(queue_clips=queue_clips)
+                self._handle_patterns(patterns)
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: systemic pattern check raised; continuing"
+                )
 
             # Check scale-down
-            self._scaler.check_and_scale_down()
+            try:
+                self._scaler.check_and_scale_down()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: scale-down check raised; continuing"
+                )
 
             # Check completion
-            if self._queue.is_complete():
-                self._completion_event.set()
+            try:
+                if self._queue.is_complete():
+                    self._completion_event.set()
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: completion check raised; continuing"
+                )
 
         logger.info("FleetCoordinator: monitoring stopped")
 
@@ -481,19 +507,32 @@ class FleetCoordinator:
         last_seen = self._last_infra_scan_ts
         max_ts_seen = last_seen
         for esc in status.get("recent_escalations", []) or []:
-            ts = float(esc.get("timestamp") or 0.0)
-            if ts <= last_seen:
+            # Per-entry guard: a single malformed escalation must never
+            # break the scan or kill the monitor thread.
+            try:
+                if not isinstance(esc, dict):
+                    continue
+                try:
+                    ts = float(esc.get("timestamp") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if ts <= last_seen:
+                    continue
+                if ts > max_ts_seen:
+                    max_ts_seen = ts
+                source = str(esc.get("source") or "")
+                message = str(esc.get("message") or "")
+                worker_id = self._extract_worker_id_from_source(source, status)
+                if not worker_id:
+                    continue
+                self._worker_health.ingest_infra_message(
+                    worker_id=worker_id, message=message, timestamp=ts,
+                )
+            except Exception:
+                logger.exception(
+                    "FleetCoordinator: skipping malformed infra escalation entry"
+                )
                 continue
-            if ts > max_ts_seen:
-                max_ts_seen = ts
-            source = str(esc.get("source") or "")
-            message = str(esc.get("message") or "")
-            worker_id = self._extract_worker_id_from_source(source, status)
-            if not worker_id:
-                continue
-            self._worker_health.ingest_infra_message(
-                worker_id=worker_id, message=message, timestamp=ts,
-            )
         self._last_infra_scan_ts = max_ts_seen
 
     @staticmethod
@@ -519,11 +558,18 @@ class FleetCoordinator:
         if len(parts) < 2:
             return ""
         role = parts[1].strip().lower()
-        candidates = [
-            w for w in status.get("workers", []) or []
-            if str(w.get("role", "")).lower() == role
-            and int(w.get("consecutive_failures") or 0) > 0
-        ]
+        candidates = []
+        for w in status.get("workers", []) or []:
+            if not isinstance(w, dict):
+                continue
+            if str(w.get("role", "")).lower() != role:
+                continue
+            try:
+                cf = int(w.get("consecutive_failures") or 0)
+            except (TypeError, ValueError):
+                continue
+            if cf > 0:
+                candidates.append(w)
         if len(candidates) == 1:
             return str(candidates[0].get("url") or "")
         return ""
