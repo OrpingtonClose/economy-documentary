@@ -33,6 +33,7 @@ from callbacks.before_model import before_model_callback
 from callbacks.after_model import after_model_callback
 from callbacks.before_tool import before_tool_callback
 from callbacks.after_tool import after_tool_callback
+from callbacks.artifact_revision_tag import make_revision_tagging_callback
 from callbacks.deterministic_steps import clean_scenes_after_scenario, extract_json_array
 from tools.otio_tools import create_timeline_tool
 
@@ -474,9 +475,31 @@ def _scenario_phase_setup(callback_context):
     return None
 
 
+_tag_scenes_revision = make_revision_tagging_callback(
+    "scenes",
+    stage="scenario_director",
+    # The scenario_director is an EvaluatorOptimizer loop — the outer
+    # after_agent_callback fires once per re-entry (e.g. if the ladder
+    # re-manifests stage one). Each re-entry produces a fresh artifact
+    # that must re-snapshot the current ledger revision, so tags refresh
+    # on reproduce rather than failing loud.
+    retag_on_reproduce=True,
+)
+
+
 def _clean_scenes_after_scenario_wrapper(callback_context):
-    """After scenario_director: clean scenes JSON then run timeline guardian."""
-    return clean_scenes_after_scenario(callback_context)
+    """After scenario_director: clean scenes, guardian, then tag revision.
+
+    Order matters. ``clean_scenes_after_scenario`` finalises
+    ``state["scenes"]`` (and runs the timeline guardian as part of its
+    chain); only once the artifact is finalised do we snapshot the
+    Preference Ledger revision and attach the ARCH-B1 tag.  Tagging
+    last also means a guardian-raised ``RuntimeError`` short-circuits
+    tagging — we never tag an artifact that failed validation.
+    """
+    result = clean_scenes_after_scenario(callback_context)
+    _tag_scenes_revision(callback_context)
+    return result
 
 
 # -- Evaluator agent -----------------------------------------------------------
