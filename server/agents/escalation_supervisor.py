@@ -45,7 +45,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from critique.record import ArtifactCritiqueRecord, EscalationRef
+from critique.record import EscalationRef
 from critique.store import ArtifactCritiqueStore, get_critique_store
 from orchestrator.escalation_menu import (
     ACTION_MENU_DESCRIPTION,
@@ -99,8 +99,8 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 },
                 "required": ["artifact_type", "artifact_id"],
             },
-            fn=lambda artifact_type, artifact_id: _record_to_dict(
-                _tools.read_artifact_critique_history(artifact_type, artifact_id)
+            fn=lambda artifact_type, artifact_id: _tools.read_artifact_critique_history(
+                artifact_id=artifact_id, artifact_type=artifact_type
             ),
         ),
         ReadToolSpec(
@@ -117,11 +117,9 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 },
                 "required": ["artifact_type", "artifact_id"],
             },
-            fn=lambda artifact_type, artifact_id: [
-                v.to_dict() for v in _tools.read_qa_verdicts(
-                    artifact_type, artifact_id
-                )
-            ],
+            fn=lambda artifact_type, artifact_id: _tools.read_qa_verdicts(
+                artifact_id=artifact_id, artifact_type=artifact_type
+            ),
         ),
         ReadToolSpec(
             name="read_escalation_history",
@@ -137,11 +135,9 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 },
                 "required": ["artifact_type"],
             },
-            fn=lambda artifact_type, artifact_id=None: [
-                ref.to_dict() for ref in _tools.read_escalation_history(
-                    artifact_type, artifact_id
-                )
-            ],
+            fn=lambda artifact_type, artifact_id=None: _tools.read_escalation_history(
+                artifact_id=artifact_id, artifact_type=artifact_type
+            ),
         ),
         ReadToolSpec(
             name="read_worker_health",
@@ -206,7 +202,7 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 "type": "object",
                 "properties": {"run_dir": {"type": "string"}},
             },
-            fn=lambda run_dir=None: _tools.read_timeline_state(run_dir),
+            fn=lambda run_dir=None: _tools.read_timeline_state(),
         ),
         ReadToolSpec(
             name="read_artifact_record",
@@ -223,17 +219,14 @@ def _make_read_tools() -> list[ReadToolSpec]:
                 },
                 "required": ["artifact_type", "artifact_id"],
             },
-            fn=lambda artifact_type, artifact_id: _record_to_dict(
-                _tools.read_artifact_record(artifact_type, artifact_id)
+            fn=lambda artifact_type, artifact_id: (
+                _tools.read_artifact_record(
+                    artifact_id=artifact_id, artifact_type=artifact_type
+                )
+                or {}
             ),
         ),
     ]
-
-
-def _record_to_dict(record: Optional[ArtifactCritiqueRecord]) -> dict[str, Any]:
-    if record is None:
-        return {}
-    return record.to_dict()
 
 
 READ_TOOLS: list[ReadToolSpec] = _make_read_tools()
