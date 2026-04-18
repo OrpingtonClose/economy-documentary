@@ -93,3 +93,102 @@ Real-time pipeline instrumentation with:
 - SSE streaming for live updates
 - Self-contained HTML reports for post-mortem analysis
 - Per-run collectors with async context isolation
+
+## Escalation Pattern
+
+Every pipeline operation is wrapped by the recovery middleware
+(`server/recovery.py`). The intended design is a **graduated ladder of
+LLM-powered agents**, one per rung, with increasing authority and scope.
+
+### Intended ladder (L0 – L4)
+
+| Level | Name | Role |
+|------:|------|------|
+| **L0** | FIX | Domain specialist agent rewrites inputs to fix the specific problem (e.g. `AudioTimingAgent` rewrites narration to fix timing; `VisualPromptAgent` rewrites a visual prompt from QA feedback). |
+| **L1** | RETRY | Intelligent retry agent analyses error patterns and adjusts params. Not dumb exponential backoff. |
+| **L2** | CREATIVE | Alternative-strategy agent brainstorms a different model / different approach. |
+| **L3** | COLLABORATIVE | Inter-agent agent talks to other pipeline agents to coordinate a fix. |
+| **L4** | HUMAN | AG-UI escalation, full diagnostic chain presented. Last resort. |
+
+Every agent returns a `RecoveryDecision`:
+
+```python
+action ∈ {"fix", "retry", "skip", "escalate", "abort"}
+state_patches: dict         # mutations to apply to op kwargs before retry
+explanation: str
+confidence: float
+```
+
+`fix` / `retry` re-run the operation (with `state_patches` applied on
+`fix`); `skip` accepts the failure; `escalate` advances to the next rung;
+`abort` stops the pipeline.
+
+Core types: `RecoveryLevel` (IntEnum 0–4), `RecoveryPolicy`,
+`RecoveryAgent` base class + domain agents in `recovery_agents.py`
+(`AudioTimingAgent`, `VisualPromptAgent`, `ProductionBatchAgent`,
+`OTIOValidationAgent`, `RetryAgent`, `CreativeAgent`,
+`CollaborativeAgent`). Registries wire `{L0..L3 → agent}` via
+`AUDIO_AGENTS` / `VIDEO_AGENTS` / `PRODUCTION_AGENTS` / `OTIO_AGENTS` /
+`GENERIC_AGENTS`. Factory policies: `_make_audio_agent_policy()`,
+`_make_video_agent_policy()`, `_make_production_agent_policy()`,
+`_make_otio_agent_policy()`, `_make_generic_agent_policy()` (level
+budgets default to `{0: 3-5, 1: 3, 2: 2, 3: 1}`).
+
+Entry point:
+
+```python
+execute_with_recovery(
+    operation, operation_name, kwargs, policy,
+    context=None, pipeline_state=None, diagnostic_data=None,
+)
+```
+
+Dispatch in `recovery.py`:
+
+- `policy.agents` set → `_execute_with_agents()` (the intended L0–L3 ladder)
+- `policy.agents` missing → `_execute_legacy()` (retry + callback
+  amendments + `EnvironmentalAssessor`, kept for backward compat)
+
+### Canonical action menu (supervisor layer)
+
+When a recovery consult reaches the Production Supervisor
+(`agents/production_supervisor.py::supervisor_escalate`), it MUST return
+exactly one `EscalationAction` from the canonical menu defined in
+`orchestrator/escalation_menu.py`:
+
+| Tier | Action | Purpose |
+|-----|--------|---------|
+| L1 | `regenerate_clip(clip_id, prompt_delta, seed_delta)` | Cheap, targeted retry with corrective guidance and/or seed perturbation. |
+| L1 | `generate_extension_clip(scene_id, duration_needed)` | Fill remaining narration time with a short clip (0.5–3.0s typical). |
+| L1 | `speed_up_narration(scene_id, speed_factor)` | Time-stretch narration; `speed_factor ∈ (1.0, 1.15]`. |
+| L2 | `trim_narration(scene_id, max_cut_sec)` | Cut up to `max_cut_sec` seconds off the end of narration. |
+| L2 | `freeze_frame_fill(scene_id, duration_needed)` | Hold the last frame for `duration_needed` seconds. |
+| L2 | `replace_with_brand_card(scene_id)` | Static brand/title card in place of the scene. Heavy narrative cost. |
+| L3 | `rewrite_scene(scene_id, guidance)` | Regenerate narration + visual brief via scenario director. |
+| L3 | `abort_run(reason)` | Stop the pipeline. Last resort. |
+
+Decision rule: pick the cheapest tier that resolves the failure while
+preserving narrative. Prefer L1 > L2 > L3. Signature / bounds are
+enforced in `EscalationAction.__post_init__`; `MAX_SPEED_FACTOR = 1.15`.
+
+### Hard invariant
+
+`assert_escalation_invariant(escalations_per_run, llm_calls_per_run)`
+is checked at end-of-run: any run that had at least one escalation MUST
+have made at least one supervisor LLM call. A violation means the
+pipeline fell back to round-robin with zero reasoning (the exact
+regression that issues #61, #73, #102 close).
+
+### Current status vs intent
+
+The ladder, agents, registries, and policy factories are implemented,
+but the production hot paths still call the **legacy policies**
+(`VIDEO_POLICY`, `TTS_POLICY`) in `tools/video_tools.py` and
+`tools/tts_tools.py`. Those policies have `agents=None`, so every GPU
+clip and every TTS call dispatches to `_execute_legacy` — the intended
+L0–L3 agent ladder is not exercised on the hot path today. The
+supervisor is reached via `_consult_supervisor` from inside the legacy
+path, meaning the supervisor is currently a bolted-on late consultant
+rather than a rung of the ladder. Migrating the hot-path policies to
+the agent factories (`_make_video_agent_policy`, `_make_audio_agent_policy`)
+is the outstanding work to bring reality in line with intent.
