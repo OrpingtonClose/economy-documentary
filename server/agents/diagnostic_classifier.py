@@ -237,10 +237,16 @@ _INFRA_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "worker_unreachable",
         re.compile(
-            r"\b(?:worker\s+unreachable|worker\s+down|/status\s+(?:timed\s*out|failed)|"
-            r"URLError|HTTPConnectionPool|"
+            # NB: the ``/status …`` alternative sits OUTSIDE the ``\b…\b``
+            # wrapper because ``/`` is a non-word character, so a word
+            # boundary before ``/`` only matches when the *preceding*
+            # character is also a word char — i.e. never in realistic
+            # usage like ``GET /status failed``.
+            r"(?:\b(?:worker\s+unreachable|worker\s+down|URLError|"
+            r"HTTPConnectionPool|"
             r"failed\s+to\s+establish\s+a\s+new\s+connection|"
-            r"unable\s+to\s+connect\s+to\s+worker)\b",
+            r"unable\s+to\s+connect\s+to\s+worker)\b"
+            r"|/status\s+(?:timed\s*out|failed))",
             re.I,
         ),
     ),

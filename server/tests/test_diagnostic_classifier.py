@@ -153,6 +153,11 @@ def test_valid_classifications_are_the_three_documented():
             "Failed to establish a new connection to gpu-worker",
             "infra.worker_unreachable",
         ),
+        # Regression: `/status` starts with a non-word char, so the
+        # alternative lives outside the `\b…\b` wrapper and must still
+        # fire when preceded by a space or start-of-string.
+        ("GET /status failed after 3 retries", "infra.worker_unreachable"),
+        ("/status timed out polling gpu-worker", "infra.worker_unreachable"),
         ("asyncio.TimeoutError: wait_for exceeded 30s", "infra.timeout"),
         ("socket.timeout on /status", "infra.timeout"),
         ("nvidia-smi failed: NVML driver not loaded", "infra.gpu_driver"),
