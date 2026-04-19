@@ -142,9 +142,11 @@ export function ProgressStrip() {
 
   // Bar fill: "how far along the whole film are we?" — one seventh per
   // step, with the active step counted as half-complete so the bar
-  // animates between checkpoints.
+  // animates between checkpoints. The final stage ("Final touches")
+  // pins the bar at 100% so a finished run reads as *done*, not "93%".
   const progressValue = useMemo(() => {
     if (activeIdx < 0) return 0;
+    if (activeIdx === STAGES.length - 1) return 100;
     const per = 100 / STAGES.length;
     return Math.min(100, Math.round(activeIdx * per + per / 2));
   }, [activeIdx]);
