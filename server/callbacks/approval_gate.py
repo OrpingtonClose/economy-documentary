@@ -178,6 +178,45 @@ def _emit_gate_digest(
         logger.debug("reasoning_digest %s emission failed: %s", kind, exc)
 
 
+def _emit_approval_gate_event(
+    event_type: str,
+    stage: str,
+    *,
+    decision: str = "",
+    reviewer: str = "",
+    boundary_slot_id: str = "",
+) -> None:
+    """UI-03a (#198): emit approval_gate_opened / approval_gate_closed on
+    the unified AG-UI pipeline event bus.
+
+    These events land on the single SSE connection alongside agent turns
+    and drive the inline approval card on the OTIO timeline (UI-03b,
+    #199) plus the narrator chat surface (UI-01).  Fire-and-forget: never
+    raise -- the gate module must not regress just because the event bus
+    is unavailable.
+    """
+    try:
+        # Local import so the callbacks package can be imported when the
+        # FastAPI surface is not loaded (e.g. unit tests that exercise
+        # only the pipeline).
+        from agui import emit_agui_event
+
+        payload: dict[str, Any] = {"stage": stage}
+        if event_type == "approval_gate_opened":
+            payload["opened_at"] = time.time()
+        else:
+            payload["closed_at"] = time.time()
+        if decision:
+            payload["decision"] = decision
+        if reviewer:
+            payload["reviewer"] = reviewer
+        if boundary_slot_id:
+            payload["boundary_slot_id"] = boundary_slot_id
+        emit_agui_event(event_type, payload)
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.debug("emit_agui_event %s emission failed: %s", event_type, exc)
+
+
 def wait_for_approval(
     stage: str,
     *,
@@ -203,6 +242,14 @@ def wait_for_approval(
         return True
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)
+
+    # UI-03a (#198): announce the gate exactly once per entry so the
+    # inline approval card (UI-03b, #199) can render and the narrator
+    # (UI-01) can surface "Stage ready -- approve or reject" in chat.
+    # The per-poll-tick check is INSIDE the loop below; this emission
+    # must stay outside it.
+    _emit_approval_gate_event("approval_gate_opened", stage)
+    _decision = "timeout"
 
     # Local import: consistency_gate imports approval_gate at module level
     # (for reconstruction gating), so importing it at top-level would form
@@ -242,49 +289,64 @@ def wait_for_approval(
             stage,
         )
 
-    while time.time() - start < _MAX_WAIT:
-        if _halt_probe is not None and _halt_probe():
-            # Record the stage we paused at (idempotent after first call)
-            # so the dashboard can surface which checkpoint the pipeline
-            # is currently waiting on.  Do not return -- stay blocked
-            # until the halt flag is released, even if the stage is
-            # otherwise approved.
-            if _halt_marker is not None:
+    try:
+        while time.time() - start < _MAX_WAIT:
+            if _halt_probe is not None and _halt_probe():
+                # Record the stage we paused at (idempotent after first call)
+                # so the dashboard can surface which checkpoint the pipeline
+                # is currently waiting on.  Do not return -- stay blocked
+                # until the halt flag is released, even if the stage is
+                # otherwise approved.
+                if _halt_marker is not None:
+                    try:
+                        _halt_marker(stage)
+                    except Exception as exc:  # pragma: no cover -- defensive
+                        logger.warning(
+                            "wait_for_approval: failed to mark halt stage "
+                            "%r: %s",
+                            stage,
+                            exc,
+                        )
+                time.sleep(_POLL_INTERVAL)
+                continue
+            if is_stage_approved(stage):
+                elapsed = time.time() - start
+                logger.info("Stage '%s' approved after %.1fs", stage, elapsed)
+                _decision = "approved"
+                return True
+            # ARCH-B2: run A5 consistency check every poll so drift that
+            # appears while humans review is caught and dispatched to B3.
+            if _gate_poll_check is not None and state is not None:
                 try:
-                    _halt_marker(stage)
+                    _gate_poll_check(state, stage)
+                except RuntimeError:
+                    # Invariant violation (missing ledger, rev decrease) --
+                    # propagate so the pipeline stops loud, not silent.
+                    _decision = "error"
+                    raise
                 except Exception as exc:  # pragma: no cover -- defensive
                     logger.warning(
-                        "wait_for_approval: failed to mark halt stage "
-                        "%r: %s",
+                        "wait_for_approval: gate-poll consistency check raised "
+                        "non-invariant error for stage %r: %s",
                         stage,
                         exc,
                     )
             time.sleep(_POLL_INTERVAL)
-            continue
-        if is_stage_approved(stage):
-            elapsed = time.time() - start
-            logger.info("Stage '%s' approved after %.1fs", stage, elapsed)
-            return True
-        # ARCH-B2: run A5 consistency check every poll so drift that
-        # appears while humans review is caught and dispatched to B3.
-        if _gate_poll_check is not None and state is not None:
-            try:
-                _gate_poll_check(state, stage)
-            except RuntimeError:
-                # Invariant violation (missing ledger, rev decrease) --
-                # propagate so the pipeline stops loud, not silent.
-                raise
-            except Exception as exc:  # pragma: no cover -- defensive
-                logger.warning(
-                    "wait_for_approval: gate-poll consistency check raised "
-                    "non-invariant error for stage %r: %s",
-                    stage,
-                    exc,
-                )
-        time.sleep(_POLL_INTERVAL)
 
-    logger.warning("Timed out waiting for approval of stage '%s' (%.0fs)", stage, _MAX_WAIT)
-    return False
+        logger.warning(
+            "Timed out waiting for approval of stage '%s' (%.0fs)",
+            stage,
+            _MAX_WAIT,
+        )
+        return False
+    finally:
+        # UI-03a (#198): parallel close event so the inline approval card
+        # (UI-03b, #199) can tear down and the narrator can announce the
+        # outcome.  Emitted regardless of whether the flag flipped via
+        # /agui/approve or via a stage-scoped directive (UI-03c, #200).
+        _emit_approval_gate_event(
+            "approval_gate_closed", stage, decision=_decision
+        )
 
 
 # ---------------------------------------------------------------------------

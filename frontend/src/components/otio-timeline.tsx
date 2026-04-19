@@ -29,6 +29,7 @@ import type {
 } from "@/lib/types";
 import { SlotDetailPanel } from "@/components/slot-detail-panel";
 import { ReconciliationOverlay } from "@/components/reconciliation-overlay";
+import { ApprovalCard } from "@/components/approval-card";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -48,7 +49,7 @@ const TRACK_DEFS: Array<{
 ];
 
 export function OtioTimeline() {
-  const { timeline, connected, error } = useOtioStream();
+  const { timeline, connected, error, openGates } = useOtioStream();
   const [zoom, setZoom] = useState<number>(40); // pixels per second
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
 
@@ -110,6 +111,19 @@ export function OtioTimeline() {
       </header>
 
       <div className="relative flex-1 overflow-hidden rounded-lg border border-pipeline-blue/60 bg-pipeline-card">
+        {openGates.length > 0 && (
+          // UI-03b (#199): inline approval cards.  Absolutely positioned
+          // overlay so mount/unmount does not shift the track layout --
+          // one of the DoD criteria on the issue.
+          <div
+            className="pointer-events-none absolute right-3 top-3 z-20 flex w-80 flex-col gap-2"
+            data-testid="approval-card-stack"
+          >
+            {openGates.map((gate) => (
+              <ApprovalCard key={gate.stage} gate={gate} />
+            ))}
+          </div>
+        )}
         <div className="relative h-full overflow-x-auto overflow-y-hidden">
           <div
             style={{

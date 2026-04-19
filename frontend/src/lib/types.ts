@@ -247,6 +247,24 @@ export interface OtioTimelineStatus {
   source_file: string;
 }
 
+/** UI-03a (#198): approval_gate_opened / _closed pipeline events.
+ *
+ * Emitted by ``callbacks.approval_gate.wait_for_approval`` on entry and
+ * exit so the inline approval card on the OTIO timeline (UI-03b, #199)
+ * and the narrator chat surface (UI-01) can drive off the unified AG-UI
+ * event bus.  Paired: one ``approval_gate_opened`` per stage entry and
+ * exactly one ``approval_gate_closed`` when the gate flips via
+ * ``/agui/approve`` or via a stage-scoped directive (UI-03c, #200).
+ */
+export interface ApprovalGateEvent {
+  stage: string;
+  opened_at?: number;
+  closed_at?: number;
+  decision?: "approved" | "timeout" | "error" | string;
+  reviewer?: string;
+  boundary_slot_id?: string;
+}
+
 export interface SlotStateEvent {
   slot_id: string;
   track: OtioTrack["name"];
