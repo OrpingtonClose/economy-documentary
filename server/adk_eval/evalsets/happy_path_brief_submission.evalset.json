@@ -1,0 +1,49 @@
+{
+  "eval_set_id": "happy_path_brief_submission",
+  "name": "Happy path: brief submission",
+  "description": "Stubbed placeholder that proves the eval harness wiring. The real golden is captured via `adk web` and committed in a follow-up PR.",
+  "metadata": {
+    "stubbed": true,
+    "reason": "Placeholder to prove wiring. Replace via `adk web` capture.",
+    "captured_by": null,
+    "captured_at": null
+  },
+  "eval_cases": [
+    {
+      "eval_id": "brief_submission_stub",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Make a 3-scene documentary about tariffs."
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Draft scenario emitted."
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "scenario_director",
+                "args": {
+                  "topic": "tariffs",
+                  "num_scenes": 3
+                }
+              }
+            ],
+            "intermediate_responses": []
+          }
+        }
+      ]
+    }
+  ]
+}
