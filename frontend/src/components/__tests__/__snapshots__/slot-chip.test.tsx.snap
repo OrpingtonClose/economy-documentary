@@ -1,0 +1,76 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`UI-02b SlotChip snapshot: default / selected / missing: default 1`] = `
+<button
+  aria-label="slot scene3_narr, scene 3 narration, track A1_Narration, 4.2 seconds, status delivered"
+  aria-pressed="false"
+  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] leading-tight transition focus:outline-none focus-visible:ring-2 focus-visible:ring-pipeline-accent border-pipeline-blue/70 bg-pipeline-blue/20 text-pipeline-accent hover:bg-pipeline-blue/40 hover:text-pipeline-text"
+  data-slot-id="scene3_narr"
+  data-state="default"
+  data-testid="slot-chip-scene3_narr"
+  role="button"
+  type="button"
+>
+  <span
+    aria-hidden="true"
+    class="opacity-70"
+  >
+    ◉
+  </span>
+  <span
+    class="truncate max-w-[18ch]"
+  >
+    scene 3 narration
+  </span>
+</button>
+`;
+
+exports[`UI-02b SlotChip snapshot: default / selected / missing: missing 1`] = `
+<button
+  aria-label="slot ghost_slot, ghost slot, missing from current timeline"
+  aria-pressed="false"
+  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] leading-tight transition focus:outline-none focus-visible:ring-2 focus-visible:ring-pipeline-accent border-dashed border-pipeline-blue/40 bg-transparent text-pipeline-muted/70 hover:text-pipeline-muted"
+  data-slot-id="ghost_slot"
+  data-state="missing"
+  data-testid="slot-chip-ghost_slot"
+  role="button"
+  type="button"
+>
+  <span
+    aria-hidden="true"
+    class="opacity-70"
+  >
+    ◉
+  </span>
+  <span
+    class="truncate max-w-[18ch]"
+  >
+    ghost slot
+  </span>
+</button>
+`;
+
+exports[`UI-02b SlotChip snapshot: default / selected / missing: selected 1`] = `
+<button
+  aria-label="slot scene3_narr, scene 3 narration, track A1_Narration, 4.2 seconds, status delivered, selected"
+  aria-pressed="true"
+  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] leading-tight transition focus:outline-none focus-visible:ring-2 focus-visible:ring-pipeline-accent border-pipeline-accent bg-pipeline-accent/30 text-pipeline-text ring-2 ring-pipeline-accent"
+  data-slot-id="scene3_narr"
+  data-state="selected"
+  data-testid="slot-chip-scene3_narr"
+  role="button"
+  type="button"
+>
+  <span
+    aria-hidden="true"
+    class="opacity-70"
+  >
+    ◉
+  </span>
+  <span
+    class="truncate max-w-[18ch]"
+  >
+    scene 3 narration
+  </span>
+</button>
+`;
