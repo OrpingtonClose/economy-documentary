@@ -63,7 +63,7 @@ BRIEF_INTENT_KEY: str = "brief_intent"
 #: Default tolerance window applied when the brief doesn't mention one.
 #: 30 seconds matches the timing loop's soft budget and is the largest
 #: drift the constraint gate will accept without fail-closed halting.
-DEFAULT_TOLERANCE_SEC: float = 30.0
+DEFAULT_TOLERANCE_SEC: float = 60.0
 
 #: Fallback duration for briefs where no numeric duration can be parsed.
 #: Matches ``max_scene_duration`` heuristics elsewhere — a ~3-minute
