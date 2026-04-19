@@ -544,8 +544,12 @@ async def release_halt(request: Request):
     checkpoint = prior.get("halt_last_checkpoint") or prior.get("halted_at_stage")
 
     if mode == "rewind":
+        # _append_rewind_directive acquires the long-held ``_state_lock``
+        # that ``_run_directive_sync`` can hold for seconds while A5/A6
+        # run.  Offload to a worker so the event loop (and the halt
+        # button) stay responsive per ARCH-H4.
         try:
-            _append_rewind_directive(checkpoint)
+            await asyncio.to_thread(_append_rewind_directive, checkpoint)
         except Exception:  # noqa: BLE001 -- surface but still release
             logger.exception("rewind directive failed to append; releasing anyway")
 
@@ -685,7 +689,17 @@ def _drifted_slot_summary(
                 scene_num = _int_suffix(
                     _extract_token(step.artifact_key, "scene-"), "scene-"
                 )
-            if scene_num is not None and scene_num not in scene_seen:
+            # Only mark scene-wide drift when we could not derive any
+            # per-slot triples.  If we have specific slot_ids the UI will
+            # paint those individually; adding the scene too would leave
+            # orphan slots (same scene, different phrase) stuck on the
+            # amber outline because their teardown only fires for the
+            # scene-wide case.
+            if (
+                scene_num is not None
+                and not ids
+                and scene_num not in scene_seen
+            ):
                 scene_seen.add(scene_num)
                 scene_nums.append(scene_num)
 

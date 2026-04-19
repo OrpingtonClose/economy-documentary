@@ -730,7 +730,9 @@ def test_directive_emits_re_manifestation_progress_for_each_step(
     # directive_applied payload aggregates the scenes + slots.
     applied = [e for e in events if e["type"] == "directive_applied"][0]["data"]
     assert set(applied["drifted_slot_ids"]) == {"V1:2:1", "A1:2:1", "A2:2:1"}
-    assert set(applied["drifted_scene_nums"]) == {2, 4}
+    # Only scene 4 (the scene-wide step with no clip_id) gets
+    # scene-wide drift.  Scene 2 is covered by the per-slot ids.
+    assert set(applied["drifted_scene_nums"]) == {4}
 
 
 def test_directive_failed_step_emits_failed_phase(client, monkeypatch):
