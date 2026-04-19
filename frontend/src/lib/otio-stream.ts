@@ -41,9 +41,46 @@ export function useOtioStream(): {
   const [connected, setConnected] = useState(false);
   const [openGates, setOpenGates] = useState<ApprovalGateEvent[]>([]);
   const hasSnapshotRef = useRef(false);
+  // Buffer for events that arrive before the initial snapshot lands.
+  // When ``OtioTimeline`` remounts while another hook (e.g. the
+  // preview chips) is already keeping ``/agui/stream`` open, the
+  // server does *not* send a fresh ``otio_snapshot`` — it's only
+  // emitted when the EventSource itself opens.  Until the HTTP
+  // ``/agui/otio/state`` fetch resolves, ``timeline`` is ``null`` and
+  // the reducers below would silently drop updates.  Queue them
+  // instead and replay once a snapshot is available.
+  const pendingRef = useRef<
+    Array<{ kind: "slot"; slot: SlotStateEvent } | { kind: "authoritative" }>
+  >([]);
 
   useEffect(() => {
     let cancelled = false;
+
+    function applyOrQueue(
+      reducer: (t: OtioTimelineStatus) => OtioTimelineStatus,
+      queued:
+        | { kind: "slot"; slot: SlotStateEvent }
+        | { kind: "authoritative" },
+    ) {
+      setTimeline((prev) => {
+        if (prev) return reducer(prev);
+        pendingRef.current.push(queued);
+        return prev;
+      });
+    }
+
+    function flushPending(base: OtioTimelineStatus): OtioTimelineStatus {
+      let next = base;
+      for (const pending of pendingRef.current) {
+        if (pending.kind === "slot") {
+          next = applySlotState(next, pending.slot);
+        } else if (pending.kind === "authoritative") {
+          next = { ...next, state: "authoritative" };
+        }
+      }
+      pendingRef.current = [];
+      return next;
+    }
 
     // Bootstrap: grab the snapshot even if SSE is slow / blocked.
     // Only apply if the SSE stream hasn't already delivered a snapshot,
@@ -52,7 +89,8 @@ export function useOtioStream(): {
     fetch(`${BACKEND_URL}/agui/otio/state`)
       .then((r) => r.json())
       .then((data: OtioTimelineStatus) => {
-        if (!cancelled && !hasSnapshotRef.current) setTimeline(data);
+        if (cancelled || hasSnapshotRef.current) return;
+        setTimeline(flushPending(data));
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
@@ -82,7 +120,7 @@ export function useOtioStream(): {
           try {
             const data = JSON.parse(e.data) as OtioTimelineStatus;
             hasSnapshotRef.current = true;
-            setTimeline(data);
+            setTimeline(flushPending(data));
           } catch {
             /* ignore malformed snapshot */
           }
@@ -90,7 +128,10 @@ export function useOtioStream(): {
           try {
             const env = JSON.parse(e.data) as { data: SlotStateEvent };
             const slot = env.data;
-            setTimeline((prev) => (prev ? applySlotState(prev, slot) : prev));
+            applyOrQueue(
+              (prev) => applySlotState(prev, slot),
+              { kind: "slot", slot },
+            );
           } catch {
             /* ignore malformed */
           }
@@ -100,8 +141,9 @@ export function useOtioStream(): {
           } catch {
             /* ok, payload may be empty */
           }
-          setTimeline((prev) =>
-            prev ? { ...prev, state: "authoritative" } : prev,
+          applyOrQueue(
+            (prev) => ({ ...prev, state: "authoritative" }),
+            { kind: "authoritative" },
           );
         } else if (evt === "artifact_update") {
           // artifact_update also moves slots; mirror through
@@ -140,6 +182,7 @@ export function useOtioStream(): {
 
     return () => {
       cancelled = true;
+      pendingRef.current = [];
       unsubscribe();
     };
   }, []);
