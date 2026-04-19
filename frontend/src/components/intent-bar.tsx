@@ -55,6 +55,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { CostPreviewDialog } from "@/components/cost-preview-dialog";
+import {
+  fetchDirectiveEstimate,
+  type CostEstimate,
+} from "@/lib/cost-estimate";
 import { useOtioStream } from "@/lib/otio-stream";
 import { useSelection } from "@/lib/stores/selection";
 import type { OtioSlot } from "@/lib/types";
@@ -193,6 +198,16 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
   const [status, setStatus] = useState<SubmitStatus>({ kind: "idle" });
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // DESIGN-07 (#259): every directive opens a cost-preview dialog
+  // first; the /api/directive POST only fires on confirmation.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [pendingDirective, setPendingDirective] = useState<string>("");
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  // Monotonic guard so a stale estimate can't land on a newer preview
+  // (e.g. reviewer cancels chip A, clicks chip B before A resolves).
+  const estimateFetchIdRef = useRef(0);
+
   const placeholder = sceneNum != null
     ? `Say something about Scene ${sceneNum}`
     : "Say something about the whole film";
@@ -201,7 +216,7 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
     ? `Applies to Scene ${sceneNum}.`
     : "Applies to the whole film.";
 
-  const submit = useCallback(
+  const executeSubmit = useCallback(
     async (directive: string) => {
       const text = directive.trim();
       if (!text || submitting) return;
@@ -243,6 +258,7 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
         });
         setValue("");
         setShowSuggestions(false);
+        setPreviewOpen(false);
       } catch (err) {
         setStatus({
           kind: "error",
@@ -255,21 +271,61 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
     [submitting, sceneNum],
   );
 
+  const openPreview = useCallback(
+    (directive: string) => {
+      const text = directive.trim();
+      if (!text || submitting) return;
+      setPendingDirective(text);
+      setEstimate(null);
+      setEstimateLoading(true);
+      setPreviewOpen(true);
+      setStatus({ kind: "idle" });
+      const myId = ++estimateFetchIdRef.current;
+      const slot_context = sceneNum != null
+        ? {
+            scope: "scene" as const,
+            scope_ref: String(sceneNum),
+            scene_num: sceneNum,
+          }
+        : null;
+      void fetchDirectiveEstimate(
+        { directive: text, slot_context },
+        { backendUrl: BACKEND_URL },
+      ).then((est) => {
+        // Drop stale responses so a cancelled-then-reopened preview
+        // never renders numbers that belong to a previous directive.
+        if (estimateFetchIdRef.current !== myId) return;
+        setEstimate(est);
+        setEstimateLoading(false);
+      });
+    },
+    [submitting, sceneNum],
+  );
+
   const onChipClick = useCallback(
     (chip: Chip) => {
       setValue(chip.directive);
-      void submit(chip.directive);
+      openPreview(chip.directive);
     },
-    [submit],
+    [openPreview],
   );
 
   const onFormSubmit = useCallback(
     (ev: React.FormEvent<HTMLFormElement>) => {
       ev.preventDefault();
-      void submit(value);
+      openPreview(value);
     },
-    [submit, value],
+    [openPreview, value],
   );
+
+  const confirmSubmit = useCallback(() => {
+    void executeSubmit(pendingDirective);
+  }, [executeSubmit, pendingDirective]);
+
+  const previewTitle = sceneNum != null
+    ? `Apply to Scene ${sceneNum}`
+    : "Apply to the whole film";
+  const previewDescription = `"${pendingDirective}" — ${scopeDescription}`;
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -374,6 +430,24 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
           </p>
         )}
       </div>
+      <CostPreviewDialog
+        open={previewOpen}
+        onOpenChange={(next) => {
+          // Cancelling invalidates the in-flight estimate so its
+          // response can't leak into a later preview.
+          if (!next) estimateFetchIdRef.current += 1;
+          setPreviewOpen(next);
+        }}
+        title={previewTitle}
+        description={previewDescription}
+        estimate={estimate}
+        loading={estimateLoading}
+        onConfirm={confirmSubmit}
+        confirmLabel="Continue"
+        cancelLabel="Cancel"
+        submitting={submitting}
+        dataTestId="intent-cost-preview"
+      />
     </TooltipProvider>
   );
 }

@@ -56,6 +56,11 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { CostPreviewDialog } from "@/components/cost-preview-dialog";
+import {
+  fetchDirectiveEstimate,
+  type CostEstimate,
+} from "@/lib/cost-estimate";
 import { clearSelection, useSelection } from "@/lib/stores/selection";
 import { useOtioStream } from "@/lib/otio-stream";
 import type {
@@ -259,13 +264,24 @@ export function SceneDrilldown({
   // bail out when their captured id no longer matches.
   const redoRequestIdRef = useRef(0);
 
+  // DESIGN-07 (#259): Redo opens a cost-preview dialog first -- the
+  // actual /api/directive POST only fires after the reviewer confirms.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
+  const [estimateLoading, setEstimateLoading] = useState(false);
+  const estimateFetchIdRef = useRef(0);
+
   // Reset the redo banner whenever the drilldown swaps to a different
   // scene — otherwise a stale "Redo queued"/error banner from Scene 3
   // would persist when the reviewer selects Scene 5.
   useEffect(() => {
     redoRequestIdRef.current += 1;
+    estimateFetchIdRef.current += 1;
     setRedoStatus({ kind: "idle" });
     setRedoSubmitting(false);
+    setPreviewOpen(false);
+    setEstimate(null);
+    setEstimateLoading(false);
   }, [effectiveSlotId]);
 
   const handleClose = useCallback(() => {
@@ -318,7 +334,34 @@ export function SceneDrilldown({
       });
     } finally {
       if (redoRequestIdRef.current === requestId) setRedoSubmitting(false);
+      setPreviewOpen(false);
     }
+  }, [scene, redoSubmitting]);
+
+  const openRedoPreview = useCallback(() => {
+    if (!scene || redoSubmitting) return;
+    setEstimate(null);
+    setEstimateLoading(true);
+    setPreviewOpen(true);
+    const myId = ++estimateFetchIdRef.current;
+    void fetchDirectiveEstimate(
+      {
+        directive: `Redo Scene ${scene.scene_num}`,
+        slot_context: {
+          scope: "scene",
+          scope_ref: String(scene.scene_num),
+          scene_num: scene.scene_num,
+        },
+      },
+      { backendUrl: BACKEND_URL },
+    ).then((est) => {
+      // Drop stale responses: a cancel-then-reopen (or a scene switch
+      // while the fetch is in flight) must not leak numbers into the
+      // newer preview.
+      if (estimateFetchIdRef.current !== myId) return;
+      setEstimate(est);
+      setEstimateLoading(false);
+    });
   }, [scene, redoSubmitting]);
 
   const open = Boolean(effectiveSlotId);
@@ -415,13 +458,37 @@ export function SceneDrilldown({
           )}
           <Button
             type="button"
-            onClick={submitRedo}
+            onClick={openRedoPreview}
             disabled={!scene || redoSubmitting}
             data-testid="scene-redo-button"
           >
             {redoSubmitting ? "Queuing…" : "Redo this scene"}
           </Button>
         </footer>
+        <CostPreviewDialog
+          open={previewOpen}
+          onOpenChange={(next) => {
+            // Cancelling invalidates the in-flight estimate so its
+            // late-arriving response can't leak into a future preview.
+            if (!next) estimateFetchIdRef.current += 1;
+            setPreviewOpen(next);
+          }}
+          title={scene ? `Redo Scene ${scene.scene_num}` : "Redo this scene"}
+          description={
+            scene
+              ? `Rebuild Scene ${scene.scene_num}${
+                  scene.label?.trim() ? ` (${scene.label.trim()})` : ""
+                } from the brief.`
+              : undefined
+          }
+          estimate={estimate}
+          loading={estimateLoading}
+          onConfirm={submitRedo}
+          confirmLabel="Redo this scene"
+          cancelLabel="Cancel"
+          submitting={redoSubmitting}
+          dataTestId="scene-redo-cost-preview"
+        />
       </SheetContent>
     </Sheet>
   );

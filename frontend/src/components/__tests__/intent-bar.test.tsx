@@ -190,17 +190,38 @@ describe("IntentBar", () => {
     });
   });
 
-  test("clicking a chip posts the chip text with no slot_context", async () => {
+  test("clicking a chip opens the cost preview before posting", async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     installFetch(calls);
     const user = userEvent.setup();
     render(<IntentBar stageOverride="scenario" />);
     const chip = await screen.findByTestId("intent-chip-make-it-tighter");
     await user.click(chip);
+    // DESIGN-07 (#259): the dialog must open first; no /api/directive
+    // POST fires until the reviewer confirms.
+    expect(calls.length).toBe(0);
+    const confirm = await screen.findByTestId("intent-cost-preview-confirm");
+    await user.click(confirm);
     await waitFor(() => expect(calls.length).toBe(1));
     const body = JSON.parse(String(calls[0][1]!.body));
     expect(body.directive).toBe("Make it tighter");
     expect(body.slot_context).toBeNull();
+  });
+
+  test("cancelling the cost preview skips the /api/directive POST", async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    installFetch(calls);
+    const user = userEvent.setup();
+    render(<IntentBar stageOverride="scenario" />);
+    const chip = await screen.findByTestId("intent-chip-friendlier-tone");
+    await user.click(chip);
+    const cancel = await screen.findByTestId("intent-cost-preview-cancel");
+    await user.click(cancel);
+    // Give any pending work a chance to settle, then assert no POST.
+    await waitFor(() => {
+      expect(screen.queryByTestId("intent-cost-preview")).toBeNull();
+    });
+    expect(calls.length).toBe(0);
   });
 
   test("typed submit on a selected scene posts scope=scene with scene_num", async () => {
@@ -220,6 +241,9 @@ describe("IntentBar", () => {
     });
     await user.type(screen.getByTestId("intent-input"), "warmer palette");
     await user.click(screen.getByTestId("intent-submit"));
+    // DESIGN-07: confirm the cost preview to fire the POST.
+    const confirm = await screen.findByTestId("intent-cost-preview-confirm");
+    await user.click(confirm);
     await waitFor(() => expect(calls.length).toBe(1));
     const body = JSON.parse(String(calls[0][1]!.body));
     expect(body.directive).toBe("warmer palette");

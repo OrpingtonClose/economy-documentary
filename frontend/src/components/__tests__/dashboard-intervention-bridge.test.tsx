@@ -62,7 +62,7 @@ describe("DashboardIntervention halt surface", () => {
     expect(screen.queryByTestId("directive-scope-chip")).toBeNull();
   });
 
-  test("pause button posts to /api/halt when the pipeline is running", async () => {
+  test("pause button posts to /api/halt only after cost-preview confirmation", async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     mockFetch((url: string, init) => {
       calls.push([url, init]);
@@ -96,8 +96,15 @@ describe("DashboardIntervention halt surface", () => {
 
     const user = userEvent.setup();
     render(<DashboardIntervention />);
-    const btn = await screen.findByTestId("halt-button");
+    // DESIGN-09 (#261): the pause button now opens a cost-preview
+    // dialog instead of firing immediately. The actual /api/halt POST
+    // only happens after the reviewer confirms in the dialog.
+    const btn = await screen.findByTestId("halt-pause-button");
     await user.click(btn);
+    // Dialog is now open; no halt POST yet.
+    expect(calls.some(([u]) => u.endsWith("/api/halt"))).toBe(false);
+    const confirm = await screen.findByTestId("halt-pause-dialog-confirm");
+    await user.click(confirm);
     await waitFor(() => {
       expect(calls.some(([u]) => u.endsWith("/api/halt"))).toBe(true);
     });

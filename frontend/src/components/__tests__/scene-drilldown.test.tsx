@@ -263,6 +263,14 @@ describe("SceneDrilldown", () => {
     });
     const redo = await screen.findByTestId("scene-redo-button");
     await user.click(redo);
+    // DESIGN-07 (#259): the redo button now opens a cost-preview
+    // dialog first; no /api/directive POST fires until the reviewer
+    // confirms in the dialog.
+    expect(calls.length).toBe(0);
+    const confirm = await screen.findByTestId(
+      "scene-redo-cost-preview-confirm",
+    );
+    await user.click(confirm);
     await waitFor(() => {
       expect(calls.length).toBeGreaterThan(0);
     });

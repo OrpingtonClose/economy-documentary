@@ -13,6 +13,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { HaltPauseButton } from "@/components/halt-pause-button";
+import { RewindDropdown } from "@/components/rewind-dropdown";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -228,21 +230,52 @@ export function DashboardIntervention(_props: DashboardInterventionProps = {}) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {/* UX-06 (#248): only show Pause when the pipeline is actively
-            * running. Red is reserved for real problems, so we use an
-            * amber/grey treatment. DESIGN-09 will redesign this surface. */}
-          {!haltEngaged && pipelineRunning && (
-            <button
-              type="button"
-              onClick={submitHalt}
+          {/* DESIGN-08 (#260): rewind-to-stage dropdown (incl. Abandon
+            * run) sits next to the pause button. Disabled while the
+            * pipeline isn't running so stray clicks don't fire at an
+            * idle backend. */}
+          {pipelineRunning && (
+            <RewindDropdown
               disabled={haltSubmitting}
-              className="rounded border border-amber-500/70 bg-amber-900/20 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-900/40 disabled:opacity-60"
-              data-testid="halt-button"
-              title="Pause the pipeline at the next safe checkpoint"
-            >
-              {haltSubmitting ? "Pausing…" : "Pause production"}
-            </button>
+              onRewindAccepted={(_stage, label) =>
+                pushToast({
+                  kind: "halt",
+                  message: `${label} — pipeline will pause at next safe checkpoint`,
+                })
+              }
+              onRewindFailed={(_stage, detail) =>
+                pushToast({
+                  kind: "error",
+                  message: "Rewind request failed",
+                  detail,
+                })
+              }
+              onAbandonAccepted={() =>
+                pushToast({
+                  kind: "halt",
+                  message:
+                    "Abandon requested — pipeline will exit after current work",
+                })
+              }
+              onAbandonFailed={(detail) =>
+                pushToast({
+                  kind: "error",
+                  message: "Abandon failed",
+                  detail,
+                })
+              }
+            />
           )}
+          {/* DESIGN-09 (#261): amber pause button that first opens the
+            * cost-preview dialog. Hides when idle (UX-06) or when the
+            * halt flag is already engaged (HaltResumeCard owns that
+            * state). */}
+          <HaltPauseButton
+            running={pipelineRunning}
+            halted={haltEngaged}
+            submitting={haltSubmitting}
+            onConfirmPause={submitHalt}
+          />
         </div>
       </div>
       {haltEngaged && (
