@@ -809,6 +809,56 @@ async def approve_stage(request: Request):
     return JSONResponse({"status": "approved", "stage": stage})
 
 
+@router.get("/restated_brief")
+async def get_restated_brief():
+    """Serve the R0 :class:`BriefIntent` (INTENT-03, issue #267).
+
+    Reads the typed brief that the Intent Extractor (INTENT-01) wrote
+    at run start.  The payload mirrors :class:`BriefIntent` — every
+    field is hard-constraint material the constraint gate (INTENT-02)
+    and the per-stage verifier (INTENT-04) also see.  The frontend
+    wiring lives in a separate PR (issue #255); this endpoint is the
+    backend-only half called out in #267.
+
+    Response shape::
+
+        {
+          "brief_intent": {
+            "duration_sec": 420.0,
+            "tolerance_sec": 30.0,
+            "audience": "adhd-friendly",
+            "tone": [...],
+            "corpus_paths": [...],
+            "required_topics": [...],
+            "forbidden_topics": [...],
+            "format_hints": {...},
+            "confidence": {...}
+          },
+          "present": true
+        }
+
+    When no run is active (no backup on disk) ``present`` is ``false``
+    and ``brief_intent`` is ``null`` so the frontend can render an
+    "awaiting brief" state without having to special-case 404s.
+    """
+    try:
+        from agents.intent_extractor import read_intent_backup
+
+        intent = read_intent_backup()
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.warning("/agui/restated_brief: read failure: %s", exc)
+        return JSONResponse(
+            {"brief_intent": None, "present": False, "error": str(exc)},
+            status_code=200,
+        )
+
+    if intent is None:
+        return JSONResponse({"brief_intent": None, "present": False})
+
+    payload = intent.model_dump(mode="json")
+    return JSONResponse({"brief_intent": payload, "present": True})
+
+
 @router.get("/scenes")
 async def get_scenes():
     """Return scene list from the pipeline's scenes backup file.
