@@ -39,6 +39,13 @@ const ReasoningTracePanel = dynamic(
   () => import("@/components/reasoning-trace").then((m) => m.ReasoningTracePanel),
   { ssr: false }
 );
+const DashboardIntervention = dynamic(
+  () =>
+    import("@/components/dashboard-intervention").then(
+      (m) => m.DashboardIntervention
+    ),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("otio");
@@ -79,6 +86,9 @@ export default function Home() {
 
       {/* Right panel: tabbed content */}
       <div className="flex-1 flex flex-col">
+        {/* ARCH-H4 (#159): halt button + directive input, always visible */}
+        <DashboardIntervention />
+
         {/* Tab bar */}
         <div className="flex border-b border-pipeline-blue bg-pipeline-card">
           {tabs.map((tab) => (
