@@ -519,6 +519,22 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
     except Exception:  # noqa: BLE001 — dashboard emit is best-effort
         logger.exception("preview consumer: emit_agui_event failed")
 
+    # UI-01 (#186): emit a chat-narrator turn for the same event so the
+    # CopilotKit stream carries a plain-English one-liner.  Best-effort;
+    # a missing narrator module never stalls preview delivery.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "preview_ready",
+            fields={
+                "boundary": boundary,
+                "duration_sec": manifest.total_duration_sec,
+                "preview_path": manifest.preview_path,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("chat_narrator preview_ready emission failed: %s", exc)
+
 
 def emit_preview_failed(
     trigger_reason: str,

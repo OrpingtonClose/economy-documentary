@@ -605,6 +605,24 @@ def run_narration_reconciliation(
             "narration_reconciliation: all %d block(s) within tolerance",
             len(results),
         )
+        # UI-01 (#186): narrator chat turn for the "converged" milestone.
+        # Best-effort, never block reconciliation if import / emit fails.
+        try:
+            from agents.chat_narrator import emit_narrator_event  # type: ignore
+            total_measured = sum(
+                float(r.measured_sec)
+                for r in results
+                if r.verdict != NarrationTimingVerdict.SKIP
+            )
+            emit_narrator_event(
+                "reconciliation_converged",
+                fields={"duration_sec": total_measured},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "chat_narrator reconciliation_converged emission failed: %s",
+                exc,
+            )
     return results
 
 

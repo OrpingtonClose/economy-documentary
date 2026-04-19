@@ -476,12 +476,27 @@ def _emit_sse(digest: ReasoningDigest) -> None:
         # deque.append is atomic under CPython's GIL; no lock needed per-push.
         queue.append(payload)
     emit = _agui_emitter()
-    if not emit:
-        return
+    if emit:
+        try:
+            emit("reasoning_digest", payload)
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.debug(
+                "emit_agui_event bridge for reasoning_digest failed: %s", exc
+            )
+
+    # UI-01 (#186): bridge promoted digests into the chat narrator so the
+    # CopilotKit stream carries a plain-English one-liner for every
+    # user-salient pipeline event.  Best-effort; a missing or broken
+    # narrator must never stall the digest writer.
     try:
-        emit("reasoning_digest", payload)
+        from agents.chat_narrator import (  # noqa: WPS433
+            bridge_from_reasoning_digest,
+        )
+        bridge_from_reasoning_digest(payload)
     except Exception as exc:  # pragma: no cover -- defensive
-        logger.debug("emit_agui_event bridge for reasoning_digest failed: %s", exc)
+        logger.debug(
+            "chat_narrator bridge for reasoning_digest failed: %s", exc
+        )
 
 
 # ---------------------------------------------------------------------------
