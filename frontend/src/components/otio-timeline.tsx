@@ -30,6 +30,7 @@ import {
 } from "@/lib/preview-stream";
 import type { PreviewEntry } from "@/lib/preview-stream";
 import type {
+  DriftState,
   OtioSlot,
   OtioTimelineStatus,
   OtioTrack,
@@ -58,7 +59,7 @@ const TRACK_DEFS: Array<{
 ];
 
 export function OtioTimeline() {
-  const { timeline, connected, error, openGates } = useOtioStream();
+  const { timeline, connected, error, openGates, drift } = useOtioStream();
   const { state: previewState } = usePreviewStream();
   const [zoom, setZoom] = useState<number>(40); // pixels per second
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
@@ -196,6 +197,7 @@ export function OtioTimeline() {
                   totalDuration={totalDuration}
                   onSelect={setSelectedSlotId}
                   selectedSlotId={selectedSlotId}
+                  drift={drift}
                 />
               );
             })}
@@ -409,6 +411,7 @@ function TrackRow({
   totalDuration,
   onSelect,
   selectedSlotId,
+  drift,
 }: {
   top: number;
   track: OtioTrack;
@@ -418,6 +421,7 @@ function TrackRow({
   totalDuration: number;
   onSelect: (slotId: string) => void;
   selectedSlotId: string | null;
+  drift: DriftState;
 }) {
   return (
     <div
@@ -446,15 +450,23 @@ function TrackRow({
             empty track
           </div>
         ) : (
-          track.slots.map((slot) => (
-            <SlotBlock
-              key={slot.slot_id}
-              slot={slot}
-              zoom={zoom}
-              selected={selectedSlotId === slot.slot_id}
-              onSelect={onSelect}
-            />
-          ))
+          track.slots.map((slot) => {
+            const drifting =
+              drift.slotIds.has(slot.slot_id) ||
+              drift.sceneNums.has(slot.scene_num);
+            const driftStage = drift.slotStages[slot.slot_id] || null;
+            return (
+              <SlotBlock
+                key={slot.slot_id}
+                slot={slot}
+                zoom={zoom}
+                selected={selectedSlotId === slot.slot_id}
+                onSelect={onSelect}
+                drifting={drifting}
+                driftStage={driftStage}
+              />
+            );
+          })
         )}
       </div>
     </div>
@@ -470,11 +482,15 @@ function SlotBlock({
   zoom,
   selected,
   onSelect,
+  drifting,
+  driftStage,
 }: {
   slot: OtioSlot;
   zoom: number;
   selected: boolean;
   onSelect: (slotId: string) => void;
+  drifting: boolean;
+  driftStage: string | null;
 }) {
   const left = slot.start_sec * zoom;
   const width = Math.max(slot.duration_sec * zoom, 2);
@@ -501,15 +517,27 @@ function SlotBlock({
     gap: "",
   };
 
+  // UI-05b: amber outline + badge for slots whose derivation is
+  // drifting against the preference ledger.  Never mutates the
+  // OTIO itself -- paint-only, driven entirely by SSE.
+  const badgeText = driftStage || "re-manifesting";
+  const tooltip = drifting
+    ? `${slotTooltip(slot)}\ndrift: ${badgeText}`
+    : slotTooltip(slot);
+
   return (
     <button
       type="button"
       onClick={() => onSelect(slot.slot_id)}
-      title={slotTooltip(slot)}
+      title={tooltip}
+      data-drifting={drifting ? "true" : undefined}
       className={
         "group absolute top-1 flex h-[calc(100%-6px)] items-stretch overflow-hidden rounded text-[10px] transition " +
         classNameByStatus[slot.status] +
-        (selected ? " ring-2 ring-pipeline-accent" : "")
+        (selected ? " ring-2 ring-pipeline-accent" : "") +
+        (drifting
+          ? " outline outline-2 outline-amber-400 outline-offset-[-2px] animate-pulse"
+          : "")
       }
       style={{ left, width }}
     >
@@ -521,8 +549,13 @@ function SlotBlock({
             ? `${slot.rung || "running"}…`
             : slot.label}
         </div>
-        <div className="text-[9px] opacity-75">
-          {slot.duration_sec.toFixed(2)}s
+        <div className="flex w-full items-center justify-between gap-1 text-[9px] opacity-75">
+          <span>{slot.duration_sec.toFixed(2)}s</span>
+          {drifting && (
+            <span className="rounded bg-amber-500/90 px-1 py-[1px] text-[8px] font-semibold uppercase tracking-wide text-amber-950">
+              {badgeText}
+            </span>
+          )}
         </div>
       </div>
 

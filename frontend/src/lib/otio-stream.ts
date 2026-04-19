@@ -3,7 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   ApprovalGateEvent,
+  DirectiveAppliedEvent,
+  DriftState,
   OtioTimelineStatus,
+  ReManifestationProgressEvent,
   SlotStateEvent,
   SlotStatus,
 } from "@/lib/types";
@@ -11,6 +14,12 @@ import { subscribeAguiStream } from "@/lib/agui-stream";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+
+const EMPTY_DRIFT: DriftState = {
+  slotIds: new Set(),
+  sceneNums: new Set(),
+  slotStages: {},
+};
 
 /**
  * SSE-driven hook for the OTIO centrepiece timeline.
@@ -29,17 +38,23 @@ const BACKEND_URL =
  *    into a fresh `OtioTimelineStatus` on every event.  This keeps the
  *    frontend stateless w.r.t. the "last update" — the server is the
  *    source of truth.
+ * 4. UI-05b: tracks transient drift state derived from
+ *    `directive_applied` + `re_manifestation_progress` events.  The
+ *    drift set clears automatically as each step's terminal phase
+ *    arrives; the state is never persisted.
  */
 export function useOtioStream(): {
   timeline: OtioTimelineStatus | null;
   error: string | null;
   connected: boolean;
   openGates: ApprovalGateEvent[];
+  drift: DriftState;
 } {
   const [timeline, setTimeline] = useState<OtioTimelineStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [openGates, setOpenGates] = useState<ApprovalGateEvent[]>([]);
+  const [drift, setDrift] = useState<DriftState>(EMPTY_DRIFT);
   const hasSnapshotRef = useRef(false);
   // Buffer for events that arrive before the initial snapshot lands.
   // When ``OtioTimeline`` remounts while another hook (e.g. the
@@ -102,14 +117,12 @@ export function useOtioStream(): {
         "slot_state",
         "otio_authoritative",
         "artifact_update",
-        // UI-03a (#198): inline approval card driver. Every
-        // wait_for_approval entry emits approval_gate_opened; the paired
-        // approval_gate_closed fires when the gate flips via
-        // /agui/approve OR via a stage-scoped directive (UI-03c, #200).
-        // The timeline listens here so the card mounts/unmounts on the
-        // unified AG-UI event bus -- no polling.
+        // UI-03a (#198): inline approval card driver.
         "approval_gate_opened",
         "approval_gate_closed",
+        // UI-05b: drift badges on the timeline.
+        "directive_applied",
+        "re_manifestation_progress",
       ],
       onConnected: (c) => {
         setConnected(c);
@@ -146,10 +159,6 @@ export function useOtioStream(): {
             { kind: "authoritative" },
           );
         } else if (evt === "artifact_update") {
-          // artifact_update also moves slots; mirror through
-          // slot_state when it already carried scene/phrase (the
-          // backend always does, so this branch is a safety net for
-          // older pipelines).
           try {
             JSON.parse(e.data);
           } catch {
@@ -176,6 +185,24 @@ export function useOtioStream(): {
           } catch {
             /* ignore malformed */
           }
+        } else if (evt === "directive_applied") {
+          try {
+            const env = JSON.parse(e.data) as { data: DirectiveAppliedEvent };
+            const payload = env.data;
+            setDrift((prev) => seedDrift(prev, payload));
+          } catch {
+            /* ignore */
+          }
+        } else if (evt === "re_manifestation_progress") {
+          try {
+            const env = JSON.parse(e.data) as {
+              data: ReManifestationProgressEvent;
+            };
+            const payload = env.data;
+            setDrift((prev) => applyProgress(prev, payload));
+          } catch {
+            /* ignore */
+          }
         }
       },
     });
@@ -187,7 +214,7 @@ export function useOtioStream(): {
     };
   }, []);
 
-  return { timeline, error, connected, openGates };
+  return { timeline, error, connected, openGates, drift };
 }
 
 function applySlotState(
@@ -210,4 +237,67 @@ function applySlotState(
   });
   if (!touched) return prev;
   return { ...prev, tracks };
+}
+
+function seedDrift(prev: DriftState, payload: DirectiveAppliedEvent): DriftState {
+  const slotIds = new Set(prev.slotIds);
+  const sceneNums = new Set(prev.sceneNums);
+  const slotStages = { ...prev.slotStages };
+  for (const id of payload.drifted_slot_ids ?? []) {
+    slotIds.add(id);
+    if (!slotStages[id]) {
+      slotStages[id] = "re-manifesting";
+    }
+  }
+  for (const n of payload.drifted_scene_nums ?? []) {
+    sceneNums.add(n);
+  }
+  return { slotIds, sceneNums, slotStages };
+}
+
+function applyProgress(
+  prev: DriftState,
+  payload: ReManifestationProgressEvent,
+): DriftState {
+  const slotIds = new Set(prev.slotIds);
+  const sceneNums = new Set(prev.sceneNums);
+  const slotStages = { ...prev.slotStages };
+  const ids = payload.slot_ids ?? [];
+  const stageLabel = stageLabelFor(payload);
+
+  if (payload.phase === "start") {
+    for (const id of ids) {
+      slotIds.add(id);
+      slotStages[id] = stageLabel;
+    }
+    if (
+      payload.scene_num !== null &&
+      payload.scene_num !== undefined
+    ) {
+      sceneNums.add(payload.scene_num);
+    }
+  } else if (
+    payload.phase === "complete" ||
+    payload.phase === "failed"
+  ) {
+    for (const id of ids) {
+      slotIds.delete(id);
+      delete slotStages[id];
+    }
+    if (
+      payload.scene_num !== null &&
+      payload.scene_num !== undefined &&
+      ids.length === 0
+    ) {
+      sceneNums.delete(payload.scene_num);
+    }
+  }
+  return { slotIds, sceneNums, slotStages };
+}
+
+function stageLabelFor(payload: ReManifestationProgressEvent): string {
+  const stage = payload.stage_name
+    ? payload.stage_name.replace(/_/g, " ")
+    : "re-manifesting";
+  return `re-manifesting ${stage}`.trim();
 }

@@ -574,3 +574,340 @@ def test_directive_persists_ledger_on_disk(client, output_dir):
     records = list_preferences(data)
     assert len(records) == 1
     assert records[0].subject is Subject.PACING
+
+
+# ---------------------------------------------------------------------------
+# UI-05: directive_applied / re_manifestation_progress / halt mode events
+# ---------------------------------------------------------------------------
+
+
+def _subscribe_events(monkeypatch) -> list[dict]:
+    """Collect every ``_emit`` call into an in-memory list.
+
+    Patches the module-local ``_emit`` so we don't depend on the agui
+    module importing cleanly in the test environment -- the contract
+    is "emit is called with this payload", not "it reaches a real
+    SSE subscriber".
+    """
+    events: list[dict] = []
+
+    def fake_emit(event_type: str, data: dict) -> None:
+        events.append({"type": event_type, "data": data})
+
+    monkeypatch.setattr(dd, "_emit", fake_emit)
+    return events
+
+
+def test_directive_emits_directive_applied_event(client, monkeypatch):
+    """UI-05a: accepted directives emit a directive_applied event with
+    the ledger record ids and the current (possibly empty) drifted
+    slot set.  Drift payload may be empty when no stage derivations
+    exist on the blackboard -- the event must still fire."""
+    events = _subscribe_events(monkeypatch)
+    set_llm_client_factory(
+        _stub_llm_records(
+            [
+                {
+                    "scope": "scene",
+                    "scope_ref": "scene-3",
+                    "polarity": "prefer",
+                    "subject": "pacing",
+                    "content": "tighter pacing in scene 3",
+                }
+            ]
+        )
+    )
+    r = client.post(
+        "/api/directive",
+        json={
+            "directive": "scene 3 feels slow",
+            "reviewer": "alice",
+            "l4_event_id": "L4-100",
+        },
+    )
+    assert r.status_code == 200, r.text
+    applied = [e for e in events if e["type"] == "directive_applied"]
+    assert len(applied) == 1, events
+    payload = applied[0]["data"]
+    assert payload["directive_text"] == "scene 3 feels slow"
+    assert payload["l4_event_id"] == "L4-100"
+    assert payload["reviewer"] == "alice"
+    assert payload["ledger_record_ids"] == [1]
+    assert isinstance(payload["drifted_slot_ids"], list)
+    assert isinstance(payload["drifted_scene_nums"], list)
+    assert isinstance(payload["re_manifestation_plans"], list)
+
+
+def test_directive_emits_re_manifestation_progress_for_each_step(
+    client, monkeypatch
+):
+    """UI-05a: every plan step emits a start + terminal
+    re_manifestation_progress event, in order."""
+    events = _subscribe_events(monkeypatch)
+
+    # Fake out the dispatch path so we don't need real stage derivations
+    # on the blackboard -- the contract under test is "given non-empty
+    # receipts, events fire", not the A5/A6 drift mechanics.
+    from callbacks import remanifestation as rm
+
+    plan = rm.RemanifestationPlan(
+        stage_name="tts",
+        from_rev=1,
+        to_rev=2,
+        steps=(
+            rm.PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-2/clip-1",
+                reason="drift from L4-200",
+                scene_id="scene-2",
+                clip_id="clip-1",
+            ),
+            rm.PlanStep(
+                action="regenerate_scene",
+                artifact_key="scene-4:audio",
+                reason="drift from L4-200",
+                scene_id="scene-4",
+                clip_id=None,
+            ),
+        ),
+    )
+    drift_receipt = rm.DriftHandlingReceipt(
+        drift=rm.LedgerDrift(
+            stage_name="tts",
+            artifact_ids=("scene-2/clip-1", "scene-4:audio"),
+            from_rev=1,
+            to_rev=2,
+            new_records=[],
+        ),
+        plan=plan,
+        step_receipts=(
+            {"status": "dispatched", "action": "regenerate_clip"},
+            {"status": "dispatched", "action": "regenerate_scene"},
+        ),
+        error=None,
+    )
+    monkeypatch.setattr(dd, "_dispatch_drift", lambda state: [drift_receipt])
+
+    set_llm_client_factory(
+        _stub_llm_records(
+            [
+                {
+                    "scope": "scene",
+                    "scope_ref": "scene-2",
+                    "polarity": "prefer",
+                    "subject": "pacing",
+                    "content": "tighter pacing",
+                }
+            ]
+        )
+    )
+    r = client.post(
+        "/api/directive",
+        json={
+            "directive": "scene 2 and 4 feel slow",
+            "reviewer": "alice",
+            "l4_event_id": "L4-200",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    progress = [
+        e for e in events if e["type"] == "re_manifestation_progress"
+    ]
+    # Two steps x two phases (start + complete) = 4 events.
+    assert len(progress) == 4, progress
+    phases = [e["data"]["phase"] for e in progress]
+    assert phases == ["start", "complete", "start", "complete"]
+    # Each event identifies the scene / slot it targets.
+    assert progress[0]["data"]["scene_num"] == 2
+    assert progress[0]["data"]["slot_ids"] == [
+        "V1:2:1", "A1:2:1", "A2:2:1"
+    ]
+    assert progress[2]["data"]["scene_num"] == 4
+    # Scene-wide step (no clip_id) has no exact slot ids.
+    assert progress[2]["data"]["slot_ids"] == []
+
+    # directive_applied payload aggregates the scenes + slots.
+    applied = [e for e in events if e["type"] == "directive_applied"][0]["data"]
+    assert set(applied["drifted_slot_ids"]) == {"V1:2:1", "A1:2:1", "A2:2:1"}
+    assert set(applied["drifted_scene_nums"]) == {2, 4}
+
+
+def test_directive_failed_step_emits_failed_phase(client, monkeypatch):
+    """A step marked failed in its receipt emits a terminal ``failed``
+    phase event instead of ``complete`` -- so the drift badge can go
+    red instead of clearing."""
+    events = _subscribe_events(monkeypatch)
+    from callbacks import remanifestation as rm
+
+    plan = rm.RemanifestationPlan(
+        stage_name="tts",
+        from_rev=1,
+        to_rev=2,
+        steps=(
+            rm.PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="drift from L4-300",
+                scene_id="scene-1",
+                clip_id="clip-0",
+            ),
+        ),
+    )
+    receipt = rm.DriftHandlingReceipt(
+        drift=rm.LedgerDrift(
+            stage_name="tts",
+            artifact_ids=("scene-1/clip-0",),
+            from_rev=1,
+            to_rev=2,
+            new_records=[],
+        ),
+        plan=plan,
+        step_receipts=({"status": "failed", "error": "ffmpeg crashed"},),
+        error=None,
+    )
+    monkeypatch.setattr(dd, "_dispatch_drift", lambda state: [receipt])
+
+    set_llm_client_factory(
+        _stub_llm_records(
+            [
+                {
+                    "scope": "scene",
+                    "scope_ref": "scene-1",
+                    "polarity": "prefer",
+                    "subject": "pacing",
+                    "content": "tighter pacing",
+                }
+            ]
+        )
+    )
+    r = client.post(
+        "/api/directive",
+        json={"directive": "scene 1 retry", "reviewer": "alice"},
+    )
+    assert r.status_code == 200, r.text
+    progress = [e for e in events if e["type"] == "re_manifestation_progress"]
+    assert [e["data"]["phase"] for e in progress] == ["start", "failed"]
+    assert progress[1]["data"]["error"] == "ffmpeg crashed"
+
+
+# ---------------------------------------------------------------------------
+# UI-05c: /api/halt/release mode param
+# ---------------------------------------------------------------------------
+
+
+def test_release_halt_default_mode_is_resume(client, monkeypatch):
+    events = _subscribe_events(monkeypatch)
+    client.post("/api/halt", json={"reviewer": "alice"})
+    r = client.post("/api/halt/release")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "resume"
+    assert body["halt_requested"] is False
+    released = [e for e in events if e["type"] == "halt_released"]
+    assert len(released) == 1
+    assert released[0]["data"]["mode"] == "resume"
+
+
+def test_release_halt_mode_resume_clears_flag(client, monkeypatch):
+    events = _subscribe_events(monkeypatch)
+    client.post("/api/halt", json={"reviewer": "alice"})
+    r = client.post("/api/halt/release", json={"mode": "resume"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "resume"
+    assert body["halt_requested"] is False
+    assert body["halt_exit_requested"] is False
+    assert dd.is_halt_requested() is False
+    assert any(
+        e["type"] == "halt_released" and e["data"]["mode"] == "resume"
+        for e in events
+    )
+
+
+def test_release_halt_mode_rewind_appends_ledger_record(
+    client, output_dir, monkeypatch
+):
+    events = _subscribe_events(monkeypatch)
+    client.post(
+        "/api/halt",
+        json={"reviewer": "alice", "last_checkpoint": "scenario"},
+    )
+    r = client.post("/api/halt/release", json={"mode": "rewind"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "rewind"
+    assert body["halt_requested"] is False
+
+    # Rewind appends a synthetic directive to the ledger so A5/A6
+    # observe it on the next consistency check.
+    bb_path = os.path.join(str(output_dir), ".dashboard_blackboard.json")
+    with open(bb_path) as f:
+        data = json.load(f)
+    records = list_preferences(data)
+    assert len(records) == 1
+    assert records[0].origin.reviewer == "l4-dashboard-rewind"
+    assert "rewind" in records[0].content.lower()
+    assert records[0].metadata.get("rewind_checkpoint") == "scenario"
+
+    released = [e for e in events if e["type"] == "halt_released"]
+    assert len(released) == 1
+    assert released[0]["data"]["mode"] == "rewind"
+    assert released[0]["data"]["last_checkpoint"] == "scenario"
+
+
+def test_release_halt_mode_exit_sets_sticky_flag(client, monkeypatch):
+    events = _subscribe_events(monkeypatch)
+    client.post("/api/halt", json={"reviewer": "alice"})
+    r = client.post("/api/halt/release", json={"mode": "exit"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "exit"
+    assert body["halt_requested"] is False
+    # Exit clears the halt flag itself (so the gate poll can unwind)
+    # but leaves the sticky exit flag set so the pipeline shuts down.
+    assert body["halt_exit_requested"] is True
+    state = dd._read_halt_state()
+    assert state["halt_requested"] is False
+    assert state["halt_exit_requested"] is True
+
+    released = [e for e in events if e["type"] == "halt_released"]
+    assert len(released) == 1
+    assert released[0]["data"]["mode"] == "exit"
+
+
+def test_release_halt_rejects_unknown_mode(client):
+    client.post("/api/halt", json={"reviewer": "alice"})
+    r = client.post("/api/halt/release", json={"mode": "banana"})
+    assert r.status_code == 400
+    assert "mode" in r.json()["error"]
+
+
+def test_halt_emits_halt_fired_event(client, monkeypatch):
+    events = _subscribe_events(monkeypatch)
+    r = client.post(
+        "/api/halt",
+        json={
+            "reviewer": "alice",
+            "reason": "too slow",
+            "last_checkpoint": "scenario",
+        },
+    )
+    assert r.status_code == 200
+    fired = [e for e in events if e["type"] == "halt_fired"]
+    assert len(fired) == 1
+    assert fired[0]["data"]["reviewer"] == "alice"
+    assert fired[0]["data"]["reason"] == "too slow"
+    assert fired[0]["data"]["last_checkpoint"] == "scenario"
+    assert fired[0]["data"]["phase"] == "requested"
+
+
+def test_halt_last_checkpoint_round_trip(client):
+    r = client.post(
+        "/api/halt",
+        json={"reviewer": "alice", "last_checkpoint": "scenario"},
+    )
+    assert r.status_code == 200
+    assert r.json()["halt_last_checkpoint"] == "scenario"
+    r = client.get("/api/halt_state")
+    assert r.json()["halt_last_checkpoint"] == "scenario"

@@ -68,7 +68,11 @@ type HaltState = {
   halt_reviewer: string | null;
   halt_reason: string | null;
   halt_timestamp: number | null;
+  halt_last_checkpoint?: string | null;
+  halt_exit_requested?: boolean;
 };
+
+type HaltReleaseMode = "resume" | "rewind" | "exit";
 
 type Toast = {
   id: number;
@@ -181,20 +185,42 @@ export function DashboardIntervention({
     }
   }, [pushToast]);
 
-  const releaseHalt = useCallback(async () => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/halt/release`, {
-        method: "POST",
-      });
-      if (res.ok) {
+  const releaseHalt = useCallback(
+    async (mode: HaltReleaseMode = "resume") => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/halt/release`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          pushToast({
+            kind: "error",
+            message: `Halt release failed (${mode})`,
+            detail: text.slice(0, 200),
+          });
+          return;
+        }
         const data: HaltState = await res.json();
         setHaltState(data);
-        pushToast({ kind: "success", message: "Halt released — pipeline resuming" });
+        const message =
+          mode === "rewind"
+            ? "Rewind queued — rolling back to last checkpoint"
+            : mode === "exit"
+            ? "Exit requested — pipeline will shut down at next checkpoint"
+            : "Halt released — pipeline resuming";
+        pushToast({ kind: "success", message });
+      } catch (err) {
+        pushToast({
+          kind: "error",
+          message: `Halt release failed (${mode})`,
+          detail: err instanceof Error ? err.message : String(err),
+        });
       }
-    } catch {
-      // ignore
-    }
-  }, [pushToast]);
+    },
+    [pushToast],
+  );
 
   const submitDirective = useCallback(
     async (ev?: React.FormEvent<HTMLFormElement>) => {
@@ -278,16 +304,7 @@ export function DashboardIntervention({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {haltEngaged ? (
-            <button
-              type="button"
-              onClick={releaseHalt}
-              className="rounded bg-pipeline-blue px-3 py-2 text-sm font-medium text-pipeline-text hover:bg-pipeline-accent"
-              data-testid="halt-release-button"
-            >
-              Release halt
-            </button>
-          ) : (
+          {!haltEngaged && (
             <button
               type="button"
               onClick={submitHalt}
@@ -301,6 +318,12 @@ export function DashboardIntervention({
           )}
         </div>
       </div>
+      {haltEngaged && (
+        <HaltResumeCard
+          haltState={haltState}
+          onRelease={releaseHalt}
+        />
+      )}
       <form
         onSubmit={submitDirective}
         className="flex items-center gap-2"
@@ -356,6 +379,82 @@ export function DashboardIntervention({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * UI-05c: halt resume card rendered while the halt flag is engaged.
+ *
+ * Offers the three documented exit paths -- resume from current stage,
+ * rewind to the last safe checkpoint, or exit the run.  All three go
+ * through ``POST /api/halt/release`` with a ``mode`` parameter; the
+ * backend decides the state transition (synthetic rewind directive,
+ * sticky exit flag, or plain release).
+ */
+function HaltResumeCard({
+  haltState,
+  onRelease,
+}: {
+  haltState: HaltState | null;
+  onRelease: (mode: HaltReleaseMode) => void | Promise<void>;
+}) {
+  const stage = haltState?.halted_at_stage ?? "next safe checkpoint";
+  const checkpoint = haltState?.halt_last_checkpoint ?? null;
+  const reason = haltState?.halt_reason ?? null;
+  const rewindLabel = checkpoint
+    ? `Rewind to ${checkpoint}`
+    : "Rewind (no checkpoint)";
+  return (
+    <div
+      className="flex flex-col gap-2 rounded border border-amber-500/70 bg-amber-900/20 px-3 py-2 text-amber-100"
+      data-testid="halt-resume-card"
+      role="region"
+      aria-label="Halt resume options"
+    >
+      <div className="flex flex-col">
+        <span className="text-sm font-semibold">
+          Paused at {stage}.
+        </span>
+        <span className="text-xs text-amber-200/90">
+          Last safe checkpoint:{" "}
+          <span className="font-mono">{checkpoint ?? "none"}</span>
+          {reason ? ` · reason: ${reason}` : ""}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void onRelease("resume")}
+          className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+          data-testid="halt-resume-button"
+        >
+          Resume from here
+        </button>
+        <button
+          type="button"
+          onClick={() => void onRelease("rewind")}
+          disabled={!checkpoint}
+          className="rounded bg-amber-500 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="halt-rewind-button"
+          title={
+            checkpoint
+              ? `Roll back to ${checkpoint} and retry`
+              : "No checkpoint recorded yet"
+          }
+        >
+          {rewindLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => void onRelease("exit")}
+          className="rounded bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
+          data-testid="halt-exit-button"
+          title="Stop the pipeline after current in-flight work completes"
+        >
+          Exit run
+        </button>
+      </div>
     </div>
   );
 }

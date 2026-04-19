@@ -265,6 +265,45 @@ export interface ApprovalGateEvent {
   boundary_slot_id?: string;
 }
 
+/** UI-05a: lightweight per-step progress event for the drift badge. */
+export interface ReManifestationProgressEvent {
+  plan_id: string;
+  stage_name: string;
+  action: string;
+  artifact_key: string;
+  scene_id: string | null;
+  clip_id: string | null;
+  scene_num: number | null;
+  slot_ids: string[];
+  reason: string;
+  status: string;
+  error: string | null;
+  phase: "start" | "complete" | "failed" | string;
+}
+
+/** UI-05a: the "directive accepted, these slots are drifting" event. */
+export interface DirectiveAppliedEvent {
+  directive_text: string;
+  l4_event_id: string;
+  reviewer: string;
+  ledger_record_ids: number[];
+  records: Array<Record<string, unknown>>;
+  drifted_slot_ids: string[];
+  drifted_scene_nums: number[];
+  scope: Record<string, unknown> | null;
+  re_manifestation_plans: Array<Record<string, unknown>>;
+}
+
+/** Frontend-only drift state derived from SSE events; never persisted. */
+export interface DriftState {
+  /** Slot ids currently re-manifesting (amber outline + badge). */
+  slotIds: Set<string>;
+  /** Scene numbers whose exact phrase index was unknown (scene-wide drift). */
+  sceneNums: Set<number>;
+  /** Per-slot latest in-flight stage label, used by the badge copy. */
+  slotStages: Record<string, string>;
+}
+
 export interface SlotStateEvent {
   slot_id: string;
   track: OtioTrack["name"];
