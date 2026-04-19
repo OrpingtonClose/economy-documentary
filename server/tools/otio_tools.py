@@ -538,6 +538,16 @@ def _run_per_moment_audio_check(
             "(%.2fs over budget) — continuing pipeline",
             action, scene_num, voice, actual_duration_sec,
         )
+        # Clear the persisted violation flag so the OTIO gate in the
+        # NEXT stage (or the audio stage itself on a timing-loop
+        # re-iteration) doesn't raise a stale ``RuntimeError("OTIO
+        # VIOLATION from previous stage: ...")``.  Recovery has
+        # already decided the violation is tolerable; the downstream
+        # stage boundary check (timeline_guardian / intent_verifier)
+        # remains in place as the real safety net.
+        # N.B. ADK ``State`` does not implement ``.pop`` (see #281),
+        # so clear by assigning an empty string instead.
+        state["otio_violation"] = ""
         return
     if action == "abort":
         raise RuntimeError(f"per-moment audio violation (abort): {err}")

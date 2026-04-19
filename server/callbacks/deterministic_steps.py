@@ -604,11 +604,17 @@ def deterministic_audio_callback(
             parts=[genai_types.Part(text="Audio stage restored from B2 checkpoint — skipped.")],
         )
 
-    # OTIO GATE: refuse to proceed if a previous stage flagged a violation
+    # OTIO GATE: refuse to proceed if a previous stage flagged a violation.
+    # The recovery ladder may decide the violation is tolerable (skip /
+    # retry_with_fix) — in that case clear the flag and continue rather
+    # than aborting the entire run.  ``retry_with_fix`` on a stale flag
+    # from the *previous* iteration is a no-op for this stage (the
+    # per-moment checks already ran at audio time), so "skip" is the
+    # correct semantics.
     if state.get("otio_violation"):
         from recovery import escalate_pipeline_error
         _otio_gate_msg = f"OTIO VIOLATION (from previous stage): {state['otio_violation']}"
-        escalate_pipeline_error(
+        _otio_response = escalate_pipeline_error(
             operation_name="audio_otio_gate",
             error_msg=_otio_gate_msg,
             severity="critical",
@@ -616,7 +622,16 @@ def deterministic_audio_callback(
             diagnosis_hint="A previous stage flagged an OTIO violation.",
             agent_policy_type="otio",
         )
-        raise RuntimeError(_otio_gate_msg)
+        _otio_action = (_otio_response or {}).get("action", "abort")
+        if _otio_action in ("skip", "retry_with_fix"):
+            logger.warning(
+                "OTIO_GATE: recovery decided '%s' for stale flag %r — "
+                "clearing and continuing",
+                _otio_action, state["otio_violation"],
+            )
+            state["otio_violation"] = ""
+        else:
+            raise RuntimeError(_otio_gate_msg)
 
     # CONTRACT: validate preconditions before starting audio stage
     from contracts import AUDIO_CONTRACT, validate_preconditions
