@@ -28,6 +28,7 @@ pipeline events as AG-UI CustomEvents alongside agent protocol events.
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import json
 import logging
@@ -36,7 +37,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 import asyncio
 
@@ -166,6 +167,10 @@ class FeedbackStore:
         with self._lock:
             self._artifacts[artifact.id] = artifact
         emit_agui_event("artifact", artifact.to_dict())
+        # ARCH-H1: bridge artifact transitions onto the centrepiece timeline.
+        # The OTIO dashboard subscribes to "slot_state" to update the three
+        # tracks (V1_Video / A1_Narration / A2_Music) without polling.
+        _emit_slot_state_from_artifact(artifact)
 
     def update_artifact_status(self, artifact_id: str, status: ArtifactStatus) -> None:
         """Update an artifact's status."""
@@ -174,6 +179,11 @@ class FeedbackStore:
             if art:
                 art.status = status
         emit_agui_event("artifact_update", {"id": artifact_id, "status": status.value})
+        # ARCH-H1: mirror on the slot_state stream the centrepiece subscribes to.
+        with self._lock:
+            updated = self._artifacts.get(artifact_id)
+        if updated is not None:
+            _emit_slot_state_from_artifact(updated)
 
     def get_artifact(self, artifact_id: str) -> Optional[ArtifactEvent]:
         with self._lock:
@@ -316,6 +326,63 @@ def emit_agui_event(event_type: str, data: dict) -> None:
     with _event_lock:
         for queue in _event_subscribers:
             queue.append(event)
+
+
+# ---------------------------------------------------------------------------
+# ARCH-H1 slot-state bridge
+# ---------------------------------------------------------------------------
+#
+# The centrepiece OTIO dashboard models each slot as
+# ``{track}:{scene_num}:{phrase_idx}``.  Artifacts flowing through the
+# existing FeedbackStore carry scene/phrase metadata; we translate every
+# ``ArtifactEvent`` into a ``slot_state`` SSE event so the frontend never
+# has to poll to learn that a slot changed state.
+_ARTIFACT_TYPE_TO_TRACK = {
+    "video_clip": "V1_Video",
+    "narration": "A1_Narration",
+    "music": "A2_Music",
+}
+
+_STATUS_TO_SLOT_STATE = {
+    "generating": "in_progress",
+    "regenerating": "in_progress",
+    "pending_review": "delivered",
+    "approved": "delivered",
+    "rejected": "failed",
+}
+
+
+def _emit_slot_state_from_artifact(artifact: "ArtifactEvent") -> None:
+    track = _ARTIFACT_TYPE_TO_TRACK.get(artifact.artifact_type.value)
+    if track is None:
+        return
+    slot_state = _STATUS_TO_SLOT_STATE.get(artifact.status.value, "pending")
+    slot_id = f"{track.split('_')[0]}:{artifact.scene_num}:{artifact.phrase_idx}"
+    emit_agui_event("slot_state", {
+        "slot_id": slot_id,
+        "track": track,
+        "scene_num": artifact.scene_num,
+        "phrase_idx": artifact.phrase_idx,
+        "status": slot_state,
+        "artifact_id": artifact.id,
+        "artifact_status": artifact.status.value,
+        "preview_url": artifact.preview_url,
+        "duration_sec": artifact.duration_sec,
+        "qa_scores": artifact.qa_scores,
+    })
+
+
+def emit_otio_authoritative(timeline_path: str = "", reason: str = "") -> None:
+    """Emit the ``otio_authoritative`` flip event (ARCH-H2).
+
+    Called from :func:`server.callbacks.otio_state.set_otio_state` when the
+    timeline crystallises.  Event-driven by design — the UI uses this to
+    drop the reconciliation overlay and lock the timeline to scale.
+    """
+    emit_agui_event("otio_authoritative", {
+        "timeline_path": timeline_path,
+        "reason": reason,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -483,7 +550,6 @@ async def ingest_artifact(request: Request):
         qa_scores:    dict  — QA quality scores
         metadata:     dict  — additional metadata (prompt, lora, etc.)
     """
-    from fastapi import Request as _Req  # already imported at module level
 
     body = await request.json()
 
@@ -1210,3 +1276,241 @@ async def reasoning_digest_stream(request: Request) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+
+# ---------------------------------------------------------------------------
+# ARCH-H1 / ARCH-H2 / ARCH-H3 — OTIO centrepiece timeline endpoints
+# ---------------------------------------------------------------------------
+#
+# These endpoints back the new dashboard centrepiece: an authoritative
+# (or draft-with-reconciliation-overlay) OTIO timeline rendered on three
+# canonical tracks.  All endpoints are pure read models — no mutation —
+# and a dedicated SSE stream delivers slot-state transitions so the UI
+# never polls.
+
+
+@router.get("/otio/state")
+async def get_otio_state_view():
+    """Return the centrepiece OTIO view.
+
+    Response shape::
+
+        {
+          "state": "draft"|"authoritative",
+          "total_duration_sec": float,
+          "tracks": [
+            {"name": "V1_Video", "kind": "video", "slots": [...], "total_slots": N},
+            {"name": "A1_Narration", "kind": "audio", "slots": [...], ...},
+            {"name": "A2_Music", "kind": "audio", "slots": [...], ...}
+          ],
+          "reconciliation": [...],  // empty when state=="authoritative"
+          "source_file": "/tmp/documentary-pipeline/timelines/<file>.otio"
+        }
+    """
+    from otio_timeline_model import build_timeline_view
+
+    artifacts = _store.get_all_artifacts()
+    view = build_timeline_view(_OUTPUT_DIR, feedback_artifacts=artifacts)
+    return JSONResponse(view.to_dict())
+
+
+@router.get("/slots/{slot_id}/detail")
+async def get_slot_detail(slot_id: str):
+    """Aggregate artifact history, QA, reasoning, ledger, rung, preview.
+
+    Pure read-only; never mutates state.  See
+    :mod:`server.slot_detail_model` for the underlying builder.
+    """
+    from otio_timeline_model import parse_slot_id
+    from slot_detail_model import build_slot_detail
+
+    try:
+        parse_slot_id(slot_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    artifacts = _store.get_all_artifacts()
+    detail = build_slot_detail(
+        slot_id,
+        _OUTPUT_DIR,
+        feedback_artifacts=artifacts,
+        state=None,
+    )
+    return JSONResponse(detail.to_dict())
+
+
+@router.get("/slots/{slot_id}/thumbnail")
+async def get_slot_thumbnail(slot_id: str):
+    """Return the first-frame thumbnail for a delivered video slot.
+
+    Best-effort.  If ``ffmpeg`` is on PATH and a delivered MP4 exists for
+    the slot we extract a single frame on-demand (cached on disk next to
+    the MP4).  Otherwise we return 404.
+    """
+    from fastapi.responses import FileResponse
+    from otio_timeline_model import (
+        TRACK_V1_VIDEO,
+        parse_slot_id,
+    )
+
+    try:
+        track, scene, phrase = parse_slot_id(slot_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if track != TRACK_V1_VIDEO:
+        return JSONResponse({"error": "not a video slot"}, status_code=400)
+
+    mp4_path = os.path.join(
+        _OUTPUT_DIR,
+        "video",
+        f"scene_{scene:03d}_phrase_{phrase:03d}.mp4",
+    )
+    if not os.path.exists(mp4_path):
+        return JSONResponse({"error": "no delivered clip"}, status_code=404)
+    thumb_path = mp4_path.replace(".mp4", "_thumb.jpg")
+    if not os.path.exists(thumb_path):
+        try:
+            import subprocess
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-ss", "0.1", "-i", mp4_path,
+                    "-frames:v", "1", "-q:v", "4", thumb_path,
+                ],
+                check=True,
+                timeout=10,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("thumbnail extraction failed for %s: %s", mp4_path, exc)
+            return JSONResponse({"error": "thumbnail unavailable"}, status_code=404)
+    return FileResponse(thumb_path, media_type="image/jpeg")
+
+
+@router.get("/slots/{slot_id}/waveform")
+async def get_slot_waveform(slot_id: str, samples: int = 240):
+    """Return a downsampled RMS envelope for the WAV backing this slot."""
+    from otio_timeline_model import (
+        TRACK_A1_NARRATION,
+        TRACK_A2_MUSIC,
+        parse_slot_id,
+    )
+
+    try:
+        track, scene, phrase = parse_slot_id(slot_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    if track == TRACK_A1_NARRATION:
+        wav_path = os.path.join(
+            _OUTPUT_DIR, "audio", f"scene_{scene:03d}_phrase_{phrase:03d}.wav"
+        )
+    elif track == TRACK_A2_MUSIC:
+        wav_path = os.path.join(
+            _OUTPUT_DIR, "music", f"scene_{scene:03d}_phrase_{phrase:03d}.wav"
+        )
+    else:
+        return JSONResponse({"error": "not an audio slot"}, status_code=400)
+
+    if not os.path.exists(wav_path):
+        return JSONResponse({"error": "no delivered audio"}, status_code=404)
+    samples = max(16, min(samples, 2000))
+
+    try:
+        import wave
+        with wave.open(wav_path, "rb") as wf:
+            n_frames = wf.getnframes()
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            raw = wf.readframes(n_frames)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"wav read failed: {exc}"}, status_code=500)
+
+    # Cheap RMS downsample without numpy dependency (ARCH-H1 doesn't need it).
+    import struct
+    if sampwidth == 2:
+        fmt = "<" + "h" * (len(raw) // 2)
+    elif sampwidth == 4:
+        fmt = "<" + "i" * (len(raw) // 4)
+    else:
+        return JSONResponse({"error": "unsupported sample width"}, status_code=415)
+    try:
+        all_samples = struct.unpack(fmt, raw)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"decode failed: {exc}"}, status_code=500)
+    # Fold channels down to mono by averaging interleaved samples.
+    if n_channels > 1:
+        mono = [
+            sum(all_samples[i : i + n_channels]) / n_channels
+            for i in range(0, len(all_samples), n_channels)
+        ]
+    else:
+        mono = list(all_samples)
+
+    if not mono:
+        return JSONResponse({"samples": [], "duration_sec": 0})
+
+    bucket = max(1, len(mono) // samples)
+    peak = float(1 << (8 * sampwidth - 1))
+    envelope = []
+    for i in range(0, len(mono), bucket):
+        chunk = mono[i : i + bucket]
+        if not chunk:
+            continue
+        mx = max(abs(v) for v in chunk)
+        envelope.append(round(mx / peak, 4))
+    return JSONResponse({
+        "samples": envelope[:samples],
+        "duration_sec": n_frames / framerate if framerate else 0,
+    })
+
+
+@router.get("/stream")
+async def stream_events(request: Request):
+    """Server-Sent Events stream for the centrepiece dashboard.
+
+    Subscribes to the shared AG-UI event bus and relays every event as
+    SSE.  The dashboard listens for ``slot_state``, ``otio_authoritative``,
+    and ``artifact_update`` to drive the three-track view without ever
+    polling.
+    """
+
+    async def _event_gen():
+        queue = subscribe_agui_events()
+        try:
+            # Kick the connection with an initial snapshot event so late
+            # subscribers see the current OTIO state without re-fetching.
+            from otio_timeline_model import build_timeline_view
+            artifacts = _store.get_all_artifacts()
+            view = build_timeline_view(_OUTPUT_DIR, feedback_artifacts=artifacts)
+            snapshot = {
+                "type": "otio_snapshot",
+                "data": view.to_dict(),
+                "timestamp": time.time(),
+            }
+            yield f"event: {snapshot['type']}\ndata: {json.dumps(snapshot['data'])}\n\n"
+
+            last_heartbeat = time.time()
+            while True:
+                if await request.is_disconnected():
+                    break
+                if queue:
+                    event = queue.popleft()
+                    ev_type = event.get("type", "message")
+                    payload = json.dumps({
+                        "data": event.get("data"),
+                        "timestamp": event.get("timestamp"),
+                    })
+                    yield f"event: {ev_type}\ndata: {payload}\n\n"
+                    last_heartbeat = time.time()
+                else:
+                    if time.time() - last_heartbeat > 15:
+                        yield ": heartbeat\n\n"
+                        last_heartbeat = time.time()
+                    await asyncio.sleep(0.15)
+        finally:
+            unsubscribe_agui_events(queue)
+
+    return StreamingResponse(_event_gen(), media_type="text/event-stream")
+

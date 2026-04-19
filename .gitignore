@@ -7,5 +7,7 @@ __pycache__/
 /tmp/
 node_modules/
 .next/
+next-env.d.ts
+tsconfig.tsbuildinfo
 dashboard_logs/
 lora_cache/

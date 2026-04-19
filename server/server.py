@@ -49,6 +49,7 @@ from agui import (
     unsubscribe_agui_events,
 )
 from dashboard.sse import router as dashboard_router
+from dashboard_directives import router as dashboard_directives_router
 from fleet.router import router as fleet_router
 from plugins import build_plugins, setup_otel
 
@@ -213,6 +214,9 @@ app.include_router(agui_router)
 # ARCH-H5 (issue #160): dedicated /api/reasoning_digest_stream SSE endpoint
 # for the rule-based reasoning digest feed.
 app.include_router(agui_api_router)
+
+# ARCH-H4 (#159): dashboard halt button + directive injection
+app.include_router(dashboard_directives_router)
 
 # Fleet coordination routes (pull-work, report, queue status)
 app.include_router(fleet_router)

@@ -221,7 +221,46 @@ def wait_for_approval(
                 stage,
             )
 
+    # ARCH-H4 (#159): the halt-anywhere button sets a disk-backed flag
+    # that the dashboard polls on every tick.  When engaged, the
+    # approval-gate loop stays blocked even if the stage was marked
+    # approved -- the pipeline pauses at the NEXT safe checkpoint rather
+    # than aborting a mid-stage tool call.  Clearing the flag lets the
+    # next poll tick fall through to the normal approval check.
+    _halt_probe = None
+    _halt_marker = None
+    try:
+        from dashboard_directives import (
+            is_halt_requested as _halt_probe,
+            mark_halted_at_stage as _halt_marker,
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.warning(
+            "wait_for_approval: dashboard_directives unavailable (%s); "
+            "halt-anywhere flag will not be observed for stage %r",
+            exc,
+            stage,
+        )
+
     while time.time() - start < _MAX_WAIT:
+        if _halt_probe is not None and _halt_probe():
+            # Record the stage we paused at (idempotent after first call)
+            # so the dashboard can surface which checkpoint the pipeline
+            # is currently waiting on.  Do not return -- stay blocked
+            # until the halt flag is released, even if the stage is
+            # otherwise approved.
+            if _halt_marker is not None:
+                try:
+                    _halt_marker(stage)
+                except Exception as exc:  # pragma: no cover -- defensive
+                    logger.warning(
+                        "wait_for_approval: failed to mark halt stage "
+                        "%r: %s",
+                        stage,
+                        exc,
+                    )
+            time.sleep(_POLL_INTERVAL)
+            continue
         if is_stage_approved(stage):
             elapsed = time.time() - start
             logger.info("Stage '%s' approved after %.1fs", stage, elapsed)
