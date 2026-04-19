@@ -19,10 +19,9 @@ can witness ledger drift:
   called from inside :mod:`callbacks.approval_gate`'s poll loop so a
   drift observed while humans are reviewing is handled immediately.
 
-On drift, B2 delegates to :mod:`callbacks.remanifestation` (ARCH-B3).
-``handle_drift_signals`` drains the drift queue, asks the active plan
-provider (A6 when landed, :class:`DefaultPlanProvider` as the stub) for
-a plan, executes the plan through the orchestrator/escalation ladders,
+On drift, B2 delegates to :mod:`callbacks.remanifestation` (ARCH-A6).
+:func:`remanifestation.handle_drift` drains the drift queue, calls the
+A6 impact analyser / planner / validator / executor for each signal,
 and re-escalates to human L4 on exhaustion. **No silent degradation.**
 
 Design invariants (mirrored by tests in
@@ -57,10 +56,9 @@ from callbacks.consistency_checker import (
     pending_drift_signals,
 )
 from callbacks.remanifestation import (
-    Escalator,
-    PlanProvider,
-    StageRunner,
-    handle_drift_signals,
+    DriftHandlingReceipt,
+    StepExecutor,
+    handle_drift,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,28 +79,20 @@ _WIRED_ATTR = "_arch_b2_consistency_wired"
 def _dispatch_drift_if_any(
     state: MutableMapping[str, Any],
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
-    gate: bool = True,
-) -> list[dict[str, Any]]:
-    """If drift signals exist on ``state``, hand them to the B3 executor.
+    executor: Optional[StepExecutor] = None,
+) -> list[DriftHandlingReceipt]:
+    """If drift signals exist on ``state``, hand them to the A6 executor.
 
-    A thin wrapper around :func:`remanifestation.handle_drift_signals` so
-    that all B2 invocation points (after_agent, before_agent, before_tool,
-    gate poll) share the same dispatch behaviour.
+    A thin wrapper around :func:`remanifestation.handle_drift` (the A6
+    canonical drift handler, landed on main via PR #177) so that all B2
+    invocation points (after_agent, before_agent, before_tool, gate
+    poll) share the same dispatch behaviour.
 
-    Returns the handler results (empty list when no drift was queued).
+    Returns the handler receipts (empty list when no drift was queued).
     """
     if not pending_drift_signals(state):
         return []
-    return handle_drift_signals(
-        state,
-        plan_provider=plan_provider,
-        runner=runner,
-        escalator=escalator,
-        gate=gate,
-    )
+    return handle_drift(state, executor=executor)
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +107,7 @@ ToolCallback = Callable[[Any, Mapping[str, Any], Any], Any]
 def make_after_agent_with_consistency(
     original: Optional[AgentCallback],
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
-    gate: bool = True,
+    executor: Optional[StepExecutor] = None,
 ) -> AgentCallback:
     """Return an ``after_agent_callback`` composing ``original`` + A5 + B3.
 
@@ -130,8 +117,9 @@ def make_after_agent_with_consistency(
        Guardian, approval gates, and output_key tagging remain
        authoritative.
     2. :func:`after_agent_consistency_check` -- A5 detects drift.
-    3. :func:`handle_drift_signals` -- B3 executor consumes any queued
-       drift signals. Re-escalates to human L4 on exhaustion.
+    3. :func:`remanifestation.handle_drift` -- A6 executor consumes
+       any queued drift signals. Re-escalates to human L4 on
+       exhaustion.
 
     Returns whatever ``original`` returned (typically ``None`` or a
     ``genai_types.Content`` skip marker).
@@ -143,13 +131,7 @@ def make_after_agent_with_consistency(
             result = original(callback_context)
 
         after_agent_consistency_check(callback_context)
-        _dispatch_drift_if_any(
-            callback_context.state,
-            plan_provider=plan_provider,
-            runner=runner,
-            escalator=escalator,
-            gate=gate,
-        )
+        _dispatch_drift_if_any(callback_context.state, executor=executor)
         return result
 
     _chained.__name__ = "after_agent_with_consistency"
@@ -164,10 +146,7 @@ def make_after_agent_with_consistency(
 def make_before_agent_with_consistency(
     original: Optional[AgentCallback],
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
-    gate: bool = True,
+    executor: Optional[StepExecutor] = None,
 ) -> AgentCallback:
     """Return a ``before_agent_callback`` composing ``original`` + A5 + B3.
 
@@ -193,13 +172,7 @@ def make_before_agent_with_consistency(
 
     def _chained(callback_context: Any) -> Any:
         after_agent_consistency_check(callback_context)
-        _dispatch_drift_if_any(
-            callback_context.state,
-            plan_provider=plan_provider,
-            runner=runner,
-            escalator=escalator,
-            gate=gate,
-        )
+        _dispatch_drift_if_any(callback_context.state, executor=executor)
 
         if original is not None:
             return original(callback_context)
@@ -217,10 +190,7 @@ def make_before_agent_with_consistency(
 def make_before_tool_with_consistency(
     original: Optional[ToolCallback],
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
-    gate: bool = True,
+    executor: Optional[StepExecutor] = None,
 ) -> ToolCallback:
     """Return a ``before_tool_callback`` composing ``original`` + A5 + B3.
 
@@ -238,13 +208,7 @@ def make_before_tool_with_consistency(
 
     def _chained(tool: Any, args: Mapping[str, Any], tool_context: Any) -> Any:
         before_tool_consistency_check(tool, args, tool_context)
-        _dispatch_drift_if_any(
-            tool_context.state,
-            plan_provider=plan_provider,
-            runner=runner,
-            escalator=escalator,
-            gate=gate,
-        )
+        _dispatch_drift_if_any(tool_context.state, executor=executor)
         if original is not None:
             return original(tool, args, tool_context)
         return None
@@ -267,9 +231,7 @@ def gate_poll_consistency_check(
     state: MutableMapping[str, Any],
     stage_name: str,
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
+    executor: Optional[StepExecutor] = None,
 ) -> Optional[LedgerDrift]:
     """Run A5 + B3 from inside the approval-gate poll loop.
 
@@ -288,13 +250,7 @@ def gate_poll_consistency_check(
     B3 regardless of this call's own detection.
     """
     drift = check_consistency_at_gate(state, stage_name)
-    _dispatch_drift_if_any(
-        state,
-        plan_provider=plan_provider,
-        runner=runner,
-        escalator=escalator,
-        gate=False,
-    )
+    _dispatch_drift_if_any(state, executor=executor)
     return drift
 
 
@@ -330,10 +286,7 @@ def _iter_agent_tree(root: Any) -> Iterable[Any]:
 def wire_consistency_checks_into_agents(
     root: Any,
     *,
-    plan_provider: Optional[PlanProvider] = None,
-    runner: Optional[StageRunner] = None,
-    escalator: Optional[Escalator] = None,
-    gate: bool = True,
+    executor: Optional[StepExecutor] = None,
 ) -> list[str]:
     """Compose B2 callbacks onto every agent in ``root``'s tree.
 
@@ -348,11 +301,8 @@ def wire_consistency_checks_into_agents(
     Args:
         root: A SequentialAgent / LoopAgent / Agent -- typically the
             master ``pipeline_agent``.
-        plan_provider: Passed through to :func:`handle_drift_signals`.
-        runner: Passed through to :func:`handle_drift_signals`.
-        escalator: Passed through to :func:`handle_drift_signals`.
-        gate: When ``True`` (default), re-manifestation is gated through
-            the reconstruction approval gate. Tests pass ``False``.
+        executor: Optional step executor forwarded to A6's
+            :func:`remanifestation.handle_drift`.
     """
     wired: list[str] = []
     for agent in _iter_agent_tree(root):
@@ -364,19 +314,13 @@ def wire_consistency_checks_into_agents(
         orig_after = getattr(agent, "after_agent_callback", None)
         agent.after_agent_callback = make_after_agent_with_consistency(
             orig_after,
-            plan_provider=plan_provider,
-            runner=runner,
-            escalator=escalator,
-            gate=gate,
+            executor=executor,
         )
 
         orig_before = getattr(agent, "before_agent_callback", None)
         agent.before_agent_callback = make_before_agent_with_consistency(
             orig_before,
-            plan_provider=plan_provider,
-            runner=runner,
-            escalator=escalator,
-            gate=gate,
+            executor=executor,
         )
 
         # before_tool_callback is only meaningful on agents that own tools;
@@ -386,10 +330,7 @@ def wire_consistency_checks_into_agents(
             orig_tool = getattr(agent, "before_tool_callback", None)
             agent.before_tool_callback = make_before_tool_with_consistency(
                 orig_tool,
-                plan_provider=plan_provider,
-                runner=runner,
-                escalator=escalator,
-                gate=gate,
+                executor=executor,
             )
 
         try:

@@ -514,6 +514,36 @@ def _init_pipeline_state(
             state["_pipeline_key"],
         )
 
+    # ARCH-A3 (#133): seed the Preference Ledger with R0 baseline
+    # records parsed from the original brief, so every run begins with
+    # a non-empty ledger rather than revision 0.  Idempotent -- re-runs
+    # (AG-UI re-entry, B2 restore) that already carry R0 records skip.
+    try:
+        from callbacks.run_start_seed import (
+            RunStartSeedError,
+            seed_ledger_from_brief,
+        )
+        # Disable the LLM path unless explicitly enabled -- the CI env
+        # has no google-genai credentials, and the heuristic baseline
+        # is sufficient to satisfy the A3 contract (non-empty ledger
+        # covering every canonical subject).
+        _r0_use_llm = os.environ.get(
+            "ARCH_A_R0_USE_LLM", ""
+        ).strip().lower() in ("1", "true", "yes")
+        seed_ledger_from_brief(state, use_llm=_r0_use_llm)
+    except RunStartSeedError as seed_err:
+        logger.error(
+            "ARCH-A3 R0 seed failed: %s -- refusing to start pipeline "
+            "with an empty Preference Ledger",
+            seed_err,
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"ERROR: R0 seed failed: {seed_err}"
+            )],
+        )
+
     # ── ADK Environment Simulation wiring ──────────────────────────────
     # When a simulation scenario is active, compose the ADK-native
     # before_tool_callback with each agent's existing callback so that

@@ -10,14 +10,16 @@ Covers the invariants declared in ``server/callbacks/consistency_gate.py``:
    before-agent, before-tool, and gate-poll all emit a drift signal when
    the ledger has advanced past the stage's derivation revision.
 3. **B3 drift handler runs when drift is detected.** Queued drift
-   signals are drained and handled in the same callback hop.
+   signals are drained and handled in the same callback hop by the A6
+   canonical :func:`callbacks.remanifestation.handle_drift` entrypoint
+   (landed on main via PR #177).
 4. **Idempotent agent-tree wiring.** ``wire_consistency_checks_into_agents``
    tags each agent so a second call does not double-chain.
-5. **Gate-poll check does not re-gate reconstruction** (would deadlock).
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -49,13 +51,29 @@ from callbacks.preference_ledger import (  # noqa: E402
     append_preference,
 )
 from callbacks.remanifestation import (  # noqa: E402
-    remanifestation_history,
+    REMANIFESTATION_RECEIPTS_KEY,
 )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _receipts(state: dict) -> list[dict]:
+    """Read A6 drift-handling receipts off state.
+
+    A6's :func:`handle_drift` appends a ``DriftHandlingReceipt`` (JSON
+    dict) to ``state[REMANIFESTATION_RECEIPTS_KEY]`` for each signal it
+    processes.  Tests use the list to assert that the B2 bridge
+    actually dispatched.
+    """
+    raw = state.get(REMANIFESTATION_RECEIPTS_KEY)
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    return json.loads(raw)
 
 
 def _origin(event_id: str = "L4-001") -> Origin:
@@ -70,8 +88,8 @@ def _seed_ledger(state: dict, n: int = 1, start: int = 1) -> None:
     for i in range(n):
         append_preference(
             state,
-            scope=Scope.SCENE,
-            scope_ref=f"scene-{start + i}",
+            scope=Scope.GLOBAL,
+            scope_ref=None,
             polarity=Polarity.PREFER,
             subject=Subject.TONE,
             content=f"record {start + i}",
@@ -80,7 +98,12 @@ def _seed_ledger(state: dict, n: int = 1, start: int = 1) -> None:
 
 
 def _state_with_drift(stage: str = "scenario") -> dict:
-    """State where the ledger has advanced past the stage's derivation."""
+    """State where the ledger has advanced past the stage's derivation.
+
+    Uses GLOBAL-scope records so the A6 impact analyser matches the
+    tagged artifact and produces a non-empty plan -- otherwise the drift
+    is handled with an empty plan and no receipts are appended.
+    """
     state = {PREFERENCE_LEDGER_KEY: "[]"}
     _seed_ledger(state, 1)
     state[f"{stage}_scenes"] = [{"id": "s1"}]
@@ -108,15 +131,6 @@ def _ctx(state: dict, agent_name: str = "scenario") -> SimpleNamespace:
     return SimpleNamespace(state=state, agent_name=agent_name)
 
 
-class _NullEscalator:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def __call__(self, state, drift, plan, reason):
-        self.calls += 1
-        return f"ESC-{self.calls}"
-
-
 # ---------------------------------------------------------------------------
 # after_agent composition
 # ---------------------------------------------------------------------------
@@ -130,34 +144,30 @@ def test_after_agent_preserves_original_return_value_and_invokes_a5():
         seen.append(ctx.agent_name)
         return "ORIGINAL"
 
-    cb = make_after_agent_with_consistency(
-        original, escalator=_NullEscalator(), gate=False
-    )
+    cb = make_after_agent_with_consistency(original)
     out = cb(_ctx(state))
 
     assert out == "ORIGINAL"
     assert seen == ["scenario"]
-    # A5 drift detected AND B3 handled it (queue drained, history entry).
+    # A5 drift detected AND A6 handled it (queue drained, receipt recorded).
     assert pending_drift_signals(state) == []
-    hist = remanifestation_history(state)
-    assert hist and hist[0]["status"] in ("executed", "escalated")
+    receipts = _receipts(state)
+    assert receipts, "expected A6 to append a drift-handling receipt"
 
 
 def test_after_agent_is_a_no_op_when_no_drift_is_detected():
     state = _state_without_drift()
-    cb = make_after_agent_with_consistency(None, gate=False)
+    cb = make_after_agent_with_consistency(None)
     out = cb(_ctx(state))
 
     assert out is None
     assert pending_drift_signals(state) == []
-    assert remanifestation_history(state) == []
+    assert _receipts(state) == []
 
 
 def test_after_agent_accepts_none_original_callback():
     state = _state_with_drift()
-    cb = make_after_agent_with_consistency(
-        None, escalator=_NullEscalator(), gate=False
-    )
+    cb = make_after_agent_with_consistency(None)
     assert cb(_ctx(state)) is None
 
 
@@ -173,18 +183,15 @@ def test_before_agent_checks_drift_before_running_original():
     def original(ctx):
         order.append("original")
         # By the time original runs, A5 must have already signalled drift
-        # and B3 must have handled it (signals drained).
+        # and A6 must have handled it (signals drained).
         assert pending_drift_signals(state) == []
         return None
 
-    cb = make_before_agent_with_consistency(
-        original, escalator=_NullEscalator(), gate=False
-    )
+    cb = make_before_agent_with_consistency(original)
     cb(_ctx(state))
 
     assert order == ["original"]
-    hist = remanifestation_history(state)
-    assert hist  # B3 handler appended
+    assert _receipts(state)  # A6 handler appended
 
 
 def test_before_agent_propagates_skip_marker_from_original():
@@ -193,7 +200,7 @@ def test_before_agent_propagates_skip_marker_from_original():
     def original(_ctx):
         return "SKIP"
 
-    cb = make_before_agent_with_consistency(original, gate=False)
+    cb = make_before_agent_with_consistency(original)
     assert cb(_ctx(state)) == "SKIP"
 
 
@@ -210,16 +217,14 @@ def test_before_tool_runs_consistency_and_then_original():
         seen.append("original")
         return None
 
-    cb = make_before_tool_with_consistency(
-        original, escalator=_NullEscalator(), gate=False
-    )
+    cb = make_before_tool_with_consistency(original)
     tool_ctx = SimpleNamespace(state=state, agent_name="scenario")
     cb("fake_tool", {"x": 1}, tool_ctx)
 
     assert seen == ["original"]
     # Drift was dispatched
     assert pending_drift_signals(state) == []
-    assert remanifestation_history(state)
+    assert _receipts(state)
 
 
 def test_before_tool_surfaces_original_reject_value():
@@ -228,7 +233,7 @@ def test_before_tool_surfaces_original_reject_value():
     def original(_tool, _args, _ctx):
         return {"error": "rate_limited"}
 
-    cb = make_before_tool_with_consistency(original, gate=False)
+    cb = make_before_tool_with_consistency(original)
     tool_ctx = SimpleNamespace(state=state, agent_name="scenario")
     out = cb("fake_tool", {}, tool_ctx)
     assert out == {"error": "rate_limited"}
@@ -236,7 +241,7 @@ def test_before_tool_surfaces_original_reject_value():
 
 def test_before_tool_with_none_original_is_a_noop_on_clean_state():
     state = _state_without_drift()
-    cb = make_before_tool_with_consistency(None, gate=False)
+    cb = make_before_tool_with_consistency(None)
     tool_ctx = SimpleNamespace(state=state, agent_name="scenario")
     assert cb("tool", {}, tool_ctx) is None
 
@@ -246,24 +251,21 @@ def test_before_tool_with_none_original_is_a_noop_on_clean_state():
 # ---------------------------------------------------------------------------
 
 
-def test_gate_poll_detects_drift_and_dispatches_b3_without_recursive_gate():
+def test_gate_poll_detects_drift_and_dispatches_a6():
     state = _state_with_drift()
-    drift = gate_poll_consistency_check(
-        state, "scenario", escalator=_NullEscalator()
-    )
+    drift = gate_poll_consistency_check(state, "scenario")
     assert drift is not None
     assert drift.stage_name == "scenario"
-    # Drift handled in the same hop -- queue drained, history recorded.
+    # Drift handled in the same hop -- queue drained, receipt recorded.
     assert pending_drift_signals(state) == []
-    hist = remanifestation_history(state)
-    assert hist
+    assert _receipts(state)
 
 
 def test_gate_poll_returns_none_when_no_drift():
     state = _state_without_drift()
     drift = gate_poll_consistency_check(state, "scenario")
     assert drift is None
-    assert remanifestation_history(state) == []
+    assert _receipts(state) == []
 
 
 def test_gate_poll_propagates_invariant_violation():
@@ -295,7 +297,7 @@ def test_wire_consistency_checks_into_agents_composes_every_agent():
     mid = _FakeAgent("mid", sub_agents=[leaf])
     root = _FakeAgent("root", sub_agents=[mid])
 
-    wired = wire_consistency_checks_into_agents(root, gate=False)
+    wired = wire_consistency_checks_into_agents(root)
 
     assert set(wired) == {"root", "mid", "leaf"}
     for agent in (root, mid, leaf):
@@ -308,9 +310,9 @@ def test_wire_is_idempotent_on_second_call():
     leaf = _FakeAgent("leaf", has_tools=True)
     root = _FakeAgent("root", sub_agents=[leaf])
 
-    first = wire_consistency_checks_into_agents(root, gate=False)
+    first = wire_consistency_checks_into_agents(root)
     after_first = leaf.after_agent_callback
-    second = wire_consistency_checks_into_agents(root, gate=False)
+    second = wire_consistency_checks_into_agents(root)
 
     # First call wired both, second call wired nothing.
     assert set(first) == {"root", "leaf"}
@@ -334,8 +336,6 @@ def test_wire_preserves_existing_callbacks():
     state = _state_with_drift()
     wire_consistency_checks_into_agents(
         _FakeAgent("root", sub_agents=[leaf]),
-        escalator=_NullEscalator(),
-        gate=False,
     )
 
     # Original after-callback return value still propagated.

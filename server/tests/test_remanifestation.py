@@ -1,31 +1,36 @@
 """
-Unit tests for ARCH-B3 re-manifestation executor (issue #139).
+Unit tests for ARCH-A6 re-manifestation pipeline (#136).
 
-Covers the invariants declared in ``server/callbacks/remanifestation.py``:
+Covers the invariants declared in
+:mod:`server.callbacks.remanifestation`:
 
-1. **Plan protocol validation** -- malformed plans raise loudly.
-2. **Queue round-trip** -- ``enqueue_plan`` + ``drain_plans`` preserves
-   order and plan contents through JSON.
-3. **``execute_plan`` clears artifact tags and stage derivations** named
-   by the plan so the re-running stage can re-tag at the current ledger
-   revision without hitting ``ArtifactAlreadyTaggedError``.
-4. **History log** -- every execution / escalation / failure appends a
-   structured entry to ``remanifestation_history``.
-5. **Fail-loud executor** -- missing ledger state raises
-   :class:`RemanifestationError`; a raising runner bubbles up wrapped.
-6. **Drift-signal dispatch** -- ``handle_drift_signals`` drains the A5
-   queue, turns each drift into a plan (or escalates on ``None``), runs
-   the plan, and re-escalates to human L4 on plan failure.
-7. **Plan provider protocol is runtime-checkable** -- custom providers
-   (tests simulate A6) plug in without importing B3 internals.
+1. **Impact analysis** -- GLOBAL records invalidate every tagged
+   artifact regardless of stage; STAGE records match only their
+   stage; narrower-scope records substring-match the artifact key.
+2. **Empty plans** -- drift with no impacted artifacts produces an
+   empty :class:`RemanifestationPlan`, not a spurious step.
+3. **Action selection** -- hard (FORBID/REQUIRE) records on
+   scene-scoped artifacts escalate to ``rewrite_scene``; DURATION
+   PREFER/REQUIRE yields ``generate_extension_clip``; everything
+   else is ``regenerate_clip``.
+4. **Validator** -- rejects forbidden (``trim_narration`` et al.)
+   actions, rejects plans that reference untagged artifacts, and
+   rejects plans that contradict current-ledger FORBID records.
+5. **Executor** -- queues each step via the default executor, appends
+   receipts, clears the artifact tag after successful dispatch, and
+   is idempotent on a second pass.
+6. **Top-level orchestration** -- :func:`handle_drift` consumes every
+   queued signal in FIFO order, re-enqueues only the signals whose
+   plans failed validation, and leaves a successful run with an empty
+   drift queue.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -34,11 +39,13 @@ if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
 from callbacks.artifact_revision_tag import (  # noqa: E402
+    ARTIFACT_REVISION_TAGS_KEY,
     has_tag,
+    list_tags,
     tag_artifact,
 )
 from callbacks.consistency_checker import (  # noqa: E402
-    STAGE_DERIVATIONS_KEY,
+    LEDGER_DRIFT_SIGNALS_KEY,
     LedgerDrift,
     check_consistency,
     pending_drift_signals,
@@ -48,22 +55,24 @@ from callbacks.preference_ledger import (  # noqa: E402
     PREFERENCE_LEDGER_KEY,
     Origin,
     Polarity,
+    PreferenceRecord,
     Scope,
     Subject,
     append_preference,
+    current_revision,
 )
 from callbacks.remanifestation import (  # noqa: E402
-    REMANIFESTATION_PLAN_QUEUE_KEY,
-    DefaultPlanProvider,
-    DictRemanifestationPlan,
-    RemanifestationError,
+    ALLOWED_ACTIONS,
+    InvalidPlanError,
+    PlanStep,
+    REMANIFESTATION_QUEUE_KEY,
+    REMANIFESTATION_RECEIPTS_KEY,
     RemanifestationPlan,
-    drain_plans,
-    enqueue_plan,
+    analyse_impact,
     execute_plan,
-    handle_drift_signals,
-    list_pending_plans,
-    remanifestation_history,
+    handle_drift,
+    plan_remanifestation,
+    validate_plan,
 )
 
 
@@ -72,505 +81,558 @@ from callbacks.remanifestation import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _origin(event_id: str = "L4-001") -> Origin:
+def _origin(event_id: str = "L4-001", reviewer: str = "alice") -> Origin:
     return Origin(
         l4_event_id=event_id,
-        reviewer="tester",
+        reviewer=reviewer,
         timestamp="2026-04-18T12:00:00Z",
     )
-
-
-def _seed_ledger(state: dict, n: int = 1, start: int = 1) -> None:
-    for i in range(n):
-        append_preference(
-            state,
-            scope=Scope.SCENE,
-            scope_ref=f"scene-{start + i}",
-            polarity=Polarity.PREFER,
-            subject=Subject.TONE,
-            content=f"record {start + i}",
-            origin=_origin(f"L4-{start + i:03d}"),
-        )
 
 
 def _fresh_state() -> dict:
     return {PREFERENCE_LEDGER_KEY: "[]"}
 
 
-def _tagged_state() -> dict:
-    """State with ledger seeded, one stage derived against an old rev, and a
-    tagged artifact on that stage so a real drift can be generated."""
+def _append(state: dict, **kwargs) -> PreferenceRecord:
+    kwargs.setdefault("scope", Scope.GLOBAL)
+    kwargs.setdefault("scope_ref", None)
+    kwargs.setdefault("polarity", Polarity.PREFER)
+    kwargs.setdefault("subject", Subject.TONE)
+    kwargs.setdefault("content", "placeholder")
+    kwargs.setdefault("origin", _origin())
+    if kwargs["scope"] is Scope.GLOBAL:
+        kwargs["scope_ref"] = None
+    return append_preference(state, **kwargs)
+
+
+def _tag(state: dict, artifact_key: str, stage: str) -> None:
+    tag_artifact(state, artifact_key=artifact_key, stage=stage)
+
+
+def _make_drift(
+    state: dict,
+    *,
+    stage_name: str,
+    from_rev: int,
+    new_records: list[PreferenceRecord],
+    artifact_ids: tuple[str, ...] = (),
+) -> LedgerDrift:
+    to_rev = current_revision(state)
+    return LedgerDrift(
+        stage_name=stage_name,
+        artifact_ids=artifact_ids,
+        from_rev=from_rev,
+        to_rev=to_rev,
+        new_records=tuple(r.to_dict() for r in new_records),
+    )
+
+
+# ---------------------------------------------------------------------------
+# analyse_impact
+# ---------------------------------------------------------------------------
+
+
+def test_global_record_invalidates_every_tagged_artifact():
     state = _fresh_state()
-    _seed_ledger(state, 1)  # rev 1
-    state["scenario_scenes"] = [{"id": "scene-1"}]  # artifact payload
-    tag_artifact(state, "scenario_scenes", stage="scenario")
-    record_stage_derivation(
-        state, "scenario", revision=1, artifact_ids=["scenario_scenes"]
+    _tag(state, "scene-1:audio", "audio_producer")
+    _tag(state, "clip-0/scene-1", "video_producer")
+    _tag(state, "assembler:final", "assembler")
+    rec = _append(
+        state,
+        scope=Scope.GLOBAL,
+        subject=Subject.TONE,
+        content="warmer overall tone",
     )
-    _seed_ledger(state, 2, start=2)  # revs 2, 3 -- now stale
-    return state
+    drift = _make_drift(state, stage_name="scenario", from_rev=0, new_records=[rec])
+
+    impacted = analyse_impact(state, drift)
+    keys = {i.artifact_key for i in impacted}
+    assert keys == {"scene-1:audio", "clip-0/scene-1", "assembler:final"}
 
 
-def _drift_for(state: dict, stage: str = "scenario") -> LedgerDrift:
-    drift = check_consistency(state, stage)
-    assert drift is not None, "test helper expected drift to be detectable"
-    return drift
-
-
-# ---------------------------------------------------------------------------
-# Plan protocol validation
-# ---------------------------------------------------------------------------
-
-
-def test_dict_plan_rejects_empty_stages():
-    with pytest.raises(ValueError, match="stages_to_rerun"):
-        DictRemanifestationPlan(
-            plan_id="p1",
-            triggered_by={},
-            stages_to_rerun=(),
-            artifact_keys_to_clear=(),
-            rationale="r",
-        )
-
-
-def test_dict_plan_rejects_non_string_stage():
-    with pytest.raises(ValueError, match="stages_to_rerun"):
-        DictRemanifestationPlan(
-            plan_id="p1",
-            triggered_by={},
-            stages_to_rerun=("",),  # empty string is not a stage
-            artifact_keys_to_clear=(),
-            rationale="r",
-        )
-
-
-def test_dict_plan_rejects_non_string_plan_id():
-    with pytest.raises(ValueError, match="plan_id"):
-        DictRemanifestationPlan(
-            plan_id="",
-            triggered_by={},
-            stages_to_rerun=("scenario",),
-            artifact_keys_to_clear=(),
-            rationale="r",
-        )
-
-
-def test_dict_plan_round_trips_through_dict():
-    plan = DictRemanifestationPlan(
-        plan_id="p1",
-        triggered_by={"stage_name": "scenario", "from_rev": 1, "to_rev": 2},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=("scenario_scenes",),
-        rationale="preference changed",
-    )
-    restored = DictRemanifestationPlan.from_dict(plan.to_dict())
-    assert restored == plan
-
-
-def test_dict_plan_from_dict_rejects_missing_fields():
-    with pytest.raises(ValueError, match="missing required fields"):
-        DictRemanifestationPlan.from_dict(
-            {
-                "plan_id": "p1",
-                # triggered_by missing
-                "stages_to_rerun": ["scenario"],
-                "artifact_keys_to_clear": [],
-                "rationale": "r",
-            }
-        )
-
-
-def test_runtime_checkable_protocol_accepts_dict_plan():
-    plan = DictRemanifestationPlan(
-        plan_id="p1",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="r",
-    )
-    assert isinstance(plan, RemanifestationPlan)
-
-
-# ---------------------------------------------------------------------------
-# Queue round-trip
-# ---------------------------------------------------------------------------
-
-
-def test_enqueue_and_drain_round_trip_preserves_order():
+def test_stage_record_matches_only_its_stage():
     state = _fresh_state()
-    p1 = DictRemanifestationPlan(
-        plan_id="p1",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="first",
+    _tag(state, "scene-1:audio", "audio_producer")
+    _tag(state, "clip-0/scene-1", "video_producer")
+    rec = _append(
+        state,
+        scope=Scope.STAGE,
+        scope_ref="audio_producer",
+        subject=Subject.VOICE,
+        content="lower voice",
     )
-    p2 = DictRemanifestationPlan(
-        plan_id="p2",
-        triggered_by={},
-        stages_to_rerun=("audio",),
-        artifact_keys_to_clear=(),
-        rationale="second",
-    )
-    enqueue_plan(state, p1)
-    enqueue_plan(state, p2)
+    drift = _make_drift(state, stage_name="audio_producer", from_rev=0, new_records=[rec])
 
-    assert [p.plan_id for p in list_pending_plans(state)] == ["p1", "p2"]
-
-    drained = drain_plans(state)
-    assert [p.plan_id for p in drained] == ["p1", "p2"]
-    assert list_pending_plans(state) == []
-    # Queue is reset to empty list, not missing (preserve JSON type).
-    assert json.loads(state[REMANIFESTATION_PLAN_QUEUE_KEY]) == []
+    impacted = analyse_impact(state, drift)
+    keys = {i.artifact_key for i in impacted}
+    assert keys == {"scene-1:audio"}
 
 
-def test_enqueue_requires_plan_compatible_object():
+def test_scene_record_substring_matches_artifact_key():
     state = _fresh_state()
-    with pytest.raises(TypeError, match="RemanifestationPlan"):
-        enqueue_plan(state, object())
+    _tag(state, "scene-3:audio", "audio_producer")
+    _tag(state, "scene-4:audio", "audio_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-3",
+        subject=Subject.TONE,
+        content="warmer scene 3",
+    )
+    drift = _make_drift(state, stage_name="audio_producer", from_rev=0, new_records=[rec])
+
+    impacted = analyse_impact(state, drift)
+    assert {i.artifact_key for i in impacted} == {"scene-3:audio"}
+
+
+def test_artifacts_at_or_past_drift_horizon_are_skipped():
+    state = _fresh_state()
+    # rev 1 lands first; artifact is tagged AFTER, so its revision is 1.
+    rec1 = _append(state, scope=Scope.GLOBAL, content="rev1")
+    _tag(state, "scene-1:audio", "audio_producer")
+    # drift window from rev 0 -> rev 1; the artifact is AT the horizon,
+    # so it's considered already-derived.
+    drift = LedgerDrift(
+        stage_name="scenario",
+        artifact_ids=(),
+        from_rev=0,
+        to_rev=1,
+        new_records=(rec1.to_dict(),),
+    )
+    assert analyse_impact(state, drift) == []
+
+
+def test_analyse_impact_result_is_sorted_by_artifact_key():
+    state = _fresh_state()
+    _tag(state, "zeta", "s")
+    _tag(state, "alpha", "s")
+    _tag(state, "mid", "s")
+    rec = _append(state, scope=Scope.GLOBAL, content="global")
+    drift = _make_drift(state, stage_name="s", from_rev=0, new_records=[rec])
+    impacted = analyse_impact(state, drift)
+    assert [i.artifact_key for i in impacted] == ["alpha", "mid", "zeta"]
 
 
 # ---------------------------------------------------------------------------
-# execute_plan -- side effects
+# plan_remanifestation
 # ---------------------------------------------------------------------------
 
 
-def test_execute_plan_clears_artifact_tags_and_stage_derivations():
-    state = _tagged_state()
-    # Pre-condition: tag + derivation both present.
-    assert has_tag(state, "scenario_scenes")
-    assert "scenario" in json.loads(state[STAGE_DERIVATIONS_KEY])
+def test_empty_drift_produces_empty_plan():
+    state = _fresh_state()
+    rec = _append(state, scope=Scope.GLOBAL, content="none")
+    # No tagged artifacts -> empty plan.
+    drift = _make_drift(state, stage_name="s", from_rev=0, new_records=[rec])
+    plan = plan_remanifestation(state, drift)
+    assert plan.is_empty
+    assert plan.steps == ()
+    assert "no impacted artifacts" in plan.reason
 
-    plan = DictRemanifestationPlan(
-        plan_id="p-test",
-        triggered_by={"stage_name": "scenario"},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=("scenario_scenes",),
-        rationale="test clearing",
+
+def test_hard_record_on_scene_artifact_yields_rewrite_scene():
+    state = _fresh_state()
+    _tag(state, "scene-3:audio", "audio_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-3",
+        polarity=Polarity.FORBID,
+        subject=Subject.TONE,
+        content="must not sound ironic",
+    )
+    drift = _make_drift(state, stage_name="audio_producer", from_rev=0, new_records=[rec])
+    plan = plan_remanifestation(state, drift)
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.action == "rewrite_scene"
+    assert step.scene_id == "scene-3"
+    assert step.guidance
+
+
+def test_duration_prefer_yields_generate_extension_clip():
+    state = _fresh_state()
+    _tag(state, "scene-2:video", "video_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-2",
+        polarity=Polarity.PREFER,
+        subject=Subject.DURATION,
+        content="add a beat of breathing room at the end",
+    )
+    drift = _make_drift(state, stage_name="video_producer", from_rev=0, new_records=[rec])
+    plan = plan_remanifestation(state, drift)
+    assert len(plan.steps) == 1
+    step = plan.steps[0]
+    assert step.action == "generate_extension_clip"
+    assert step.scene_id == "scene-2"
+    assert step.duration_needed and step.duration_needed > 0
+
+
+def test_default_action_is_regenerate_clip_with_nonzero_seed_delta():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-1",
+        polarity=Polarity.PREFER,
+        subject=Subject.VISUAL_STYLE,
+        content="cooler colour palette",
+    )
+    drift = _make_drift(state, stage_name="video_producer", from_rev=0, new_records=[rec])
+    plan = plan_remanifestation(state, drift)
+    step = plan.steps[0]
+    assert step.action == "regenerate_clip"
+    assert step.clip_id == "clip-0"
+    assert step.seed_delta and step.seed_delta != 0
+    assert step.prompt_delta
+
+
+def test_plan_allowed_actions_only():
+    state = _fresh_state()
+    _tag(state, "scene-1:audio", "audio_producer")
+    _tag(state, "scene-2/clip-0", "video_producer")
+    _tag(state, "opaque-key", "assembler")
+    rec = _append(state, scope=Scope.GLOBAL, content="global tone shift")
+    drift = _make_drift(state, stage_name="s", from_rev=0, new_records=[rec])
+    plan = plan_remanifestation(state, drift)
+    actions = {s.action for s in plan.steps}
+    assert actions.issubset(ALLOWED_ACTIONS)
+
+
+# ---------------------------------------------------------------------------
+# validate_plan
+# ---------------------------------------------------------------------------
+
+
+def test_validator_rejects_forbidden_legacy_action():
+    state = _fresh_state()
+    _tag(state, "scene-1:audio", "audio_producer")
+    # Hand-craft a plan that names a forbidden action.
+    plan = RemanifestationPlan(
+        stage_name="audio_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="trim_narration",
+                artifact_key="scene-1:audio",
+                reason="test",
+                scene_id="scene-1",
+            ),
+        ),
+    )
+    with pytest.raises(InvalidPlanError, match="forbidden action"):
+        validate_plan(state, plan)
+
+
+def test_validator_rejects_unknown_artifact_key():
+    state = _fresh_state()
+    plan = RemanifestationPlan(
+        stage_name="audio_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="rewrite_scene",
+                artifact_key="scene-1:audio",
+                reason="test",
+                scene_id="scene-1",
+                guidance="g",
+            ),
+        ),
+    )
+    with pytest.raises(InvalidPlanError, match="no tag"):
+        validate_plan(state, plan)
+
+
+def test_validator_rejects_extension_when_duration_is_forbidden():
+    state = _fresh_state()
+    _tag(state, "scene-2:video", "video_producer")
+    _append(
+        state,
+        scope=Scope.GLOBAL,
+        polarity=Polarity.FORBID,
+        subject=Subject.DURATION,
+        content="keep it tight; no extensions",
+    )
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="generate_extension_clip",
+                artifact_key="scene-2:video",
+                reason="test",
+                scene_id="scene-2",
+                duration_needed=1.0,
+            ),
+        ),
+    )
+    with pytest.raises(InvalidPlanError, match="FORBID"):
+        validate_plan(state, plan)
+
+
+def test_validator_accepts_valid_plan():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="test",
+                clip_id="clip-0",
+                prompt_delta="cooler palette",
+                seed_delta=42,
+            ),
+        ),
+    )
+    validate_plan(state, plan)  # no exception
+
+
+def test_validator_rejects_duplicate_artifact_keys():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="test",
+                clip_id="clip-0",
+                prompt_delta="x",
+                seed_delta=1,
+            ),
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="test",
+                clip_id="clip-0",
+                prompt_delta="y",
+                seed_delta=2,
+            ),
+        ),
+    )
+    with pytest.raises(InvalidPlanError, match="re-targets artifact"):
+        validate_plan(state, plan)
+
+
+# ---------------------------------------------------------------------------
+# execute_plan
+# ---------------------------------------------------------------------------
+
+
+def test_execute_plan_queues_steps_and_clears_tags():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="test",
+                clip_id="clip-0",
+                prompt_delta="cooler",
+                seed_delta=1,
+            ),
+        ),
+    )
+    receipts = execute_plan(state, plan)
+    assert len(receipts) == 1
+    assert receipts[0]["status"] == "queued"
+    # Tag cleared so next producer will re-tag at the new revision.
+    assert not has_tag(state, "scene-1/clip-0")
+    # Queue + receipts written to blackboard in JSON form.
+    queue = json.loads(state[REMANIFESTATION_QUEUE_KEY])
+    assert len(queue) == 1
+    assert queue[0]["action"] == "regenerate_clip"
+    receipts_json = json.loads(state[REMANIFESTATION_RECEIPTS_KEY])
+    assert len(receipts_json) == 1
+
+
+def test_execute_plan_isolates_executor_failures_per_step():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    _tag(state, "scene-2/clip-0", "video_producer")
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="t",
+                clip_id="clip-0",
+                prompt_delta="a",
+                seed_delta=1,
+            ),
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-2/clip-0",
+                reason="t",
+                clip_id="clip-0",
+                prompt_delta="b",
+                seed_delta=1,
+            ),
+        ),
     )
 
-    execute_plan(state, plan, gate=False)
+    call_log: list[str] = []
 
-    assert not has_tag(state, "scenario_scenes")
-    assert "scenario" not in json.loads(state[STAGE_DERIVATIONS_KEY])
+    def flaky_executor(state, step):
+        call_log.append(step.artifact_key)
+        if step.artifact_key == "scene-1/clip-0":
+            raise RuntimeError("dispatch boom")
+        return {"status": "dispatched", "action": step.action}
+
+    receipts = execute_plan(state, plan, executor=flaky_executor)
+    assert [r["status"] for r in receipts] == ["failed", "dispatched"]
+    # Failed step left its tag in place; succeeded step cleared its tag.
+    assert has_tag(state, "scene-1/clip-0")
+    assert not has_tag(state, "scene-2/clip-0")
 
 
-def test_execute_plan_invokes_runner_per_stage_in_order():
-    state = _tagged_state()
-    plan = DictRemanifestationPlan(
-        plan_id="p-multi",
-        triggered_by={},
-        stages_to_rerun=("scenario", "audio", "visual"),
-        artifact_keys_to_clear=(),
-        rationale="multi",
+def test_execute_plan_is_idempotent_on_second_pass():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    plan = RemanifestationPlan(
+        stage_name="video_producer",
+        from_rev=0,
+        to_rev=1,
+        steps=(
+            PlanStep(
+                action="regenerate_clip",
+                artifact_key="scene-1/clip-0",
+                reason="t",
+                clip_id="clip-0",
+                prompt_delta="a",
+                seed_delta=1,
+            ),
+        ),
     )
-    seen: list[str] = []
-
-    def runner(_state, stage):
-        seen.append(stage)
-
-    execute_plan(state, plan, runner=runner, gate=False)
-
-    assert seen == ["scenario", "audio", "visual"]
+    first = execute_plan(state, plan)
+    second = execute_plan(state, plan)
+    assert len(first) == 1
+    assert len(second) == 1
+    # No tag, no second-pass clear failure.
+    assert not has_tag(state, "scene-1/clip-0")
 
 
-def test_execute_plan_records_history_on_success():
-    state = _tagged_state()
-    plan = DictRemanifestationPlan(
-        plan_id="p-hist",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=("scenario_scenes",),
-        rationale="history-test",
+# ---------------------------------------------------------------------------
+# handle_drift orchestration
+# ---------------------------------------------------------------------------
+
+
+def test_handle_drift_consumes_every_queued_signal_on_success():
+    state = _fresh_state()
+    _tag(state, "scene-1/clip-0", "video_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-1",
+        subject=Subject.VISUAL_STYLE,
+        content="cooler palette",
     )
-
-    execute_plan(state, plan, gate=False)
-
-    hist = remanifestation_history(state)
-    assert len(hist) == 1
-    assert hist[0]["plan_id"] == "p-hist"
-    assert hist[0]["status"] == "executed"
-    assert "scenario" in hist[0]["note"] or "stage" in hist[0]["note"]
-
-
-def test_execute_plan_fails_loud_on_missing_ledger():
-    state: dict = {}  # no ledger -- invariant violation
-    plan = DictRemanifestationPlan(
-        plan_id="p1",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="r",
+    # Queue a drift directly (A5's check_consistency round-trip is
+    # exercised elsewhere).
+    drift = _make_drift(
+        state,
+        stage_name="video_producer",
+        from_rev=0,
+        new_records=[rec],
     )
-    with pytest.raises(RemanifestationError, match="preference_ledger"):
-        execute_plan(state, plan, gate=False)
+    state[LEDGER_DRIFT_SIGNALS_KEY] = json.dumps([drift.to_dict()])
+
+    outcomes = handle_drift(state)
+    assert len(outcomes) == 1
+    assert outcomes[0].error is None
+    assert pending_drift_signals(state) == []
 
 
-def test_execute_plan_wraps_runner_exceptions_as_remanifestation_error():
-    state = _tagged_state()
-    plan = DictRemanifestationPlan(
-        plan_id="p-fail",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="fail-test",
-    )
+def test_handle_drift_reenqueues_signals_whose_plans_fail_validation(monkeypatch):
+    """When validate_plan rejects a plan, handle_drift must re-queue the
+    drift signal so a human can intervene rather than silently dropping it.
 
-    def bad_runner(_state, _stage):
-        raise RuntimeError("runner boom")
-
-    with pytest.raises(RemanifestationError, match="runner boom"):
-        execute_plan(state, plan, runner=bad_runner, gate=False)
-
-    # A failure history entry should have been appended.
-    hist = remanifestation_history(state)
-    assert hist[-1]["status"] == "failed"
-    assert hist[-1]["plan_id"] == "p-fail"
-
-
-def test_execute_plan_forwards_state_to_reconstruction_gate(monkeypatch):
-    """The reconstruction gate must receive ``state`` so the ARCH-B2 per-poll
-    consistency check runs while a human reviews the plan (issue #138).
-    Without this, drift that appears during reconstruction approval would
-    not be dispatched to B3 until the next stage boundary.
-
-    Unit tests cannot import ``callbacks.approval_gate`` directly (its
-    module-level ``from google.adk.agents.callback_context import ...``
-    fails in the hermetic test env), so we patch the inner local import
-    inside ``_gate_reconstruction`` via a fake module.
+    We inject a validator that always raises to exercise the re-enqueue
+    path independently of the planner (which is too careful to emit a
+    violating plan on its own).
     """
-    import sys
-    import types
+    import callbacks.remanifestation as remanif
 
-    captured: dict[str, Any] = {}
-
-    def fake_wait(stage_name, *, state=None):
-        captured["stage"] = stage_name
-        captured["state_is"] = state
-        return True
-
-    def fake_mark_ready(stage_name):
-        captured["marked"] = stage_name
-
-    fake_mod = types.ModuleType("callbacks.approval_gate")
-    fake_mod.wait_for_approval = fake_wait
-    fake_mod.mark_stage_ready = fake_mark_ready
-    fake_mod.reset_stage_approval = lambda stage: None  # noqa: ARG005
-    monkeypatch.setitem(sys.modules, "callbacks.approval_gate", fake_mod)
-
-    state = _tagged_state()
-    plan = DictRemanifestationPlan(
-        plan_id="p-gate-fwd",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="state-forward test",
-    )
-
-    execute_plan(state, plan, gate=True)
-
-    assert captured["marked"] == "reconstruct"
-    assert captured["stage"] == "reconstruct"
-    # The critical invariant: state was forwarded, not ``None``.
-    assert captured["state_is"] is state
-
-
-def test_execute_plan_resets_approval_before_marking_ready(monkeypatch):
-    """Each reconstruction plan must reset the ``reconstruct`` approval
-    before marking the stage ready; otherwise a stale ``approved=True``
-    flag from a previous plan silently short-circuits ``wait_for_approval``
-    and auto-approves every subsequent reconstruction (issue #139 DoD:
-    reconstruct is itself gated)."""
-    import sys
-    import types
-
-    call_order: list[str] = []
-
-    fake_mod = types.ModuleType("callbacks.approval_gate")
-    fake_mod.wait_for_approval = lambda *a, **kw: (  # noqa: ARG005
-        call_order.append("wait") or True
-    )
-    fake_mod.mark_stage_ready = lambda stage: call_order.append(f"ready:{stage}")
-    fake_mod.reset_stage_approval = lambda stage: call_order.append(f"reset:{stage}")
-    monkeypatch.setitem(sys.modules, "callbacks.approval_gate", fake_mod)
-
-    state = _tagged_state()
-    plan = DictRemanifestationPlan(
-        plan_id="p-reset",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=(),
-        rationale="reset-before-ready test",
-    )
-
-    execute_plan(state, plan, gate=True)
-
-    # reset MUST happen before mark_ready -- otherwise the UI briefly
-    # exposes a stage that is both "ready" and already-"approved".
-    assert call_order.index("reset:reconstruct") < call_order.index(
-        "ready:reconstruct"
-    )
-    assert call_order.index("ready:reconstruct") < call_order.index("wait")
-
-
-def test_execute_plan_skips_untagged_artifacts_quietly():
-    """Clearing an artifact that was never tagged must not raise."""
-    state = _tagged_state()
-    # Extra unknown key in plan -- executor must tolerate it.
-    plan = DictRemanifestationPlan(
-        plan_id="p-mix",
-        triggered_by={},
-        stages_to_rerun=("scenario",),
-        artifact_keys_to_clear=("scenario_scenes", "never_tagged"),
-        rationale="r",
-    )
-    execute_plan(state, plan, gate=False)  # must not raise
-
-    assert not has_tag(state, "scenario_scenes")
-    assert not has_tag(state, "never_tagged")
-
-
-# ---------------------------------------------------------------------------
-# Drift-signal dispatch (B2 <-> B3 bridge)
-# ---------------------------------------------------------------------------
-
-
-class _RecordingEscalator:
-    """Drop-in escalator stub that records calls and returns fake ids."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def __call__(self, state, drift, plan, reason):
-        self.calls.append(
-            {
-                "stage": drift.stage_name,
-                "plan_id": plan.plan_id if plan is not None else None,
-                "reason": reason,
-            }
-        )
-        return f"ESC-{len(self.calls)}"
-
-
-def test_handle_drift_signals_executes_default_plan_and_drains_queue():
-    state = _tagged_state()
-    _drift_for(state)  # enqueue a drift signal
-
-    results = handle_drift_signals(state, gate=False)
-
-    assert len(results) == 1
-    assert results[0]["outcome"] == "executed"
-    assert results[0]["stage_name"] == "scenario"
-    assert results[0]["plan_id"] is not None
-    # Drift queue drained.
-    assert pending_drift_signals(state) == []
-    # History recorded an execution.
-    hist = remanifestation_history(state)
-    assert any(h["status"] == "executed" for h in hist)
-
-
-def test_handle_drift_signals_escalates_when_provider_returns_none():
-    state = _tagged_state()
-    _drift_for(state)
-    escalator = _RecordingEscalator()
-
-    class NoPlanProvider:
-        def plan_for_drift(self, state, drift):
-            return None
-
-    results = handle_drift_signals(
-        state,
-        plan_provider=NoPlanProvider(),
-        escalator=escalator,
-        gate=False,
-    )
-
-    assert len(results) == 1
-    assert results[0]["outcome"] == "escalated"
-    assert results[0]["plan_id"] is None
-    assert escalator.calls and escalator.calls[0]["stage"] == "scenario"
-    assert "no plan" in escalator.calls[0]["reason"].lower()
-    # Drift queue still drained even on escalation.
-    assert pending_drift_signals(state) == []
-
-
-def test_handle_drift_signals_re_escalates_on_plan_execution_failure():
-    state = _tagged_state()
-    _drift_for(state)
-    escalator = _RecordingEscalator()
-
-    def bad_runner(_state, _stage):
-        raise RuntimeError("stage exploded")
-
-    results = handle_drift_signals(
-        state,
-        runner=bad_runner,
-        escalator=escalator,
-        gate=False,
-    )
-
-    assert len(results) == 1
-    assert results[0]["outcome"] == "escalated"
-    assert results[0]["plan_id"] is not None  # plan existed but failed
-    assert escalator.calls
-    assert "execution failed" in escalator.calls[0]["reason"]
-    # History shows both the failed execution AND the escalation.
-    statuses = [h["status"] for h in remanifestation_history(state)]
-    assert "failed" in statuses
-    assert "escalated" in statuses
-
-
-def test_handle_drift_signals_is_idempotent_when_queue_empty():
     state = _fresh_state()
-    results = handle_drift_signals(state, gate=False)
-    assert results == []
-    assert remanifestation_history(state) == []
+    _tag(state, "scene-1/clip-0", "video_producer")
+    rec = _append(
+        state,
+        scope=Scope.SCENE,
+        scope_ref="scene-1",
+        subject=Subject.VISUAL_STYLE,
+        content="cooler palette",
+    )
+    drift = _make_drift(
+        state,
+        stage_name="video_producer",
+        from_rev=0,
+        new_records=[rec],
+    )
+    state[LEDGER_DRIFT_SIGNALS_KEY] = json.dumps([drift.to_dict()])
+
+    def always_fail(state, plan):
+        raise remanif.InvalidPlanError("simulated validator rejection")
+
+    monkeypatch.setattr(remanif, "validate_plan", always_fail)
+
+    outcomes = remanif.handle_drift(state)
+    assert len(outcomes) == 1
+    assert outcomes[0].error == "simulated validator rejection"
+    # Drift re-enqueued for human intervention.
+    assert len(pending_drift_signals(state)) == 1
+    # No execution attempted -> no receipts.
+    assert REMANIFESTATION_RECEIPTS_KEY not in state or state.get(
+        REMANIFESTATION_RECEIPTS_KEY
+    ) in (None, "", "[]")
 
 
-def test_default_plan_provider_skips_drift_with_no_tagged_artifacts():
-    """Stage-derivation tagged without a corresponding artifact tag --
-    default provider must return ``None`` so B3 escalates instead of
-    silently succeeding on nothing."""
+def test_handle_drift_end_to_end_with_a5_signal():
+    """Full chain: A5 detects drift -> A6 plans/validates/executes."""
     state = _fresh_state()
-    _seed_ledger(state, 1)
+    # Seed a global baseline + tag a stage as derived at that revision.
+    _append(state, scope=Scope.GLOBAL, content="baseline tone")
     record_stage_derivation(
-        state, "scenario", revision=1, artifact_ids=["phantom-key"]
+        state, "video_producer", artifact_ids=["scene-1/clip-0"]
     )
-    _seed_ledger(state, 1, start=2)
-    drift = _drift_for(state)
-
-    assert DefaultPlanProvider().plan_for_drift(state, drift) is None
-
-
-def test_custom_plan_provider_plugs_in_without_b3_imports():
-    """An A6-like provider that implements the protocol inline must
-    compose with ``handle_drift_signals`` -- B3 never imports A6."""
-    state = _tagged_state()
-    _drift_for(state)
-
-    class StubA6:
-        def plan_for_drift(self, state, drift):
-            return DictRemanifestationPlan(
-                plan_id=f"stub-{drift.stage_name}",
-                triggered_by=drift.to_dict(),
-                stages_to_rerun=(drift.stage_name, "downstream"),
-                artifact_keys_to_clear=("scenario_scenes",),
-                rationale="stub A6 impact analysis",
-            )
-
-    seen: list[str] = []
-
-    def runner(_state, stage):
-        seen.append(stage)
-
-    results = handle_drift_signals(
+    # Tag the artifact at the same revision so analyse_impact can see it.
+    tag_artifact(state, artifact_key="scene-1/clip-0", stage="video_producer")
+    # Append a new scene-scoped record -> ledger revision advances.
+    _append(
         state,
-        plan_provider=StubA6(),
-        runner=runner,
-        gate=False,
+        scope=Scope.SCENE,
+        scope_ref="scene-1",
+        subject=Subject.VISUAL_STYLE,
+        content="cooler palette",
     )
+    # A5 flags drift.
+    drift = check_consistency(state, "video_producer")
+    assert drift is not None
+    assert drift.to_rev > drift.from_rev
 
-    assert len(results) == 1
-    assert results[0]["outcome"] == "executed"
-    assert results[0]["plan_id"] == "stub-scenario"
-    assert seen == ["scenario", "downstream"]
+    # A6 picks up and handles.
+    outcomes = handle_drift(state)
+    assert len(outcomes) == 1
+    assert outcomes[0].error is None
+    # Artifact tag cleared -> producer will re-tag at new revision.
+    assert not has_tag(state, "scene-1/clip-0")
+    # Queue empty.
+    assert pending_drift_signals(state) == []
