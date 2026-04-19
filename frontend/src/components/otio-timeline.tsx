@@ -20,7 +20,7 @@
  *      flows from the timeline (preference interpreter is H4).
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOtioStream } from "@/lib/otio-stream";
 import {
   usePreviewStream,
@@ -40,6 +40,10 @@ import { ReconciliationOverlay } from "@/components/reconciliation-overlay";
 import { ApprovalCard } from "@/components/approval-card";
 import { PreviewModal } from "@/components/preview-modal";
 import { subscribeSlotSelection } from "@/lib/selection-bus";
+import {
+  selectionStore,
+  useSelection,
+} from "@/lib/stores/selection";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -62,9 +66,45 @@ const TRACK_DEFS: Array<{
 export function OtioTimeline() {
   const { timeline, connected, error, openGates, drift } = useOtioStream();
   const { state: previewState } = usePreviewStream();
-  const [zoom, setZoom] = useState<number>(40); // pixels per second
-  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const { selectedSlotId, selectionOrigin, selectionTick } = useSelection();
   const [openBoundary, setOpenBoundary] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const handleSelect = useCallback((slotId: string) => {
+    selectionStore.getState().selectSlot(slotId, "timeline");
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    selectionStore.getState().clearSelection();
+  }, []);
+
+  // UI-02 bridge: when selection originates *outside* the timeline
+  // (chat chip, detail panel, directive input) scroll the selected
+  // slot into view. Scrolling on an in-timeline click would fight the
+  // user's intent, so we gate on `selectionOrigin !== "timeline"`.
+  useEffect(() => {
+    if (!selectedSlotId) return;
+    if (selectionOrigin === "timeline") return;
+    if (!timeline) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const slot = findSlotInTimeline(timeline, selectedSlotId);
+    if (!slot) return;
+    const slotLeftPx = TRACK_LABEL_WIDTH_PX + slot.start_sec * zoom;
+    const slotRightPx =
+      slotLeftPx + Math.max(slot.duration_sec * zoom, 2);
+    const viewLeft = container.scrollLeft;
+    const viewRight = viewLeft + container.clientWidth;
+    if (slotLeftPx < viewLeft || slotRightPx > viewRight) {
+      // centre the slot when it's out of view
+      const target =
+        slotLeftPx - container.clientWidth / 2 + (slot.duration_sec * zoom) / 2;
+      container.scrollTo({
+        left: Math.max(0, target),
+        behavior: "smooth",
+      });
+    }
+  }, [selectedSlotId, selectionOrigin, selectionTick, timeline, zoom]);
 
   // UI-01c (#195): react to chat-chip clicks by selecting the referenced
   // slot.  The chip dispatches via the selection bus so the coupling
@@ -153,7 +193,15 @@ export function OtioTimeline() {
             ))}
           </div>
         )}
-        <div className="relative h-full overflow-x-auto overflow-y-hidden">
+        <div
+          ref={scrollRef}
+          className="relative h-full overflow-x-auto overflow-y-hidden"
+          onClick={(e) => {
+            // Clicking background (but not a slot button) clears selection.
+            if (e.target === e.currentTarget) handleClearSelection();
+          }}
+          data-testid="otio-scroll-container"
+        >
           <div
             style={{
               width:
@@ -207,7 +255,7 @@ export function OtioTimeline() {
                   accent={def.accent}
                   zoom={zoom}
                   totalDuration={totalDuration}
-                  onSelect={setSelectedSlotId}
+                  onSelect={handleSelect}
                   selectedSlotId={selectedSlotId}
                   drift={drift}
                 />
@@ -234,7 +282,7 @@ export function OtioTimeline() {
       {selectedSlotId && (
         <SlotDetailPanel
           slotId={selectedSlotId}
-          onClose={() => setSelectedSlotId(null)}
+          onClose={handleClearSelection}
         />
       )}
 
@@ -247,6 +295,18 @@ export function OtioTimeline() {
       )}
     </div>
   );
+}
+
+function findSlotInTimeline(
+  timeline: OtioTimelineStatus,
+  slotId: string,
+): OtioSlot | null {
+  for (const track of timeline.tracks) {
+    for (const slot of track.slots) {
+      if (slot.slot_id === slotId) return slot;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
