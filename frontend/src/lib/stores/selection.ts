@@ -25,7 +25,8 @@
  */
 
 import { useMemo } from "react";
-import { createStore, useStore } from "zustand";
+import { createStore } from "zustand/vanilla";
+import { useStore } from "zustand/react";
 
 export type SelectionOrigin =
   | "chip"

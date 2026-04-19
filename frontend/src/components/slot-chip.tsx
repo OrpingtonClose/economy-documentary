@@ -30,7 +30,7 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { useStore } from "zustand";
+import { useStore } from "zustand/react";
 import type { OtioSlot, OtioTimelineStatus } from "@/lib/types";
 import {
   selectionStore,
