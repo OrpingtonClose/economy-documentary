@@ -305,6 +305,11 @@ export function DashboardIntervention({
     : null;
   const scopeLabel = humanScopeLabel ?? "global (no slot selected)";
   const showScopeChip = selectedSlotId != null || selectedSlotOverride != null;
+  // Only the store-backed path can actually be cleared from here. When
+  // a parent provides `selectedSlot` as a prop override, the parent owns
+  // its lifecycle — rendering a × that calls `clearSelection()` would
+  // appear non-functional (see Devin Review on PR #219).
+  const showScopeClear = selectedSlotId != null && selectedSlotOverride == null;
 
   return (
     <div className="flex flex-col gap-2 border-b border-pipeline-blue bg-pipeline-card px-4 py-3">
@@ -359,15 +364,17 @@ export function DashboardIntervention({
           <span className="inline-flex items-center gap-1 rounded-full border border-pipeline-accent bg-pipeline-accent/20 px-2 py-0.5 font-mono text-[11px] text-pipeline-text">
             <span aria-hidden="true">◉</span>
             <span>{scopeLabel}</span>
-            <button
-              type="button"
-              onClick={() => clearSelection()}
-              className="ml-1 rounded px-1 text-pipeline-muted hover:text-pipeline-text"
-              aria-label="Clear slot scope (make directive global)"
-              data-testid="directive-scope-clear"
-            >
-              ×
-            </button>
+            {showScopeClear && (
+              <button
+                type="button"
+                onClick={() => clearSelection()}
+                className="ml-1 rounded px-1 text-pipeline-muted hover:text-pipeline-text"
+                aria-label="Clear slot scope (make directive global)"
+                data-testid="directive-scope-clear"
+              >
+                ×
+              </button>
+            )}
           </span>
         </div>
       )}

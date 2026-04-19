@@ -210,6 +210,20 @@ describe("UI-02 intervention bar bridge", () => {
     expect(screen.queryByTestId("directive-scope-chip")).toBeNull();
   });
 
+  test("scope chip × is hidden when selectedSlot prop override is in use", async () => {
+    // Parent-owned selection (legacy API): the chip describes the scope
+    // but we must NOT render a × that calls the store's clearSelection —
+    // it would be a no-op because the prop is the source of truth.
+    render(
+      <DashboardIntervention
+        selectedSlot={{ scope: "element", scope_ref: "override_slot" }}
+      />,
+    );
+    const chip = await screen.findByTestId("directive-scope-chip");
+    expect(chip).toHaveTextContent(/override_slot/i);
+    expect(screen.queryByTestId("directive-scope-clear")).toBeNull();
+  });
+
   test("deriveSlotContext produces the expected backend payload", () => {
     expect(deriveSlotContext("scene3_narr", null)).toEqual({
       scope: "element",
