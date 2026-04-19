@@ -6,6 +6,7 @@ import { useState } from "react";
 import type { PipelinePhase } from "@/lib/types";
 import { useRunSession } from "@/lib/run-session";
 import { RunReconnectBanner } from "@/components/run-reconnect-banner";
+import { NarratorAssistantMessage } from "@/components/narrator-assistant-message";
 
 // Dynamic imports with ssr:false to prevent hydration issues
 // that strip onClick handlers from buttons inside map loops
@@ -48,6 +49,10 @@ const DashboardIntervention = dynamic(
     ),
   { ssr: false }
 );
+const PreviewChips = dynamic(
+  () => import("@/components/preview-chips").then((m) => m.PreviewChips),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("otio");
@@ -76,6 +81,7 @@ export default function Home() {
             ADHD-friendly AI documentary generation
           </p>
         </div>
+        <PreviewChips />
         <div className="flex-1 overflow-hidden">
           <CopilotChat
             labels={{
@@ -83,6 +89,7 @@ export default function Home() {
               initial:
                 "Enter a topic to start generating your documentary. I'll guide you through script creation, audio generation, visual planning, and final assembly.",
             }}
+            AssistantMessage={NarratorAssistantMessage}
           />
         </div>
       </div>

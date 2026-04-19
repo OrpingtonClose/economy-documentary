@@ -154,12 +154,14 @@ def _run_builder_safely(
             "preview_triggers: render failed for %r — %s",
             trigger_reason, exc,
         )
+        _emit_preview_failed_safely(trigger_reason, str(exc))
         return None
-    except Exception:  # noqa: BLE001 — never crash the pipeline for a preview
+    except Exception as exc:  # noqa: BLE001 — never crash the pipeline for a preview
         logger.exception(
             "preview_triggers: unexpected builder error for %r",
             trigger_reason,
         )
+        _emit_preview_failed_safely(trigger_reason, str(exc))
         return None
 
     _persist_manifest(state, manifest)
@@ -173,6 +175,26 @@ def _run_builder_safely(
             trigger_reason,
         )
     return manifest
+
+
+def _emit_preview_failed_safely(trigger_reason: str, error: str) -> None:
+    """Best-effort ``preview_failed`` SSE emission.
+
+    Preview dashboard emission is *always* best-effort — the run must
+    never halt because the SSE stream is unavailable.  UI-06a (#208)
+    requires that every preview render failure surfaces on the
+    dashboard so the user sees the ▶ marker in a failed state rather
+    than a silently missing marker.
+    """
+    try:
+        from previews.consumers import emit_preview_failed
+
+        emit_preview_failed(trigger_reason, error)
+    except Exception:  # noqa: BLE001 — dashboard emit is best-effort
+        logger.exception(
+            "preview_triggers: emit_preview_failed failed for %r",
+            trigger_reason,
+        )
 
 
 # ---------------------------------------------------------------------------

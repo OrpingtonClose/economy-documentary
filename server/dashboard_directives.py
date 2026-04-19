@@ -70,6 +70,26 @@ from callbacks.remanifestation import DriftHandlingReceipt, handle_drift
 
 logger = logging.getLogger(__name__)
 
+
+def _emit(event_type: str, data: dict) -> None:
+    """Emit a pipeline event on the shared AG-UI bus.
+
+    Wrapped in a try/except so a broken subscriber never sinks a
+    directive or halt endpoint -- the contract is "best-effort
+    notification", not "blocking hand-off".  Import is deferred to
+    avoid a hard dependency cycle with :mod:`agui`, which pulls in a
+    lot of heavy optional modules.
+    """
+    try:
+        from agui import emit_agui_event  # local import, cycle-safe
+    except Exception:  # noqa: BLE001 -- optional subsystem, never fatal
+        logger.debug("emit_agui_event unavailable; skipping %s", event_type)
+        return
+    try:
+        emit_agui_event(event_type, data)
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to emit %s event", event_type)
+
 router = APIRouter(prefix="/api", tags=["dashboard-directives"])
 
 
@@ -88,7 +108,18 @@ _HALT_DEFAULT: dict[str, Any] = {
     "halt_reviewer": None,
     "halt_reason": None,
     "halt_timestamp": None,
+    "halt_last_checkpoint": None,
+    "halt_exit_requested": False,
 }
+
+#: Valid modes accepted by :func:`release_halt`.  ``resume`` is the
+#: legacy shape -- clear the flag and return.  ``rewind`` tells the
+#: pipeline to fall back to the last safe checkpoint (implemented as a
+#: synthetic directive appended to the ledger so A5/A6 drift the right
+#: stages).  ``exit`` flips the sticky ``halt_exit_requested`` flag so
+#: the pipeline shuts down cleanly at its next safe checkpoint instead
+#: of resuming.
+_HALT_RELEASE_MODES: tuple[str, ...] = ("resume", "rewind", "exit")
 
 #: Serialises write-then-read cycles on the shared blackboard. The lock is
 #: process-local so cross-process callers still rely on the atomic
@@ -182,6 +213,7 @@ def set_halt_requested(
     reviewer: Optional[str] = None,
     reason: Optional[str] = None,
     at_stage: Optional[str] = None,
+    last_checkpoint: Optional[str] = None,
 ) -> dict[str, Any]:
     """Engage the halt flag.  Returns the new halt state."""
     with _file_lock(_HALT_FILE):
@@ -193,20 +225,30 @@ def set_halt_requested(
             state["halt_reason"] = reason
         if at_stage is not None:
             state["halted_at_stage"] = at_stage
+        if last_checkpoint is not None:
+            state["halt_last_checkpoint"] = last_checkpoint
         state["halt_timestamp"] = time.time()
         _write_halt_state(state)
     return state
 
 
-def clear_halt() -> dict[str, Any]:
-    """Release the halt flag so the gate-poll loop can resume."""
+def clear_halt(*, preserve_exit_flag: bool = False) -> dict[str, Any]:
+    """Release the halt flag so the gate-poll loop can resume.
+
+    ``preserve_exit_flag`` keeps ``halt_exit_requested`` set in the
+    returned state -- used by the ``exit`` release mode so the
+    approval-gate loop still observes the terminate-after-checkpoint
+    request even after the halt flag itself clears.
+    """
     with _file_lock(_HALT_FILE):
         state = dict(_HALT_DEFAULT)
+        if preserve_exit_flag:
+            state["halt_exit_requested"] = True
         _write_halt_state(state)
     return state
 
 
-def mark_halted_at_stage(stage_name: str) -> None:
+def mark_halted_at_stage(stage_name: str, *, last_checkpoint: Optional[str] = None) -> None:
     """Record the stage the pipeline paused at after observing the flag.
 
     Called by the approval-gate poll loop the first time it observes the
@@ -223,11 +265,26 @@ def mark_halted_at_stage(stage_name: str) -> None:
         state = _read_halt_state()
         if not state.get("halt_requested"):
             return
-        if state.get("halted_at_stage") == stage_name:
+        if (
+            state.get("halted_at_stage") == stage_name
+            and (last_checkpoint is None
+                 or state.get("halt_last_checkpoint") == last_checkpoint)
+        ):
             return
         state["halted_at_stage"] = stage_name
+        if last_checkpoint is not None:
+            state["halt_last_checkpoint"] = last_checkpoint
         state["halt_timestamp"] = time.time()
         _write_halt_state(state)
+    # Tell the dashboard the pipeline actually paused here -- this is
+    # the event the "paused at X" banner subscribes to. Emitting outside
+    # the lock avoids blocking the gate-poll loop on slow subscribers.
+    _emit("halt_fired", {
+        "stage": stage_name,
+        "last_checkpoint": last_checkpoint,
+        "reviewer": state.get("halt_reviewer"),
+        "reason": state.get("halt_reason"),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -387,22 +444,141 @@ async def halt_pipeline(request: Request):
         return JSONResponse({"error": str(exc)}, status_code=400)
     reviewer = body.get("reviewer") or "l4-dashboard"
     reason = body.get("reason")
-    state = set_halt_requested(reviewer=reviewer, reason=reason)
+    last_checkpoint = body.get("last_checkpoint")
+    if last_checkpoint is not None and not isinstance(last_checkpoint, str):
+        return JSONResponse(
+            {"error": "last_checkpoint must be a string"}, status_code=400
+        )
+    state = set_halt_requested(
+        reviewer=reviewer,
+        reason=reason,
+        last_checkpoint=last_checkpoint,
+    )
     logger.info(
         "Halt requested by %s (reason=%s) -- pipeline will pause at next "
         "safe checkpoint",
         reviewer,
         reason,
     )
+    # Surface the halt on the chat + timeline immediately.  The gate-poll
+    # loop will re-emit ``halt_fired`` with the actual stage it paused
+    # at via :func:`mark_halted_at_stage`; this first event tells the
+    # dashboard "the button was pressed, expect a pause soon".
+    _emit("halt_fired", {
+        "stage": state.get("halted_at_stage"),
+        "last_checkpoint": state.get("halt_last_checkpoint"),
+        "reviewer": reviewer,
+        "reason": reason,
+        "phase": "requested",
+    })
+    # UI-01 (#186): narrator chat turn announcing the halt.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "halt_fired",
+            fields={
+                "stage": state.get("halted_at_stage") or "pipeline",
+                "checkpoint": state.get("halted_at_stage") or "next safe checkpoint",
+                "reason": reason or "",
+                "reviewer": reviewer,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort UI hook
+        logger.debug("chat_narrator halt_fired emission failed: %s", exc)
     return JSONResponse({"status": "halt_requested", **state})
 
 
+def _append_rewind_directive(checkpoint: Optional[str]) -> None:
+    """Inject a synthetic directive that rewinds to the last checkpoint.
+
+    The rewind is modelled as a regular preference-ledger record so A5
+    observes it on the next consistency check and A6 re-manifests the
+    right slots.  Content is deliberately conservative: no fixed vocab
+    so the interpreter's closed-vocab heuristics do not reject it, and
+    the scope is GLOBAL so every stage downstream of the checkpoint
+    gets revisited.
+    """
+    import datetime as _dt
+
+    from callbacks.preference_ledger import (  # cycle-safe local import
+        Origin,
+        Polarity,
+        Scope,
+        Subject,
+        append_preference,
+    )
+
+    ref = (checkpoint or "last-safe-checkpoint").strip() or "last-safe-checkpoint"
+    origin = Origin(
+        l4_event_id=f"rewind-{uuid.uuid4().hex[:8]}",
+        reviewer="l4-dashboard-rewind",
+        timestamp=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+    )
+    with _state_lock:
+        state = _load_blackboard()
+        append_preference(
+            state,
+            scope=Scope.GLOBAL,
+            polarity=Polarity.PREFER,
+            subject=Subject.NARRATIVE_STRUCTURE,
+            content=f"rewind to {ref}",
+            origin=origin,
+            metadata={"rewind_checkpoint": ref, "kind": "halt_rewind"},
+        )
+        _save_blackboard(state)
+
+
 @router.post("/halt/release")
-async def release_halt():
-    """Clear the halt flag so the approval-gate loop resumes."""
-    state = clear_halt()
-    logger.info("Halt released -- pipeline may resume at next checkpoint")
-    return JSONResponse({"status": "released", **state})
+async def release_halt(request: Request):
+    """Clear the halt flag so the approval-gate loop resumes.
+
+    Body (optional): ``{"mode": "resume" | "rewind" | "exit"}``.  The
+    default is ``resume`` (legacy shape).  ``rewind`` additionally
+    appends a synthetic directive to the ledger so A5/A6 roll the
+    pipeline back to ``halt_last_checkpoint``.  ``exit`` sets a sticky
+    exit flag that the approval-gate loop reads to terminate the run.
+    """
+    try:
+        body = await _safe_json_body(request)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    mode = body.get("mode", "resume")
+    if not isinstance(mode, str) or mode not in _HALT_RELEASE_MODES:
+        return JSONResponse(
+            {
+                "error": (
+                    f"mode must be one of {_HALT_RELEASE_MODES}, "
+                    f"got {mode!r}"
+                ),
+            },
+            status_code=400,
+        )
+
+    prior = _read_halt_state()
+    checkpoint = prior.get("halt_last_checkpoint") or prior.get("halted_at_stage")
+
+    if mode == "rewind":
+        # _append_rewind_directive acquires the long-held ``_state_lock``
+        # that ``_run_directive_sync`` can hold for seconds while A5/A6
+        # run.  Offload to a worker so the event loop (and the halt
+        # button) stay responsive per ARCH-H4.
+        try:
+            await asyncio.to_thread(_append_rewind_directive, checkpoint)
+        except Exception:  # noqa: BLE001 -- surface but still release
+            logger.exception("rewind directive failed to append; releasing anyway")
+
+    state = clear_halt(preserve_exit_flag=(mode == "exit"))
+    logger.info(
+        "Halt released (mode=%s, checkpoint=%s) -- pipeline may resume",
+        mode,
+        checkpoint,
+    )
+    _emit("halt_released", {
+        "mode": mode,
+        "last_checkpoint": checkpoint,
+        "stage": prior.get("halted_at_stage"),
+    })
+    return JSONResponse({"status": "released", "mode": mode, **state})
 
 
 @router.get("/halt_state")
@@ -416,6 +592,166 @@ def _dispatch_drift(state: MutableMapping[str, Any]) -> list[DriftHandlingReceip
     if not pending_drift_signals(state):
         return []
     return handle_drift(state)
+
+
+def _int_suffix(token: Optional[str], prefix: str) -> Optional[int]:
+    """Parse the integer suffix of a ``{prefix}N`` token."""
+    if not token:
+        return None
+    if token.startswith(prefix):
+        tail = token[len(prefix):]
+        if tail.isdigit():
+            return int(tail)
+    # Fallback: take trailing digits after the last hyphen.
+    idx = token.rfind("-")
+    if idx >= 0:
+        tail = token[idx + 1:]
+        if tail.isdigit():
+            return int(tail)
+    return None
+
+
+def _derive_slot_ids(
+    *,
+    scene_id: Optional[str],
+    clip_id: Optional[str],
+    artifact_key: Optional[str],
+) -> list[str]:
+    """Map a plan step's scene/clip/artifact_key to OTIO slot ids.
+
+    OTIO slot ids are ``{track_prefix}:{scene_num}:{phrase_idx}`` --
+    see :func:`agui._emit_slot_state_from_artifact`.  A single step
+    conceptually touches every track at the ``(scene, phrase)``
+    coordinate, so we fan out across the three canonical tracks.
+
+    Returns an empty list when no parseable scene token is present --
+    scene-less drifts surface only as ``drifted_scene_nums`` or as the
+    raw ``artifact_key`` in the event payload.
+    """
+    scene_num = _int_suffix(scene_id, "scene-")
+    if scene_num is None and artifact_key:
+        scene_num = _int_suffix(_extract_token(artifact_key, "scene-"), "scene-")
+    if scene_num is None:
+        return []
+
+    phrase_idx = _int_suffix(clip_id, "clip-")
+    if phrase_idx is None and artifact_key:
+        phrase_idx = _int_suffix(_extract_token(artifact_key, "clip-"), "clip-")
+
+    if phrase_idx is None:
+        # Scene-wide drift: no specific phrase.  Callers use
+        # ``drifted_scene_nums`` to light up every phrase in the scene.
+        return []
+
+    return [
+        f"V1:{scene_num}:{phrase_idx}",
+        f"A1:{scene_num}:{phrase_idx}",
+        f"A2:{scene_num}:{phrase_idx}",
+    ]
+
+
+def _extract_token(haystack: str, prefix: str) -> Optional[str]:
+    """Return ``{prefix}N`` from ``haystack`` if present, else ``None``."""
+    idx = haystack.find(prefix)
+    if idx < 0:
+        return None
+    tail = haystack[idx + len(prefix):]
+    digits = ""
+    for ch in tail:
+        if ch.isdigit():
+            digits += ch
+        else:
+            break
+    if not digits:
+        return None
+    return f"{prefix}{digits}"
+
+
+def _drifted_slot_summary(
+    receipts: list[DriftHandlingReceipt],
+) -> tuple[list[str], list[int], list[dict[str, Any]]]:
+    """Walk re-manifestation receipts to build the drift payload.
+
+    Returns:
+        (slot_ids, scene_nums, step_descriptors)
+        - ``slot_ids``: deterministic-sorted list of OTIO slot ids.
+        - ``scene_nums``: scenes whose exact phrase index was unknown.
+        - ``step_descriptors``: one dict per plan step with scene/clip/
+          slot_ids/status, used to emit per-step progress events.
+    """
+    slot_ids: list[str] = []
+    slot_seen: set[str] = set()
+    scene_nums: list[int] = []
+    scene_seen: set[int] = set()
+    step_descriptors: list[dict[str, Any]] = []
+
+    for receipt in receipts:
+        plan = receipt.plan
+        step_receipts = list(receipt.step_receipts)
+        for i, step in enumerate(plan.steps):
+            ids = _derive_slot_ids(
+                scene_id=step.scene_id,
+                clip_id=step.clip_id,
+                artifact_key=step.artifact_key,
+            )
+            for sid in ids:
+                if sid not in slot_seen:
+                    slot_seen.add(sid)
+                    slot_ids.append(sid)
+            scene_num = _int_suffix(step.scene_id, "scene-")
+            if scene_num is None and step.artifact_key:
+                scene_num = _int_suffix(
+                    _extract_token(step.artifact_key, "scene-"), "scene-"
+                )
+            # Only mark scene-wide drift when we could not derive any
+            # per-slot triples.  If we have specific slot_ids the UI will
+            # paint those individually; adding the scene too would leave
+            # orphan slots (same scene, different phrase) stuck on the
+            # amber outline because their teardown only fires for the
+            # scene-wide case.
+            if (
+                scene_num is not None
+                and not ids
+                and scene_num not in scene_seen
+            ):
+                scene_seen.add(scene_num)
+                scene_nums.append(scene_num)
+
+            status = "queued"
+            error: Optional[str] = None
+            if receipt.error:
+                status = "failed"
+                error = receipt.error
+            elif i < len(step_receipts):
+                sr = step_receipts[i]
+                st = sr.get("status") if isinstance(sr, Mapping) else None
+                if st in ("dispatched", "queued"):
+                    status = "queued"
+                elif st == "failed":
+                    status = "failed"
+                    error = (
+                        sr.get("error") if isinstance(sr, Mapping) else None
+                    )
+                elif st:
+                    status = str(st)
+
+            step_descriptors.append({
+                "plan_id": f"plan-{plan.stage_name}-{plan.from_rev}-{plan.to_rev}",
+                "stage_name": plan.stage_name,
+                "action": step.action,
+                "artifact_key": step.artifact_key,
+                "scene_id": step.scene_id,
+                "clip_id": step.clip_id,
+                "scene_num": scene_num,
+                "slot_ids": ids,
+                "reason": step.reason,
+                "status": status,
+                "error": error,
+            })
+
+    slot_ids.sort()
+    scene_nums.sort()
+    return slot_ids, scene_nums, step_descriptors
 
 
 def _receipt_summary(receipt: DriftHandlingReceipt) -> dict[str, Any]:
@@ -521,23 +857,104 @@ def _run_directive_sync(
                 status_code=500,
             )
 
+    # UI-03c (#200): a stage-scoped directive is a "reject with note" on
+    # an inline approval gate.  The ledger record has already been
+    # appended above; now flip the approval flag so the wait_for_approval
+    # poll loop exits and the pipeline moves on with the new directive
+    # applied as drift on downstream stages.  Outside the _state_lock:
+    # the approval state file is owned by callbacks.approval_gate and
+    # uses its own on-disk write.
+    released_stage: Optional[str] = None
+    if scope_hint is not None and scope_hint.get("scope") == "stage":
+        stage_ref = scope_hint.get("scope_ref")
+        if isinstance(stage_ref, str) and stage_ref.strip():
+            released_stage = stage_ref.strip()
+            try:
+                from callbacks.approval_gate import approve_stage
+
+                approve_stage(released_stage)
+                logger.info(
+                    "Stage-scoped directive released approval gate "
+                    "(stage=%s, reviewer=%s, event=%s)",
+                    released_stage,
+                    reviewer,
+                    l4_event_id,
+                )
+            except Exception as exc:  # pragma: no cover -- defensive
+                logger.warning(
+                    "Stage-scoped directive failed to release gate "
+                    "(stage=%s): %s",
+                    released_stage,
+                    exc,
+                )
+
     record_payload = [r.to_dict() for r in records]
     plan_payload = [_receipt_summary(r) for r in receipts]
+    drifted_slot_ids, drifted_scene_nums, step_descriptors = (
+        _drifted_slot_summary(receipts)
+    )
+    record_ids = [r.revision for r in records]
     logger.info(
-        "Directive accepted: reviewer=%s event=%s records=%d plans=%d",
+        "Directive accepted: reviewer=%s event=%s records=%d plans=%d slots=%d",
         reviewer,
         l4_event_id,
         len(records),
         len(plan_payload),
+        len(drifted_slot_ids),
     )
+
+    # UI-05a: emit the directive_applied + per-step re_manifestation_progress
+    # events onto the shared AG-UI bus so the dashboard can echo the
+    # directive, light up drifted slots, and drip the progress badge
+    # back as each step finishes.
+    _emit("directive_applied", {
+        "directive_text": directive,
+        "l4_event_id": l4_event_id,
+        "reviewer": reviewer,
+        "ledger_record_ids": record_ids,
+        "records": record_payload,
+        "drifted_slot_ids": drifted_slot_ids,
+        "drifted_scene_nums": drifted_scene_nums,
+        "scope": scope_hint,
+        "re_manifestation_plans": plan_payload,
+    })
+    for desc in step_descriptors:
+        _emit("re_manifestation_progress", {
+            **desc,
+            "phase": "start",
+        })
+        terminal_phase = "failed" if desc["status"] == "failed" else "complete"
+        _emit("re_manifestation_progress", {
+            **desc,
+            "phase": terminal_phase,
+        })
+
+    # UI-01 (#186): narrator chat turn. ``n_drifted`` is the count of
+    # re-manifestation plans actually scheduled.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "directive_applied",
+            fields={
+                "directive_text": directive,
+                "n_drifted": len(plan_payload),
+                "reviewer": reviewer,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort UI hook
+        logger.debug("chat_narrator directive_applied emission failed: %s", exc)
+
     return JSONResponse(
         {
             "status": "accepted",
             "l4_event_id": l4_event_id,
-            "record_ids": [r.revision for r in records],
+            "record_ids": record_ids,
             "records": record_payload,
             "re_manifestation_plans": plan_payload,
+            "drifted_slot_ids": drifted_slot_ids,
+            "drifted_scene_nums": drifted_scene_nums,
             "scope_hint": scope_hint,
+            "released_stage": released_stage,
         }
     )
 

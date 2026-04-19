@@ -42,9 +42,11 @@ Spec references:
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Mapping, Optional
 
@@ -67,6 +69,12 @@ logger = logging.getLogger(__name__)
 
 #: SSE event kind emitted to the dashboard each time a preview is built.
 PREVIEW_READY_EVENT = "preview_ready"
+
+#: SSE event kind emitted to the dashboard when a preview render fails
+#: (UI-06a, issue #208).  ``preview_failed`` is the parallel of
+#: ``preview_ready`` for failure paths — never silently degrade: every
+#: failed render must surface on the dashboard so the user sees it.
+PREVIEW_FAILED_EVENT = "preview_failed"
 
 #: Dashboard → backend event kind when a human rejects a preview.
 HUMAN_DISLIKE_EVENT = "human_dislike_preview"
@@ -353,6 +361,88 @@ def _submit_agent_lane_escalation(
 # ---------------------------------------------------------------------------
 
 
+#: Known canonical boundary labels surfaced to the UI (UI-06a #208).
+#: The UI uses these to position the ▶ marker on the timeline.
+BOUNDARY_NARRATION_LOCKED = "narration_locked"
+BOUNDARY_HALFWAY = "halfway"
+BOUNDARY_FINAL = "final"
+
+_SCENE_TRIGGER_RE = re.compile(r"^scene_(\d+)_complete$")
+_ACT_TRIGGER_RE = re.compile(r"^act_(\d+)_complete$")
+
+
+def derive_boundary(trigger_reason: str) -> str:
+    """Map a builder ``trigger_reason`` to a UI-facing boundary label.
+
+    The UI renders preview markers at canonical boundaries; the builder
+    uses slightly more descriptive reasons (``pre_production``,
+    ``scene_N_complete``, …).  This helper normalises to the labels
+    documented in UI-06 (#191, #208):
+
+    - ``pre_production`` → :data:`BOUNDARY_NARRATION_LOCKED`
+    - ``halfway`` → :data:`BOUNDARY_HALFWAY`
+    - ``final`` → :data:`BOUNDARY_FINAL`
+    - ``scene_N_complete`` → ``scene_N_complete`` (unchanged)
+    - ``act_N_complete`` → ``act_N_complete`` (unchanged)
+
+    Unknown trigger reasons pass through verbatim so the UI can still
+    render them; emitting an event with a recognisable label is always
+    preferable to dropping the event (no silent degradation).
+    """
+    t = (trigger_reason or "").strip()
+    if not t:
+        return ""
+    if t == "pre_production":
+        return BOUNDARY_NARRATION_LOCKED
+    if t in ("halfway", "halfway_milestone"):
+        return BOUNDARY_HALFWAY
+    if t in ("final", "final_complete", "pipeline_complete"):
+        return BOUNDARY_FINAL
+    if _SCENE_TRIGGER_RE.match(t) or _ACT_TRIGGER_RE.match(t):
+        return t
+    return t
+
+
+def _public_preview_url(preview_path: str) -> str:
+    """Return a URL the dashboard can fetch for the preview mp4.
+
+    Previews render to :data:`~previews.builder.DEFAULT_PREVIEW_DIR`
+    (typically ``/tmp/documentary-pipeline/previews``).  The agui
+    router exposes ``GET /agui/preview/<filename>`` which streams the
+    file from that directory — we return a backend-relative URL so the
+    frontend (on a different origin) prepends its ``BACKEND_URL``.
+
+    If the preview is not under the preview directory (tests may use a
+    tmp path), fall back to ``file://`` so the consumer always has
+    *some* URL to show rather than an empty string.  The dashboard
+    interprets empty ``file_url`` as "preview bytes unavailable", which
+    is a legitimate observable state — but we prefer to emit the real
+    path when we have one.
+    """
+    if not preview_path:
+        return ""
+    # Late import to avoid a module-level dependency cycle; the builder
+    # lives under server/ and imports from here via the triggers.
+    try:
+        from previews.builder import DEFAULT_PREVIEW_DIR  # type: ignore
+    except ImportError:
+        return preview_path
+    try:
+        abs_path = os.path.abspath(preview_path)
+        abs_dir = os.path.abspath(DEFAULT_PREVIEW_DIR)
+    except (TypeError, ValueError):
+        return preview_path
+    if abs_path.startswith(abs_dir + os.sep):
+        rel = os.path.relpath(abs_path, abs_dir)
+        # URL components are always forward-slashed; POSIX style wins.
+        return f"/agui/preview/{rel.replace(os.sep, '/')}"
+    return abs_path
+
+
+def _iso_now() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+
 def emit_preview_ready(manifest: PreviewManifest) -> None:
     """Emit a ``preview_ready`` SSE event for the dashboard.
 
@@ -361,6 +451,25 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
     payload carries the preview path, trigger reason, and a short
     reasoning digest so the dashboard can show a one-line summary
     without re-reading the manifest.
+
+    Payload shape (UI-06a #208)::
+
+        {
+          "type": "preview_ready",
+          "boundary": "<narration_locked|scene_N_complete|halfway|final|...>",
+          "duration_sec": float,
+          "file_url": str,        # URL the dashboard can fetch
+          "rendered_at": str,     # ISO-8601 UTC timestamp
+          # plus legacy fields preserved for existing consumers:
+          "preview_path": str,
+          "manifest_path": str,
+          "input_hash": str,
+          "trigger_reason": str,
+          "total_duration_sec": float,
+          "counts": dict,
+          "digest": str,
+          "kind": str,
+        }
     """
     try:
         from agui import emit_agui_event  # type: ignore
@@ -376,12 +485,30 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
     data = manifest.to_dict()
     digest = _reasoning_digest(data, plans)
 
+    boundary = derive_boundary(manifest.trigger_reason)
+    file_url = _public_preview_url(manifest.preview_path)
+    if manifest.built_at:
+        try:
+            rendered_at = _dt.datetime.fromtimestamp(
+                manifest.built_at, tz=_dt.timezone.utc
+            ).isoformat(timespec="seconds")
+        except (TypeError, ValueError, OSError):
+            rendered_at = _iso_now()
+    else:
+        rendered_at = _iso_now()
+
     payload = {
+        # UI-06a contract fields (issue #208):
+        "boundary": boundary,
+        "duration_sec": float(manifest.total_duration_sec or 0.0),
+        "file_url": file_url,
+        "rendered_at": rendered_at,
+        # Legacy fields kept for existing ARCH-G3 consumers:
         "preview_path": manifest.preview_path,
         "manifest_path": manifest.manifest_path,
         "input_hash": manifest.input_hash,
         "trigger_reason": manifest.trigger_reason,
-        "total_duration_sec": manifest.total_duration_sec,
+        "total_duration_sec": float(manifest.total_duration_sec or 0.0),
         "counts": dict(manifest.counts),
         "digest": digest,
         "kind": manifest.kind,
@@ -391,6 +518,67 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
         emit_agui_event(PREVIEW_READY_EVENT, payload)
     except Exception:  # noqa: BLE001 — dashboard emit is best-effort
         logger.exception("preview consumer: emit_agui_event failed")
+
+    # UI-01 (#186): emit a chat-narrator turn for the same event so the
+    # CopilotKit stream carries a plain-English one-liner.  Best-effort;
+    # a missing narrator module never stalls preview delivery.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "preview_ready",
+            fields={
+                "boundary": boundary,
+                "duration_sec": manifest.total_duration_sec,
+                "preview_path": manifest.preview_path,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("chat_narrator preview_ready emission failed: %s", exc)
+
+
+def emit_preview_failed(
+    trigger_reason: str,
+    error: str,
+    *,
+    preview_path: str = "",
+    input_hash: str = "",
+    rendered_at: Optional[str] = None,
+) -> None:
+    """Emit a ``preview_failed`` SSE event for the dashboard.
+
+    Parallel of :func:`emit_preview_ready` for render failures.  The
+    pipeline must never silently swallow a preview failure — even when
+    the builder itself is not safe to re-run (missing ffmpeg / font),
+    the dashboard needs to know a scheduled preview did not materialise
+    so the ▶ marker can surface the failure to the user.
+
+    The ``rendered_at`` timestamp is the UTC ISO-8601 time the failure
+    was observed; if not supplied, it defaults to "now".
+    """
+    try:
+        from agui import emit_agui_event  # type: ignore
+    except ImportError:
+        logger.warning(
+            "preview consumer: agui module not importable; "
+            "preview_failed SSE emission skipped."
+        )
+        return
+
+    boundary = derive_boundary(trigger_reason)
+    payload = {
+        "boundary": boundary,
+        "trigger_reason": trigger_reason or "",
+        "error": str(error or ""),
+        "rendered_at": rendered_at or _iso_now(),
+        "preview_path": preview_path or "",
+        "input_hash": input_hash or "",
+        "file_url": _public_preview_url(preview_path) if preview_path else "",
+    }
+
+    try:
+        emit_agui_event(PREVIEW_FAILED_EVENT, payload)
+    except Exception:  # noqa: BLE001 — dashboard emit is best-effort
+        logger.exception("preview consumer: emit_agui_event failed (failed path)")
 
 
 def handle_human_dislike_preview(
@@ -493,11 +681,17 @@ def handle_human_dislike_preview(
 
 __all__ = [
     "AGENT_ESCALATION_OP",
+    "BOUNDARY_FINAL",
+    "BOUNDARY_HALFWAY",
+    "BOUNDARY_NARRATION_LOCKED",
     "ESCALATION_LEVEL_CONTENT",
     "ESCALATION_LEVEL_L4",
     "HUMAN_DISLIKE_ESCALATION_OP",
     "HUMAN_DISLIKE_EVENT",
+    "PREVIEW_FAILED_EVENT",
     "PREVIEW_READY_EVENT",
+    "derive_boundary",
+    "emit_preview_failed",
     "emit_preview_ready",
     "evaluate_preview",
     "handle_human_dislike_preview",

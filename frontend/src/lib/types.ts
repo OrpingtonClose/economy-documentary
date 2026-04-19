@@ -247,6 +247,63 @@ export interface OtioTimelineStatus {
   source_file: string;
 }
 
+/** UI-03a (#198): approval_gate_opened / _closed pipeline events.
+ *
+ * Emitted by ``callbacks.approval_gate.wait_for_approval`` on entry and
+ * exit so the inline approval card on the OTIO timeline (UI-03b, #199)
+ * and the narrator chat surface (UI-01) can drive off the unified AG-UI
+ * event bus.  Paired: one ``approval_gate_opened`` per stage entry and
+ * exactly one ``approval_gate_closed`` when the gate flips via
+ * ``/agui/approve`` or via a stage-scoped directive (UI-03c, #200).
+ */
+export interface ApprovalGateEvent {
+  stage: string;
+  opened_at?: number;
+  closed_at?: number;
+  decision?: "approved" | "timeout" | "error" | string;
+  reviewer?: string;
+  boundary_slot_id?: string;
+}
+
+/** UI-05a: lightweight per-step progress event for the drift badge. */
+export interface ReManifestationProgressEvent {
+  plan_id: string;
+  stage_name: string;
+  action: string;
+  artifact_key: string;
+  scene_id: string | null;
+  clip_id: string | null;
+  scene_num: number | null;
+  slot_ids: string[];
+  reason: string;
+  status: string;
+  error: string | null;
+  phase: "start" | "complete" | "failed" | string;
+}
+
+/** UI-05a: the "directive accepted, these slots are drifting" event. */
+export interface DirectiveAppliedEvent {
+  directive_text: string;
+  l4_event_id: string;
+  reviewer: string;
+  ledger_record_ids: number[];
+  records: Array<Record<string, unknown>>;
+  drifted_slot_ids: string[];
+  drifted_scene_nums: number[];
+  scope: Record<string, unknown> | null;
+  re_manifestation_plans: Array<Record<string, unknown>>;
+}
+
+/** Frontend-only drift state derived from SSE events; never persisted. */
+export interface DriftState {
+  /** Slot ids currently re-manifesting (amber outline + badge). */
+  slotIds: Set<string>;
+  /** Scene numbers whose exact phrase index was unknown (scene-wide drift). */
+  sceneNums: Set<number>;
+  /** Per-slot latest in-flight stage label, used by the badge copy. */
+  slotStages: Record<string, string>;
+}
+
 export interface SlotStateEvent {
   slot_id: string;
   track: OtioTrack["name"];
@@ -269,6 +326,76 @@ export interface SlotDetailView {
   qa_verdicts: Array<Record<string, unknown>>;
   reasoning_digests: Array<Record<string, unknown>>;
   ledger_records: Array<Record<string, unknown>>;
+  current_rung: Record<string, unknown>;
+  latest_preview: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// UI-04 — full slot drilldown (issue #189 / #201 / #204)
+// ---------------------------------------------------------------------------
+
+/** A single artifact revision recorded against a slot.
+ *
+ * ``outcome`` is the normalised lifecycle: ``accepted`` / ``rejected`` /
+ * ``pending`` / ``regenerating`` / ``generating`` / ``failed``. ``b2_url``
+ * is the canonical download URL for the take's media when B2 uploads are
+ * present; otherwise it falls back to ``preview_url``.
+ */
+export interface SlotTake {
+  revision: number;
+  artifact_id: string;
+  status: string;
+  outcome: string;
+  timestamp: number | null;
+  preview_url: string;
+  b2_url: string;
+  qa_scores: Record<string, string | number>;
+  ledger_revision_at_derivation: { revision: number } | null;
+}
+
+/** One LLM critic's structured perspective on the current artifact. */
+export interface SlotCritique {
+  source: string;
+  voter_model: string;
+  rating: "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "UNKNOWN";
+  score: number | null;
+  summary: string;
+  issues: string[];
+  suggestions: string[];
+  timestamp?: number;
+  iteration?: number;
+}
+
+/** One deterministic QA evaluator verdict. */
+export interface SlotQaResult {
+  source: string;
+  status: "pass" | "warn" | "escalate" | "fail";
+  score: number | null;
+  summary: string;
+  measurements: Record<string, number | string>;
+  timestamp?: number;
+  // Loose shape — evaluators emit heterogeneous fields.
+  [key: string]: unknown;
+}
+
+/** A media artifact reference (preview / waveform / thumbnail / take). */
+export interface SlotArtifactRef {
+  kind: "preview" | "thumbnail" | "waveform" | "take";
+  url: string;
+  label: string;
+  revision?: number;
+  outcome?: string;
+}
+
+/** Full drilldown payload returned by ``GET /api/slots/{slot_id}/full``. */
+export interface SlotFullView {
+  slot: OtioSlot;
+  takes: SlotTake[];
+  critiques: SlotCritique[];
+  qa_results: SlotQaResult[];
+  artifacts: SlotArtifactRef[];
+  ledger_records: Array<Record<string, unknown>>;
+  reasoning_trace_preview: Array<Record<string, unknown>>;
   current_rung: Record<string, unknown>;
   latest_preview: Record<string, unknown>;
 }

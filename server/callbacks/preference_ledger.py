@@ -483,6 +483,226 @@ def query_by_scope(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Slot-oriented scope resolution (UI-04b / issue #202)
+# ---------------------------------------------------------------------------
+
+
+#: Mapping from canonical OTIO track name -> set of stage names the slot is
+#: "owned by". Stage-scoped ledger records whose ``scope_ref`` matches any of
+#: these names are considered applicable to the slot. Records carrying no
+#: ``scope_ref`` apply to every stage (same convention as virtual_brief).
+_TRACK_STAGES: dict[str, frozenset[str]] = {
+    "V1_Video": frozenset({"video", "visual_direction", "production"}),
+    "A1_Narration": frozenset({"audio", "scenario", "narration"}),
+    "A2_Music": frozenset({"audio", "music"}),
+}
+
+
+#: Mapping from canonical OTIO track name -> the artifact type string used by
+#: ARTIFACT_TYPE-scoped ledger records.
+_TRACK_ARTIFACT_TYPES: dict[str, str] = {
+    "V1_Video": "video_clip",
+    "A1_Narration": "narration",
+    "A2_Music": "music",
+}
+
+
+def _parse_slot(slot_id: str) -> tuple[str, int, int]:
+    """Parse ``{short}:{scene}:{phrase}`` into a canonical track + ints.
+
+    Kept inline (not imported from otio_timeline_model) to avoid a module
+    cycle — preference_ledger is a lower layer than otio_timeline_model.
+    """
+    parts = slot_id.split(":")
+    if len(parts) != 3:
+        raise ValueError(f"malformed slot id: {slot_id!r}")
+    short, scene_s, phrase_s = parts
+    try:
+        scene = int(scene_s)
+        phrase = int(phrase_s)
+    except ValueError as exc:
+        raise ValueError(f"malformed slot id: {slot_id!r}") from exc
+    long_track = {
+        "V1": "V1_Video",
+        "A1": "A1_Narration",
+        "A2": "A2_Music",
+    }.get(short)
+    if long_track is None:
+        raise ValueError(f"unknown track {short!r} in slot id {slot_id!r}")
+    return long_track, scene, phrase
+
+
+def _scene_ref_matches(ref: Optional[str], scene_num: int) -> bool:
+    """True if a SCENE-scope record applies to the given scene.
+
+    Conventions observed across the pipeline:
+
+    * ``str(scene_num)`` (e.g. ``"1"``),
+    * ``"scene-{n}"``, ``"scene_{n}"``, ``"scene-{n:03d}"``, ``"scene_{n:03d}"``,
+    * ``None`` (applies to every scene — same convention as virtual_brief).
+    """
+    if ref is None:
+        return True
+    candidates = {
+        str(scene_num),
+        f"scene-{scene_num}",
+        f"scene_{scene_num}",
+        f"scene-{scene_num:03d}",
+        f"scene_{scene_num:03d}",
+    }
+    return ref in candidates
+
+
+def _element_ref_matches(
+    ref: Optional[str], slot_id: str, scene_num: int, phrase_idx: int
+) -> bool:
+    """True if an ELEMENT-scope record applies to the given slot.
+
+    Accepts the canonical ``{short}:{scene}:{phrase}`` form as well as the
+    ``scene_{s}_phrase_{p}`` / ``s{s}_p{p}`` conventions used by the
+    critique store. ``ref=None`` applies to any element.
+    """
+    if ref is None:
+        return True
+    candidates = {
+        slot_id,
+        f"{scene_num}:{phrase_idx}",
+        f"{scene_num}_{phrase_idx}",
+        f"scene_{scene_num}_phrase_{phrase_idx}",
+        f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}",
+        f"s{scene_num}_p{phrase_idx}",
+        f"s{scene_num:03d}_p{phrase_idx:03d}",
+    }
+    return ref in candidates
+
+
+def records_applying_to_slot(
+    state: Mapping[str, Any],
+    slot_id: str,
+    *,
+    voice_block_ref: Optional[str] = None,
+) -> list[PreferenceRecord]:
+    """Return every ledger record that applies to ``slot_id``.
+
+    This is the read-side contract consumed by the slot-detail aggregator
+    (UI-04a / issue #201). The rules mirror the virtual brief's
+    containment semantics, specialised to the slot:
+
+    * ``GLOBAL`` records always apply.
+    * ``STAGE`` records apply when ``scope_ref`` is ``None``, or when it
+      matches one of the stages owning the slot's track (see
+      :data:`_TRACK_STAGES`).
+    * ``SCENE`` records apply when ``scope_ref`` is ``None`` or matches
+      the slot's scene number (accepts the common string conventions —
+      ``"3"``, ``"scene-3"``, ``"scene_3"``, ``"scene_003"``, ...).
+    * ``VOICE_BLOCK`` records apply only to narration slots. They match
+      when ``scope_ref`` is ``None`` or equal to ``voice_block_ref`` (the
+      caller supplies this from the slot's OTIO metadata; callers that do
+      not know the voice block pass ``None`` and only get the unrefed
+      records).
+    * ``ARTIFACT_TYPE`` records apply when ``scope_ref`` is ``None`` or
+      matches the slot's artifact type (``video_clip``, ``narration``, or
+      ``music``).
+    * ``ELEMENT`` records apply when ``scope_ref`` is ``None`` or matches
+      any of the canonical slot-id / scene-phrase forms (see
+      :func:`_element_ref_matches`).
+
+    Results are ordered by revision ascending. Records that have been
+    superseded by a strictly newer record with the **same** subject,
+    scope and scope_ref carry a ``superseded=True`` attribute on the
+    returned dataclass copy (the stored record is never mutated).
+
+    Args:
+        state: ADK session state containing the Preference Ledger.
+        slot_id: Canonical slot id, ``{track_short}:{scene}:{phrase}``.
+        voice_block_ref: Optional voice-block identifier, used to match
+            ``VOICE_BLOCK``-scoped records with a specific ``scope_ref``.
+
+    Returns:
+        List of :class:`PreferenceRecord` instances that apply to the
+        slot, in revision-ascending order. Superseded entries carry a
+        ``superseded=True`` metadata hint on their returned copies.
+
+    Raises:
+        ValueError: On a malformed ``slot_id``. The ledger itself may
+            also raise when the stored state is invalid — fail loud.
+    """
+    track, scene_num, phrase_idx = _parse_slot(slot_id)
+    stages = _TRACK_STAGES.get(track, frozenset())
+    artifact_type = _TRACK_ARTIFACT_TYPES.get(track)
+
+    applicable: list[PreferenceRecord] = []
+    for record in list_preferences(state):
+        rec_scope = record.scope
+        rec_ref = record.scope_ref
+
+        if rec_scope is Scope.GLOBAL:
+            applicable.append(record)
+            continue
+
+        if rec_scope is Scope.STAGE:
+            if rec_ref is None or rec_ref in stages:
+                applicable.append(record)
+            continue
+
+        if rec_scope is Scope.SCENE:
+            if _scene_ref_matches(rec_ref, scene_num):
+                applicable.append(record)
+            continue
+
+        if rec_scope is Scope.VOICE_BLOCK:
+            # Voice-block records only apply to narration slots.
+            if track != "A1_Narration":
+                continue
+            if rec_ref is None or (
+                voice_block_ref is not None and rec_ref == voice_block_ref
+            ):
+                applicable.append(record)
+            continue
+
+        if rec_scope is Scope.ARTIFACT_TYPE:
+            if rec_ref is None or (artifact_type and rec_ref == artifact_type):
+                applicable.append(record)
+            continue
+
+        if rec_scope is Scope.ELEMENT:
+            if _element_ref_matches(rec_ref, slot_id, scene_num, phrase_idx):
+                applicable.append(record)
+            continue
+
+    applicable.sort(key=lambda r: r.revision)
+
+    # Mark superseded records: for every (subject, scope, scope_ref) triple,
+    # only the highest-revision entry is "live"; older ones are flagged.
+    latest_rev: dict[tuple[Any, Any, Optional[str]], int] = {}
+    for record in applicable:
+        key = (record.subject, record.scope, record.scope_ref)
+        if record.revision > latest_rev.get(key, -1):
+            latest_rev[key] = record.revision
+
+    out: list[PreferenceRecord] = []
+    for record in applicable:
+        key = (record.subject, record.scope, record.scope_ref)
+        is_superseded = record.revision < latest_rev[key]
+        meta = dict(record.metadata)
+        if is_superseded:
+            meta["superseded"] = True
+        out.append(
+            PreferenceRecord(
+                scope=record.scope,
+                scope_ref=record.scope_ref,
+                polarity=record.polarity,
+                subject=record.subject,
+                content=record.content,
+                origin=record.origin,
+                revision=record.revision,
+                metadata=meta,
+            )
+        )
+    return out
+
+
 __all__ = [
     "PREFERENCE_LEDGER_KEY",
     "Scope",
@@ -492,6 +712,7 @@ __all__ = [
     "PreferenceRecord",
     "append_preference",
     "query_by_scope",
+    "records_applying_to_slot",
     "list_preferences",
     "current_revision",
 ]

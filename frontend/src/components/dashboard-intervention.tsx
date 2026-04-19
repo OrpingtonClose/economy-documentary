@@ -23,7 +23,13 @@
  *    ``slot_context`` so the directive is scoped to that slot by default.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useOtioStream } from "@/lib/otio-stream";
+import type { OtioSlot, OtioTimelineStatus } from "@/lib/types";
+import {
+  clearSelection,
+  useSelection,
+} from "@/lib/stores/selection";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -68,7 +74,11 @@ type HaltState = {
   halt_reviewer: string | null;
   halt_reason: string | null;
   halt_timestamp: number | null;
+  halt_last_checkpoint?: string | null;
+  halt_exit_requested?: boolean;
 };
+
+type HaltReleaseMode = "resume" | "rewind" | "exit";
 
 type Toast = {
   id: number;
@@ -87,10 +97,11 @@ function summariseRecord(r: DirectiveRecord): string {
 
 export type DashboardInterventionProps = {
   /**
-   * The slot the reviewer currently has selected (if any), piped through
-   * from the H3 slot detail panel. When present, the directive is scoped
-   * to this slot by default; only an explicit "global" control would
-   * override.
+   * Override the selection source. When omitted (the default), the
+   * intervention bar subscribes to the UI-02a shared selection store
+   * and derives `slot_context` from the corresponding OTIO slot. The
+   * prop is retained so existing tests (and any future non-OTIO
+   * callers) can still inject an explicit context.
    */
   selectedSlot?: SlotContext | null;
 
@@ -102,9 +113,28 @@ export type DashboardInterventionProps = {
 };
 
 export function DashboardIntervention({
-  selectedSlot,
+  selectedSlot: selectedSlotOverride,
   onRecordsAppended,
 }: DashboardInterventionProps) {
+  const { selectedSlotId } = useSelection();
+  const { timeline } = useOtioStream();
+  const selectedSlot = useMemo<SlotContext | null>(() => {
+    if (selectedSlotOverride !== undefined) return selectedSlotOverride;
+    if (!selectedSlotId) return null;
+    const slot = timeline ? findSlotInSnapshot(timeline, selectedSlotId) : null;
+    return deriveSlotContext(selectedSlotId, slot);
+  }, [selectedSlotOverride, selectedSlotId, timeline]);
+  // Only resolve meta from the store when there is no prop override.
+  // If a parent is driving `selectedSlot` explicitly, the store's id is
+  // irrelevant — the chip label and visibility must follow the override
+  // so the UI agrees with the `slot_context` we actually POST.
+  const selectedSlotMeta = useMemo(
+    () =>
+      selectedSlotOverride === undefined && selectedSlotId && timeline
+        ? findSlotInSnapshot(timeline, selectedSlotId)
+        : null,
+    [selectedSlotOverride, selectedSlotId, timeline],
+  );
   const [directive, setDirective] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [haltSubmitting, setHaltSubmitting] = useState(false);
@@ -181,20 +211,42 @@ export function DashboardIntervention({
     }
   }, [pushToast]);
 
-  const releaseHalt = useCallback(async () => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/halt/release`, {
-        method: "POST",
-      });
-      if (res.ok) {
+  const releaseHalt = useCallback(
+    async (mode: HaltReleaseMode = "resume") => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/halt/release`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          pushToast({
+            kind: "error",
+            message: `Halt release failed (${mode})`,
+            detail: text.slice(0, 200),
+          });
+          return;
+        }
         const data: HaltState = await res.json();
         setHaltState(data);
-        pushToast({ kind: "success", message: "Halt released — pipeline resuming" });
+        const message =
+          mode === "rewind"
+            ? "Rewind queued — rolling back to last checkpoint"
+            : mode === "exit"
+            ? "Exit requested — pipeline will shut down at next checkpoint"
+            : "Halt released — pipeline resuming";
+        pushToast({ kind: "success", message });
+      } catch (err) {
+        pushToast({
+          kind: "error",
+          message: `Halt release failed (${mode})`,
+          detail: err instanceof Error ? err.message : String(err),
+        });
       }
-    } catch {
-      // ignore
-    }
-  }, [pushToast]);
+    },
+    [pushToast],
+  );
 
   const submitDirective = useCallback(
     async (ev?: React.FormEvent<HTMLFormElement>) => {
@@ -250,9 +302,27 @@ export function DashboardIntervention({
   );
 
   const haltEngaged = haltState?.halt_requested === true;
-  const scopeLabel = selectedSlot
+  const humanScopeLabel = selectedSlotMeta
+    ? describeOtioSlot(selectedSlotMeta)
+    : selectedSlot
     ? describeSelectedSlot(selectedSlot)
-    : "global (no slot selected)";
+    : null;
+  const scopeLabel = humanScopeLabel ?? "global (no slot selected)";
+  // The chip mirrors whichever selection source is actually driving the
+  // directive payload — the override prop when one is provided (even if
+  // explicitly `null`, which means the parent is intentionally scoping
+  // to global), and the store otherwise. This keeps the visible chip in
+  // lockstep with the `slot_context` we POST.
+  const showScopeChip =
+    selectedSlotOverride !== undefined
+      ? selectedSlotOverride != null
+      : selectedSlotId != null;
+  // Only the store-backed path can actually be cleared from here. When
+  // a parent provides `selectedSlot` as a prop override, the parent owns
+  // its lifecycle — rendering a × that calls `clearSelection()` would
+  // appear non-functional (see Devin Review on PR #219).
+  const showScopeClear =
+    selectedSlotOverride === undefined && selectedSlotId != null;
 
   return (
     <div className="flex flex-col gap-2 border-b border-pipeline-blue bg-pipeline-card px-4 py-3">
@@ -278,16 +348,7 @@ export function DashboardIntervention({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {haltEngaged ? (
-            <button
-              type="button"
-              onClick={releaseHalt}
-              className="rounded bg-pipeline-blue px-3 py-2 text-sm font-medium text-pipeline-text hover:bg-pipeline-accent"
-              data-testid="halt-release-button"
-            >
-              Release halt
-            </button>
-          ) : (
+          {!haltEngaged && (
             <button
               type="button"
               onClick={submitHalt}
@@ -301,6 +362,35 @@ export function DashboardIntervention({
           )}
         </div>
       </div>
+      {haltEngaged && (
+        <HaltResumeCard
+          haltState={haltState}
+          onRelease={releaseHalt}
+        />
+      )}
+      {showScopeChip && (
+        <div
+          className="flex items-center gap-2 text-xs"
+          data-testid="directive-scope-chip"
+        >
+          <span className="text-pipeline-muted">scoped to</span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-pipeline-accent bg-pipeline-accent/20 px-2 py-0.5 font-mono text-[11px] text-pipeline-text">
+            <span aria-hidden="true">◉</span>
+            <span>{scopeLabel}</span>
+            {showScopeClear && (
+              <button
+                type="button"
+                onClick={() => clearSelection()}
+                className="ml-1 rounded px-1 text-pipeline-muted hover:text-pipeline-text"
+                aria-label="Clear slot scope (make directive global)"
+                data-testid="directive-scope-clear"
+              >
+                ×
+              </button>
+            )}
+          </span>
+        </div>
+      )}
       <form
         onSubmit={submitDirective}
         className="flex items-center gap-2"
@@ -359,6 +449,126 @@ export function DashboardIntervention({
     </div>
   );
 }
+
+/**
+ * UI-05c: halt resume card rendered while the halt flag is engaged.
+ *
+ * Offers the three documented exit paths -- resume from current stage,
+ * rewind to the last safe checkpoint, or exit the run.  All three go
+ * through ``POST /api/halt/release`` with a ``mode`` parameter; the
+ * backend decides the state transition (synthetic rewind directive,
+ * sticky exit flag, or plain release).
+ */
+function HaltResumeCard({
+  haltState,
+  onRelease,
+}: {
+  haltState: HaltState | null;
+  onRelease: (mode: HaltReleaseMode) => void | Promise<void>;
+}) {
+  const stage = haltState?.halted_at_stage ?? "next safe checkpoint";
+  const checkpoint = haltState?.halt_last_checkpoint ?? null;
+  const reason = haltState?.halt_reason ?? null;
+  const rewindLabel = checkpoint
+    ? `Rewind to ${checkpoint}`
+    : "Rewind (no checkpoint)";
+  return (
+    <div
+      className="flex flex-col gap-2 rounded border border-amber-500/70 bg-amber-900/20 px-3 py-2 text-amber-100"
+      data-testid="halt-resume-card"
+      role="region"
+      aria-label="Halt resume options"
+    >
+      <div className="flex flex-col">
+        <span className="text-sm font-semibold">
+          Paused at {stage}.
+        </span>
+        <span className="text-xs text-amber-200/90">
+          Last safe checkpoint:{" "}
+          <span className="font-mono">{checkpoint ?? "none"}</span>
+          {reason ? ` · reason: ${reason}` : ""}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void onRelease("resume")}
+          className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+          data-testid="halt-resume-button"
+        >
+          Resume from here
+        </button>
+        <button
+          type="button"
+          onClick={() => void onRelease("rewind")}
+          disabled={!checkpoint}
+          className="rounded bg-amber-500 px-3 py-1.5 text-xs font-semibold text-amber-950 hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+          data-testid="halt-rewind-button"
+          title={
+            checkpoint
+              ? `Roll back to ${checkpoint} and retry`
+              : "No checkpoint recorded yet"
+          }
+        >
+          {rewindLabel}
+        </button>
+        <button
+          type="button"
+          onClick={() => void onRelease("exit")}
+          className="rounded bg-red-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-600"
+          data-testid="halt-exit-button"
+          title="Stop the pipeline after current in-flight work completes"
+        >
+          Exit run
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function findSlotInSnapshot(
+  timeline: OtioTimelineStatus,
+  slotId: string,
+): OtioSlot | null {
+  for (const track of timeline.tracks) {
+    for (const slot of track.slots) {
+      if (slot.slot_id === slotId) return slot;
+    }
+  }
+  return null;
+}
+
+/**
+ * Translate an OTIO slot (from the UI-02a selection store) into the
+ * `SlotContext` payload the backend's directive endpoint expects.
+ */
+export function deriveSlotContext(
+  slotId: string,
+  slot: OtioSlot | null,
+): SlotContext {
+  const ctx: SlotContext = {
+    scope: "element",
+    scope_ref: slotId,
+    clip_id: slotId,
+  };
+  if (slot) {
+    ctx.scene_num = slot.scene_num;
+  }
+  return ctx;
+}
+
+function describeOtioSlot(slot: OtioSlot): string {
+  const trackLabel =
+    slot.track === "V1_Video"
+      ? "video"
+      : slot.track === "A1_Narration"
+      ? "narration"
+      : slot.track === "A2_Music"
+      ? "music"
+      : slot.track;
+  return `scene ${slot.scene_num} ${trackLabel}`;
+}
+
 
 function describeSelectedSlot(slot: SlotContext): string {
   if (slot.scope && typeof slot.scope === "string") {
