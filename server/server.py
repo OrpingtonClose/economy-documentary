@@ -129,7 +129,11 @@ class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
         except Exception:
             collector.finalize(status="error")
             finalize_run(run_id, status="error")
-            remove_collector(run_id)
+            # Do NOT remove_collector on error — keep it in the registry
+            # so /dashboard/latest still returns the crash state + recent
+            # events instead of going blank ("Waiting for pipeline...").
+            # The collector will be replaced when the next run starts.
+            logger.error("Pipeline run %s crashed — collector retained for dashboard", run_id)
             raise
 
 

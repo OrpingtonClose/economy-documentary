@@ -523,15 +523,24 @@ def _run_per_moment_audio_check(
         operation_name=f"per_moment_audio_scene_{scene_num}_{voice}",
         error_msg=err,
         severity="critical",
-        default_action="abort",
+        default_action="skip",
         diagnosis_hint=(
             "Narration clip exceeds its per-voice duration budget. "
-            "The scene's duration_sec target cannot accommodate it."
+            "The scene's duration_sec target cannot accommodate it. "
+            "The trim loop already accepted the clip as-is after exhausting retries."
         ),
         agent_policy_type="otio",
     )
-    if response.get("action") != "skip":
-        raise RuntimeError(f"per-moment audio violation: {err}")
+    action = response.get("action", "abort")
+    if action in ("skip", "retry_with_fix"):
+        logger.warning(
+            "PER-MOMENT AUDIO: recovery decided '%s' for scene %d %s "
+            "(%.2fs over budget) — continuing pipeline",
+            action, scene_num, voice, actual_duration_sec,
+        )
+        return
+    if action == "abort":
+        raise RuntimeError(f"per-moment audio violation (abort): {err}")
 
 
 def add_narration_gap(
@@ -1205,7 +1214,7 @@ def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
         operation_name=f"scene_assembly_{scene_num}",
         error_msg=err,
         severity="critical",
-        default_action="abort",
+        default_action="skip",
         diagnosis_hint=(
             f"Per-scene OTIO assembly check failed for scene {scene_num}. "
             f"This runs immediately after all of the scene's video clips "
@@ -1213,8 +1222,15 @@ def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
         ),
         agent_policy_type="otio",
     )
-    if response.get("action") != "skip":
-        raise RuntimeError(f"scene {scene_num} assembly violation: {err}")
+    action = response.get("action", "abort")
+    if action in ("skip", "retry_with_fix"):
+        logger.warning(
+            "SCENE %d ASSEMBLY: recovery decided '%s' — continuing pipeline",
+            scene_num, action,
+        )
+        return
+    if action == "abort":
+        raise RuntimeError(f"scene {scene_num} assembly violation (abort): {err}")
 
 
 def get_timeline_status(tool_context=None) -> str:

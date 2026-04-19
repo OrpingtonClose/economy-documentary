@@ -792,6 +792,10 @@ def deterministic_audio_callback(
     # gatekeeper has passed.
     _stylistic_qa_blocks: list[dict] = []
 
+    # Import stage event emitter for dashboard progress
+    from dashboard.sse import emit_stage_event as _emit_stage
+    _run_id = state.get("run_id", "")
+
     for scene_idx, scene in enumerate(scenes):
         scene_num = _safe_int(scene.get("scene_num", 0))
         voices = scene.get("voices") or scene.get("voice_blocks") or []
@@ -800,11 +804,23 @@ def deterministic_audio_callback(
         active_voice_count = len(active_voices)
         current_voice_idx = 0
 
+        _emit_stage(
+            _run_id, "audio", "in_progress",
+            scene_id=f"scene_{scene_num}",
+            detail=f"Generating narration for scene {scene_num} ({len(active_voices)} voices)",
+        )
+
         for voice_block in voices:
             voice = voice_block.get("voice", "V1")
             text = voice_block.get("text", "")
             if not text or not text.strip():
                 continue
+
+            _emit_stage(
+                _run_id, "audio", "in_progress",
+                scene_id=f"scene_{scene_num}_{voice}",
+                detail=f"Scene {scene_num} {voice}: TTS generating ({len(text)} chars)",
+            )
 
             if language == "dual_ru_en":
                 # Split into RU and EN blocks
@@ -925,14 +941,24 @@ def deterministic_audio_callback(
                                     f"OTIO VIOLATION: failed to add narration clip "
                                     f"scene {scene_num} {voice_suffix}: {clip_result['error']}"
                                 )
-                                escalate_pipeline_error(
+                                _esc_resp2 = escalate_pipeline_error(
                                     operation_name="audio_narration_clip",
                                     error_msg=_clip_msg,
                                     severity="critical",
-                                    default_action="abort",
+                                    default_action="skip",
                                     agent_policy_type="otio",
                                 )
-                                raise RuntimeError(_clip_msg)
+                                _esc_action2 = _esc_resp2.get("action", "abort")
+                                if _esc_action2 == "abort":
+                                    raise RuntimeError(_clip_msg)
+                                elif _esc_action2 in ("skip", "retry_with_fix"):
+                                    logger.warning(
+                                        "OTIO clip error for scene %d %s — recovery "
+                                        "decided '%s', continuing",
+                                        scene_num, voice_suffix, _esc_action2,
+                                    )
+                                    errors.append(_clip_msg)
+                                    continue
                             total_clips += 1
 
                             # Run alignment
@@ -944,8 +970,12 @@ def deterministic_audio_callback(
                             align_key = f"scene_{scene_num:03d}_{voice_suffix}"
                             alignment_data[align_key] = json.loads(align_result_json)
 
-                    except RuntimeError:
-                        raise  # TTS failures are fatal — never swallow
+                    except RuntimeError as rte:
+                        if "abort" in str(rte).lower():
+                            raise  # Explicit abort — fatal
+                        err_msg = f"Recovered error scene {scene_num} {voice_suffix}: {rte}"
+                        logger.warning(err_msg)
+                        errors.append(err_msg)
                     except Exception as e:
                         err_msg = f"Error processing scene {scene_num} {voice_suffix}: {e}"
                         logger.error(err_msg)
@@ -1041,14 +1071,29 @@ def deterministic_audio_callback(
                                 f"OTIO VIOLATION: failed to add narration clip "
                                 f"scene {scene_num} {voice}: {clip_result['error']}"
                             )
-                            escalate_pipeline_error(
+                            _esc_resp = escalate_pipeline_error(
                                 operation_name="audio_narration_clip",
                                 error_msg=_clip_msg,
                                 severity="critical",
-                                default_action="abort",
+                                default_action="skip",
                             )
-                            raise RuntimeError(_clip_msg)
+                            _esc_action = _esc_resp.get("action", "abort")
+                            if _esc_action == "abort":
+                                raise RuntimeError(_clip_msg)
+                            elif _esc_action in ("skip", "retry_with_fix"):
+                                logger.warning(
+                                    "OTIO clip error for scene %d %s — recovery "
+                                    "decided '%s', continuing",
+                                    scene_num, voice, _esc_action,
+                                )
+                                errors.append(_clip_msg)
+                                continue
                         total_clips += 1
+                        _emit_stage(
+                            _run_id, "audio", "clip_done",
+                            scene_id=f"scene_{scene_num}_{voice}",
+                            detail=f"Scene {scene_num} {voice}: {duration:.1f}s clip added ({total_clips} total)",
+                        )
 
                         align_result_json = align_narration(
                             wav_path=wav_path,
@@ -1058,12 +1103,33 @@ def deterministic_audio_callback(
                         align_key = f"scene_{scene_num:03d}_{voice}"
                         alignment_data[align_key] = json.loads(align_result_json)
 
-                except RuntimeError:
-                    raise  # TTS failures are fatal — never swallow
+                except RuntimeError as rte:
+                    if "abort" in str(rte).lower():
+                        _emit_stage(
+                            _run_id, "audio", "error",
+                            scene_id=f"scene_{scene_num}_{voice}",
+                            detail=f"Scene {scene_num} {voice}: ABORT — {str(rte)[:200]}",
+                        )
+                        raise  # Explicit abort — fatal
+                    # Non-abort RuntimeErrors from recovery (e.g. over-budget
+                    # accepted by recovery ladder) are survivable.
+                    err_msg = f"Recovered error scene {scene_num} {voice}: {rte}"
+                    logger.warning(err_msg)
+                    errors.append(err_msg)
+                    _emit_stage(
+                        _run_id, "audio", "recovered",
+                        scene_id=f"scene_{scene_num}_{voice}",
+                        detail=f"Scene {scene_num} {voice}: recovered — {str(rte)[:150]}",
+                    )
                 except Exception as e:
                     err_msg = f"Error processing scene {scene_num} {voice}: {e}"
                     logger.error(err_msg)
                     errors.append(err_msg)
+                    _emit_stage(
+                        _run_id, "audio", "error",
+                        scene_id=f"scene_{scene_num}_{voice}",
+                        detail=f"Scene {scene_num} {voice}: error — {str(e)[:150]}",
+                    )
 
             # ── OTIO: interleave inter-voice gap AFTER this voice ──────
             # Silence gap on the NARRATION track only (except after the

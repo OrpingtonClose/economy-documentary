@@ -236,29 +236,30 @@ async def dashboard_ingest(request: Request):
     elif event_type == "finalize":
         collector.finalize(body.get("status", "completed"))
     elif event_type == "stage_event":
-        # #66/#68: structured per-scene progress event.  We use the
-        # phase_start/phase_end plumbing on the collector so the event
-        # shows up in the run's events list, but we also record stage
-        # + scene_id + status on the collector's recent_events stream
-        # so the dashboard can render per-scene progress.
+        # #66/#68: structured per-scene progress event.  Record the
+        # human-readable detail so the dashboard's "Recent Events"
+        # section provides anxiety-release during long operations.
         stage = body.get("stage", "unknown")
         status = body.get("status", "running")
         scene_id = body.get("scene_id", "")
+        detail = body.get("detail", "")
         label = f"{stage}:{scene_id}" if scene_id else stage
-        if status in ("start", "started", "running"):
+
+        # Always record the structured stage event with detail text
+        collector.stage_event(stage, status, scene_id, detail)
+
+        # Also use phase plumbing so it shows up in phase counters
+        if status in ("start", "started", "running", "in_progress"):
             collector.phase_start(label)
-        elif status in ("complete", "completed", "ok", "done"):
+        elif status in ("complete", "completed", "ok", "done", "clip_done"):
             collector.phase_end(label, status="completed")
         elif status in ("error", "failed", "fail"):
             collector.phase_end(label, status="failed")
-        else:
-            # Unknown intermediate status — emit as a tool_start/end
-            # pair so it still renders on the dashboard.
-            collector.tool_start(label, body.get("agent", "pipeline"), status)
-            collector.tool_end(label, body.get("agent", "pipeline"), 0.0, 0)
+        elif status == "recovered":
+            collector.phase_end(label, status="recovered")
         logger.debug(
-            "Dashboard stage_event: run=%s stage=%s scene=%s status=%s",
-            run_id, stage, scene_id, status,
+            "Dashboard stage_event: run=%s stage=%s scene=%s status=%s detail=%s",
+            run_id, stage, scene_id, status, detail[:80],
         )
     # heartbeat: just keeps the collector alive, no action needed
 
