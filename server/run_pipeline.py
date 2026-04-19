@@ -252,11 +252,15 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     # in _init_pipeline_state; staging the text here (rather than the
     # full corpus) keeps R0 records short and traceable to the user's
     # original ask.
-    _original_brief = f"Create an ADHD-friendly documentary about: {topic}"
-    if language == "ru":
-        _original_brief += " (narration in Russian)"
-    elif language == "dual_ru_en":
-        _original_brief += " (dual Russian primary / English subtitle narration)"
+    _explicit_brief = os.environ.get("DOCUMENTARY_BRIEF_TEXT", "").strip()
+    if _explicit_brief:
+        _original_brief = _explicit_brief
+    else:
+        _original_brief = f"Create an ADHD-friendly documentary about: {topic}"
+        if language == "ru":
+            _original_brief += " (narration in Russian)"
+        elif language == "dual_ru_en":
+            _original_brief += " (dual Russian primary / English subtitle narration)"
     from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
     initial_state[ORIGINAL_BRIEF_KEY] = _original_brief
 

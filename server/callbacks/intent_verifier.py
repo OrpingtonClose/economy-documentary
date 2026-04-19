@@ -245,7 +245,13 @@ def _verify_scenario(intent, state: Mapping[str, Any]) -> VerificationRecord:
         )
 
     blob = _scene_text_blob(scenes)
-    missing = [t for t in intent.required_topics if t and t.lower() not in blob]
+    # Use the same fuzzy keyword-coverage check as the pre-flight gate
+    # so a post-stage halt can only fire when the gate would also fire.
+    # See ``callbacks.intent_gate._topic_covered``.
+    from callbacks.intent_gate import _topic_covered
+    missing = [
+        t for t in intent.required_topics if not _topic_covered(t, blob)
+    ]
     if missing:
         failures.append(
             "scenario missing required_topic(s): "
@@ -328,7 +334,10 @@ def _verify_audio(intent, state: Mapping[str, Any]) -> VerificationRecord:
 def _verify_visual(intent, state: Mapping[str, Any]) -> VerificationRecord:
     failures: list[str] = []
     blob = _visual_text_blob(state)
-    missing = [t for t in intent.required_topics if t and t.lower() not in blob]
+    from callbacks.intent_gate import _topic_covered
+    missing = [
+        t for t in intent.required_topics if not _topic_covered(t, blob)
+    ]
     if missing:
         failures.append(
             "visual direction never covers required_topic(s): "

@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -171,6 +172,61 @@ def _compute_movie_duration_sec(scenes: list[dict]) -> float:
     return _sum_scene_duration_sec(scenes) + _compute_gap_overhead_sec(scenes)
 
 
+_TOPIC_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "a", "an", "and", "or", "of", "the", "in", "on", "for", "to",
+        "with", "by", "as", "at", "from", "about", "over", "under",
+        "its", "their", "this", "that", "these", "those", "is", "are",
+        "be", "do", "did", "does", "discuss", "cover", "include", "mention",
+    }
+)
+
+
+def _topic_keywords(topic: str) -> list[str]:
+    """Tokenise a required/forbidden topic into matchable keywords.
+
+    Splits on any non-alphanumeric character (so hyphenated phrases
+    like ``fight-flight-freeze circuitry`` become
+    ``["fight", "flight", "freeze", "circuitry"]``), lower-cases each
+    word and drops structural stopwords.  Single-letter tokens are
+    kept (abbreviations like "PAG" are upper-case in the brief but
+    reduced to "pag" here).
+    """
+    if not topic:
+        return []
+    # Split on non-alphanumeric chars.  Preserves meaningful tokens
+    # even when the brief uses hyphens, slashes, or punctuation.
+    raw = re.split(r"[^a-zA-Z0-9]+", topic.lower())
+    return [w for w in raw if w and w not in _TOPIC_STOPWORDS]
+
+
+def _topic_covered(topic: str, blob_lower: str) -> bool:
+    """Return True if ``topic`` is adequately covered by ``blob_lower``.
+
+    The earlier implementation required an exact case-insensitive
+    substring match which was unrealistically strict -- an LLM writing
+    scenes about ``endogenous opioid receptors and endorphin release``
+    was rightly judged to cover "opioid chemistry" but the literal
+    two-word substring never appeared, triggering a HALT after three
+    retries.
+
+    New rule: tokenise the required topic into significant keywords
+    (see :func:`_topic_keywords`) and require at least
+    ``ceil(N/2)`` of those keywords to appear anywhere in the blob
+    (minimum one).  This mirrors how a human reader decides whether a
+    script "covers" a topic: you don't need the exact phrase, you need
+    the concept to clearly appear.
+    """
+    keywords = _topic_keywords(topic)
+    if not keywords:
+        # No significant keywords -- fall back to substring match so we
+        # never silently accept an empty topic as "covered".
+        return bool(topic and topic.lower() in blob_lower)
+    required_hits = max(1, (len(keywords) + 1) // 2)
+    hits = sum(1 for kw in keywords if kw in blob_lower)
+    return hits >= required_hits
+
+
 def _scenes_text_blob(scenes: list[dict]) -> str:
     """Concatenate every voice/narration string in the draft.
 
@@ -231,7 +287,7 @@ def evaluate_gate(
     blob = _scenes_text_blob(scenes)
     missing_required: list[str] = []
     for topic in intent.required_topics:
-        if topic and topic.lower() not in blob:
+        if not _topic_covered(topic, blob):
             missing_required.append(topic)
     if missing_required:
         failures.append(
@@ -239,6 +295,11 @@ def evaluate_gate(
             + ", ".join(repr(t) for t in missing_required)
         )
 
+    # Forbidden-topic match must be stricter than required-topic match:
+    # we only halt on an actual meaningful phrase appearing, not on
+    # incidental single keywords.  Use the original substring semantics
+    # so "discuss recreational drug use" doesn't trigger on any scene
+    # that happens to mention the word "use".
     present_forbidden: list[str] = []
     for topic in intent.forbidden_topics:
         if topic and topic.lower() in blob:
