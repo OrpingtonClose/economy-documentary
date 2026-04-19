@@ -37,15 +37,19 @@ export function useOtioStream(): {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const esRef = useRef<EventSource | null>(null);
+  const hasSnapshotRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     // Bootstrap: grab the snapshot even if SSE is slow / blocked.
+    // Only apply if the SSE stream hasn't already delivered a snapshot,
+    // otherwise a late-arriving HTTP response can clobber slot_state
+    // updates that have already been merged into the timeline.
     fetch(`${BACKEND_URL}/agui/otio/state`)
       .then((r) => r.json())
       .then((data: OtioTimelineStatus) => {
-        if (!cancelled) setTimeline(data);
+        if (!cancelled && !hasSnapshotRef.current) setTimeline(data);
       })
       .catch((err) => {
         if (!cancelled) setError(String(err));
@@ -62,6 +66,7 @@ export function useOtioStream(): {
     es.addEventListener("otio_snapshot", (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data) as OtioTimelineStatus;
+        hasSnapshotRef.current = true;
         setTimeline(data);
       } catch {
         /* ignore malformed snapshot */

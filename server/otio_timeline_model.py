@@ -494,16 +494,16 @@ def build_timeline_view(
             if track_name == TRACK_A1_NARRATION:
                 recon = recon_by_sp.get((scene, phrase))
                 if recon is not None:
-                    measured = (
-                        recon.get("measured_duration_sec")
-                        or recon.get("measured_sec")
-                        or recon.get("measured")
-                    )
-                    scripted = (
-                        recon.get("scripted_duration_sec")
-                        or recon.get("scripted_sec")
-                        or recon.get("scripted")
-                    )
+                    measured = recon.get("measured_duration_sec")
+                    if measured is None:
+                        measured = recon.get("measured_sec")
+                    if measured is None:
+                        measured = recon.get("measured")
+                    scripted = recon.get("scripted_duration_sec")
+                    if scripted is None:
+                        scripted = recon.get("scripted_sec")
+                    if scripted is None:
+                        scripted = recon.get("scripted")
                     try:
                         if measured is not None:
                             slot.measured_duration_sec = round(float(measured), 3)
