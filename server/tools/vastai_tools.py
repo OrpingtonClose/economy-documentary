@@ -1,7 +1,9 @@
 """
 Vast.ai API tools -- GPU VM provisioning, status, and termination.
 
-All credentials via VAST_API_KEY env var.
+Credentials are read from the first of these env vars that is set:
+``VAST_API_KEY`` (the vastai CLI's own name), ``VASTAI_API_KEY``,
+or ``VAST_AI_API_KEY``.
 """
 
 from __future__ import annotations
@@ -68,9 +70,15 @@ def _vast_cmd(args: list[str]) -> dict | list:
     We try JSON first, then fall back to Python ``ast.literal_eval``
     to handle the repr-style create output.
     """
-    api_key = os.environ.get("VAST_API_KEY", "")
+    from worker_provisioner import _resolve_vast_api_key
+    api_key = _resolve_vast_api_key()
     if not api_key:
-        return {"error": "VAST_API_KEY not set"}
+        return {
+            "error": (
+                "Vast.ai API key not set — looked for VAST_API_KEY, "
+                "VASTAI_API_KEY, or VAST_AI_API_KEY."
+            )
+        }
 
     cmd = ["vastai", "--api-key", api_key] + args
     try:

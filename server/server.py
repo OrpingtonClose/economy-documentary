@@ -512,6 +512,21 @@ async def unified_agui_endpoint(request: Request):
             from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
             if not str(_state.get(ORIGINAL_BRIEF_KEY) or "").strip():
                 _state[ORIGINAL_BRIEF_KEY] = _latest_user_text
+            # UI-PIPE-CORPUS: chat path carries only a topic; scenario-director
+            # needs corpus_path.  Fall back to DEFAULT_CORPUS_PATH env so the
+            # operator can stage research material once and have every brief
+            # pick it up automatically.
+            _default_corpus = os.environ.get("DEFAULT_CORPUS_PATH", "").strip()
+            if (
+                _default_corpus
+                and not str(_state.get("corpus_path") or "").strip()
+                and os.path.exists(_default_corpus)
+            ):
+                _state["corpus_path"] = _default_corpus
+                logger.info(
+                    "UI-PIPE: defaulted corpus_path=%s (DEFAULT_CORPUS_PATH)",
+                    _default_corpus,
+                )
             logger.info(
                 "UI-PIPE: staged user brief into session state (topic=%r)",
                 _latest_user_text[:80],

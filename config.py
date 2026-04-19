@@ -56,7 +56,14 @@ WOLFRAM_ALPHA_API = os.environ.get("WOLFRAM_ALPHA_API", "")
 JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
 
 # GPU / Infrastructure
-VAST_API_KEY = os.environ.get("VAST_API_KEY", "")
+# The vastai CLI itself reads VAST_API_KEY, but we also accept the
+# shorthand names that appear in some secret stores so operators don't
+# have to re-export the value under a different name.
+VAST_API_KEY = (
+    os.environ.get("VAST_API_KEY", "")
+    or os.environ.get("VASTAI_API_KEY", "")
+    or os.environ.get("VAST_AI_API_KEY", "")
+)
 
 # Proxy Services
 BRIGHTDATA_KEY = os.environ.get("BRIGHTDATA_KEY", "")
