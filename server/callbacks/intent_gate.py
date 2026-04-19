@@ -298,9 +298,11 @@ def _record_critique(
 
 
 def _clear_critique(state: MutableMapping[str, Any]) -> None:
-    state.pop(GATE_CRITIQUE_KEY, None)
-    # Keep the template var present but empty so ADK's instruction
-    # formatter doesn't raise on the missing key.
+    # ADK's State object does not implement ``.pop`` / ``__delitem__``;
+    # overwrite to ``None`` so downstream ``state.get(KEY)`` still sees
+    # a falsy value without raising.  Keep the template var present but
+    # empty so ADK's instruction formatter doesn't raise on resolution.
+    state[GATE_CRITIQUE_KEY] = None
     state[GATE_CRITIQUE_BLOCK_KEY] = ""
 
 
@@ -429,9 +431,12 @@ def clear_intent_gate_state(state: MutableMapping[str, Any]) -> None:
     :func:`_clear_critique` so the ADK instruction template always
     resolves cleanly on the first iteration.
     """
+    # ADK's State object rejects ``pop`` / ``__delitem__``; overwrite
+    # to a falsy sentinel so ``state.get(KEY)`` stays consistent without
+    # raising on a real ADK session.
     state[GATE_ATTEMPT_KEY] = 0
-    state.pop(GATE_CRITIQUE_KEY, None)
-    state.pop(GATE_VERDICT_KEY, None)
+    state[GATE_CRITIQUE_KEY] = None
+    state[GATE_VERDICT_KEY] = None
     state[GATE_CRITIQUE_BLOCK_KEY] = ""
 
 
