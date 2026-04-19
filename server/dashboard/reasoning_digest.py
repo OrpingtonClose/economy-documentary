@@ -521,16 +521,30 @@ def _load_log(state: Mapping[str, Any]) -> list[dict[str, Any]]:
     )
 
 
+# Guards the read-modify-write on ``state[REASONING_DIGEST_LOG_KEY]``.
+# The pipeline passes the same ``state`` mapping into ``emit_digest`` from
+# multiple threads (e.g. ``callbacks/preference_ledger.append_preference``
+# and ``recovery._execute_with_agents`` may run under the ADK runner in
+# parallel); without this lock two concurrent appends can both read the
+# same length-N list and one write clobbers the other, losing entries.
+# The lock is held only around the in-memory list mutation, so the SSE
+# emission path (:func:`_emit_sse`, called *outside* this lock) still
+# honours the non-blocking invariant.
+_log_lock = threading.Lock()
+
+
 def _append_to_log(state: MutableMapping[str, Any], digest: ReasoningDigest) -> None:
-    existing = _load_log(state)
-    existing.append(digest.to_dict())
-    # Preserve the storage shape if the caller seeded a JSON string; default
-    # to plain list storage (simpler and cheaper).
-    current = state.get(REASONING_DIGEST_LOG_KEY)
-    if isinstance(current, str):
-        state[REASONING_DIGEST_LOG_KEY] = json.dumps(existing, ensure_ascii=False)
-    else:
-        state[REASONING_DIGEST_LOG_KEY] = existing
+    payload = digest.to_dict()
+    with _log_lock:
+        existing = _load_log(state)
+        existing.append(payload)
+        # Preserve the storage shape if the caller seeded a JSON string;
+        # default to plain list storage (simpler and cheaper).
+        current = state.get(REASONING_DIGEST_LOG_KEY)
+        if isinstance(current, str):
+            state[REASONING_DIGEST_LOG_KEY] = json.dumps(existing, ensure_ascii=False)
+        else:
+            state[REASONING_DIGEST_LOG_KEY] = existing
 
 
 def write_digest(

@@ -284,20 +284,15 @@ def make_before_stage_callback(requires_stage: str):
 
     The callback blocks (polls) until the required stage is approved.
     If timed out, it returns Content to skip the agent with an error.
+
+    Note: this callback does **not** emit a ``stage_start`` reasoning
+    digest. ``requires_stage`` here is the *prerequisite* stage whose
+    approval gates the current agent; it is not the stage that is about
+    to start.  stage_start digests should be emitted by call sites that
+    actually know the identity of the stage being entered
+    (see :func:`dashboard.reasoning_digest.emit_digest`).
     """
     def _before_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
-        # ARCH-H5 (issue #160): stage_start digest.  Emit once per
-        # before-agent call (after which ADK proceeds into the stage).
-        try:
-            from dashboard.reasoning_digest import emit_digest
-
-            emit_digest(
-                getattr(callback_context, "state", None),
-                "stage_start",
-                {"stage": requires_stage},
-            )
-        except Exception as exc:  # pragma: no cover -- defensive
-            logger.debug("reasoning_digest stage_start emission failed: %s", exc)
         if not is_stage_approved(requires_stage):
             logger.info(
                 "Stage requires '%s' approval — waiting...", requires_stage
