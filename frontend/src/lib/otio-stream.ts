@@ -265,16 +265,21 @@ function applyProgress(
   const ids = payload.slot_ids ?? [];
   const stageLabel = stageLabelFor(payload);
 
+  const sceneKnown =
+    payload.scene_num !== null && payload.scene_num !== undefined;
+  // Scene-wide steps (no clip id) paint every slot in the scene via
+  // sceneNums; slot-specific steps paint only their own triples.  We
+  // mirror that asymmetry on teardown so the two sets can each clear
+  // independently as their terminal events arrive.
+  const sceneWide = ids.length === 0 && sceneKnown;
+
   if (payload.phase === "start") {
     for (const id of ids) {
       slotIds.add(id);
       slotStages[id] = stageLabel;
     }
-    if (
-      payload.scene_num !== null &&
-      payload.scene_num !== undefined
-    ) {
-      sceneNums.add(payload.scene_num);
+    if (sceneWide) {
+      sceneNums.add(payload.scene_num as number);
     }
   } else if (
     payload.phase === "complete" ||
@@ -284,12 +289,8 @@ function applyProgress(
       slotIds.delete(id);
       delete slotStages[id];
     }
-    if (
-      payload.scene_num !== null &&
-      payload.scene_num !== undefined &&
-      ids.length === 0
-    ) {
-      sceneNums.delete(payload.scene_num);
+    if (sceneWide) {
+      sceneNums.delete(payload.scene_num as number);
     }
   }
   return { slotIds, sceneNums, slotStages };
@@ -298,6 +299,6 @@ function applyProgress(
 function stageLabelFor(payload: ReManifestationProgressEvent): string {
   const stage = payload.stage_name
     ? payload.stage_name.replace(/_/g, " ")
-    : "re-manifesting";
+    : "";
   return `re-manifesting ${stage}`.trim();
 }

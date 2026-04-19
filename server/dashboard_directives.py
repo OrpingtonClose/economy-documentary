@@ -241,10 +241,9 @@ def clear_halt(*, preserve_exit_flag: bool = False) -> dict[str, Any]:
     request even after the halt flag itself clears.
     """
     with _file_lock(_HALT_FILE):
-        prior = _read_halt_state()
         state = dict(_HALT_DEFAULT)
         if preserve_exit_flag:
-            state["halt_exit_requested"] = bool(prior.get("halt_exit_requested")) or True
+            state["halt_exit_requested"] = True
         _write_halt_state(state)
     return state
 
