@@ -1,0 +1,271 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`RestatedBriefCard — render shape renders an empty state when no brief is submitted yet 1`] = `
+<div
+  class="rounded-xl text-card-foreground shadow border bg-card"
+  data-testid="restated-brief-card"
+>
+  <div
+    data-state="open"
+  >
+    <div
+      class="flex flex-col space-y-1.5 p-6 pb-3"
+    >
+      <div
+        class="flex items-start justify-between gap-3"
+      >
+        <div
+          class="flex-1 min-w-0"
+        >
+          <div
+            class="font-semibold tracking-tight text-base"
+          >
+            Here's what I heard you ask for.
+          </div>
+          <div
+            class="text-sm text-muted-foreground"
+          >
+            Submit a brief to see what I understood.
+          </div>
+        </div>
+        <button
+          aria-controls="radix-:r1:"
+          aria-expanded="true"
+          aria-label="Collapse summary"
+          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-state="open"
+          data-testid="restated-brief-toggle"
+          type="button"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-chevron-down h-4 w-4"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m6 9 6 6 6-6"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      data-state="open"
+      id="radix-:r1:"
+      style="transition-duration: 0s; animation-name: none;"
+    >
+      <div
+        class="p-6 pt-0"
+      >
+        <p
+          class="text-sm text-muted-foreground"
+          data-testid="restated-brief-empty"
+        >
+          Nothing to show yet. Type a topic into the chat on the left and I'll paraphrase it back here so you can check I got it right.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`RestatedBriefCard — render shape renders the machine's paraphrase when a brief is present 1`] = `
+<div
+  class="rounded-xl text-card-foreground shadow border bg-card"
+  data-testid="restated-brief-card"
+>
+  <div
+    data-state="open"
+  >
+    <div
+      class="flex flex-col space-y-1.5 p-6 pb-3"
+    >
+      <div
+        class="flex items-start justify-between gap-3"
+      >
+        <div
+          class="flex-1 min-w-0"
+        >
+          <div
+            class="font-semibold tracking-tight text-base"
+          >
+            Here's what I heard you ask for.
+          </div>
+          <div
+            class="text-sm text-muted-foreground"
+          >
+            If any of this looks wrong, tell me in chat and I'll update it.
+          </div>
+        </div>
+        <button
+          aria-controls="radix-:r0:"
+          aria-expanded="true"
+          aria-label="Collapse summary"
+          class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-state="open"
+          data-testid="restated-brief-toggle"
+          type="button"
+        >
+          <svg
+            aria-hidden="true"
+            class="lucide lucide-chevron-down h-4 w-4"
+            fill="none"
+            height="24"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m6 9 6 6 6-6"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      data-state="open"
+      id="radix-:r0:"
+      style="transition-duration: 0s; animation-name: none;"
+    >
+      <div
+        class="p-6 pt-0"
+      >
+        <div
+          class="flex flex-col gap-4"
+          data-testid="restated-brief-body"
+        >
+          <div
+            class="flex flex-col gap-1"
+          >
+            <span
+              class="text-xs uppercase tracking-wide text-muted-foreground"
+            >
+              Length
+            </span>
+            <span
+              class="text-3xl font-semibold tabular-nums"
+              data-testid="restated-brief-duration"
+            >
+              7 minutes
+            </span>
+          </div>
+          <dl
+            class="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          >
+            <div
+              class="flex flex-col gap-1"
+            >
+              <dt
+                class="text-xs uppercase tracking-wide text-muted-foreground"
+              >
+                Audience
+              </dt>
+              <dd
+                class="text-sm font-medium"
+                data-testid="restated-brief-audience"
+              >
+                ADHD-friendly adults
+              </dd>
+            </div>
+            <div
+              class="flex flex-col gap-1"
+            >
+              <dt
+                class="text-xs uppercase tracking-wide text-muted-foreground"
+              >
+                Tone
+              </dt>
+              <dd
+                class="flex flex-wrap gap-1"
+              >
+                <div
+                  class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                  data-testid="restated-brief-tone"
+                >
+                  cinematic
+                </div>
+                <div
+                  class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80"
+                  data-testid="restated-brief-tone"
+                >
+                  warm
+                </div>
+              </dd>
+            </div>
+          </dl>
+          <div
+            class="flex flex-col gap-1"
+          >
+            <span
+              class="text-xs uppercase tracking-wide text-muted-foreground"
+            >
+              Must cover
+            </span>
+            <div
+              class="flex flex-wrap gap-1"
+            >
+              <div
+                class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80"
+                data-testid="restated-brief-required"
+              >
+                Periaqueductal Gray
+              </div>
+              <div
+                class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80"
+                data-testid="restated-brief-required"
+              >
+                fear response
+              </div>
+            </div>
+          </div>
+          <div
+            class="flex flex-col gap-1"
+          >
+            <span
+              class="text-xs uppercase tracking-wide text-muted-foreground"
+            >
+              Steer clear of
+            </span>
+            <div
+              class="flex flex-wrap gap-1"
+            >
+              <div
+                class="inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-muted-foreground"
+                data-testid="restated-brief-forbidden"
+              >
+                clickbait
+              </div>
+            </div>
+          </div>
+          <div
+            class="flex items-center gap-2 text-xs text-muted-foreground"
+          >
+            <span>
+              How sure I am overall:
+            </span>
+            <span
+              class="font-medium text-foreground tabular-nums"
+              data-testid="restated-brief-confidence"
+            >
+              88
+              %
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+`;
