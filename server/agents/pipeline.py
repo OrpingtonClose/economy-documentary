@@ -367,8 +367,13 @@ assembler_agent.before_agent_callback = _assembly_before_with_gate
 # drains the drift queue. Idempotent -- a second import does not double-
 # chain (see ``_WIRED_ATTR`` in ``callbacks.consistency_gate``).
 # ---------------------------------------------------------------------------
+from types import SimpleNamespace as _SimpleNamespace  # noqa: E402
+
 _b2_wired_agents = wire_consistency_checks_into_agents(
-    SequentialAgent(  # ephemeral holder; we wire the real sub-agents below
+    # Non-ADK holder so agents don't acquire a parent before the real
+    # ``documentary_pipeline`` SequentialAgent wraps them. ``_iter_agent_tree``
+    # only needs a ``sub_agents`` attribute to walk the list.
+    _SimpleNamespace(
         name="_arch_b2_wiring_root",
         sub_agents=[
             scenario_director,
