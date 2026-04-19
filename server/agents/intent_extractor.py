@@ -347,6 +347,21 @@ def _heuristic_audience(brief: str) -> tuple[str, float]:
     return "general", 0.3
 
 
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s")
+
+
+def _clip_to_sentence(text: str) -> str:
+    """Return ``text`` truncated at the first sentence-ending punctuation.
+
+    Prevents required-topic clauses from swallowing negative clauses
+    in the next sentence (e.g. "must cover A and B.  Do not discuss C.").
+    """
+    m = _SENTENCE_END.search(text)
+    if m:
+        return text[: m.start()]
+    return text
+
+
 _REQUIRED_TOPIC_SPLIT = re.compile(r"\bmust cover\b|\bshould cover\b|\bcovering\b", re.I)
 _FORBIDDEN_TOPIC_SPLIT = re.compile(
     r"\bmust not\b|\bdo not\b|\bdon'?t\b|\bno\b|\bavoid\b|\bexclude\b", re.I
@@ -378,13 +393,16 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
         required.append(token)
 
     # Clauses following "must cover" / "covering" / ...
+    # Stop at the first sentence boundary so negative clauses
+    # ("Do not discuss X.") don't leak into the positive list.
     for match in _REQUIRED_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 240]
+        tail = _clip_to_sentence(tail)
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
-            cleaned = item.strip().rstrip(".")
+            cleaned = _clip_to_sentence(item).strip().rstrip(".")
             if not cleaned:
                 continue
-            if len(cleaned) > 80:
+            if len(cleaned) > 60:
                 continue
             key = cleaned.lower()
             if key in seen_required:
@@ -394,9 +412,10 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
 
     for match in _FORBIDDEN_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 120]
+        tail = _clip_to_sentence(tail)
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
-            cleaned = item.strip().rstrip(".")
-            if cleaned and len(cleaned) <= 80:
+            cleaned = _clip_to_sentence(item).strip().rstrip(".")
+            if cleaned and len(cleaned) <= 60:
                 forbidden.append(cleaned)
 
     confidence = 0.75 if required else 0.2
