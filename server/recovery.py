@@ -868,6 +868,44 @@ def get_all_escalations() -> list[dict]:
         return [req.to_dict() for req in _pending_escalations.values()]
 
 
+def _emit_ladder_digest(
+    *,
+    level: int,
+    level_name: str,
+    operation: str,
+    action: str,
+    explanation: str,
+    attempt_num: int,
+    success: bool,
+    pipeline_state: Optional[dict] = None,
+) -> None:
+    """Fire-and-forget ladder_step reasoning digest (ARCH-H5, issue #160).
+
+    Emits one digest per L0-L3 recovery resolution so the dashboard can
+    surface ladder progress without re-parsing the full ``RecoveryAttempt``
+    history.  Never raises -- a broken digest bus must not disturb the
+    recovery ladder itself.
+    """
+    try:
+        from dashboard.reasoning_digest import emit_digest
+
+        emit_digest(
+            pipeline_state,
+            "ladder_step",
+            {
+                "level": level,
+                "level_name": level_name,
+                "operation": operation,
+                "action": action,
+                "explanation": explanation[:200] if explanation else "",
+                "attempt_num": attempt_num,
+                "success": success,
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.debug("reasoning_digest ladder_step emission failed: %s", exc)
+
+
 def _emit_escalation_event(req: HumanEscalationRequest) -> None:
     """Emit an SSE event for the AG-UI dashboard."""
     try:
@@ -1131,6 +1169,17 @@ def _execute_with_agents(
                     if decision.state_patches else None
                 ),
             ))
+            # ARCH-H5 (issue #160): ladder_step digest for L0-L3 resolution.
+            _emit_ladder_digest(
+                level=level,
+                level_name=level_name,
+                operation=operation_name,
+                action=decision.action,
+                explanation=decision.explanation,
+                attempt_num=attempt_num,
+                success=decision.action in ("fix", "retry", "skip"),
+                pipeline_state=pipeline_state,
+            )
 
             # ── Handle the decision ───────────────────────────────────
             if decision.action == "fix":

@@ -115,6 +115,10 @@ def mark_stage_ready(stage: str) -> None:
     """
     if _should_auto_approve():
         logger.info("Stage '%s' auto-approved (test mode)", stage)
+        _emit_gate_digest("gate_open", stage, reviewer="auto-approve")
+        _emit_gate_digest(
+            "gate_close", stage, decision="approved", reviewer="auto-approve"
+        )
         return
     state = _read_approval_state()
     if stage not in state:
@@ -123,6 +127,7 @@ def mark_stage_ready(stage: str) -> None:
     state[stage]["ready_at"] = time.time()
     _write_approval_state(state)
     logger.info("Stage '%s' marked ready for review", stage)
+    _emit_gate_digest("gate_open", stage)
 
 
 def approve_stage(stage: str) -> None:
@@ -143,6 +148,34 @@ def approve_stage(stage: str) -> None:
     state[stage]["approved_by"] = "quick-test"
     _write_approval_state(state)
     logger.info("Stage '%s' programmatically approved (quick-test)", stage)
+    _emit_gate_digest(
+        "gate_close", stage, decision="approved", reviewer="quick-test"
+    )
+
+
+def _emit_gate_digest(
+    kind: str,
+    stage: str,
+    *,
+    decision: str = "",
+    reviewer: str = "",
+) -> None:
+    """Fire-and-forget emission of a gate-open / gate-close reasoning digest.
+
+    ARCH-H5 (issue #160) wiring. Never raise -- the gate module must not
+    regress just because the digest bus is unavailable.
+    """
+    try:
+        from dashboard.reasoning_digest import emit_digest
+
+        event: dict[str, Any] = {"stage": stage}
+        if decision:
+            event["decision"] = decision
+        if reviewer:
+            event["reviewer"] = reviewer
+        emit_digest(None, kind, event)
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.debug("reasoning_digest %s emission failed: %s", kind, exc)
 
 
 def wait_for_approval(
@@ -261,10 +294,26 @@ def wait_for_approval(
 def make_after_stage_callback(stage: str):
     """Create an after_agent_callback that marks a stage ready for review.
 
-    This wraps any existing after_agent_callback so both run.
+    This wraps any existing after_agent_callback so both run.  The wrapper
+    also emits a ``stage_end`` reasoning digest (ARCH-H5, issue #160) so
+    the dashboard sees one plain-english line per stage boundary without
+    each agent having to wire it up by hand.
     """
     def _after_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
         mark_stage_ready(stage)
+        # ARCH-H5 (issue #160): stage_end digest.  The state mapping is
+        # the ADK session state so cross-stage consumers reading
+        # ``reasoning_digest_log`` get a chronological record.
+        try:
+            from dashboard.reasoning_digest import emit_digest
+
+            emit_digest(
+                getattr(callback_context, "state", None),
+                "stage_end",
+                {"stage": stage, "status": "ok"},
+            )
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.debug("reasoning_digest stage_end emission failed: %s", exc)
         return None
     return _after_callback
 
@@ -274,6 +323,13 @@ def make_before_stage_callback(requires_stage: str):
 
     The callback blocks (polls) until the required stage is approved.
     If timed out, it returns Content to skip the agent with an error.
+
+    Note: this callback does **not** emit a ``stage_start`` reasoning
+    digest. ``requires_stage`` here is the *prerequisite* stage whose
+    approval gates the current agent; it is not the stage that is about
+    to start.  stage_start digests should be emitted by call sites that
+    actually know the identity of the stage being entered
+    (see :func:`dashboard.reasoning_digest.emit_digest`).
     """
     def _before_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
         if not is_stage_approved(requires_stage):
