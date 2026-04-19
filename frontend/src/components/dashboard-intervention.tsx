@@ -30,6 +30,13 @@ import {
   clearSelection,
   useSelection,
 } from "@/lib/stores/selection";
+import { CostPreviewDialog } from "@/components/cost-preview-dialog";
+import { HaltPauseButton } from "@/components/halt-pause-button";
+import { RewindDropdown } from "@/components/rewind-dropdown";
+import {
+  fetchDirectiveEstimate,
+  type CostEstimate,
+} from "@/lib/cost-estimate";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -141,6 +148,18 @@ export function DashboardIntervention({
   const [haltState, setHaltState] = useState<HaltState | null>(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // DESIGN-07 (#259): cost-preview state for the directive-submit path.
+  // The dialog opens as soon as the reviewer hits Enter/Send; the
+  // actual POST only fires after they click "Continue".
+  const [directiveDialogOpen, setDirectiveDialogOpen] = useState(false);
+  const [directiveEstimate, setDirectiveEstimate] =
+    useState<CostEstimate | null>(null);
+  const [directiveEstimateLoading, setDirectiveEstimateLoading] =
+    useState(false);
+  const pendingDirectiveRef = useRef<{
+    text: string;
+    slot_context: SlotContext | null;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastIdRef = useRef(0);
 
@@ -274,57 +293,89 @@ export function DashboardIntervention({
     [pushToast],
   );
 
+  // Actually POST the pending directive after the reviewer confirms
+  // the cost preview. Kept separate from ``openDirectivePreview`` so
+  // the Cancel button simply closes the dialog without touching the
+  // directive input.
+  const postPendingDirective = useCallback(async () => {
+    const pending = pendingDirectiveRef.current;
+    if (!pending) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/directive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directive: pending.text,
+          slot_context: pending.slot_context,
+          reviewer: "dashboard-user",
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        pushToast({
+          kind: "error",
+          message:
+            res.status === 422
+              ? "Directive couldn't be parsed"
+              : `Directive rejected (${res.status})`,
+          detail:
+            typeof payload?.error === "string"
+              ? payload.error
+              : JSON.stringify(payload).slice(0, 200),
+        });
+        return;
+      }
+      const data = payload as DirectiveResponse;
+      const summary = data.records.map(summariseRecord).join("\n");
+      pushToast({
+        kind: "success",
+        message: `Directive accepted — ${data.records.length} record(s) added`,
+        detail: summary,
+      });
+      onRecordsAppended?.(data.records);
+      setDirective("");
+      pendingDirectiveRef.current = null;
+      setDirectiveDialogOpen(false);
+    } catch (err) {
+      pushToast({
+        kind: "error",
+        message: "Directive request failed",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }, [pushToast, onRecordsAppended]);
+
+  // DESIGN-07 (#259): open the cost-preview dialog for the directive
+  // the reviewer just typed. Stashes the text + slot_context so the
+  // POST has something stable to reference even if the reviewer keeps
+  // typing in the input while the estimate fetches.
   const submitDirective = useCallback(
     async (ev?: React.FormEvent<HTMLFormElement>) => {
       ev?.preventDefault();
       const text = directive.trim();
       if (!text || submitting) return;
-      setSubmitting(true);
+      pendingDirectiveRef.current = {
+        text,
+        slot_context: selectedSlot ?? null,
+      };
+      setDirectiveEstimate(null);
+      setDirectiveEstimateLoading(true);
+      setDirectiveDialogOpen(true);
       try {
-        const res = await fetch(`${BACKEND_URL}/api/directive`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            directive: text,
-            slot_context: selectedSlot ?? null,
-            reviewer: "dashboard-user",
-          }),
+        const est = await fetchDirectiveEstimate({
+          directive: text,
+          slot_context: selectedSlot ?? null,
+          action: "Apply directive",
         });
-        const payload = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          pushToast({
-            kind: "error",
-            message:
-              res.status === 422
-                ? "Directive couldn't be parsed"
-                : `Directive rejected (${res.status})`,
-            detail:
-              typeof payload?.error === "string"
-                ? payload.error
-                : JSON.stringify(payload).slice(0, 200),
-          });
-          return;
-        }
-        const data = payload as DirectiveResponse;
-        const summary = data.records.map(summariseRecord).join("\n");
-        pushToast({
-          kind: "success",
-          message: `Directive accepted — ${data.records.length} record(s) added`,
-          detail: summary,
-        });
-        onRecordsAppended?.(data.records);
-        setDirective("");
-      } catch (err) {
-        pushToast({
-          kind: "error",
-          message: "Directive request failed",
-          detail: err instanceof Error ? err.message : String(err),
-        });
+        setDirectiveEstimate(est);
       } finally {
-        setSubmitting(false);
+        setDirectiveEstimateLoading(false);
       }
     },
-    [directive, submitting, selectedSlot, pushToast, onRecordsAppended],
+    [directive, submitting, selectedSlot],
   );
 
   const haltEngaged = haltState?.halt_requested === true;
@@ -383,21 +434,50 @@ export function DashboardIntervention({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {/* UX-06 (#248): only show Pause when pipeline is actively
-            * running. Red is reserved for real problems, so use a
-            * secondary amber/grey treatment. */}
-          {!haltEngaged && pipelineRunning && (
-            <button
-              type="button"
-              onClick={submitHalt}
+          {/* DESIGN-08 (#260): rewind dropdown. Only meaningful while
+            * the pipeline is actively running; hidden otherwise so
+            * the controls row stays empty when idle. */}
+          {pipelineRunning && (
+            <RewindDropdown
               disabled={haltSubmitting}
-              className="rounded border border-amber-500/70 bg-amber-900/20 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-900/40 disabled:opacity-60"
-              data-testid="halt-button"
-              title="Pause the pipeline at the next safe checkpoint"
-            >
-              {haltSubmitting ? "Pausing…" : "Pause production"}
-            </button>
+              onRewindAccepted={(_stage, label) =>
+                pushToast({
+                  kind: "success",
+                  message: `${label} — pipeline will pause and roll back`,
+                })
+              }
+              onRewindFailed={(_stage, detail) =>
+                pushToast({
+                  kind: "error",
+                  message: "Rewind failed",
+                  detail,
+                })
+              }
+              onAbandonAccepted={() =>
+                pushToast({
+                  kind: "halt",
+                  message:
+                    "Abandon requested — pipeline will shut down at next checkpoint",
+                })
+              }
+              onAbandonFailed={(detail) =>
+                pushToast({
+                  kind: "error",
+                  message: "Abandon failed",
+                  detail,
+                })
+              }
+            />
           )}
+          {/* DESIGN-09 (#261): amber pause button with a cost-preview
+            * confirmation step.  The button hides entirely while the
+            * halt flag is engaged -- HaltResumeCard owns that UI. */}
+          <HaltPauseButton
+            running={pipelineRunning}
+            halted={haltEngaged}
+            submitting={haltSubmitting}
+            onConfirmPause={submitHalt}
+          />
         </div>
       </div>
       {haltEngaged && (
@@ -467,6 +547,22 @@ export function DashboardIntervention({
           {submitting ? "Sending…" : "Send a note to the producer"}
         </button>
       </form>
+      {/* DESIGN-07 (#259): cost preview before the directive actually
+        * hits the Preference Interpreter. Confirm fires the POST; cancel
+        * leaves the input value untouched so the reviewer can edit. */}
+      <CostPreviewDialog
+        open={directiveDialogOpen}
+        onOpenChange={(next) => {
+          setDirectiveDialogOpen(next);
+          if (!next) pendingDirectiveRef.current = null;
+        }}
+        title="Apply this directive?"
+        estimate={directiveEstimate}
+        loading={directiveEstimateLoading}
+        onConfirm={postPendingDirective}
+        submitting={submitting}
+        dataTestId="directive-cost-dialog"
+      />
       {toasts.length > 0 && (
         <ul
           className="flex flex-col gap-1 pt-1"

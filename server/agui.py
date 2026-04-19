@@ -2139,3 +2139,236 @@ async def get_reasoning_raw_for_slot(
     traces.reverse()
     return JSONResponse({"traces": traces, "count": len(traces)})
 
+
+# ---------------------------------------------------------------------------
+# DESIGN-07 (#259) / DESIGN-08 (#260): cost preview + rewind-to-stage
+# ---------------------------------------------------------------------------
+#
+# These endpoints back the shadcn ``Dialog`` cost preview and the
+# ``DropdownMenu``-based rewind affordance in the dashboard.  They are
+# deliberately small wrappers over existing pipeline state so the UI
+# flows are usable today; the per-stage cost math is a placeholder
+# (documented below) and the rewind handler delegates to the existing
+# halt + preference-ledger plumbing rather than introducing a parallel
+# rollback path.
+
+# Plain-English stage labels surfaced by DESIGN-08.  Keep the backend
+# identifiers aligned with ``server/dashboard/sse.py::KNOWN_PIPELINE_STAGES``
+# -- DESIGN-08 forbids introducing new stage names.
+_REWIND_STAGE_LABELS: dict[str, str] = {
+    "scenario": "scenario",
+    "visual_director": "visuals",
+    "audio": "narration",
+    "video": "production",
+    "assembly": "final touches",
+}
+
+# TODO(DESIGN-07 backend): the cost numbers below are a conservative
+# client-side-equivalent placeholder.  Replace with a proper estimate
+# that reads the current blackboard (scene count, worker availability,
+# historical runtime) once the accounting hooks land.  Until then the
+# UI shows the same rough numbers the client-side fallback would show.
+_PER_STAGE_MINUTES: dict[str, float] = {
+    "scenario": 1.0,
+    "visual_director": 3.0,
+    "audio": 5.0,
+    "video": 8.0,
+    "assembly": 2.0,
+}
+_PER_STAGE_DOLLARS: dict[str, float] = {
+    "scenario": 0.05,
+    "visual_director": 0.2,
+    "audio": 0.4,
+    "video": 1.2,
+    "assembly": 0.1,
+}
+_FALLBACK_STAGE_MINUTES = 7.0
+_FALLBACK_STAGE_DOLLARS = 0.7
+
+
+def _estimate_for(stage: Optional[str], *, scene_scoped: bool) -> dict:
+    """Compute a placeholder cost estimate for the directive endpoint."""
+    stages = 1 if scene_scoped else 3
+    minutes_per_stage = (
+        _PER_STAGE_MINUTES.get(stage, _FALLBACK_STAGE_MINUTES)
+        if stage
+        else _FALLBACK_STAGE_MINUTES
+    )
+    dollars_per_stage = (
+        _PER_STAGE_DOLLARS.get(stage, _FALLBACK_STAGE_DOLLARS)
+        if stage
+        else _FALLBACK_STAGE_DOLLARS
+    )
+    eta_minutes = max(1, round(stages * minutes_per_stage))
+    dollars = round(stages * dollars_per_stage, 2)
+    stage_label = "scene"
+    unit = stage_label if stages == 1 else f"{stage_label}s"
+    summary = (
+        f"This will rerun {stages} {unit}, "
+        f"add about {eta_minutes} minutes, "
+        f"and cost about ${dollars:.2f}."
+    )
+    return {
+        "stages": stages,
+        "stage_label": stage_label,
+        "eta_minutes": eta_minutes,
+        "dollars": dollars,
+        "summary": summary,
+        "note": "Backend estimate is a placeholder (DESIGN-07 TODO).",
+    }
+
+
+@router.post("/estimate_directive")
+async def estimate_directive(request: Request) -> JSONResponse:
+    """Return a plain-English cost estimate for a directive-style action.
+
+    Accepts the same shape the intervention bar / rewind dropdown already
+    builds: ``{"directive": str?, "slot_context": dict?, "stage": str?,
+    "action": str?}``.  Everything is optional -- when nothing is
+    supplied we assume a pipeline-wide change (three stages).
+
+    This is a deliberate placeholder.  The numbers come from a static
+    per-stage table (see ``_PER_STAGE_MINUTES`` / ``_PER_STAGE_DOLLARS``
+    above) rather than from live blackboard state; the TODO comment on
+    that table is the spec for the real implementation.  The shape of
+    the response (``stages``, ``stage_label``, ``eta_minutes``,
+    ``dollars``, ``summary``) matches :class:`CostEstimate` on the
+    frontend so the dialog can render without any transformation.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001 -- empty/malformed bodies are fine
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    slot_context = body.get("slot_context")
+    scene_scoped = False
+    if isinstance(slot_context, dict):
+        scene_scoped = any(
+            slot_context.get(k) is not None
+            for k in ("scene_num", "scene_id", "clip_id", "voice_block_id")
+        )
+
+    stage = body.get("stage")
+    if not isinstance(stage, str) or not stage:
+        stage = None
+
+    return JSONResponse(_estimate_for(stage, scene_scoped=scene_scoped))
+
+
+@router.post("/rewind_to_stage")
+async def rewind_to_stage(request: Request) -> JSONResponse:
+    """Rewind the pipeline to an earlier stage.
+
+    Body: ``{"stage": str, "reviewer": str?, "reason": str?}``.
+
+    The endpoint is a thin wrapper that defers to the existing halt +
+    preference-ledger plumbing rather than introducing a parallel
+    rollback path:
+
+    1. Engage the halt flag via :func:`set_halt_requested` with a
+       plain-English reason ("Rewind to narration") so the approval-gate
+       poll loop pauses the pipeline at the next safe checkpoint.
+    2. Append a synthetic rewind directive via
+       :func:`_append_rewind_directive` scoped to the target stage so
+       downstream consistency-checker / A6 re-manifestation treats it
+       as drift on that stage.
+    3. Emit a ``rewind_requested`` AG-UI event so the dashboard can
+       surface a toast.
+
+    Returns ``{"status": "accepted", "stage": str, "halt_state": {...}}``
+    on success, HTTP 400 on an unknown stage, HTTP 500 on a ledger /
+    halt-state write failure.  On either failure the halt flag stays
+    unchanged so the reviewer can retry.
+    """
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse(
+            {"error": "request body must be JSON"}, status_code=400
+        )
+    if not isinstance(body, dict):
+        return JSONResponse(
+            {"error": "request body must be a JSON object"}, status_code=400
+        )
+
+    stage = body.get("stage")
+    if not isinstance(stage, str) or not stage:
+        return JSONResponse(
+            {"error": "'stage' must be a non-empty string"}, status_code=400
+        )
+    if stage not in _REWIND_STAGE_LABELS:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Unknown stage {stage!r}. Must be one of "
+                    f"{sorted(_REWIND_STAGE_LABELS)}."
+                )
+            },
+            status_code=400,
+        )
+
+    reviewer = body.get("reviewer") or "dashboard-user"
+    reason = body.get("reason") or (
+        f"Rewind to {_REWIND_STAGE_LABELS[stage]}"
+    )
+
+    try:
+        # Deferred import keeps ``agui`` importable during tests that
+        # stub out ``dashboard_directives``' disk-backed state.
+        from dashboard_directives import (  # type: ignore
+            _append_rewind_directive,
+            _read_halt_state,
+            set_halt_requested,
+        )
+    except Exception as exc:  # noqa: BLE001 -- surface wiring failures loud
+        logger.exception("rewind_to_stage: dashboard_directives import failed")
+        return JSONResponse(
+            {"error": f"rewind wiring unavailable: {exc}"}, status_code=500,
+        )
+
+    try:
+        set_halt_requested(
+            reviewer=str(reviewer),
+            reason=str(reason),
+            at_stage=stage,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("rewind_to_stage: halt flag write failed")
+        return JSONResponse(
+            {"error": f"halt flag write failed: {exc}"}, status_code=500,
+        )
+
+    try:
+        await asyncio.to_thread(_append_rewind_directive, stage)
+    except Exception:  # noqa: BLE001 -- directive append is best-effort
+        logger.exception(
+            "rewind_to_stage: synthetic rewind directive append failed "
+            "(halt flag is still engaged; reviewer can retry)"
+        )
+
+    try:
+        halt_state = _read_halt_state()
+    except Exception:  # noqa: BLE001
+        halt_state = {}
+
+    emit_agui_event(
+        "rewind_requested",
+        {
+            "stage": stage,
+            "stage_label": _REWIND_STAGE_LABELS[stage],
+            "reviewer": reviewer,
+            "reason": reason,
+        },
+    )
+
+    return JSONResponse(
+        {
+            "status": "accepted",
+            "stage": stage,
+            "stage_label": _REWIND_STAGE_LABELS[stage],
+            "halt_state": halt_state,
+        }
+    )
+

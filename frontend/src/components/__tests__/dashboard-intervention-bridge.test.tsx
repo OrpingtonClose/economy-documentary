@@ -115,6 +115,19 @@ describe("UI-02 intervention bar bridge", () => {
           halt_timestamp: null,
         });
       }
+      // DESIGN-07 (#259): the intervention bar now fetches a cost
+      // estimate before posting the directive. Tests stub a minimal
+      // estimate so the CostPreviewDialog can render and be confirmed.
+      if (url.endsWith("/agui/estimate_directive")) {
+        return jsonResponse({
+          stages: 1,
+          stage_label: "scene",
+          eta_minutes: 5,
+          dollars: 0.4,
+          summary:
+            "This will rerun 1 scene, add about 5 minutes, and cost about $0.40.",
+        });
+      }
       if (url.endsWith("/api/directive")) {
         return jsonResponse({
           status: "accepted",
@@ -146,6 +159,14 @@ describe("UI-02 intervention bar bridge", () => {
     });
     await user.type(screen.getByTestId("directive-input"), "prefer shorter");
     await user.click(screen.getByTestId("directive-submit"));
+    // DESIGN-07 (#259): confirm the cost-preview dialog before the
+    // POST actually fires.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("directive-cost-dialog"),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId("directive-cost-dialog-confirm"));
     await waitFor(() => {
       const calls = (global.fetch as unknown as jest.Mock).mock.calls as Array<
         [string, RequestInit | undefined]
@@ -180,6 +201,14 @@ describe("UI-02 intervention bar bridge", () => {
 
     await user.type(screen.getByTestId("directive-input"), "louder");
     await user.click(screen.getByTestId("directive-submit"));
+    // DESIGN-07 (#259): confirm the cost-preview dialog before the
+    // POST actually fires.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("directive-cost-dialog"),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId("directive-cost-dialog-confirm"));
 
     await waitFor(() => {
       const calls = (global.fetch as unknown as jest.Mock).mock.calls as Array<
