@@ -32,8 +32,9 @@ Human-in-the-loop gates (AG-UI approval workflow):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from google.adk.agents import Agent, SequentialAgent
 from google.adk.agents.callback_context import CallbackContext
@@ -43,7 +44,6 @@ from google.genai import types as genai_types
 from agents.assembler_agent import assembler_agent
 from agents.audio_agent import audio_agent
 from agents.intent_extractor import (
-    BRIEF_INTENT_KEY,
     IntentExtractionError,
     run_intent_extractor,
 )
@@ -145,14 +145,24 @@ def _validate_postconditions_and_log(
 # returns Content (skipping the LLM) when timing passes, and sets
 # actions.escalate=True so the LoopAgent exits immediately.
 # ---------------------------------------------------------------------------
+# TTS-fit loop cap.  User spec ("regenerate audio until it fits, escalation
+# after 10 tries") — we run up to TIMING_LOOP_MAX_ITERATIONS rounds of
+# audio_agent → timing_evaluator → scenario_refiner.  On the 11th miss the
+# ``_timing_loop_after_with_gate`` callback emits a human-escalation halt
+# so the user can approve as-is or redraft; nothing downstream runs until
+# the user responds.
+TIMING_LOOP_MAX_ITERATIONS: int = 10
+
+
 timing_loop = LoopAgent(
     name="timing_loop",
     description=(
         "Audio generation with timing feedback: generates TTS narration, "
-        "evaluates duration compliance, and refines scene text if the "
-        "total duration deviates from the target budget by more than 15%."
+        "measures total film runtime, and regenerates narration until "
+        "the delivered film duration lands within ±2s of the user's "
+        "stated target.  Caps at 10 attempts, then escalates to a human."
     ),
-    max_iterations=3,
+    max_iterations=TIMING_LOOP_MAX_ITERATIONS,
     sub_agents=[
         audio_agent,
         timing_evaluator,
@@ -340,11 +350,91 @@ def _timing_loop_before_with_gate(callback_context):
 
 
 def _timing_loop_after_with_gate(callback_context):
-    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready."""
+    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready.
+
+    Also enforces the user's TTS-fit policy: if the timing loop ran all
+    ``TIMING_LOOP_MAX_ITERATIONS`` attempts without landing inside the
+    ±2s target window, we HALT with a plain-English question asking
+    the user to approve the closest take or redraft.  No downstream
+    stage (visual, production, assembly) runs until the user responds.
+    """
     result = None
     if _orig_timing_loop_after:
         result = _orig_timing_loop_after(callback_context)
     _validate_postconditions_and_log(AUDIO_CONTRACT, callback_context)
+
+    # ── TTS-fit exhaustion check ─────────────────────────────────
+    # timing_evaluator writes ``timing_passed`` after every iteration;
+    # when the loop exits we read the final value.  A False here means
+    # the LoopAgent exhausted its iteration budget without fitting.
+    state = callback_context.state
+    timing_passed = state.get("timing_passed", False)
+    if isinstance(timing_passed, str):
+        timing_passed = timing_passed.lower() in ("true", "1", "yes")
+    if not timing_passed:
+        # Surface the latest measurement for the user so the halt
+        # message is actionable (numbers, not jargon).
+        try:
+            analysis_raw = state.get("timing_analysis") or "{}"
+            analysis = json.loads(str(analysis_raw)) if analysis_raw else {}
+        except (ValueError, TypeError):
+            analysis = {}
+        target_sec = analysis.get("target_duration")
+        actual_movie = analysis.get("movie_duration") or analysis.get("actual_duration")
+        deviation = analysis.get("deviation_sec")
+        tol = analysis.get("tolerance_sec")
+        logger.error(
+            "TTS-fit loop exhausted %d attempts — target=%.1fs, "
+            "delivered=%.1fs, drift=%.1fs (tol ±%.1fs)",
+            TIMING_LOOP_MAX_ITERATIONS,
+            float(target_sec or 0.0),
+            float(actual_movie or 0.0),
+            float(deviation or 0.0),
+            float(tol or 0.0),
+        )
+        # Mark the stage as needing human intervention so the UI can
+        # render the escalation card.  The flag is read by the
+        # /agui endpoints and by the chat narrator.
+        state["tts_fit_escalation"] = json.dumps(
+            {
+                "attempts": TIMING_LOOP_MAX_ITERATIONS,
+                "target_duration_sec": target_sec,
+                "delivered_duration_sec": actual_movie,
+                "deviation_sec": deviation,
+                "tolerance_sec": tol,
+            }
+        )
+        # Friendly halt copy — the user asked for plain English.
+        if (
+            target_sec is not None
+            and actual_movie is not None
+            and deviation is not None
+        ):
+            human_msg = (
+                f"The narration keeps landing about "
+                f"{abs(float(deviation)):.0f} seconds "
+                f"{'over' if float(deviation) > 0 else 'under'} your "
+                f"{float(target_sec):.0f}-second target after "
+                f"{TIMING_LOOP_MAX_ITERATIONS} regeneration attempts. "
+                "Please choose: (1) keep this take as-is, "
+                "(2) redraft the scenario from scratch, or "
+                "(3) give a hint and let me keep trying."
+            )
+        else:
+            human_msg = (
+                f"I regenerated the narration {TIMING_LOOP_MAX_ITERATIONS} "
+                "times and it still isn't landing on your target duration. "
+                "Please choose: (1) keep this take as-is, "
+                "(2) redraft the scenario from scratch, or "
+                "(3) give a hint and let me keep trying."
+            )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text="HALT_TTS_FIT_ESCALATION: " + human_msg
+            )],
+        )
+
     # INTENT-04: narration-duration drift check against R0.
     audio_record = verify_and_log("audio", callback_context.state)
     if not audio_record.passed:

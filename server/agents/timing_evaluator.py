@@ -32,13 +32,19 @@ from agents.model_config import build_model
 
 logger = logging.getLogger(__name__)
 
-# Tolerance: allow ±15% deviation from target duration before triggering
-# a refinement loop.  Tighter than the original ±20% in Strands because
-# the ADK pipeline has fewer retry opportunities.
-_TIMING_TOLERANCE_PCT = 0.15
+# Tolerance: how far the measured movie runtime may drift from the
+# user's stated target before the loop re-runs.  User request ("aim
+# for movie that is exactly 7 minutes, milliseconds not important"):
+# keep this tight — ±2 whole seconds of total film runtime.  The
+# scenario refiner regenerates narration until the loop passes; the
+# timing_loop LoopAgent is now capped at 10 iterations (see
+# TIMING_LOOP_MAX_ITERATIONS) after which a human escalation fires.
+_TIMING_TOLERANCE_SEC: float = 2.0
 
-# Minimum absolute deviation (seconds) to trigger refinement.
-# Prevents micro-adjustments on short movies where 15% is < 5s.
+# Legacy percent/minimum knobs, kept for back-compat with tests and
+# briefs that don't carry a typed intent; superseded by the absolute
+# tolerance above when the BriefIntent is available on the blackboard.
+_TIMING_TOLERANCE_PCT = 0.15
 _TIMING_TOLERANCE_MIN_SEC = 5.0
 
 
@@ -65,7 +71,27 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
             parts=[genai_types.Part(text="TIMING: No scenes found — skipping evaluation.")],
         )
 
-    target_duration = sum(s.get("duration_sec", 30) for s in scenes)
+    # Target: user's stated film runtime from the typed BriefIntent
+    # when present (the canonical source of truth).  Fall back to the
+    # scene-sum on legacy runs without an intent.  Comparing against the
+    # user's ground truth (e.g. 420s for "7 minutes") is what lets the
+    # timing loop regenerate audio until the delivered mp4 matches what
+    # the user actually asked for.
+    target_duration: float
+    intent_target: Optional[float] = None
+    try:
+        from agents.intent_extractor import get_brief_intent
+
+        intent = get_brief_intent(state)
+        if intent is not None:
+            intent_target = float(intent.duration_sec)
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug("Timing evaluator: intent lookup failed: %s", exc)
+
+    if intent_target is not None and intent_target > 0:
+        target_duration = intent_target
+    else:
+        target_duration = sum(s.get("duration_sec", 30) for s in scenes)
 
     # Get actual audio duration from OTIO timeline
     actual_duration = 0.0
@@ -110,13 +136,37 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
             )],
         )
 
-    # Compute deviation
-    deviation_sec = actual_duration - target_duration
+    # Compute the full movie runtime the audio stage will deliver:
+    # measured narration + inter-voice and inter-scene silence gaps.
+    # These gap constants match ``callbacks.deterministic_steps`` /
+    # ``callbacks.intent_gate`` so every layer agrees on what duration
+    # means.  The movie runtime is what the user experiences and what
+    # ffprobe reports on the final mp4 — that's what we compare
+    # against the target.
+    _INTER_VOICE_PAUSE = 1.5
+    _INTER_SCENE_PAUSE = 2.5
+    total_voice_gaps = 0.0
+    for s in scenes:
+        voices = s.get("voices") or []
+        active = sum(1 for v in voices if (v.get("text") or "").strip())
+        total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE
+    total_scene_gaps = max(0, len(scenes) - 1) * _INTER_SCENE_PAUSE
+    gap_overhead_sec = total_voice_gaps + total_scene_gaps
+    movie_duration = actual_duration + gap_overhead_sec
+
+    # Deviation is computed on MOVIE runtime when we have a typed intent
+    # (user's "7 minutes" → compare against 420s of delivered mp4).
+    # Otherwise fall back to narration-vs-scene-budget for legacy runs.
+    if intent_target is not None and intent_target > 0:
+        deviation_sec = movie_duration - target_duration
+        tolerance_sec = _TIMING_TOLERANCE_SEC
+    else:
+        deviation_sec = actual_duration - target_duration
+        tolerance_sec = max(
+            target_duration * _TIMING_TOLERANCE_PCT,
+            _TIMING_TOLERANCE_MIN_SEC,
+        )
     deviation_pct = abs(deviation_sec) / target_duration if target_duration > 0 else 0
-    tolerance_sec = max(
-        target_duration * _TIMING_TOLERANCE_PCT,
-        _TIMING_TOLERANCE_MIN_SEC,
-    )
 
     passed = abs(deviation_sec) <= tolerance_sec
 
@@ -142,12 +192,17 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
     analysis = {
         "target_duration": round(target_duration, 1),
         "actual_duration": round(actual_duration, 1),
+        "movie_duration": round(movie_duration, 1),
+        "gap_overhead_sec": round(gap_overhead_sec, 1),
         "deviation_sec": round(deviation_sec, 1),
         "deviation_pct": round(deviation_pct * 100, 1),
         "tolerance_sec": round(tolerance_sec, 1),
         "passed": passed,
         "scene_analysis": scene_analysis,
         "over_budget": deviation_sec > 0,
+        "intent_target_sec": (
+            round(intent_target, 1) if intent_target else None
+        ),
     }
     state["timing_passed"] = passed
     state["timing_analysis"] = json.dumps(analysis)

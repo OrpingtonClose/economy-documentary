@@ -79,6 +79,13 @@ class GateVerdict:
     short strings, each describing one violated constraint — the gate
     surfaces them verbatim into the critique so the director's next
     attempt knows exactly what to fix.
+
+    ``total_scene_duration_sec`` is the raw narration-only sum (legacy
+    metric kept for back-compat with external callers and tests).
+    ``movie_duration_sec`` is the expected final-film runtime including
+    the silence gaps the audio stage will insert — this is what the
+    gate actually compares against the user's target, because that is
+    the duration the user sees in the delivered mp4.
     """
 
     passed: bool
@@ -89,6 +96,8 @@ class GateVerdict:
     present_forbidden_topics: list[str] = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
     attempt: int = 1
+    movie_duration_sec: float = 0.0
+    gap_overhead_sec: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -123,6 +132,43 @@ def _sum_scene_duration_sec(scenes: list[dict]) -> float:
         except (TypeError, ValueError):
             continue
     return total
+
+
+# Inter-voice / inter-scene silence gap constants.  These MUST match the
+# values used by :mod:`callbacks.deterministic_steps` (which scales scene
+# durations so ``scene_sum + gaps = movie_target``) and by
+# :mod:`callbacks.intent_verifier`.  Hard-coded here to avoid a runtime
+# import cycle with ``callbacks.deterministic_steps`` — if the constants
+# ever move, this list moves with them.
+_INTER_VOICE_PAUSE_SEC: float = 1.5
+_INTER_SCENE_PAUSE_SEC: float = 2.5
+
+
+def _compute_gap_overhead_sec(scenes: list[dict]) -> float:
+    """Return the total silence gap runtime the audio stage will insert.
+
+    Mirrors the calculation in :mod:`callbacks.deterministic_steps`
+    so the gate's notion of "movie duration" matches the value the
+    deterministic audio callback will actually produce.
+    """
+    total_voice_gaps = 0.0
+    for scene in scenes:
+        voices = scene.get("voices") or []
+        active = 0
+        for voice in voices:
+            if not isinstance(voice, Mapping):
+                continue
+            text = voice.get("text") or ""
+            if isinstance(text, str) and text.strip():
+                active += 1
+        total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE_SEC
+    total_scene_gaps = max(0, len(scenes) - 1) * _INTER_SCENE_PAUSE_SEC
+    return total_voice_gaps + total_scene_gaps
+
+
+def _compute_movie_duration_sec(scenes: list[dict]) -> float:
+    """Return the expected final-film runtime (narration + silence gaps)."""
+    return _sum_scene_duration_sec(scenes) + _compute_gap_overhead_sec(scenes)
 
 
 def _scenes_text_blob(scenes: list[dict]) -> str:
@@ -160,18 +206,26 @@ def evaluate_gate(
     can compose a critique or halt message.
     """
     total = _sum_scene_duration_sec(scenes)
+    gap_overhead = _compute_gap_overhead_sec(scenes)
+    movie_duration = total + gap_overhead
     failures: list[str] = []
 
+    # Compare against MOVIE duration (narration + silence gaps) because
+    # that is the runtime of the delivered mp4 — and therefore the
+    # duration the user stated in the brief.  The raw narration sum is
+    # kept on the verdict for diagnostics.  See also the matching check
+    # in :mod:`callbacks.intent_verifier` which must stay in lockstep.
     lower_target = intent.duration_sec - intent.tolerance_sec
     upper_target = intent.duration_sec + intent.tolerance_sec
     if not scenes:
         failures.append("scenario draft has zero scenes")
-    elif total < lower_target or total > upper_target:
+    elif movie_duration < lower_target or movie_duration > upper_target:
         failures.append(
-            f"total scene duration {total:.1f}s is outside the "
-            f"{intent.duration_sec:.1f}s ± {intent.tolerance_sec:.1f}s "
-            f"window (acceptable range: {lower_target:.1f}s — "
-            f"{upper_target:.1f}s)"
+            f"expected film runtime {movie_duration:.1f}s (narration "
+            f"{total:.1f}s + silence gaps {gap_overhead:.1f}s) is "
+            f"outside the {intent.duration_sec:.1f}s ± "
+            f"{intent.tolerance_sec:.1f}s window (acceptable range: "
+            f"{lower_target:.1f}s — {upper_target:.1f}s)"
         )
 
     blob = _scenes_text_blob(scenes)
@@ -204,6 +258,8 @@ def evaluate_gate(
         present_forbidden_topics=present_forbidden,
         failures=failures,
         attempt=attempt,
+        movie_duration_sec=movie_duration,
+        gap_overhead_sec=gap_overhead,
     )
 
 
@@ -221,9 +277,12 @@ def build_critique(verdict: GateVerdict) -> str:
     """
     lines = [
         "R0 constraint gate rejected the previous scenario draft.",
-        f"Target duration: {verdict.target_duration_sec:.1f}s "
+        f"Target film runtime: {verdict.target_duration_sec:.1f}s "
         f"± {verdict.tolerance_sec:.1f}s.",
-        f"Measured: {verdict.total_scene_duration_sec:.1f}s.",
+        f"Measured film runtime (narration + silence gaps): "
+        f"{verdict.movie_duration_sec:.1f}s "
+        f"(narration {verdict.total_scene_duration_sec:.1f}s + "
+        f"gaps {verdict.gap_overhead_sec:.1f}s).",
         "Fix every item below on your next attempt:",
     ]
     for failure in verdict.failures:
