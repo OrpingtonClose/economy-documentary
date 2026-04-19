@@ -754,7 +754,9 @@ def _init_pipeline_state(
     # per-stage verifiers (INTENT-04) always have R0 constraints to check.
     reset_intent_gate()
     state[GATE_ATTEMPT_KEY] = 0
-    state.pop(GATE_CRITIQUE_KEY, None)
+    # ADK's State object does not implement ``.pop`` / ``__delitem__``;
+    # overwrite to ``None`` to clear any stale critique from a prior run.
+    state[GATE_CRITIQUE_KEY] = None
     try:
         run_intent_extractor(state, use_llm=_r0_use_llm)
     except IntentExtractionError as intent_err:
