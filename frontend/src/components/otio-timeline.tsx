@@ -139,44 +139,56 @@ export function OtioTimeline() {
     <div className="flex h-full flex-col gap-3">
       <header className="flex items-center justify-between px-1">
         <div>
+          {/* UX-05 (#247): plain-English header. The older
+            * "OTIO Timeline · Centrepiece" phrasing only makes sense to
+            * engineers who know what OTIO is. */}
           <h2 className="text-lg font-semibold text-pipeline-accent">
-            OTIO Timeline · Centrepiece
+            Your film so far
           </h2>
           <p className="text-xs text-pipeline-muted">
-            Three-track authoritative view. All media drawn to scale against
-            real seconds.
-            {timeline.source_file && (
-              <>
-                {" "}
-                <span className="font-mono text-pipeline-muted/70">
-                  {timeline.source_file}
-                </span>
-              </>
-            )}
+            Scenes, narration, and music drawn to scale against real seconds.
+            {/* UX-05 (#247): filesystem path removed from the header.
+              * It leaked a CI-only detail (``demo.otio``) and made the
+              * dashboard look like a debug console. The path is still
+              * available to power users via the slot detail drilldown. */}
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span
-            className={
-              "rounded-full px-2 py-0.5 font-medium " +
-              (timeline.state === "authoritative"
-                ? "bg-emerald-800/50 text-emerald-200"
-                : "bg-amber-900/60 text-amber-200")
-            }
-            title={
+          {/* UX-05 (#247): consolidate the three internal status badges
+            * (draft/authoritative, total duration, SSE live/connecting)
+            * into small info icons with title tooltips. Primary users
+            * no longer see jargon in the header; advanced users still
+            * get the details on hover. */}
+          <InfoDot
+            label={
               timeline.state === "authoritative"
-                ? "OTIO crystallised — pacing locked"
-                : "OTIO draft — reconciliation overlay visible"
+                ? "Locked"
+                : "Still drafting"
             }
-          >
-            {timeline.state === "authoritative" ? "authoritative" : "draft"}
-          </span>
-          <span className="text-pipeline-muted">
-            {totalDuration.toFixed(1)}s
-          </span>
-          <span className="text-pipeline-muted">
-            SSE: {connected ? "live" : "connecting"}
-          </span>
+            tooltip={
+              timeline.state === "authoritative"
+                ? "Timeline finalised — pacing locked."
+                : "Timeline still being assembled. A reconciliation overlay highlights segments that are still moving."
+            }
+            tone={timeline.state === "authoritative" ? "ok" : "warn"}
+            testId="otio-state-info"
+          />
+          <InfoDot
+            label="Length"
+            tooltip={`Total runtime: ${totalDuration.toFixed(1)} seconds.`}
+            tone="muted"
+            testId="otio-duration-info"
+          />
+          <InfoDot
+            label={connected ? "Live" : "Reconnecting"}
+            tooltip={
+              connected
+                ? "Live stream connected — updates arrive as the pipeline runs."
+                : "Reconnecting to the live event stream…"
+            }
+            tone={connected ? "ok" : "warn"}
+            testId="otio-sse-info"
+          />
           <ZoomControls zoom={zoom} onChange={setZoom} />
         </div>
       </header>
@@ -732,8 +744,17 @@ function ZoomControls({
   zoom: number;
   onChange: (next: number) => void;
 }) {
+  // UX-05 (#247): the internal ``px/s`` readout moves to a tooltip so
+  // the primary dashboard shows only a compact zoom label. The numeric
+  // value is still surfaced on hover (and in the data-zoom attribute)
+  // for power users and tests.
   return (
-    <div className="flex items-center gap-1">
+    <div
+      className="flex items-center gap-1"
+      title={`Zoom: ${zoom.toFixed(0)} px/s`}
+      data-zoom={zoom.toFixed(0)}
+      data-testid="otio-zoom-controls"
+    >
       <button
         type="button"
         className="rounded bg-pipeline-bg px-2 py-0.5 hover:bg-pipeline-blue/30"
@@ -742,8 +763,8 @@ function ZoomControls({
       >
         −
       </button>
-      <span className="w-16 text-center font-mono text-[11px] text-pipeline-muted">
-        {zoom.toFixed(0)} px/s
+      <span className="w-10 text-center text-[11px] text-pipeline-muted">
+        Zoom
       </span>
       <button
         type="button"
@@ -754,6 +775,41 @@ function ZoomControls({
         +
       </button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// InfoDot — tiny pill used to tuck internal status (draft/authoritative,
+// duration, SSE live, zoom) behind a tooltip so the primary dashboard
+// surface stays plain-English. (UX-05, #247)
+// ---------------------------------------------------------------------------
+
+function InfoDot({
+  label,
+  tooltip,
+  tone = "muted",
+  testId,
+}: {
+  label: string;
+  tooltip: string;
+  tone?: "ok" | "warn" | "muted";
+  testId?: string;
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "bg-emerald-900/30 text-emerald-200 border-emerald-700/60"
+      : tone === "warn"
+      ? "bg-amber-900/30 text-amber-200 border-amber-700/60"
+      : "bg-pipeline-bg text-pipeline-muted border-pipeline-blue/60";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${toneClass}`}
+      title={tooltip}
+      data-testid={testId}
+    >
+      <span aria-hidden="true">ⓘ</span>
+      <span>{label}</span>
+    </span>
   );
 }
 
