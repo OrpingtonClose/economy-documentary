@@ -19,13 +19,37 @@
 import { render, screen } from "@testing-library/react";
 import type { OtioTimelineStatus } from "@/lib/types";
 
-const emptyTimeline: OtioTimelineStatus = {
+const populatedTimeline: OtioTimelineStatus = {
   state: "draft",
   total_duration_sec: 30,
   source_file: "demo.otio",
   reconciliation: [],
   tracks: [
-    { name: "V1_Video", kind: "video", total_slots: 0, slots: [] },
+    {
+      name: "V1_Video",
+      kind: "video",
+      total_slots: 1,
+      slots: [
+        {
+          slot_id: "scene1_vid",
+          track: "V1_Video",
+          scene_num: 1,
+          phrase_idx: 0,
+          start_sec: 0,
+          duration_sec: 5,
+          status: "delivered",
+          label: "scene 1",
+          preview_url: "",
+          thumbnail_url: "",
+          waveform_url: "",
+          failure_reason: "",
+          rung: "",
+          scripted_duration_sec: 5,
+          measured_duration_sec: 5,
+          metadata: {},
+        },
+      ],
+    },
     { name: "A1_Narration", kind: "audio", total_slots: 0, slots: [] },
     { name: "A2_Music", kind: "audio", total_slots: 0, slots: [] },
   ],
@@ -34,11 +58,15 @@ const emptyTimeline: OtioTimelineStatus = {
 
 jest.mock("@/lib/otio-stream", () => ({
   useOtioStream: () => ({
-    timeline: emptyTimeline,
+    timeline: populatedTimeline,
     error: null,
     connected: true,
     openGates: [],
-    drift: new Set<string>(),
+    drift: {
+      slotIds: new Set<string>(),
+      sceneNums: new Set<number>(),
+      slotStages: {} as Record<string, string>,
+    },
   }),
 }));
 
