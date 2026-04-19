@@ -458,9 +458,21 @@ def calculate_budget_per_worker(
 
 def _vast_cmd(args: list[str]) -> dict | list | str:
     """Run a vastai CLI command and return parsed output."""
-    api_key = os.environ.get("VAST_API_KEY", "")
+    # Accept all three env-var spellings (see PR #242 for the config-layer
+    # equivalent): ``VAST_API_KEY`` (upstream Vast docs), ``VASTAI_API_KEY``
+    # (Vast CLI default), and ``VAST_AI_API_KEY`` (past typo preserved for
+    # existing secrets).
+    api_key = (
+        os.environ.get("VAST_API_KEY")
+        or os.environ.get("VASTAI_API_KEY")
+        or os.environ.get("VAST_AI_API_KEY")
+        or ""
+    )
     if not api_key:
-        raise RuntimeError("VAST_API_KEY not set — cannot provision GPU workers")
+        raise RuntimeError(
+            "VAST_API_KEY / VASTAI_API_KEY / VAST_AI_API_KEY not set — "
+            "cannot provision GPU workers"
+        )
 
     cmd = ["vastai", "--api-key", api_key] + args
     try:

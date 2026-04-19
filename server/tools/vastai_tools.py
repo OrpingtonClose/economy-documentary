@@ -68,9 +68,14 @@ def _vast_cmd(args: list[str]) -> dict | list:
     We try JSON first, then fall back to Python ``ast.literal_eval``
     to handle the repr-style create output.
     """
-    api_key = os.environ.get("VAST_API_KEY", "")
+    api_key = (
+        os.environ.get("VAST_API_KEY")
+        or os.environ.get("VASTAI_API_KEY")
+        or os.environ.get("VAST_AI_API_KEY")
+        or ""
+    )
     if not api_key:
-        return {"error": "VAST_API_KEY not set"}
+        return {"error": "VAST_API_KEY / VASTAI_API_KEY / VAST_AI_API_KEY not set"}
 
     cmd = ["vastai", "--api-key", api_key] + args
     try:
