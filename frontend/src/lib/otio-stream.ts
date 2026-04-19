@@ -7,6 +7,7 @@ import type {
   SlotStateEvent,
   SlotStatus,
 } from "@/lib/types";
+import { subscribeAguiStream } from "@/lib/agui-stream";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -39,7 +40,6 @@ export function useOtioStream(): {
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
   const [openGates, setOpenGates] = useState<ApprovalGateEvent[]>([]);
-  const esRef = useRef<EventSource | null>(null);
   const hasSnapshotRef = useRef(false);
 
   useEffect(() => {
@@ -58,92 +58,89 @@ export function useOtioStream(): {
         if (!cancelled) setError(String(err));
       });
 
-    const es = new EventSource(`${BACKEND_URL}/agui/stream`);
-    esRef.current = es;
-
-    es.addEventListener("open", () => {
-      setConnected(true);
-      setError(null);
-    });
-
-    es.addEventListener("otio_snapshot", (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data) as OtioTimelineStatus;
-        hasSnapshotRef.current = true;
-        setTimeline(data);
-      } catch {
-        /* ignore malformed snapshot */
-      }
-    });
-
-    es.addEventListener("slot_state", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: SlotStateEvent };
-        const slot = env.data;
-        setTimeline((prev) => (prev ? applySlotState(prev, slot) : prev));
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    es.addEventListener("otio_authoritative", (e: MessageEvent) => {
-      try {
-        JSON.parse(e.data);
-      } catch {
-        /* ok, payload may be empty */
-      }
-      setTimeline((prev) => (prev ? { ...prev, state: "authoritative" } : prev));
-    });
-
-    // artifact_update also moves slots; mirror through slot_state when
-    // it already carried scene/phrase (the backend always does, so this
-    // branch is a safety net for older pipelines).
-    es.addEventListener("artifact_update", (e: MessageEvent) => {
-      try {
-        JSON.parse(e.data);
-      } catch {
-        /* ignore */
-      }
-    });
-
-    // UI-03a (#198): inline approval card driver. Every wait_for_approval
-    // entry emits approval_gate_opened; the paired approval_gate_closed
-    // fires when the gate flips via /agui/approve OR via a stage-scoped
-    // directive (UI-03c, #200). The timeline listens here so the card
-    // mounts/unmounts on the unified AG-UI event bus -- no polling.
-    es.addEventListener("approval_gate_opened", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
-        const evt = env.data;
-        if (!evt || !evt.stage) return;
-        setOpenGates((prev) => {
-          if (prev.some((g) => g.stage === evt.stage)) return prev;
-          return [...prev, evt];
-        });
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    es.addEventListener("approval_gate_closed", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
-        const evt = env.data;
-        if (!evt || !evt.stage) return;
-        setOpenGates((prev) => prev.filter((g) => g.stage !== evt.stage));
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    es.addEventListener("error", () => {
-      setConnected(false);
+    const unsubscribe = subscribeAguiStream({
+      events: [
+        "otio_snapshot",
+        "slot_state",
+        "otio_authoritative",
+        "artifact_update",
+        // UI-03a (#198): inline approval card driver. Every
+        // wait_for_approval entry emits approval_gate_opened; the paired
+        // approval_gate_closed fires when the gate flips via
+        // /agui/approve OR via a stage-scoped directive (UI-03c, #200).
+        // The timeline listens here so the card mounts/unmounts on the
+        // unified AG-UI event bus -- no polling.
+        "approval_gate_opened",
+        "approval_gate_closed",
+      ],
+      onConnected: (c) => {
+        setConnected(c);
+        if (c) setError(null);
+      },
+      onEvent: (evt, e) => {
+        if (evt === "otio_snapshot") {
+          try {
+            const data = JSON.parse(e.data) as OtioTimelineStatus;
+            hasSnapshotRef.current = true;
+            setTimeline(data);
+          } catch {
+            /* ignore malformed snapshot */
+          }
+        } else if (evt === "slot_state") {
+          try {
+            const env = JSON.parse(e.data) as { data: SlotStateEvent };
+            const slot = env.data;
+            setTimeline((prev) => (prev ? applySlotState(prev, slot) : prev));
+          } catch {
+            /* ignore malformed */
+          }
+        } else if (evt === "otio_authoritative") {
+          try {
+            JSON.parse(e.data);
+          } catch {
+            /* ok, payload may be empty */
+          }
+          setTimeline((prev) =>
+            prev ? { ...prev, state: "authoritative" } : prev,
+          );
+        } else if (evt === "artifact_update") {
+          // artifact_update also moves slots; mirror through
+          // slot_state when it already carried scene/phrase (the
+          // backend always does, so this branch is a safety net for
+          // older pipelines).
+          try {
+            JSON.parse(e.data);
+          } catch {
+            /* ignore */
+          }
+        } else if (evt === "approval_gate_opened") {
+          try {
+            const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
+            const ev = env.data;
+            if (!ev || !ev.stage) return;
+            setOpenGates((prev) => {
+              if (prev.some((g) => g.stage === ev.stage)) return prev;
+              return [...prev, ev];
+            });
+          } catch {
+            /* ignore malformed */
+          }
+        } else if (evt === "approval_gate_closed") {
+          try {
+            const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
+            const ev = env.data;
+            if (!ev || !ev.stage) return;
+            setOpenGates((prev) => prev.filter((g) => g.stage !== ev.stage));
+          } catch {
+            /* ignore malformed */
+          }
+        }
+      },
     });
 
     return () => {
       cancelled = true;
-      es.close();
-      esRef.current = null;
+      unsubscribe();
     };
   }, []);
 

@@ -4,9 +4,11 @@
  * UI-06b (#209) — preview_ready / preview_failed SSE hook + pure
  * helpers.  The backend emits these events through ``emit_agui_event``
  * (see ``server/previews/consumers.py``) alongside every other AG-UI
- * pipeline event.  We subscribe to the same ``/agui/stream`` connection
- * used by ``useOtioStream`` so there is a single SSE channel per
- * dashboard (ARCH-H invariant preserved).
+ * pipeline event.  We subscribe through the shared
+ * ``subscribeAguiStream`` singleton (``@/lib/agui-stream``) so there
+ * is exactly one EventSource open per dashboard regardless of how many
+ * hooks / components mount — ``useOtioStream`` and ``usePreviewStream``
+ * multiplex over the same connection (ARCH-H invariant preserved).
  *
  * Each boundary surfaces at most one preview at a time.  Previews are
  * keyed by their canonical boundary label (``narration_locked``,
@@ -21,11 +23,9 @@
  * pending" caption instead of pretending the bytes are current.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { SlotStateEvent } from "@/lib/types";
-
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+import { subscribeAguiStream } from "@/lib/agui-stream";
 
 export type PreviewStatus = "ready" | "failed";
 
@@ -77,54 +77,40 @@ export function usePreviewStream(): {
 } {
   const [state, setState] = useState<PreviewState>(INITIAL_STATE);
   const [connected, setConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const esRef = useRef<EventSource | null>(null);
+  const [error] = useState<string | null>(null);
 
   useEffect(() => {
-    const es = new EventSource(`${BACKEND_URL}/agui/stream`);
-    esRef.current = es;
-
-    es.addEventListener("open", () => {
-      setConnected(true);
-      setError(null);
+    const unsubscribe = subscribeAguiStream({
+      events: ["preview_ready", "preview_failed", "slot_state"],
+      onConnected: setConnected,
+      onEvent: (evt, e) => {
+        if (evt === "preview_ready") {
+          try {
+            const env = JSON.parse(e.data) as { data: unknown };
+            const entry = parsePreviewReady(env.data);
+            if (entry) setState((prev) => upsertPreview(prev, entry));
+          } catch {
+            /* ignore malformed */
+          }
+        } else if (evt === "preview_failed") {
+          try {
+            const env = JSON.parse(e.data) as { data: unknown };
+            const entry = parsePreviewFailed(env.data);
+            if (entry) setState((prev) => upsertPreview(prev, entry));
+          } catch {
+            /* ignore malformed */
+          }
+        } else if (evt === "slot_state") {
+          try {
+            const env = JSON.parse(e.data) as { data: SlotStateEvent };
+            setState((prev) => applySlotUpdate(prev, env.data));
+          } catch {
+            /* ignore malformed */
+          }
+        }
+      },
     });
-    es.addEventListener("error", () => {
-      setConnected(false);
-    });
-
-    es.addEventListener("preview_ready", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: unknown };
-        const entry = parsePreviewReady(env.data);
-        if (entry) setState((prev) => upsertPreview(prev, entry));
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    es.addEventListener("preview_failed", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: unknown };
-        const entry = parsePreviewFailed(env.data);
-        if (entry) setState((prev) => upsertPreview(prev, entry));
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    es.addEventListener("slot_state", (e: MessageEvent) => {
-      try {
-        const env = JSON.parse(e.data) as { data: SlotStateEvent };
-        setState((prev) => applySlotUpdate(prev, env.data));
-      } catch {
-        /* ignore malformed */
-      }
-    });
-
-    return () => {
-      es.close();
-      esRef.current = null;
-    };
+    return unsubscribe;
   }, []);
 
   return { state, connected, error };
