@@ -148,6 +148,29 @@ class TrackView:
 
 
 @dataclass
+class FinishedFilm:
+    """Describes the assembled documentary when it is ready to watch.
+
+    Populated once ``deterministic_assembly_callback`` has written the
+    ``final_documentary*.mp4`` file(s) under ``output_dir``.  The UI
+    renders a "▶ Watch your film" card when any of these are non-empty.
+    """
+
+    url: str = ""  # HTTP URL served by /api/final_film/<name>
+    duration_sec: float = 0.0
+    language: str = ""  # "" for single-language, "ru"/"en" in dual
+    alternates: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "duration_sec": round(self.duration_sec, 3),
+            "language": self.language,
+            "alternates": list(self.alternates),
+        }
+
+
+@dataclass
 class OtioTimelineView:
     """Full dashboard-facing OTIO view.
 
@@ -162,6 +185,7 @@ class OtioTimelineView:
     tracks: list[TrackView] = field(default_factory=list)
     reconciliation: list[dict[str, Any]] = field(default_factory=list)
     source_file: str = ""
+    finished_film: Optional[FinishedFilm] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -170,6 +194,7 @@ class OtioTimelineView:
             "tracks": [t.to_dict() for t in self.tracks],
             "reconciliation": self.reconciliation,
             "source_file": self.source_file,
+            "finished_film": self.finished_film.to_dict() if self.finished_film else None,
         }
 
 
@@ -346,14 +371,22 @@ def build_timeline_view(
 
     if not otio_path:
         logger.debug("otio_timeline_model: no OTIO file found under %s", output_dir)
-        return OtioTimelineView(state=state, tracks=list(tracks.values()))
+        return OtioTimelineView(
+            state=state,
+            tracks=list(tracks.values()),
+            finished_film=_detect_finished_film(output_dir),
+        )
 
     try:
         with open(otio_path) as f:
             otio = json.load(f)
     except Exception as exc:  # noqa: BLE001
         logger.warning("otio_timeline_model: failed to parse %s: %s", otio_path, exc)
-        return OtioTimelineView(state=state, tracks=list(tracks.values()))
+        return OtioTimelineView(
+            state=state,
+            tracks=list(tracks.values()),
+            finished_film=_detect_finished_film(output_dir),
+        )
 
     # Root-level state: either persisted on the OTIO file itself (ARCH-E1
     # stamps documentary.state) or absent (treat as draft).
@@ -548,13 +581,82 @@ def build_timeline_view(
                 "skew_sec": diff,
             })
 
+    finished_film = _detect_finished_film(output_dir)
+
     return OtioTimelineView(
         state=state,
         total_duration_sec=round(total_duration, 3),
         tracks=[tracks[n] for n in CANONICAL_TRACKS],
         reconciliation=reconciliation,
         source_file=otio_path,
+        finished_film=finished_film,
     )
+
+
+def _detect_finished_film(output_dir: str) -> Optional[FinishedFilm]:
+    """Return a FinishedFilm pointer when ``final_documentary*.mp4`` exists.
+
+    Walks ``output_dir`` for the canonical filenames produced by
+    :func:`deterministic_assembly_callback`.  Returns ``None`` when no
+    final file exists yet — the UI then hides the "watch your film"
+    card.  Durations are probed via ``probe_clip`` so the UI can show a
+    precise runtime without re-opening the file itself.
+    """
+    if not output_dir:
+        return None
+
+    # Single-language (no suffix) takes priority; if both "_ru" and no
+    # suffix exist we trust the single-language file.
+    primary_name = "final_documentary.mp4"
+    ru_name = "final_documentary_ru.mp4"
+    en_name = "final_documentary_en.mp4"
+
+    primary_path = os.path.join(output_dir, primary_name)
+    ru_path = os.path.join(output_dir, ru_name)
+    en_path = os.path.join(output_dir, en_name)
+
+    def _probe_dur(path: str) -> float:
+        try:
+            from tools.video_tools import probe_clip  # local import
+            return float(json.loads(probe_clip(mp4_path=path)).get("duration", 0.0))
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    def _url_for(name: str) -> str:
+        return f"/agui/final_film/{name}"
+
+    if os.path.exists(primary_path):
+        return FinishedFilm(
+            url=_url_for(primary_name),
+            duration_sec=_probe_dur(primary_path),
+            language="",
+            alternates=[],
+        )
+
+    if os.path.exists(ru_path):
+        alternates: list[dict[str, Any]] = []
+        if os.path.exists(en_path):
+            alternates.append({
+                "url": _url_for(en_name),
+                "duration_sec": _probe_dur(en_path),
+                "language": "en",
+            })
+        return FinishedFilm(
+            url=_url_for(ru_name),
+            duration_sec=_probe_dur(ru_path),
+            language="ru",
+            alternates=alternates,
+        )
+
+    if os.path.exists(en_path):
+        return FinishedFilm(
+            url=_url_for(en_name),
+            duration_sec=_probe_dur(en_path),
+            language="en",
+            alternates=[],
+        )
+
+    return None
 
 
 __all__ = [
@@ -564,6 +666,7 @@ __all__ = [
     "CANONICAL_TRACKS",
     "SlotView",
     "TrackView",
+    "FinishedFilm",
     "OtioTimelineView",
     "make_slot_id",
     "parse_slot_id",

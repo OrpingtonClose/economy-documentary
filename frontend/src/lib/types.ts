@@ -239,12 +239,34 @@ export interface OtioReconciliationRow {
   skew_sec: number | null;
 }
 
+/** UX-01: finished documentary pointer surfaced by the OTIO view.
+ *
+ * Populated once ``deterministic_assembly_callback`` has written the
+ * ``final_documentary*.mp4`` file(s) under the pipeline output
+ * directory.  ``url`` is served over ``/agui/final_film/<name>`` so the
+ * dashboard can both play the file in a ``<video>`` element and offer
+ * a direct download link.
+ */
+export interface FinishedFilmAlternate {
+  url: string;
+  duration_sec: number;
+  language: string;
+}
+
+export interface FinishedFilm {
+  url: string;
+  duration_sec: number;
+  language: string;
+  alternates: FinishedFilmAlternate[];
+}
+
 export interface OtioTimelineStatus {
   state: OtioState;
   total_duration_sec: number;
   tracks: OtioTrack[];
   reconciliation: OtioReconciliationRow[];
   source_file: string;
+  finished_film: FinishedFilm | null;
 }
 
 /** UI-03a (#198): approval_gate_opened / _closed pipeline events.
