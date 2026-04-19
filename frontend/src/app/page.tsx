@@ -4,6 +4,8 @@ import dynamic from "next/dynamic";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { useState } from "react";
 import type { PipelinePhase } from "@/lib/types";
+import { useRunSession } from "@/lib/run-session";
+import { RunReconnectBanner } from "@/components/run-reconnect-banner";
 import { NarratorAssistantMessage } from "@/components/narrator-assistant-message";
 
 // Dynamic imports with ssr:false to prevent hydration issues
@@ -54,6 +56,7 @@ const PreviewChips = dynamic(
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("otio");
+  const runSession = useRunSession();
 
   const tabs = [
     { id: "otio", label: "OTIO Timeline" },
@@ -93,6 +96,9 @@ export default function Home() {
 
       {/* Right panel: tabbed content */}
       <div className="flex-1 flex flex-col">
+        {/* UI-07: banner for reconnect / buffer-overflow / stale run-id. */}
+        <RunReconnectBanner session={runSession} />
+
         {/* ARCH-H4 (#159): halt button + directive input, always visible */}
         <DashboardIntervention />
 
