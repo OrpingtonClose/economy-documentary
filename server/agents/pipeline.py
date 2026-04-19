@@ -59,10 +59,9 @@ from callbacks.approval_gate import (
 )
 from callbacks.consistency_gate import wire_consistency_checks_into_agents
 from callbacks.intent_gate import (
-    GATE_ATTEMPT_KEY,
-    GATE_CRITIQUE_KEY,
     MAX_GATE_ATTEMPTS,
     IntentGateHalt,
+    clear_intent_gate_state,
     reset_intent_gate,
     run_preflight_gate,
 )
@@ -757,8 +756,7 @@ def _init_pipeline_state(
     # BEFORE any producer agent so the pre-flight gate (INTENT-02) and
     # per-stage verifiers (INTENT-04) always have R0 constraints to check.
     reset_intent_gate()
-    state[GATE_ATTEMPT_KEY] = 0
-    state.pop(GATE_CRITIQUE_KEY, None)
+    clear_intent_gate_state(state)
     try:
         run_intent_extractor(state, use_llm=_r0_use_llm)
     except IntentExtractionError as intent_err:

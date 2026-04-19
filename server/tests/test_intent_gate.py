@@ -31,6 +31,7 @@ from callbacks.intent_gate import (  # noqa: E402
     GATE_CRITIQUE_BLOCK_KEY,
     GATE_CRITIQUE_KEY,
     GATE_VERDICT_KEY,
+    clear_intent_gate_state,
     INTENT_GATE_PASSED,
     IntentGateHalt,
     MAX_GATE_ATTEMPTS,
@@ -227,6 +228,34 @@ def test_scenario_director_instruction_references_critique_block():
         Path(_SERVER_DIR) / "agents" / "scenario_director.py"
     ).read_text(encoding="utf-8")
     assert "{_intent_gate_critique_block}" in source
+
+
+def test_clear_intent_gate_state_scrubs_every_owned_key():
+    """Re-init must not let a halted run's critique leak into the next run.
+
+    The previous bug was that ``_init_pipeline_state`` reset only the
+    attempt counter and popped :data:`GATE_CRITIQUE_KEY`, leaving the
+    formatted critique block in state.  ADK would then resolve
+    ``{_intent_gate_critique_block}`` in the scenario director's
+    instruction to the previous run's critique on the new run's first
+    iteration.
+    """
+    state = {
+        GATE_ATTEMPT_KEY: 3,
+        GATE_CRITIQUE_KEY: "stale critique text",
+        GATE_CRITIQUE_BLOCK_KEY: "\nR0 CONSTRAINT GATE CRITIQUE ...\n",
+        GATE_VERDICT_KEY: '{"passed": false}',
+        "unrelated_key": "keep me",
+    }
+
+    clear_intent_gate_state(state)
+
+    assert state[GATE_ATTEMPT_KEY] == 0
+    assert GATE_CRITIQUE_KEY not in state
+    assert GATE_VERDICT_KEY not in state
+    # Empty string (not popped) so ADK template resolution stays happy.
+    assert state[GATE_CRITIQUE_BLOCK_KEY] == ""
+    assert state["unrelated_key"] == "keep me"
 
 
 def test_run_preflight_gate_halts_after_max_attempts():

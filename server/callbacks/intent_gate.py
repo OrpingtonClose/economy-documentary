@@ -414,6 +414,27 @@ def reset_intent_gate() -> None:
     INTENT_GATE_PASSED.clear()
 
 
+def clear_intent_gate_state(state: MutableMapping[str, Any]) -> None:
+    """Scrub every gate-owned state key from ``state``.
+
+    Called by the pipeline on (re-)init so a halted or partially
+    completed previous run cannot pollute the next run's scenario
+    director prompt or verdict history.  Resetting the attempt
+    counter and verdict is not enough — the formatted critique
+    block is resolved into the director's instruction by ADK
+    template substitution, so a stale block is actively harmful.
+
+    Keeps :data:`GATE_CRITIQUE_BLOCK_KEY` present-but-empty rather
+    than popped, mirroring the post-pass behaviour of
+    :func:`_clear_critique` so the ADK instruction template always
+    resolves cleanly on the first iteration.
+    """
+    state[GATE_ATTEMPT_KEY] = 0
+    state.pop(GATE_CRITIQUE_KEY, None)
+    state.pop(GATE_VERDICT_KEY, None)
+    state[GATE_CRITIQUE_BLOCK_KEY] = ""
+
+
 __all__ = [
     "GATE_ATTEMPT_KEY",
     "GATE_CRITIQUE_BLOCK_KEY",
@@ -425,6 +446,7 @@ __all__ = [
     "MAX_GATE_ATTEMPTS",
     "build_critique",
     "build_halt_message",
+    "clear_intent_gate_state",
     "evaluate_gate",
     "reset_intent_gate",
     "run_preflight_gate",
