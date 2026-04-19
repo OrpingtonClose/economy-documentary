@@ -171,9 +171,13 @@ export function ChatHeartbeat() {
 
 function formatElapsed(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0s";
-  if (sec < 60) return `${Math.round(sec)}s`;
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec - m * 60);
+  // Round to whole seconds first so fractional values near a minute
+  // boundary (e.g. 119.5) do not produce nonsensical strings like
+  // "1m 60s". Devin Review #271.
+  const total = Math.round(sec);
+  if (total < 60) return `${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total - m * 60;
   return `${m}m ${s.toString().padStart(2, "0")}s`;
 }
 
