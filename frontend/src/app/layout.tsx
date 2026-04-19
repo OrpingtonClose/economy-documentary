@@ -3,6 +3,7 @@
 import { CopilotKit } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import "./globals.css";
+import { Toaster } from "sonner";
 
 export default function RootLayout({
   children,
@@ -15,6 +16,7 @@ export default function RootLayout({
         <CopilotKit runtimeUrl="/api/copilotkit">
           {children}
         </CopilotKit>
+        <Toaster richColors position="top-right" />
       </body>
     </html>
   );
