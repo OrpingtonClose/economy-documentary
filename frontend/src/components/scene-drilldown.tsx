@@ -32,6 +32,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -252,10 +253,17 @@ export function SceneDrilldown({
     | { kind: "error"; message: string }
   >({ kind: "idle" });
 
+  // Monotonic request id so an in-flight redo from Scene 3 can't clobber
+  // the banner after the reviewer has moved on to Scene 5. Every scene
+  // change and every new redo click bumps the counter; fetch callbacks
+  // bail out when their captured id no longer matches.
+  const redoRequestIdRef = useRef(0);
+
   // Reset the redo banner whenever the drilldown swaps to a different
   // scene — otherwise a stale "Redo queued"/error banner from Scene 3
   // would persist when the reviewer selects Scene 5.
   useEffect(() => {
+    redoRequestIdRef.current += 1;
     setRedoStatus({ kind: "idle" });
     setRedoSubmitting(false);
   }, [effectiveSlotId]);
@@ -267,6 +275,8 @@ export function SceneDrilldown({
 
   const submitRedo = useCallback(async () => {
     if (!scene || redoSubmitting) return;
+    redoRequestIdRef.current += 1;
+    const requestId = redoRequestIdRef.current;
     setRedoSubmitting(true);
     setRedoStatus({ kind: "idle" });
     try {
@@ -284,6 +294,10 @@ export function SceneDrilldown({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      // The reviewer switched scenes (or clicked redo again) while the
+      // request was in flight — drop the response on the floor so we
+      // don't overwrite the current scene's banner.
+      if (redoRequestIdRef.current !== requestId) return;
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         setRedoStatus({
@@ -297,12 +311,13 @@ export function SceneDrilldown({
         message: "Redo queued — we'll rebuild this scene.",
       });
     } catch (err) {
+      if (redoRequestIdRef.current !== requestId) return;
       setRedoStatus({
         kind: "error",
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      setRedoSubmitting(false);
+      if (redoRequestIdRef.current === requestId) setRedoSubmitting(false);
     }
   }, [scene, redoSubmitting]);
 
