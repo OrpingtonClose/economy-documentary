@@ -42,7 +42,12 @@ from agents.pipeline import pipeline_agent
 from dashboard import remove_collector, set_active_collector
 from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
-from agui import router as agui_router, subscribe_agui_events, unsubscribe_agui_events
+from agui import (
+    router as agui_router,
+    api_router as agui_api_router,
+    subscribe_agui_events,
+    unsubscribe_agui_events,
+)
 from dashboard.sse import router as dashboard_router
 from fleet.router import router as fleet_router
 from plugins import build_plugins, setup_otel
@@ -204,6 +209,10 @@ app.include_router(dashboard_router)
 
 # AG-UI routes (artifact feedback, escalations, regeneration)
 app.include_router(agui_router)
+
+# ARCH-H5 (issue #160): dedicated /api/reasoning_digest_stream SSE endpoint
+# for the rule-based reasoning digest feed.
+app.include_router(agui_api_router)
 
 # Fleet coordination routes (pull-work, report, queue status)
 app.include_router(fleet_router)

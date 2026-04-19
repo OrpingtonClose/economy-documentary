@@ -428,6 +428,26 @@ def append_preference(
         record.subject.value,
         record.origin.l4_event_id,
     )
+    # ARCH-H5 (issue #160): ledger_change digest.  Fire-and-forget --
+    # never let the digest bus block the A1 append path.
+    try:
+        from dashboard.reasoning_digest import emit_digest
+
+        emit_digest(
+            state,
+            "ledger_change",
+            {
+                "revision": record.revision,
+                "scope": record.scope.value,
+                "scope_ref": record.scope_ref or "",
+                "polarity": record.polarity.value,
+                "subject": record.subject.value,
+                "content": record.content,
+                "origin": record.origin.l4_event_id,
+            },
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.debug("reasoning_digest ledger_change emission failed: %s", exc)
     return record
 
 

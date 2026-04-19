@@ -38,12 +38,21 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
 
+import asyncio
+
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agui", tags=["agui"])
+
+# ARCH-H5 (issue #160): dedicated SSE stream for rule-based reasoning
+# digests. Mounted at /api/reasoning_digest_stream so dashboards can
+# subscribe without tangling with the unified CopilotKit POST / stream.
+# Digests are also bridged onto the unified stream as ``reasoning_digest``
+# custom events, so consumers can pick whichever pattern fits them.
+api_router = APIRouter(prefix="/api", tags=["reasoning"])
 
 
 # ---------------------------------------------------------------------------
@@ -648,6 +657,16 @@ async def approve_stage(request: Request):
     state[stage] = {"approved": True, "timestamp": time.time()}
     _write_approval_state(state)
     logger.info("Stage '%s' approved", stage)
+    # ARCH-H5 (issue #160): gate_close digest
+    try:
+        from dashboard.reasoning_digest import emit_digest
+        emit_digest(
+            None,
+            "gate_close",
+            {"stage": stage, "decision": "approved", "reviewer": "human"},
+        )
+    except Exception as exc:  # pragma: no cover -- defensive
+        logger.debug("reasoning_digest gate_close emission failed: %s", exc)
     return JSONResponse({"status": "approved", "stage": stage})
 
 
@@ -1137,3 +1156,57 @@ async def trigger_regeneration(body: dict):
         "regeneration_id": feedback.id,
         "level": level,
     })
+
+
+# ---------------------------------------------------------------------------
+# ARCH-H5 (issue #160): Reasoning Digest SSE stream
+# ---------------------------------------------------------------------------
+
+@api_router.get("/reasoning_digest_stream")
+async def reasoning_digest_stream(request: Request) -> StreamingResponse:
+    """SSE stream of rule-based reasoning digests (ARCH-H5, issue #160).
+
+    Every raw pipeline event -- stage starts/ends, gates, G2 previews, A1
+    ledger appends, L0-L3 recovery resolutions, E3/A2 QA verdicts, C2 infra
+    events, fleet ETA revisions -- is turned into a short plain-english
+    digest by :mod:`dashboard.reasoning_digest` and emitted on this channel.
+
+    The writer is deterministic (no LLM) and fire-and-forget. Dashboards
+    subscribe here to get a unified consumer-friendly feed; drill-down to
+    the raw event is available via ``source_event`` in each digest payload.
+
+    The stream never ends by itself; periodic ``:heartbeat`` comments
+    keep the connection alive through idle periods.
+    """
+    from dashboard.reasoning_digest import (
+        subscribe_digest_stream,
+        unsubscribe_digest_stream,
+    )
+
+    queue = subscribe_digest_stream()
+
+    async def event_generator():
+        try:
+            last_heartbeat = time.time()
+            while True:
+                if await request.is_disconnected():
+                    break
+                if queue:
+                    payload = queue.popleft()
+                    yield f"event: reasoning_digest\ndata: {json.dumps(payload)}\n\n"
+                    continue
+                if time.time() - last_heartbeat >= 15.0:
+                    yield ": heartbeat\n\n"
+                    last_heartbeat = time.time()
+                await asyncio.sleep(0.2)
+        finally:
+            unsubscribe_digest_stream(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

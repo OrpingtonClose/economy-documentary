@@ -299,7 +299,27 @@ class ArtifactCritiqueStore:
                 record.iteration = max(record.iteration, iteration)
             record.qa_results.append(verdict)
             self.write(record)
-            return record
+        # ARCH-H5 (issue #160): qa_verdict reasoning digest (outside the
+        # per-record lock so a slow SSE subscriber cannot stall QA writes).
+        try:
+            from dashboard.reasoning_digest import emit_digest
+
+            emit_digest(
+                None,
+                "qa_verdict",
+                {
+                    "source": verdict.source,
+                    "check_name": verdict.check_name,
+                    "verdict": verdict.verdict,
+                    "message": verdict.message,
+                    "artifact_type": artifact_type,
+                    "artifact_id": artifact_id,
+                    "confidence": verdict.confidence,
+                },
+            )
+        except Exception:  # pragma: no cover -- defensive
+            pass
+        return record
 
     def append_escalation(
         self,

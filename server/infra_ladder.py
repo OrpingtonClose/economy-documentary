@@ -270,6 +270,25 @@ class InfraLadderState:
 
     def record_attempt(self, level: int) -> None:
         self.attempts_by_level[level] = self.attempts_by_level.get(level, 0) + 1
+        # ARCH-H5 (issue #160): infra_event reasoning digest.
+        try:
+            from dashboard.reasoning_digest import emit_digest
+
+            emit_digest(
+                None,
+                "infra_event",
+                {
+                    "event": "ladder_attempt",
+                    "worker": self.event.worker_url,
+                    "level": level,
+                    "detail": (
+                        f"job={self.event.job_id} "
+                        f"classification={self.event.classification}"
+                    ),
+                },
+            )
+        except Exception:  # pragma: no cover -- defensive
+            pass
 
     def budget_remaining(self, level: int) -> int:
         used = self.attempts_by_level.get(level, 0)
