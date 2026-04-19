@@ -43,13 +43,12 @@ pick **adk_eval** in the agent dropdown, chat with the pipeline, then use
 **Save as eval set** to drop a new `*.evalset.json` into
 `server/adk_eval/evalsets/`.
 
-> **Known issue (pre-existing, tracked separately):** under
-> `google-adk==1.29.0` the `pipeline_agent` import currently fails because
-> `agents/pipeline.py` parents every sub-agent to the ephemeral
-> `_arch_b2_wiring_root` holder before constructing the real
-> `SequentialAgent("documentary_pipeline")`. Fix that before relying on
-> `adk web`; the pytest harness works around it by skipping stubbed cases
-> when credentials or imports are unavailable.
+> **Historical note:** the original `pipeline_agent` import used to
+> fail under `google-adk==1.29.0` because the ephemeral
+> `_arch_b2_wiring_root` holder double-parented sub-agents. That was
+> fixed on `main` by PR #184, so `from agents.pipeline import
+> pipeline_agent` is now clean and `adk web` / `adk eval` can attach
+> directly to production behaviour.
 
 ## Capture a golden
 

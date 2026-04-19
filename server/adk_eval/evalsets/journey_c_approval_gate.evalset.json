@@ -1,0 +1,57 @@
+{
+  "eval_set_id": "journey_c_approval_gate",
+  "name": "Journey C — inline approval gates",
+  "description": "Capture template: pipeline pauses at the scenario-approval checkpoint, the dashboard surfaces the approval card inline + announces it in chat, and the reviewer clicks approve to release. Audited static-PASS in audit cycle 9 (META #226).",
+  "metadata": {
+    "stubbed": true,
+    "reason": "Template only — awaiting real capture once live approval gate fires after #237.",
+    "captured_by": null,
+    "captured_at": null,
+    "journey": "C",
+    "related_issues": ["#226"]
+  },
+  "eval_cases": [
+    {
+      "eval_id": "journey_c_scenario_approval",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Make a 2-scene test documentary about tariffs."
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Scenario ready for your review. Approve to continue, reject with a note to iterate."
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "scenario_director",
+                "args": {
+                  "topic": "tariffs",
+                  "num_scenes": 2
+                }
+              },
+              {
+                "name": "emit_approval_gate",
+                "args": {
+                  "gate": "scenario_ready"
+                }
+              }
+            ],
+            "intermediate_responses": []
+          }
+        }
+      ]
+    }
+  ]
+}
