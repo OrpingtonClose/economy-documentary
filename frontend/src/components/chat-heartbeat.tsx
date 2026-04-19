@@ -77,12 +77,20 @@ export function ChatHeartbeat() {
                 // Only bump the update timestamp when a field we care
                 // about actually changed — otherwise a motionless
                 // backend would look "live" thanks to our own poll.
+                //
+                // NB: ``elapsed_sec`` is a wall-clock timer on the
+                // backend (``round(time.time() - start_time, 1)`` in
+                // ``server/dashboard/collector.py``) that ticks up on
+                // every snapshot regardless of pipeline progress. We
+                // therefore exclude it here: if we included it, the
+                // staleness threshold (``STALE_AFTER_MS``) could never
+                // be reached while the backend was still responding,
+                // even if the pipeline itself was stuck on a phase.
                 const changed =
                   !prev ||
                   prev.run_id !== data.run_id ||
                   prev.status !== data.status ||
-                  prev.active_phase !== data.active_phase ||
-                  prev.elapsed_sec !== data.elapsed_sec;
+                  prev.active_phase !== data.active_phase;
                 if (changed) setLastUpdateMs(Date.now());
                 return data;
               });
