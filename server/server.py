@@ -318,10 +318,10 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
             if input_data.state is None or not isinstance(input_data.state, dict):
                 input_data.state = {}
             _state = input_data.state
-            if not str(_state.get("topic", "")).strip():
+            if not str(_state.get("topic") or "").strip():
                 _state["topic"] = _latest_user_text
             from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
-            if not str(_state.get(ORIGINAL_BRIEF_KEY, "")).strip():
+            if not str(_state.get(ORIGINAL_BRIEF_KEY) or "").strip():
                 _state[ORIGINAL_BRIEF_KEY] = _latest_user_text
             logger.info(
                 "UI-PIPE: staged user brief into session state (topic=%r)",

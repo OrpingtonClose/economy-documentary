@@ -118,6 +118,41 @@ def test_user_brief_does_not_overwrite_existing_topic(server_module):
     assert state.get("topic") == "beavers"  # existing state wins
 
 
+def test_null_topic_is_overwritten(server_module):
+    """Regression guard: frontend sometimes sends state={'topic': null}.
+    str(None) is 'None' (truthy), so a naive guard silently skips
+    propagation and the pipeline aborts.  The ``or ""`` fix must treat
+    a ``None`` value as empty and stage the user brief normally."""
+
+    observed: dict[str, Any] = {"state": None}
+
+    async def _fake_run(input_data):
+        observed["state"] = dict(input_data.state or {})
+        if False:
+            yield None  # pragma: no cover
+
+    class _FakeAgent:
+        def run(self, input_data):
+            return _fake_run(input_data)
+
+    from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
+
+    with patch.object(server_module, "adk_agent", _FakeAgent()):
+        client = TestClient(server_module.app)
+        client.post(
+            "/",
+            json=_build_input_payload(
+                "A doc about otters.",
+                initial_state={"topic": None, ORIGINAL_BRIEF_KEY: None},
+            ),
+            headers={"Accept": "text/event-stream"},
+        )
+
+    state = observed["state"] or {}
+    assert state.get("topic") == "A doc about otters."
+    assert state.get(ORIGINAL_BRIEF_KEY) == "A doc about otters."
+
+
 def test_multimodal_content_parts_extracted(server_module):
     """User messages with a list of content parts are joined by text."""
 
