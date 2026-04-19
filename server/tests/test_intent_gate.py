@@ -156,7 +156,7 @@ def test_run_preflight_gate_passes_and_sets_signal():
     verdict = run_preflight_gate(state)
     assert verdict.passed is True
     assert INTENT_GATE_PASSED.is_set()
-    assert GATE_CRITIQUE_KEY not in state
+    assert not state.get(GATE_CRITIQUE_KEY)
     assert GATE_VERDICT_KEY in state
 
 
@@ -167,7 +167,7 @@ def test_run_preflight_gate_fail_writes_critique():
 
     verdict = run_preflight_gate(state, max_attempts=3)
     assert verdict.passed is False
-    assert GATE_CRITIQUE_KEY in state
+    assert state.get(GATE_CRITIQUE_KEY)
     assert state[GATE_ATTEMPT_KEY] == 1
     assert not INTENT_GATE_PASSED.is_set()
 
@@ -193,14 +193,14 @@ def test_run_preflight_gate_retry_flips_pass():
     state = _state_with_intent(intent, bad_scenes)
 
     run_preflight_gate(state)
-    assert GATE_CRITIQUE_KEY in state
+    assert state.get(GATE_CRITIQUE_KEY)
 
     # Director fixes the draft — gate should now pass.
     good_text = "PAG and opioid chemistry."
     state["scenes"] = [_scene(210, text=good_text), _scene(210, text=good_text)]
     verdict = run_preflight_gate(state)
     assert verdict.passed is True
-    assert GATE_CRITIQUE_KEY not in state
+    assert not state.get(GATE_CRITIQUE_KEY)
 
 
 def test_run_preflight_gate_raises_without_intent():
