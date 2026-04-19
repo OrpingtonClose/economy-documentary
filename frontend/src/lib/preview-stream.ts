@@ -16,11 +16,24 @@
  * simply replace the entry — no list growth.
  *
  * Stale detection (UI-06b): whenever a ``slot_state`` event arrives we
- * stamp ``lastSlotUpdateAt`` with the wall-clock time.  A preview is
- * considered "stale" iff its ``rendered_at`` timestamp is earlier than
- * ``lastSlotUpdateAt`` for any slot within the preview's boundary
- * scope.  The UI uses this to dim the ▶ marker and show a "rebuild
- * pending" caption instead of pretending the bytes are current.
+ * stamp ``lastSlotUpdateAt`` with the server-clock timestamp from the
+ * AG-UI envelope.  A preview is considered "stale" iff its
+ * ``rendered_at`` timestamp is earlier than ``lastSlotUpdateAt`` for
+ * any slot within the preview's boundary scope.  The UI uses this to
+ * dim the ▶ marker and show a "rebuild pending" caption instead of
+ * pretending the bytes are current.
+ *
+ * Module-level store (persists across hook mount/unmount):
+ *   ``OtioTimeline`` unmounts whenever the user switches away from
+ *   the OTIO tab, but ``PreviewChips`` stays mounted above the chat
+ *   pane and keeps the shared AG-UI stream open.  If
+ *   ``usePreviewStream`` kept its state in component-local
+ *   ``useState``, the timeline would come back empty on remount —
+ *   the shared ``EventSource`` would not replay past ``preview_ready``
+ *   events.  We therefore hold the preview state (``entries`` +
+ *   stale-detection timestamps + connection flag) in module scope so
+ *   every hook instance reads the same authoritative snapshot that
+ *   ``PreviewChips`` has been maintaining all along.
  */
 
 import { useEffect, useState } from "react";
@@ -69,58 +82,136 @@ const INITIAL_STATE: PreviewState = {
   lastNarrationUpdateAt: 0,
 };
 
+interface PreviewSnapshot {
+  state: PreviewState;
+  connected: boolean;
+}
+
+const INITIAL_SNAPSHOT: PreviewSnapshot = {
+  state: INITIAL_STATE,
+  connected: false,
+};
+
+// ---------------------------------------------------------------------------
+// Module-level store — see the header comment for why state lives here.
+// ---------------------------------------------------------------------------
+
+let moduleSnapshot: PreviewSnapshot = INITIAL_SNAPSHOT;
+const snapshotListeners = new Set<(s: PreviewSnapshot) => void>();
+let aguiUnsubscribe: (() => void) | null = null;
+let subscriberCount = 0;
+
+function publishSnapshot(next: PreviewSnapshot): void {
+  moduleSnapshot = next;
+  for (const fn of snapshotListeners) fn(moduleSnapshot);
+}
+
+function handleAguiEvent(evt: string, e: MessageEvent): void {
+  // The AG-UI envelope wraps every event as
+  //   {"data": <payload>, "timestamp": <server-seconds>}
+  // (see ``server/agui.py::emit_agui_event``).  We thread the server
+  // timestamp through so stale detection stays inside the server's
+  // clock domain, matching ``rendered_at``.
+  let serverTsSec: number | undefined;
+  let payload: unknown;
+  try {
+    const env = JSON.parse(e.data) as {
+      data: unknown;
+      timestamp?: number;
+    };
+    payload = env.data;
+    if (typeof env.timestamp === "number") {
+      serverTsSec = env.timestamp;
+    }
+  } catch {
+    return; // malformed envelope
+  }
+
+  if (evt === "preview_ready") {
+    const entry = parsePreviewReady(payload, serverTsSec);
+    if (entry) {
+      publishSnapshot({
+        ...moduleSnapshot,
+        state: upsertPreview(moduleSnapshot.state, entry),
+      });
+    }
+  } else if (evt === "preview_failed") {
+    const entry = parsePreviewFailed(payload, serverTsSec);
+    if (entry) {
+      publishSnapshot({
+        ...moduleSnapshot,
+        state: upsertPreview(moduleSnapshot.state, entry),
+      });
+    }
+  } else if (evt === "slot_state") {
+    if (!payload || typeof payload !== "object") return;
+    const slot = payload as SlotStateEvent;
+    publishSnapshot({
+      ...moduleSnapshot,
+      state: applySlotUpdate(moduleSnapshot.state, slot, serverTsSec),
+    });
+  }
+}
+
+function subscribePreviewStore(
+  listener: (s: PreviewSnapshot) => void,
+): () => void {
+  if (subscriberCount === 0) {
+    aguiUnsubscribe = subscribeAguiStream({
+      events: ["preview_ready", "preview_failed", "slot_state"],
+      onConnected: (c) => {
+        publishSnapshot({ ...moduleSnapshot, connected: c });
+      },
+      onEvent: handleAguiEvent,
+    });
+  }
+  subscriberCount += 1;
+  snapshotListeners.add(listener);
+  // Deliver the current snapshot synchronously so remounting
+  // consumers pick up previews that arrived while they were
+  // unmounted.
+  listener(moduleSnapshot);
+  return () => {
+    snapshotListeners.delete(listener);
+    subscriberCount -= 1;
+    if (subscriberCount <= 0) {
+      subscriberCount = 0;
+      if (aguiUnsubscribe) {
+        aguiUnsubscribe();
+        aguiUnsubscribe = null;
+      }
+      // NOTE: intentionally keep ``moduleSnapshot`` around.  The
+      // ``connected`` flag reflects the last SSE state; entries
+      // remain so that a hook remounting later starts with the
+      // known-good preview list instead of an empty ribbon.
+    }
+  };
+}
+
 /** Public hook — subscribe to preview_ready / preview_failed. */
 export function usePreviewStream(): {
   state: PreviewState;
   connected: boolean;
   error: string | null;
 } {
-  const [state, setState] = useState<PreviewState>(INITIAL_STATE);
-  const [connected, setConnected] = useState(false);
+  const [snapshot, setSnapshot] = useState<PreviewSnapshot>(moduleSnapshot);
   const [error] = useState<string | null>(null);
 
-  useEffect(() => {
-    const unsubscribe = subscribeAguiStream({
-      events: ["preview_ready", "preview_failed", "slot_state"],
-      onConnected: setConnected,
-      onEvent: (evt, e) => {
-        // The AG-UI envelope wraps every event as
-        //   {"data": <payload>, "timestamp": <server-seconds>}
-        // (see ``server/agui.py::emit_agui_event``).  We thread the
-        // server timestamp through so stale detection stays inside the
-        // server's clock domain, matching ``rendered_at``.
-        let serverTsSec: number | undefined;
-        let payload: unknown;
-        try {
-          const env = JSON.parse(e.data) as {
-            data: unknown;
-            timestamp?: number;
-          };
-          payload = env.data;
-          if (typeof env.timestamp === "number") {
-            serverTsSec = env.timestamp;
-          }
-        } catch {
-          return; // malformed envelope
-        }
+  useEffect(() => subscribePreviewStore(setSnapshot), []);
 
-        if (evt === "preview_ready") {
-          const entry = parsePreviewReady(payload, serverTsSec);
-          if (entry) setState((prev) => upsertPreview(prev, entry));
-        } else if (evt === "preview_failed") {
-          const entry = parsePreviewFailed(payload, serverTsSec);
-          if (entry) setState((prev) => upsertPreview(prev, entry));
-        } else if (evt === "slot_state") {
-          if (!payload || typeof payload !== "object") return;
-          const slot = payload as SlotStateEvent;
-          setState((prev) => applySlotUpdate(prev, slot, serverTsSec));
-        }
-      },
-    });
-    return unsubscribe;
-  }, []);
+  return { state: snapshot.state, connected: snapshot.connected, error };
+}
 
-  return { state, connected, error };
+/** Test-only: reset the module-level store so unit tests run in
+ *  isolation.  Not part of the public API surface. */
+export function _resetPreviewStoreForTests(): void {
+  if (aguiUnsubscribe) {
+    aguiUnsubscribe();
+    aguiUnsubscribe = null;
+  }
+  subscriberCount = 0;
+  snapshotListeners.clear();
+  moduleSnapshot = INITIAL_SNAPSHOT;
 }
 
 // ---------------------------------------------------------------------------
