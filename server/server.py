@@ -289,6 +289,13 @@ app.include_router(dashboard_directives_router)
 # Fleet coordination routes (pull-work, report, queue status)
 app.include_router(fleet_router)
 
+# Audit-only debug hooks (wired behind env flag, never in prod).
+# Lets the audit harness inject/drain narrator events without running the pipeline.
+if os.environ.get("DOCUMENTARY_AUDIT_HOOKS") == "1":
+    from _audit_debug_router import debug_router as _audit_debug_router
+    app.include_router(_audit_debug_router)
+    logger.info("Audit debug router mounted at /debug (DOCUMENTARY_AUDIT_HOOKS=1)")
+
 
 # AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
 # into the CopilotKit SSE stream so the connection never goes idle.
@@ -580,6 +587,13 @@ async def unified_agui_endpoint(request: Request):
                         EventType.RUN_FINISHED,
                     ):
                         continue
+                    if event_type == EventType.RUN_ERROR:
+                        # ADK surfaced an error as a stream event (not an
+                        # exception); forward it to the client and mark the
+                        # run terminated so the post-loop RUN_FINISHED emit
+                        # is suppressed.
+                        await merged.put(("agent_run_error_event", event))
+                        continue
                     await merged.put(("agent", event))
             except Exception as exc:
                 await merged.put(("agent_error", exc))
@@ -662,6 +676,19 @@ async def unified_agui_endpoint(request: Request):
                         yield _tagged(seq, sse)
                     except Exception as enc_err:
                         logger.error("Event encoding error: %s", enc_err)
+                elif kind == "agent_run_error_event":
+                    # ADK emitted RUN_ERROR as a stream event; forward it
+                    # and mark the run as terminated so we don't also emit
+                    # RUN_FINISHED (which would be a double terminal event).
+                    agent_errored = True
+                    try:
+                        sse = encoder.encode(payload)
+                        seq = registry.append(run_id, sse)
+                        yield _tagged(seq, sse)
+                    except Exception as enc_err:
+                        logger.error(
+                            "RunErrorEvent encoding error: %s", enc_err
+                        )
                 elif kind == "pipeline":
                     # Forward pipeline events as AG-UI CustomEvents
                     custom = CustomEvent(
