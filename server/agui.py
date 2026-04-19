@@ -687,6 +687,39 @@ async def respond_to_escalation(escalation_id: str, body: dict):
 
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
 
+
+@router.get("/preview/{filename:path}")
+async def get_preview_asset(filename: str):
+    """Serve a rendered preview mp4 by filename (UI-06a #208).
+
+    The ARCH-G1 preview builder writes ``preview_<hash>.mp4`` files to
+    :data:`~previews.builder.DEFAULT_PREVIEW_DIR`.  The dashboard needs
+    a fetchable URL to drive a ``<video>`` element, so we expose the
+    directory through this whitelisted endpoint.
+
+    Security: ``filename`` is resolved against the preview directory
+    and must stay inside it; any traversal attempt returns 404.  Only
+    files ending in ``.mp4`` or ``.manifest.json`` are served.
+    """
+    from fastapi.responses import FileResponse
+    from previews.builder import DEFAULT_PREVIEW_DIR
+
+    base = os.path.abspath(DEFAULT_PREVIEW_DIR)
+    candidate = os.path.abspath(os.path.join(base, filename))
+    if not candidate.startswith(base + os.sep) and candidate != base:
+        return JSONResponse({"error": "invalid preview path"}, status_code=400)
+    if not os.path.isfile(candidate):
+        return JSONResponse({"error": "preview not found"}, status_code=404)
+    if candidate.endswith(".mp4"):
+        media_type = "video/mp4"
+    elif candidate.endswith(".manifest.json"):
+        media_type = "application/json"
+    else:
+        return JSONResponse(
+            {"error": "unsupported preview file type"}, status_code=400
+        )
+    return FileResponse(candidate, media_type=media_type)
+
 # Approval gate: sequential workflow state
 # Stages: scenario -> prompts -> clips -> timeline -> assembly
 # Shared module used by both the backend (this file) and the pipeline callbacks.

@@ -33,10 +33,16 @@ from previews.builder import (
 )
 from previews.consumers import (
     AGENT_ESCALATION_OP,
+    BOUNDARY_FINAL,
+    BOUNDARY_HALFWAY,
+    BOUNDARY_NARRATION_LOCKED,
     ESCALATION_LEVEL_CONTENT,
     ESCALATION_LEVEL_L4,
     HUMAN_DISLIKE_ESCALATION_OP,
+    PREVIEW_FAILED_EVENT,
     PREVIEW_READY_EVENT,
+    derive_boundary,
+    emit_preview_failed,
     emit_preview_ready,
     evaluate_preview,
     handle_human_dislike_preview,
@@ -298,6 +304,25 @@ class TestEmitPreviewReady:
         assert "digest" in payload
         assert payload["counts"][SlotStatus.FAILED.value] == 1
 
+    def test_payload_has_ui06a_contract_fields(
+        self, manifest_with_mixed_slots
+    ):
+        """UI-06a (#208): payload MUST carry ``boundary`` / ``duration_sec``
+        / ``file_url`` / ``rendered_at`` so the dashboard can render a ▶
+        marker without re-reading the manifest."""
+        manifest, _ = manifest_with_mixed_slots
+        with mock.patch("agui.emit_agui_event") as mock_emit:
+            emit_preview_ready(manifest)
+        _, payload = mock_emit.call_args.args
+        assert payload["boundary"] == "scene_004_complete"
+        # Mixed fixture has total_duration_sec=4.0.
+        assert payload["duration_sec"] == 4.0
+        assert isinstance(payload["file_url"], str)
+        assert payload["file_url"]  # non-empty
+        rendered_at = payload["rendered_at"]
+        assert isinstance(rendered_at, str)
+        assert "T" in rendered_at and rendered_at.endswith("+00:00")
+
     def test_swallows_emit_failure(self, manifest_with_mixed_slots):
         manifest, _ = manifest_with_mixed_slots
         with mock.patch(
@@ -305,6 +330,77 @@ class TestEmitPreviewReady:
         ):
             # Must not raise — dashboard emission is best-effort.
             emit_preview_ready(manifest)
+
+
+# ---------------------------------------------------------------------------
+# derive_boundary — UI-06a #208
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveBoundary:
+
+    def test_pre_production_becomes_narration_locked(self):
+        assert derive_boundary("pre_production") == BOUNDARY_NARRATION_LOCKED
+
+    def test_halfway(self):
+        assert derive_boundary("halfway") == BOUNDARY_HALFWAY
+        assert derive_boundary("halfway_milestone") == BOUNDARY_HALFWAY
+
+    def test_final(self):
+        assert derive_boundary("final") == BOUNDARY_FINAL
+        assert derive_boundary("pipeline_complete") == BOUNDARY_FINAL
+
+    def test_scene_and_act_pass_through(self):
+        assert derive_boundary("scene_001_complete") == "scene_001_complete"
+        assert derive_boundary("scene_042_complete") == "scene_042_complete"
+        assert derive_boundary("act_002_complete") == "act_002_complete"
+
+    def test_empty_trigger_stays_empty(self):
+        assert derive_boundary("") == ""
+        assert derive_boundary(None) == ""  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# emit_preview_failed — UI-06a #208
+# ---------------------------------------------------------------------------
+
+
+class TestEmitPreviewFailed:
+
+    def test_emits_preview_failed_event(self):
+        with mock.patch("agui.emit_agui_event") as mock_emit:
+            emit_preview_failed(
+                "scene_003_complete",
+                "ffmpeg concat returned 1",
+                preview_path="/tmp/documentary-pipeline/previews/preview_x.mp4",
+                input_hash="h_fail",
+            )
+        assert mock_emit.call_count == 1
+        event_type, payload = mock_emit.call_args.args
+        assert event_type == PREVIEW_FAILED_EVENT
+        assert payload["boundary"] == "scene_003_complete"
+        assert payload["trigger_reason"] == "scene_003_complete"
+        assert "ffmpeg" in payload["error"]
+        assert payload["input_hash"] == "h_fail"
+        assert isinstance(payload["rendered_at"], str)
+        assert payload["rendered_at"].endswith("+00:00")
+        # file_url is derived from preview_path under the preview dir
+        assert payload["file_url"].startswith("/agui/preview/")
+
+    def test_normalises_pre_production_to_narration_locked(self):
+        with mock.patch("agui.emit_agui_event") as mock_emit:
+            emit_preview_failed("pre_production", "no narration")
+        _, payload = mock_emit.call_args.args
+        assert payload["boundary"] == BOUNDARY_NARRATION_LOCKED
+
+    def test_swallows_emit_failure(self):
+        with mock.patch(
+            "agui.emit_agui_event", side_effect=RuntimeError("SSE down")
+        ):
+            # Must not raise — dashboard emission is best-effort even on
+            # the failure path.  An SSE outage must not crash the
+            # pipeline's failure reporting.
+            emit_preview_failed("halfway", "render failed")
 
 
 # ---------------------------------------------------------------------------
