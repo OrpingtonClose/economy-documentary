@@ -655,16 +655,25 @@ function ReasoningSection({
  *
  * Uses a simple window-based virtualizer (not a library dependency) so
  * we can handle 1000+ entries smoothly: only the visible rows render.
+ *
+ * Rows are strictly fixed-height (``ROW_HEIGHT``) so virtualisation math
+ * stays correct. Selecting a row surfaces its full payload in a
+ * dedicated detail pane below the list rather than expanding inline —
+ * this avoids overlapping rows and keeps the scrollbar accurate.
  */
+const RAW_ROW_HEIGHT = 52;
+const RAW_LIST_HEIGHT = 320;
+
 function RawReasoningFeed({ slotId }: { slotId: string }) {
   const [traces, setTraces] = useState<ReasoningTrace[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setTraces(null);
     setError(null);
+    setSelectedId(null);
     fetch(
       `${BACKEND_URL}/api/reasoning/raw?slot_id=${encodeURIComponent(slotId)}&limit=1000`,
     )
@@ -683,6 +692,11 @@ function RawReasoningFeed({ slotId }: { slotId: string }) {
     };
   }, [slotId]);
 
+  const selected = useMemo(() => {
+    if (traces == null || selectedId == null) return null;
+    return traces.find((t) => t.id === selectedId) ?? null;
+  }, [traces, selectedId]);
+
   if (error) {
     return (
       <div className="rounded bg-red-900/50 px-2 py-1 text-red-100">
@@ -695,7 +709,7 @@ function RawReasoningFeed({ slotId }: { slotId: string }) {
   }
 
   return (
-    <div>
+    <div className="space-y-2">
       <div className="mb-1 text-[10px] uppercase tracking-widest text-pipeline-muted">
         raw trace ({traces.length})
       </div>
@@ -704,65 +718,82 @@ function RawReasoningFeed({ slotId }: { slotId: string }) {
       ) : (
         <VirtualList
           items={traces}
-          itemHeight={60}
-          height={320}
+          itemHeight={RAW_ROW_HEIGHT}
+          height={RAW_LIST_HEIGHT}
           renderItem={(trace) => (
             <RawTraceRow
               key={trace.id}
               trace={trace}
-              expanded={expanded.has(trace.id)}
-              onToggle={() => {
-                setExpanded((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(trace.id)) next.delete(trace.id);
-                  else next.add(trace.id);
-                  return next;
-                });
-              }}
+              selected={trace.id === selectedId}
+              onSelect={() =>
+                setSelectedId((prev) => (prev === trace.id ? null : trace.id))
+              }
             />
           )}
         />
       )}
+      {selected && <RawTraceDetail trace={selected} />}
     </div>
   );
 }
 
 function RawTraceRow({
   trace,
-  expanded,
-  onToggle,
+  selected,
+  onSelect,
 }: {
   trace: ReasoningTrace;
-  expanded: boolean;
-  onToggle: () => void;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   const ts = new Date(trace.timestamp * 1000).toISOString().slice(11, 23);
   const digest =
     (trace.content || "").slice(0, 160).replace(/\s+/g, " ") || trace.event_type;
   return (
-    <div className="mb-1 rounded bg-pipeline-bg/60 px-2 py-1 text-[11px]">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        className="flex w-full items-center justify-between text-left"
-      >
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={
+        "flex w-full flex-col justify-center gap-0.5 overflow-hidden rounded px-2 py-1 text-left text-[11px] " +
+        (selected
+          ? "bg-pipeline-accent/20 text-pipeline-accent"
+          : "bg-pipeline-bg/60 hover:bg-pipeline-blue/30")
+      }
+      style={{ height: RAW_ROW_HEIGHT - 4, marginBottom: 4 }}
+    >
+      <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 gap-2">
           <span className="font-mono text-[10px] text-pipeline-muted">{ts}</span>
-          <span className="truncate font-semibold">{trace.agent_name || "-"}</span>
+          <span className="truncate font-semibold">
+            {trace.agent_name || "-"}
+          </span>
         </span>
         <span className="shrink-0 text-[10px] text-pipeline-muted">
           {trace.event_type}
         </span>
-      </button>
+      </div>
       <div className="truncate text-[11px] text-pipeline-muted">{digest}</div>
-      {expanded && (
-        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-[10px]">
-          {trace.content}
-          {Object.keys(trace.metadata || {}).length > 0 &&
-            `\n\nmetadata:\n${JSON.stringify(trace.metadata, null, 2)}`}
-        </pre>
-      )}
+    </button>
+  );
+}
+
+function RawTraceDetail({ trace }: { trace: ReasoningTrace }) {
+  const ts = new Date(trace.timestamp * 1000).toISOString();
+  const hasMeta = Object.keys(trace.metadata || {}).length > 0;
+  return (
+    <div className="rounded border border-pipeline-blue/40 bg-pipeline-bg/60 p-2 text-[11px]">
+      <div className="mb-1 flex justify-between gap-2 text-[10px] uppercase tracking-widest text-pipeline-muted">
+        <span>
+          {trace.event_type} · {trace.agent_name || "-"}
+        </span>
+        <span className="font-mono">{ts}</span>
+      </div>
+      <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono text-[10px]">
+        {trace.content}
+        {hasMeta &&
+          `\n\nmetadata:\n${JSON.stringify(trace.metadata, null, 2)}`}
+      </pre>
     </div>
   );
 }
@@ -770,9 +801,10 @@ function RawTraceRow({
 /** Minimal virtualised list (no external deps).
  *
  * Renders only the rows intersecting the visible window plus a small
- * overscan buffer. Fixed row height keeps the math cheap — variable
- * heights are out of scope here; collapsed rows stay at ``itemHeight``
- * and expanded rows show a scrollable ``<pre>`` inside the same slot.
+ * overscan buffer. Row height is strictly fixed: each rendered row is
+ * wrapped in a ``height: itemHeight`` box with ``overflow: hidden`` so
+ * the positioning math stays correct regardless of what the caller
+ * renders inside.
  */
 function VirtualList<T>({
   items,
@@ -807,7 +839,14 @@ function VirtualList<T>({
     >
       <div style={{ height: total, position: "relative" }}>
         <div style={{ transform: `translateY(${offset}px)` }}>
-          {visible.map((item, i) => renderItem(item, startIdx + i))}
+          {visible.map((item, i) => (
+            <div
+              key={startIdx + i}
+              style={{ height: itemHeight, overflow: "hidden" }}
+            >
+              {renderItem(item, startIdx + i)}
+            </div>
+          ))}
         </div>
       </div>
     </div>
