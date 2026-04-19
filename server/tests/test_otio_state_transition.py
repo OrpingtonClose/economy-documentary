@@ -92,6 +92,14 @@ def tmp_timeline(tmp_path, monkeypatch):
     )
     path = tool_context.state["_timeline_path"]
     assert os.path.exists(path)
+    # ARCH-E2 (#148) + ARCH-E3 (#149): crystallisation requires BOTH
+    # gates to be explicitly True. Seed the happy-path fixture so the
+    # pre-existing E1 transition tests exercise the crystallisation
+    # flow rather than the new gate-block path. Tests that specifically
+    # want to assert gate-blocking behaviour can override these keys
+    # (set to False or delete them) before calling the callback.
+    tool_context.state["_stylistic_qa_passed"] = True
+    tool_context.state["_narration_reconciliation_passed"] = True
     return tool_context.state, path
 
 

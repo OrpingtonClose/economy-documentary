@@ -386,6 +386,37 @@ def authoritative_transition_callback(
         )
         return None
 
+    # ARCH-E2 (#148) + ARCH-E3 (#149): crystallise ONLY when every
+    # block has passed BOTH timing reconciliation and stylistic QA.
+    # These gates are boolean state keys written by the audio callback;
+    # absence of a key means the corresponding check did not run (or
+    # was rejected upstream) — either way we must not crystallise.
+    # Use ``is not True`` (not ``is False``) so absent keys (value
+    # ``None`` when the upstream gatekeeper short-circuited) block
+    # crystallisation too — otherwise ``None is False`` is ``False``
+    # and the gate silently lets the timeline through.
+    # See docs/ARCHITECTURE_DIAGRAMS.md diagram 2 (stylistic QA +
+    # crystallise).
+    stylistic_passed = state.get("_stylistic_qa_passed")
+    if stylistic_passed is not True:
+        logger.error(
+            "otio_state: NOT crystallising — stylistic QA (ARCH-E3) %s",
+            "reported failures on at least one block"
+            if stylistic_passed is False
+            else "did not run (key absent) — cannot crystallise without a pass",
+        )
+        return None
+    reconciliation_passed = state.get("_narration_reconciliation_passed")
+    if reconciliation_passed is not True:
+        logger.error(
+            "otio_state: NOT crystallising — narration reconciliation "
+            "(ARCH-E2) %s",
+            "reported timing violations on at least one block"
+            if reconciliation_passed is False
+            else "did not run (key absent) — cannot crystallise without a pass",
+        )
+        return None
+
     if get_otio_state(state) == OTIO_STATE_AUTHORITATIVE:
         logger.info("otio_state: already authoritative — idempotent no-op")
         return None
