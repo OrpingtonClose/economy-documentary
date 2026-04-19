@@ -614,6 +614,7 @@ async def unified_agui_endpoint(request: Request):
         pipe_task = asyncio.create_task(pipeline_reader())
         narrator_task = asyncio.create_task(narrator_reader())
 
+        agent_errored = False
         try:
             while True:
                 try:
@@ -628,6 +629,7 @@ async def unified_agui_endpoint(request: Request):
                 if kind == "agent_done":
                     break
                 elif kind == "agent_error":
+                    agent_errored = True
                     logger.error("ADK agent error in unified stream: %s", payload)
                     # Save trace capture on error path (pipeline cleanup may not run)
                     try:
@@ -717,19 +719,25 @@ async def unified_agui_endpoint(request: Request):
             # Close the run lifecycle: we swallowed ADK's own RUN_FINISHED
             # in ``agent_reader`` (since we emitted the matching RUN_STARTED
             # up-top), so emit our own here to balance the protocol.
-            try:
-                from ag_ui.core import RunFinishedEvent
+            #
+            # Suppress on the error path: ``RUN_ERROR`` is itself a terminal
+            # event in AG-UI, and emitting ``RUN_FINISHED`` afterwards would
+            # send two terminal lifecycle events and cause CopilotKit to
+            # double-trigger its run-end handlers.
+            if not agent_errored:
+                try:
+                    from ag_ui.core import RunFinishedEvent
 
-                run_finished = RunFinishedEvent(
-                    type=EventType.RUN_FINISHED,
-                    thread_id=input_data.thread_id,
-                    run_id=input_data.run_id,
-                )
-                sse = encoder.encode(run_finished)
-                seq = registry.append(run_id, sse)
-                yield _tagged(seq, sse)
-            except Exception as enc_err:  # pragma: no cover -- defensive
-                logger.error("RunFinishedEvent encoding error: %s", enc_err)
+                    run_finished = RunFinishedEvent(
+                        type=EventType.RUN_FINISHED,
+                        thread_id=input_data.thread_id or run_id,
+                        run_id=input_data.run_id or run_id,
+                    )
+                    sse = encoder.encode(run_finished)
+                    seq = registry.append(run_id, sse)
+                    yield _tagged(seq, sse)
+                except Exception as enc_err:  # pragma: no cover -- defensive
+                    logger.error("RunFinishedEvent encoding error: %s", enc_err)
 
         finally:
             pipe_task.cancel()
