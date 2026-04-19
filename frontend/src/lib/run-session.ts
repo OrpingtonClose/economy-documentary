@@ -328,7 +328,15 @@ export function useRunSession(): RunSession {
 
   const clearRun = useCallback(() => setRunId(null), [setRunId]);
 
-  const dismissOverflow = useCallback(() => setOverflowMessage(null), []);
+  // Dismissing the overflow banner also transitions status back to
+  // ``ready`` so any downstream consumer polling ``status === "ready"``
+  // sees the resume as complete. (The banner already hides itself the
+  // moment ``overflowMessage`` goes null, but the status field is
+  // exported for other consumers.)
+  const dismissOverflow = useCallback(() => {
+    setOverflowMessage(null);
+    setStatus("ready");
+  }, []);
 
   // -- bootstrap: read URL, fetch /api/current-run for fallback. -----------
   useEffect(() => {
@@ -392,8 +400,17 @@ export function useRunSession(): RunSession {
         if (!probe.ok) throw new Error(`probe failed: ${probe.status}`);
         const probeData = (await probe.json()) as { exists: boolean };
         if (!probeData.exists) {
+          // The URL pointed to a run the server no longer knows about
+          // (server restarted, run aged out, etc.). Strip the query
+          // param + localStorage cache *without* calling ``setRunId``,
+          // which would stomp the status back to ``idle`` and hide the
+          // "unknown run" banner before the user ever saw it.
+          writeRunIdToUrl(null);
+          setRunIdState(null);
+          setLastEventId(0);
+          setReplayedMessages([]);
+          setOverflowMessage(null);
           setStatus("unknown-run");
-          setRunId(null);
           return;
         }
         setStatus("replaying");
