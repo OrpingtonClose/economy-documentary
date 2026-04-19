@@ -1,0 +1,60 @@
+{
+  "eval_set_id": "journey_f_halt_directive",
+  "name": "Journey F — halt + directive feedback loop",
+  "description": "Capture template: reviewer hits Pause production, pipeline halts at next safe checkpoint, reviewer submits a directive scoped to a selected slot, the preference ledger accepts it and surgical re-manifestation drifts only the affected slots. Audited static-PASS in audit cycle 13 (META #226).",
+  "metadata": {
+    "stubbed": true,
+    "reason": "Template only — awaiting real capture of a live halt + directive cycle.",
+    "captured_by": null,
+    "captured_at": null,
+    "journey": "F",
+    "related_issues": ["#226", "#229"]
+  },
+  "eval_cases": [
+    {
+      "eval_id": "journey_f_halt_then_directive",
+      "conversation": [
+        {
+          "invocation_id": "inv_1",
+          "user_content": {
+            "parts": [
+              {
+                "text": "Pause — scene 3 narration feels too flat."
+              }
+            ],
+            "role": "user"
+          },
+          "final_response": {
+            "parts": [
+              {
+                "text": "Halt engaged at narration_loop; directive recorded (prefer louder narration @ element:scene3_narr). Re-manifestation queued for 1 slot."
+              }
+            ],
+            "role": "model"
+          },
+          "intermediate_data": {
+            "tool_uses": [
+              {
+                "name": "halt_pipeline",
+                "args": {
+                  "reviewer": "dashboard-user"
+                }
+              },
+              {
+                "name": "submit_directive",
+                "args": {
+                  "directive": "scene 3 narration louder",
+                  "slot_context": {
+                    "scope": "element",
+                    "scope_ref": "scene3_narr"
+                  }
+                }
+              }
+            ],
+            "intermediate_responses": []
+          }
+        }
+      ]
+    }
+  ]
+}

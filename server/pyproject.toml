@@ -23,8 +23,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest (>=9.0.3,<10.0.0)",
+    # Pin the ADK version used for the eval harness so CI is deterministic.
+    # The production install (``google-adk >= 1.0.0`` above) stays unpinned.
+    "google-adk (==1.29.0)",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "adk_eval"]
 pythonpath = ["."]

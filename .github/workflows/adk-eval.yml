@@ -1,0 +1,69 @@
+name: ADK eval
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - ".github/workflows/adk-eval.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "server/**"
+      - ".github/workflows/adk-eval.yml"
+
+concurrency:
+  group: adk-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: Run ADK eval harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        # Poetry 2.x is required — this pyproject.toml uses PEP 621
+        # ([project] only, no [tool.poetry] section).
+        run: pipx install "poetry>=2.1,<3"
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: poetry-${{ runner.os }}-py3.12-${{ hashFiles('server/poetry.lock') }}
+          restore-keys: |
+            poetry-${{ runner.os }}-py3.12-
+
+      - name: Install server dependencies
+        run: poetry install --no-root --with dev
+
+      - name: Run ADK eval pytest suite
+        # No LLM keys are injected: stubbed eval sets are skipped by design,
+        # and real eval sets bail out cleanly when credentials are absent.
+        # Tighten this once real goldens land.
+        run: poetry run pytest adk_eval/ -v --tb=short
+
+      - name: Upload eval artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adk-eval-diff-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            /tmp/adk_eval_runs/**
+            server/adk_eval/evalsets/**

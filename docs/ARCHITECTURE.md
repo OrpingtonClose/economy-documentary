@@ -165,3 +165,21 @@ model or a different approach. L3 is COLLABORATIVE: an inter-agent
 agent talks to other pipeline agents to coordinate a fix. L4 is
 HUMAN: AG-UI escalation with the full diagnostic chain presented;
 last resort.
+
+## Automated eval
+
+The Google ADK eval harness lives at ``server/adk_eval/``. It re-exports
+``pipeline_agent`` so goldens captured through ``adk web`` exercise the
+same orchestrator the production server boots — no code duplication.
+
+Run the UI locally with ``poetry run adk web .`` from ``server/``, capture
+a conversation as a ``.evalset.json`` golden, drop it under
+``server/adk_eval/evalsets/``, and the pytest parametrised runner
+(``server/adk_eval/test_evalsets.py``) will regress it against
+``server/adk_eval/test_config.json`` thresholds on every PR that touches
+``server/`` (see ``.github/workflows/adk-eval.yml``). Placeholder files
+tagged ``metadata.stubbed: true`` are skipped; real goldens drop that
+flag to opt in.
+
+Full usage — capturing goldens, running the harness offline, threshold
+tuning — lives in ``server/adk_eval/README.md``.
