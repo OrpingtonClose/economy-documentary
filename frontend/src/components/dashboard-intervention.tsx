@@ -6,8 +6,8 @@
  * Renders the two proactive-L4 entry points alongside the existing
  * reactive approval-gate flow:
  *
- * 1. **Halt-anywhere button** -- the red "I don't like this movie" button
- *    in the top-right of the dashboard shell. Posts to `POST /api/halt`,
+ * 1. **Halt-anywhere button** -- the red "Pause production" button in
+ *    the top-right of the dashboard shell. Posts to `POST /api/halt`,
  *    which engages the disk-backed halt flag. The approval-gate poll
  *    loop observes the flag and pauses the pipeline at the next safe
  *    checkpoint; workers finish their in-flight tool call first.
@@ -357,7 +357,7 @@ export function DashboardIntervention({
               data-testid="halt-button"
               title="Pause the pipeline at the next safe checkpoint"
             >
-              {haltSubmitting ? "Halting…" : "I don't like this movie"}
+              {haltSubmitting ? "Pausing…" : "Pause production"}
             </button>
           )}
         </div>
