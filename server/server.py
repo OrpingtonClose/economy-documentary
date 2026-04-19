@@ -677,9 +677,11 @@ async def unified_agui_endpoint(request: Request):
                     except Exception as enc_err:
                         logger.error("Event encoding error: %s", enc_err)
                 elif kind == "agent_run_error_event":
-                    # ADK emitted RUN_ERROR as a stream event; forward it
-                    # and mark the run as terminated so we don't also emit
-                    # RUN_FINISHED (which would be a double terminal event).
+                    # ADK emitted RUN_ERROR as a stream event.  RUN_ERROR is
+                    # terminal in AG-UI, so forward it, mark the run as
+                    # errored (suppresses post-loop RUN_FINISHED) and break
+                    # out of the main loop so no further events ship after
+                    # the terminal marker.
                     agent_errored = True
                     try:
                         sse = encoder.encode(payload)
@@ -689,6 +691,7 @@ async def unified_agui_endpoint(request: Request):
                         logger.error(
                             "RunErrorEvent encoding error: %s", enc_err
                         )
+                    break
                 elif kind == "pipeline":
                     # Forward pipeline events as AG-UI CustomEvents
                     custom = CustomEvent(
@@ -715,33 +718,35 @@ async def unified_agui_endpoint(request: Request):
                                 "Narrator event encoding error: %s", enc_err
                             )
 
-            # Drain remaining pipeline events after agent finishes
-            while pipeline_queue:
-                event = pipeline_queue.popleft()
-                custom = CustomEvent(
-                    type=EventType.CUSTOM,
-                    name="pipeline_event",
-                    value=event,
-                )
-                try:
-                    sse = encoder.encode(custom)
-                    seq = registry.append(run_id, sse)
-                    yield _tagged(seq, sse)
-                except Exception:
-                    pass
-
-            # Drain remaining narrator turns after agent finishes so the
-            # last one-liner (typically ``stage_completed`` for assembly)
-            # still reaches the reviewer.
-            while narrator_queue:
-                event = narrator_queue.popleft()
-                for evt in _narrator_to_agui_events(event):
+            # Drain remaining pipeline + narrator events after agent
+            # finishes so trailing one-liners (e.g. ``stage_completed``
+            # for assembly) still reach the reviewer.  Skipped on the
+            # error path because RUN_ERROR is terminal in AG-UI and the
+            # client has already torn down its listener.
+            if not agent_errored:
+                while pipeline_queue:
+                    event = pipeline_queue.popleft()
+                    custom = CustomEvent(
+                        type=EventType.CUSTOM,
+                        name="pipeline_event",
+                        value=event,
+                    )
                     try:
-                        sse = encoder.encode(evt)
+                        sse = encoder.encode(custom)
                         seq = registry.append(run_id, sse)
                         yield _tagged(seq, sse)
                     except Exception:
                         pass
+
+                while narrator_queue:
+                    event = narrator_queue.popleft()
+                    for evt in _narrator_to_agui_events(event):
+                        try:
+                            sse = encoder.encode(evt)
+                            seq = registry.append(run_id, sse)
+                            yield _tagged(seq, sse)
+                        except Exception:
+                            pass
 
             # Close the run lifecycle: we swallowed ADK's own RUN_FINISHED
             # in ``agent_reader`` (since we emitted the matching RUN_STARTED
