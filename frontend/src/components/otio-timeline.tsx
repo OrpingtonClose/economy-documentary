@@ -67,6 +67,7 @@ export function OtioTimeline() {
   const { timeline, connected, error, openGates, drift } = useOtioStream();
   const { state: previewState } = usePreviewStream();
   const { selectedSlotId, selectionOrigin, selectionTick } = useSelection();
+  const [zoom, setZoom] = useState<number>(40); // pixels per second
   const [openBoundary, setOpenBoundary] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -112,7 +113,7 @@ export function OtioTimeline() {
   useEffect(() => {
     return subscribeSlotSelection((detail) => {
       if (detail.source !== "timeline") {
-        setSelectedSlotId(detail.slotId);
+        selectionStore.getState().selectSlot(detail.slotId, "chip");
       }
     });
   }, []);
