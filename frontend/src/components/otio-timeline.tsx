@@ -39,10 +39,14 @@ import { SlotDetailPanel } from "@/components/slot-detail-panel";
 import { ReconciliationOverlay } from "@/components/reconciliation-overlay";
 import { ApprovalCard } from "@/components/approval-card";
 import { PreviewModal } from "@/components/preview-modal";
-import { subscribeSlotSelection } from "@/lib/selection-bus";
+import {
+  subscribeSlotSelection,
+  type SlotSelectionDetail,
+} from "@/lib/selection-bus";
 import {
   selectionStore,
   useSelection,
+  type SelectionOrigin,
 } from "@/lib/stores/selection";
 
 const BACKEND_URL =
@@ -66,6 +70,7 @@ const TRACK_DEFS: Array<{
 export function OtioTimeline() {
   const { timeline, connected, error, openGates, drift } = useOtioStream();
   const { state: previewState } = usePreviewStream();
+  const [zoom, setZoom] = useState<number>(40); // pixels per second
   const { selectedSlotId, selectionOrigin, selectionTick } = useSelection();
   const [openBoundary, setOpenBoundary] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -106,14 +111,18 @@ export function OtioTimeline() {
     }
   }, [selectedSlotId, selectionOrigin, selectionTick, timeline, zoom]);
 
-  // UI-01c (#195): react to chat-chip clicks by selecting the referenced
-  // slot.  The chip dispatches via the selection bus so the coupling
-  // stays one-way and the chat panel doesn't need a ref into the timeline.
+  // UI-01c (#195): react to chat-chip clicks dispatched via the legacy
+  // selection-bus by routing them into the UI-02a shared zustand store.
+  // Consumers that subscribe via useSelection() then pick up the change
+  // (including the scroll-into-view effect above). The bus is retained
+  // as a one-way entry point for the chat panel so it doesn't need a
+  // ref into the timeline.
   useEffect(() => {
     return subscribeSlotSelection((detail) => {
-      if (detail.source !== "timeline") {
-        setSelectedSlotId(detail.slotId);
-      }
+      if (detail.source === "timeline") return;
+      selectionStore
+        .getState()
+        .selectSlot(detail.slotId, mapBusSourceToOrigin(detail.source));
     });
   }, []);
 
@@ -295,6 +304,21 @@ export function OtioTimeline() {
       )}
     </div>
   );
+}
+
+function mapBusSourceToOrigin(
+  source: SlotSelectionDetail["source"],
+): SelectionOrigin {
+  switch (source) {
+    case "chat-chip":
+      return "chip";
+    case "slot-detail":
+      return "panel";
+    case "timeline":
+      return "timeline";
+    default:
+      return "other";
+  }
 }
 
 function findSlotInTimeline(

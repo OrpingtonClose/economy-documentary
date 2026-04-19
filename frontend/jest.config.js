@@ -23,9 +23,13 @@ module.exports = {
       },
     ],
   },
-  testMatch: [
-    "<rootDir>/src/**/__tests__/**/*.test.(ts|tsx)",
-    "<rootDir>/src/**/*.test.(ts|tsx)",
+  testMatch: ["<rootDir>/src/**/__tests__/**/*.test.(ts|tsx)"],
+  // UI-01c's chat-tokens parser ships its own node:test suite
+  // (run via `node --test --experimental-strip-types`), so exclude
+  // anything outside `__tests__/` to keep jest from picking it up.
+  testPathIgnorePatterns: [
+    "/node_modules/",
+    "<rootDir>/src/lib/chat-tokens.test.ts",
   ],
   transformIgnorePatterns: ["/node_modules/(?!(zustand)/)"],
 };
