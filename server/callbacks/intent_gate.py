@@ -294,13 +294,17 @@ def build_halt_message(verdict: GateVerdict, *, max_attempts: int) -> str:
     """Compose a plain-English chat turn shown when the gate halts."""
     target = verdict.target_duration_sec
     tolerance = verdict.tolerance_sec
-    measured = verdict.total_scene_duration_sec
+    # Report MOVIE runtime (narration + silence gaps), not raw narration.
+    # The gate compares movie_duration against the target, so the halt
+    # summary must show the same number, otherwise users see a confusing
+    # "target 420s, got 356s" even when drift was actually in movie space.
+    measured = verdict.movie_duration_sec
     joined = "; ".join(verdict.failures) or "unknown drift"
     return (
         f"Halting: after {max_attempts} attempts the scenario draft "
         f"still misses your brief (target {target:.0f}s ± "
-        f"{tolerance:.0f}s, got {measured:.0f}s). Remaining issues: "
-        f"{joined}."
+        f"{tolerance:.0f}s, got {measured:.0f}s film runtime). "
+        f"Remaining issues: {joined}."
     )
 
 

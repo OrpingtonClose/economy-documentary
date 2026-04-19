@@ -283,13 +283,24 @@ def _verify_audio(intent, state: Mapping[str, Any]) -> VerificationRecord:
     measured = _measured_narration_duration_sec(state)
     reference = measured if measured is not None else declared
 
+    # After ``deterministic_steps`` scales scene durations so that
+    # narration + silence gaps = user target, the narration-only
+    # number is intentionally shorter than the target by the gap
+    # overhead.  Compare MOVIE duration (narration + gaps) against
+    # the user's stated target — that's what ffprobe sees on the
+    # delivered mp4.  Without this, any documentary with non-trivial
+    # gap overhead would HALT right after the timing loop passes.
+    gap_overhead = _compute_gap_overhead_sec(scenes)
+    movie_duration = reference + gap_overhead
+
     failures: list[str] = []
     lower = intent.duration_sec - intent.tolerance_sec
     upper = intent.duration_sec + intent.tolerance_sec
-    if reference < lower or reference > upper:
+    if movie_duration < lower or movie_duration > upper:
         failures.append(
-            f"narration duration {reference:.1f}s outside "
-            f"{intent.duration_sec:.1f}s ± {intent.tolerance_sec:.1f}s"
+            f"movie runtime {movie_duration:.1f}s "
+            f"(narration {reference:.1f}s + gaps {gap_overhead:.1f}s) "
+            f"outside {intent.duration_sec:.1f}s ± {intent.tolerance_sec:.1f}s"
         )
     if measured is not None and declared:
         drift = abs(measured - declared)
@@ -306,6 +317,8 @@ def _verify_audio(intent, state: Mapping[str, Any]) -> VerificationRecord:
         metrics={
             "measured_duration_sec": measured,
             "declared_scene_duration_sec": declared,
+            "gap_overhead_sec": gap_overhead,
+            "movie_duration_sec": movie_duration,
             "target_duration_sec": intent.duration_sec,
             "tolerance_sec": intent.tolerance_sec,
         },

@@ -163,6 +163,40 @@ def test_audio_fails_on_measured_drift_beyond_tolerance():
     assert record.passed is False
 
 
+def test_audio_passes_when_narration_plus_gaps_equals_target():
+    """Regression for #282 bot review: after deterministic_steps scales
+    scene durations so narration+gaps=target, the audio verifier must
+    compare MOVIE runtime (not raw narration) against the user's
+    target.  Pre-fix this would FAIL because 356.5s < (420 - 30)s.
+    """
+    intent = _intent()
+    # 12 scenes × 3 active voices each.  Voice gaps: 12×2×1.5=36s.
+    # Scene gaps: 11×2.5=27.5s.  Total gaps: 63.5s.  Narration
+    # scaled to 420 - 63.5 = 356.5s — movie = 420s exactly.
+    scenes = [
+        {
+            "scene_num": i,
+            "title": f"s{i}",
+            "duration_sec": 356.5 / 12,
+            "voices": [
+                {"voice": "V1", "text": "PAG"},
+                {"voice": "V2", "text": "opioid chemistry"},
+                {"voice": "V3", "text": "panic freeze"},
+            ],
+        }
+        for i in range(1, 13)
+    ]
+    state = _state(
+        intent,
+        scenes=scenes,
+        whisperx_alignment=json.dumps({"total_duration_sec": 356.5}),
+    )
+    record = verify_stage_constraints(STAGE_AUDIO, state)
+    assert record.passed is True, record.failures
+    assert record.metrics["movie_duration_sec"] == pytest.approx(420.0, abs=0.5)
+    assert record.metrics["gap_overhead_sec"] == pytest.approx(63.5, abs=0.1)
+
+
 # ---------------------------------------------------------------------------
 # Visual stage
 # ---------------------------------------------------------------------------
