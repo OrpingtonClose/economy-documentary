@@ -89,18 +89,21 @@ jest.mock("@/components/preview-modal", () => ({ PreviewModal: () => null }));
 import { OtioTimeline } from "@/components/otio-timeline";
 
 describe("OtioTimeline (render smoke)", () => {
-  it("mounts without throwing and renders the centrepiece header", () => {
+  it("mounts without throwing and renders the plain-English header", () => {
+    // UX-05 (#247): header was rewritten from "OTIO Timeline ·
+    // Centrepiece" to "Your film so far" so first-time users do not
+    // need to know what OTIO is.
     expect(() => render(<OtioTimeline />)).not.toThrow();
-    expect(
-      screen.getByText(/OTIO Timeline · Centrepiece/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Your film so far/i)).toBeInTheDocument();
   });
 
-  it("declares a numeric zoom state visible in the ZoomControls", () => {
+  it("declares a numeric zoom state surfaced on the zoom controls", () => {
     render(<OtioTimeline />);
-    // ZoomControls renders `${zoom.toFixed(0)} px/s`.  If `zoom`
-    // regresses to undefined the component throws before this
-    // matcher runs.
-    expect(screen.getByText(/\d+ px\/s/)).toBeInTheDocument();
+    // UX-05 (#247): the ``px/s`` readout moved to a tooltip, so we
+    // assert on the data-zoom attribute instead.  If ``zoom`` regresses
+    // to undefined the component throws before this matcher runs.
+    const zoomEl = screen.getByTestId("otio-zoom-controls");
+    expect(zoomEl).toHaveAttribute("data-zoom", expect.stringMatching(/^\d+$/));
+    expect(zoomEl.getAttribute("title")).toMatch(/\d+ px\/s/);
   });
 });

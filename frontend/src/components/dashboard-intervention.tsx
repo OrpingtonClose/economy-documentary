@@ -139,6 +139,7 @@ export function DashboardIntervention({
   const [submitting, setSubmitting] = useState(false);
   const [haltSubmitting, setHaltSubmitting] = useState(false);
   const [haltState, setHaltState] = useState<HaltState | null>(null);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const toastIdRef = useRef(0);
@@ -153,6 +154,10 @@ export function DashboardIntervention({
   }, []);
 
   // Poll halt state so the top-bar indicator stays live.
+  //
+  // UX-06 (#248): also derive whether the pipeline is actively running
+  // from the dashboard snapshot, so the Pause-production button can
+  // hide when idle (red-only-for-real-problems colour policy).
   useEffect(() => {
     let cancelled = false;
     const poll = async () => {
@@ -165,6 +170,27 @@ export function DashboardIntervention({
           }
         } catch {
           // ignore network errors; polling resumes next tick
+        }
+        try {
+          const res2 = await fetch(`${BACKEND_URL}/dashboard/latest`);
+          if (res2.ok) {
+            const snap = (await res2.json()) as {
+              status?: string;
+              active_phase?: string | null;
+              run_id?: string | null;
+            };
+            if (!cancelled) {
+              const running =
+                !!snap.run_id &&
+                snap.status !== "idle" &&
+                snap.status !== "completed" &&
+                snap.status !== "error" &&
+                !!snap.active_phase;
+              setPipelineRunning(running);
+            }
+          }
+        } catch {
+          // ignore
         }
         await new Promise((r) => setTimeout(r, 2000));
       }
@@ -329,7 +355,7 @@ export function DashboardIntervention({
       <div className="flex items-center justify-between gap-3">
         <div className="flex flex-col">
           <span className="text-xs font-semibold uppercase tracking-wide text-pipeline-muted">
-            Human intervention (ARCH-H4)
+            Your controls
           </span>
           {haltEngaged ? (
             <span
@@ -343,17 +369,29 @@ export function DashboardIntervention({
             </span>
           ) : (
             <span className="text-sm text-pipeline-muted">
-              Scope: <span className="text-pipeline-text">{scopeLabel}</span>
+              {humanScopeLabel ? (
+                <>
+                  Scope:{" "}
+                  <span className="text-pipeline-text">{scopeLabel}</span>
+                </>
+              ) : (
+                <span className="text-pipeline-text">
+                  Applies to the whole film.
+                </span>
+              )}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
-          {!haltEngaged && (
+          {/* UX-06 (#248): only show Pause when pipeline is actively
+            * running. Red is reserved for real problems, so use a
+            * secondary amber/grey treatment. */}
+          {!haltEngaged && pipelineRunning && (
             <button
               type="button"
               onClick={submitHalt}
               disabled={haltSubmitting}
-              className="rounded bg-red-600 px-3 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-60"
+              className="rounded border border-amber-500/70 bg-amber-900/20 px-3 py-2 text-sm font-semibold text-amber-100 hover:bg-amber-900/40 disabled:opacity-60"
               data-testid="halt-button"
               title="Pause the pipeline at the next safe checkpoint"
             >
@@ -374,7 +412,17 @@ export function DashboardIntervention({
           data-testid="directive-scope-chip"
         >
           <span className="text-pipeline-muted">scoped to</span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-pipeline-accent bg-pipeline-accent/20 px-2 py-0.5 font-mono text-[11px] text-pipeline-text">
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-pipeline-accent bg-pipeline-accent/20 px-2 py-0.5 text-[11px] text-pipeline-text"
+            title={
+              // UX-05 (#247): keep the internal slot id available on
+              // hover while the primary label stays human-readable.
+              selectedSlotMeta?.slot_id ??
+              (selectedSlotOverride?.scope_ref as string | undefined) ??
+              selectedSlotId ??
+              undefined
+            }
+          >
             <span aria-hidden="true">◉</span>
             <span>{scopeLabel}</span>
             {showScopeClear && (
@@ -416,7 +464,7 @@ export function DashboardIntervention({
           className="rounded bg-pipeline-accent px-3 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
           data-testid="directive-submit"
         >
-          {submitting ? "Sending…" : "Send directive"}
+          {submitting ? "Sending…" : "Send a note to the producer"}
         </button>
       </form>
       {toasts.length > 0 && (
@@ -557,6 +605,18 @@ export function deriveSlotContext(
   return ctx;
 }
 
+/**
+ * UX-05 (#247): convert an OTIO slot into a plain-English label such as
+ * "Scene 1 · opening" rather than an internal ``slot_id`` like
+ * ``v1_video__scene_1__phrase_0``. Preference order:
+ *
+ *   1. the slot's own human ``label`` if one is set;
+ *   2. ``Scene <n> · <track>`` otherwise (falling back to phrase idx when
+ *      scene_num is unavailable).
+ *
+ * The raw slot id is kept as a tooltip (see the directive chip) so power
+ * users can still see it without it being the first thing on screen.
+ */
 function describeOtioSlot(slot: OtioSlot): string {
   const trackLabel =
     slot.track === "V1_Video"
@@ -566,7 +626,16 @@ function describeOtioSlot(slot: OtioSlot): string {
       : slot.track === "A2_Music"
       ? "music"
       : slot.track;
-  return `scene ${slot.scene_num} ${trackLabel}`;
+  const sceneLabel =
+    typeof slot.scene_num === "number"
+      ? `Scene ${slot.scene_num}`
+      : typeof slot.phrase_idx === "number"
+      ? `Phrase ${slot.phrase_idx + 1}`
+      : "Clip";
+  const human = slot.label && slot.label.trim().length > 0
+    ? slot.label.trim()
+    : trackLabel;
+  return `${sceneLabel} · ${human}`;
 }
 
 

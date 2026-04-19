@@ -22,3 +22,36 @@ body {
   flex: 1 1 auto !important;
   min-height: 0 !important;
 }
+
+/* UX-10 (#252): hide the "Powered by CopilotKit" footer. It is a piece
+ * of vendor branding unrelated to the documentary workflow and only
+ * confuses first-time viewers of the primary dashboard. Scoped to the
+ * exact CopilotKit class so it does not hide any of our own footers. */
+.copilotKitMessagesFooter {
+  display: none !important;
+}
+
+/* UX-09 (#251): hide the Next.js dev error overlay and route inspector
+ * toolbar in local dev. The overlay mounts as a shadow-DOM portal
+ * rooted at ``<nextjs-portal>`` / ``nextjs-build-indicator``. Hiding
+ * it at the CSS level is a soft suppression — errors still print to
+ * the browser console, so developers who need them can still diagnose
+ * problems; the primary dashboard no longer shows an engineering
+ * widget to non-technical viewers. Full suppression requires running
+ * with ``NODE_ENV=production`` (see SKILL.md). */
+nextjs-portal,
+#nextjs-dev-overlay,
+[data-nextjs-dialog-overlay],
+[data-nextjs-toast],
+[data-nextjs-dialog] {
+  display: none !important;
+}
+
+/* UX-10 (#252): hide the Next.js dev "web inspector" toolbar (the
+ * floating route-info / devtools widget rendered at the bottom of the
+ * viewport in dev mode). */
+#__next-build-watcher,
+[data-nextjs-build-indicator],
+nextjs-build-indicator {
+  display: none !important;
+}
