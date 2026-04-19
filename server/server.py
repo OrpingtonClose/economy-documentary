@@ -291,6 +291,45 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
     accept_header = request.headers.get("accept")
     encoder = EventEncoder(accept=accept_header)
 
+    # UI-PIPE (#235): stage the latest user message into the session state
+    # so the Preference Ledger R0 seed + all downstream prompts can read the
+    # brief.  Mirrors run_pipeline.py's CLI path which pre-populates
+    # initial_state["topic"] + state[ORIGINAL_BRIEF_KEY] before invoking the
+    # pipeline.  Without this, scenario_director aborts with "no brief_text
+    # provided" and the agent run ends before any narrator event can reach
+    # CopilotKit's chat stream.
+    try:
+        _latest_user_text = ""
+        for _msg in reversed(list(input_data.messages or [])):
+            if getattr(_msg, "role", None) == "user":
+                _raw = getattr(_msg, "content", "")
+                if isinstance(_raw, str):
+                    _latest_user_text = _raw.strip()
+                elif isinstance(_raw, list):
+                    _parts = []
+                    for _p in _raw:
+                        _t = getattr(_p, "text", None)
+                        if isinstance(_t, str):
+                            _parts.append(_t)
+                    _latest_user_text = " ".join(_parts).strip()
+                if _latest_user_text:
+                    break
+        if _latest_user_text:
+            if input_data.state is None or not isinstance(input_data.state, dict):
+                input_data.state = {}
+            _state = input_data.state
+            if not str(_state.get("topic") or "").strip():
+                _state["topic"] = _latest_user_text
+            from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
+            if not str(_state.get(ORIGINAL_BRIEF_KEY) or "").strip():
+                _state[ORIGINAL_BRIEF_KEY] = _latest_user_text
+            logger.info(
+                "UI-PIPE: staged user brief into session state (topic=%r)",
+                _latest_user_text[:80],
+            )
+    except Exception as _brief_err:
+        logger.warning("UI-PIPE brief propagation skipped: %s", _brief_err)
+
     # Subscribe to pipeline events (artifacts, gatekeeper, escalations)
     pipeline_queue = subscribe_agui_events()
 
