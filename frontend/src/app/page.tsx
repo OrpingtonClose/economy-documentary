@@ -52,6 +52,15 @@ const PreviewChips = dynamic(
   () => import("@/components/preview-chips").then((m) => m.PreviewChips),
   { ssr: false }
 );
+const SceneDrilldown = dynamic(
+  () =>
+    import("@/components/scene-drilldown").then((m) => m.SceneDrilldown),
+  { ssr: false }
+);
+const IntentBar = dynamic(
+  () => import("@/components/intent-bar").then((m) => m.IntentBar),
+  { ssr: false }
+);
 
 // UX-07 (#249): the dashboard used to surface eight sibling tabs
 // (OTIO, Pipeline, Reasoning, Scenario, Prompts, Clips, Timeline legacy,
@@ -148,9 +157,9 @@ export default function Home() {
                 : "text-pipeline-muted hover:text-pipeline-text"
             }`}
             data-testid="primary-tab-advanced"
-            title="Engineering and debug panels"
+            title="For developers — pipeline internals, prompts, raw QA"
           >
-            Advanced
+            For developers
           </button>
         </div>
 
@@ -184,6 +193,16 @@ export default function Home() {
           {primaryTab === "advanced" && advancedTab === "clips" && <ClipReviewer />}
           {primaryTab === "advanced" && advancedTab === "qa" && <QADashboard />}
         </div>
+
+        {/* DESIGN-06 (#258): persistent intent bar pinned at the bottom
+          * of the main content column. Replaces the natural-language
+          * input that used to live in <DashboardIntervention />. */}
+        <IntentBar />
+
+        {/* DESIGN-05 (#257): scene drilldown Sheet opens whenever a
+          * slot / scene is selected from the OTIO timeline. Rendered at
+          * the page root so its overlay covers the entire right column. */}
+        <SceneDrilldown />
       </div>
     </main>
   );
