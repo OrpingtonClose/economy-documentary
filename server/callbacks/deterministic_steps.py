@@ -3187,6 +3187,58 @@ def deterministic_assembly_callback(
     if _infra:
         _infra.notify_stage_complete("assembly")
 
+    # UX-01: surface the finished film in the dashboard.  Emit one
+    # ASSEMBLED_VIDEO artifact per primary + alternate track plus a
+    # single ``film_ready`` narrator turn so the user sees a ▶ card in
+    # the OTIO canvas and a chat message.
+    try:
+        from agui import (
+            ArtifactEvent,
+            ArtifactStatus,
+            ArtifactType,
+            emit_agui_event,
+        )
+        from agents.chat_narrator import get_narrator
+
+        def _emit_final(path: str, language: str, filename: str) -> float:
+            if not os.path.exists(path):
+                return 0.0
+            try:
+                dur = float(json.loads(probe_clip(mp4_path=path)).get("duration", 0.0))
+            except Exception:  # noqa: BLE001
+                dur = 0.0
+            artifact = ArtifactEvent(
+                id=f"final-{filename}-{int(time.time())}",
+                artifact_type=ArtifactType.ASSEMBLED_VIDEO,
+                status=ArtifactStatus.APPROVED,
+                scene_num=0,
+                phrase_idx=0,
+                language=language,
+                preview_url=f"/agui/final_film/{filename}",
+                duration_sec=dur,
+                metadata={"source_path": path},
+                timestamp=time.time(),
+            )
+            emit_agui_event("artifact", artifact.to_dict())
+            return dur
+
+        primary_dur = _emit_final(final_path, "ru" if is_dual else "", final_name)
+        if is_dual and alt_final_path:
+            _emit_final(alt_final_path, "en", "final_documentary_en.mp4")
+
+        if primary_dur > 0:
+            get_narrator().emit(
+                "film_ready",
+                fields={
+                    "duration_sec": primary_dur,
+                    "language": "ru" if is_dual else "",
+                    "url": f"/agui/final_film/{final_name}",
+                },
+                promote_to_chat=True,
+            )
+    except Exception as surface_err:  # noqa: BLE001
+        logger.warning("UX-01 surface emit skipped: %s", surface_err)
+
     return genai_types.Content(
         role="model",
         parts=[genai_types.Part(text="\n".join(summary_parts))],

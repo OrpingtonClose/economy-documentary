@@ -720,6 +720,41 @@ async def get_preview_asset(filename: str):
         )
     return FileResponse(candidate, media_type=media_type)
 
+
+@router.get("/final_film/{filename:path}")
+async def get_final_film(filename: str, request: Request):
+    """Serve the assembled documentary so the UI can play / download it.
+
+    The :func:`deterministic_assembly_callback` writes one of
+    ``final_documentary.mp4``, ``final_documentary_ru.mp4`` or
+    ``final_documentary_en.mp4`` to ``_OUTPUT_DIR``.  The OTIO
+    timeline view (see :func:`otio_timeline_model.build_timeline_view`)
+    renders a "▶ Watch your film" card pointing at this URL.
+
+    Security: ``filename`` is resolved against the output directory;
+    traversal attempts return 404.  Only the three canonical final
+    filenames are served.
+    """
+    from fastapi.responses import FileResponse
+
+    allowed = {
+        "final_documentary.mp4",
+        "final_documentary_ru.mp4",
+        "final_documentary_en.mp4",
+    }
+    if filename not in allowed:
+        return JSONResponse({"error": "not a final-film filename"}, status_code=400)
+
+    base = os.path.abspath(_OUTPUT_DIR)
+    candidate = os.path.abspath(os.path.join(base, filename))
+    if not candidate.startswith(base + os.sep) and candidate != base:
+        return JSONResponse({"error": "invalid final-film path"}, status_code=400)
+    if not os.path.isfile(candidate):
+        return JSONResponse({"error": "final film not found"}, status_code=404)
+
+    return FileResponse(candidate, media_type="video/mp4", filename=filename)
+
+
 # Approval gate: sequential workflow state
 # Stages: scenario -> prompts -> clips -> timeline -> assembly
 # Shared module used by both the backend (this file) and the pipeline callbacks.

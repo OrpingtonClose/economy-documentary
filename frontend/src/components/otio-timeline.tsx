@@ -38,6 +38,7 @@ import type {
 import { SlotDetailPanel } from "@/components/slot-detail-panel";
 import { ReconciliationOverlay } from "@/components/reconciliation-overlay";
 import { ApprovalCard } from "@/components/approval-card";
+import { FinishedFilmCard } from "@/components/finished-film-card";
 import { PreviewModal } from "@/components/preview-modal";
 import { subscribeSlotSelection } from "@/lib/selection-bus";
 import {
@@ -178,6 +179,14 @@ export function OtioTimeline() {
           <ZoomControls zoom={zoom} onChange={setZoom} />
         </div>
       </header>
+
+      {timeline.finished_film && (
+        // UX-01: definitive "your movie is ready" surface.  Renders
+        // only when the assembly callback has written a
+        // ``final_documentary*.mp4`` -- see
+        // ``otio_timeline_model._detect_finished_film``.
+        <FinishedFilmCard film={timeline.finished_film} />
+      )}
 
       <div className="relative flex-1 overflow-hidden rounded-lg border border-pipeline-blue/60 bg-pipeline-card">
         {openGates.length > 0 && (

@@ -62,6 +62,7 @@ NARRATOR_EVENT_KINDS: tuple[str, ...] = (
     "preview_ready",
     "directive_applied",
     "halt_fired",
+    "film_ready",
 )
 
 #: Seconds within which two promoted events with equivalent semantics for
@@ -274,6 +275,17 @@ def _tpl_halt_fired(f: Mapping[str, Any]) -> str:
     return f"Paused at {stage}. Last safe checkpoint was {checkpoint}."
 
 
+def _tpl_film_ready(f: Mapping[str, Any]) -> str:
+    duration = _format_duration_whole(f.get("duration_sec"))
+    language = str(f.get("language") or "").strip()
+    if language:
+        return (
+            f"Your documentary is ready ({duration}s, {language.upper()}) "
+            f"\u2014 click to watch."
+        )
+    return f"Your documentary is ready ({duration}s) \u2014 click to watch."
+
+
 _TEMPLATES = {
     "stage_started": _tpl_stage_started,
     "stage_completed": _tpl_stage_completed,
@@ -284,6 +296,7 @@ _TEMPLATES = {
     "preview_ready": _tpl_preview_ready,
     "directive_applied": _tpl_directive_applied,
     "halt_fired": _tpl_halt_fired,
+    "film_ready": _tpl_film_ready,
 }
 assert tuple(sorted(_TEMPLATES)) == tuple(sorted(NARRATOR_EVENT_KINDS)), (
     "every narrator kind must have exactly one template"
