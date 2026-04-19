@@ -38,13 +38,20 @@ halt flag without any in-process coupling.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
 import threading
 import time
 import uuid
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, Iterator, Mapping, MutableMapping, Optional
+
+try:  # pragma: no cover -- Windows has no fcntl; fall back to a no-op.
+    import fcntl
+except ImportError:  # pragma: no cover
+    fcntl = None  # type: ignore[assignment]
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -104,6 +111,36 @@ def _atomic_write_json(path: str, payload: Any) -> None:
     os.replace(tmp_path, path)
 
 
+@contextlib.contextmanager
+def _file_lock(path: str) -> Iterator[None]:
+    """Cross-process exclusive lock tied to ``path``.
+
+    Used to serialise the read-modify-write cycles on the halt-state file
+    across the server process (which owns ``/api/halt*`` endpoints) and
+    the pipeline process (which calls :func:`mark_halted_at_stage` from
+    the approval-gate poll loop).
+
+    Falls back to a process-local :class:`threading.Lock` when ``fcntl``
+    is unavailable (Windows, mock environments); on POSIX the lockfile
+    lives next to the protected file with a ``.lock`` suffix.
+    """
+    if fcntl is None:  # pragma: no cover -- exercised on Windows only
+        with _state_lock:
+            yield
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock_path = f"{path}.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 # ---------------------------------------------------------------------------
 # Halt state
 # ---------------------------------------------------------------------------
@@ -147,23 +184,25 @@ def set_halt_requested(
     at_stage: Optional[str] = None,
 ) -> dict[str, Any]:
     """Engage the halt flag.  Returns the new halt state."""
-    state = _read_halt_state()
-    state["halt_requested"] = True
-    if reviewer is not None:
-        state["halt_reviewer"] = reviewer
-    if reason is not None:
-        state["halt_reason"] = reason
-    if at_stage is not None:
-        state["halted_at_stage"] = at_stage
-    state["halt_timestamp"] = time.time()
-    _write_halt_state(state)
+    with _file_lock(_HALT_FILE):
+        state = _read_halt_state()
+        state["halt_requested"] = True
+        if reviewer is not None:
+            state["halt_reviewer"] = reviewer
+        if reason is not None:
+            state["halt_reason"] = reason
+        if at_stage is not None:
+            state["halted_at_stage"] = at_stage
+        state["halt_timestamp"] = time.time()
+        _write_halt_state(state)
     return state
 
 
 def clear_halt() -> dict[str, Any]:
     """Release the halt flag so the gate-poll loop can resume."""
-    state = dict(_HALT_DEFAULT)
-    _write_halt_state(state)
+    with _file_lock(_HALT_FILE):
+        state = dict(_HALT_DEFAULT)
+        _write_halt_state(state)
     return state
 
 
@@ -172,17 +211,23 @@ def mark_halted_at_stage(stage_name: str) -> None:
 
     Called by the approval-gate poll loop the first time it observes the
     halt flag. No-op when the flag is not set.
+
+    Guarded by :func:`_file_lock` so the read-modify-write cycle cannot
+    race with :func:`clear_halt` in the server process -- otherwise a
+    mid-release gate-poll tick could write back a stale ``halt_requested:
+    True`` and silently re-engage the halt the reviewer just released.
     """
     if not stage_name:
         return
-    state = _read_halt_state()
-    if not state.get("halt_requested"):
-        return
-    if state.get("halted_at_stage") == stage_name:
-        return
-    state["halted_at_stage"] = stage_name
-    state["halt_timestamp"] = time.time()
-    _write_halt_state(state)
+    with _file_lock(_HALT_FILE):
+        state = _read_halt_state()
+        if not state.get("halt_requested"):
+            return
+        if state.get("halted_at_stage") == stage_name:
+            return
+        state["halted_at_stage"] = stage_name
+        state["halt_timestamp"] = time.time()
+        _write_halt_state(state)
 
 
 # ---------------------------------------------------------------------------
@@ -390,46 +435,30 @@ def _receipt_summary(receipt: DriftHandlingReceipt) -> dict[str, Any]:
     }
 
 
-@router.post("/directive")
-async def submit_directive(request: Request):
-    """Parse a free-form directive through A2 and land it in the ledger.
+def _run_directive_sync(
+    *,
+    directive: str,
+    reviewer: str,
+    l4_event_id: str,
+    scope_hint: Optional[dict[str, Any]],
+) -> JSONResponse:
+    """Synchronous core of :func:`submit_directive`.
 
-    Body: ``{"directive": str, "slot_context": dict | null,
-    "reviewer": str | null, "l4_event_id": str | null}``.
-
-    On success returns ``{"record_ids": [...], "records": [...],
-    "re_manifestation_plans": [...]}``.  On A2 parse failure returns
-    HTTP 422 with the :class:`InterpreterError` message.  On ledger /
-    consistency-check failure returns HTTP 500 -- these indicate a
-    pipeline-invariant violation, not a reviewer mistake.
+    Pulled out so the async endpoint can offload it onto a thread-pool
+    worker via :func:`asyncio.to_thread`.  The Preference Interpreter makes
+    a blocking HTTP call to the LLM provider and the A6 re-manifestation
+    executor can spend multi-second stretches inside ``handle_drift``;
+    running the whole locked cycle on the event loop would freeze every
+    other endpoint -- including the halt button, which must stay
+    responsive for the whole point of H4 to hold.
     """
-    try:
-        body = await _safe_json_body(request)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
-    directive = body.get("directive")
-    if not isinstance(directive, str) or not directive.strip():
-        return JSONResponse(
-            {"error": "'directive' must be a non-empty string"},
-            status_code=400,
-        )
-    slot_context = body.get("slot_context")
-    reviewer = body.get("reviewer") or "l4-dashboard"
-    l4_event_id = body.get("l4_event_id") or f"l4-{uuid.uuid4().hex[:12]}"
-
-    try:
-        scope_hint = _slot_context_to_scope_hint(slot_context)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-
     with _state_lock:
         state = _load_blackboard()
         try:
             records = interpret_directive(
-                directive.strip(),
-                reviewer=str(reviewer),
-                l4_event_id=str(l4_event_id),
+                directive,
+                reviewer=reviewer,
+                l4_event_id=l4_event_id,
                 scope_hint=scope_hint,
                 state=state,
             )
@@ -510,6 +539,53 @@ async def submit_directive(request: Request):
             "re_manifestation_plans": plan_payload,
             "scope_hint": scope_hint,
         }
+    )
+
+
+@router.post("/directive")
+async def submit_directive(request: Request):
+    """Parse a free-form directive through A2 and land it in the ledger.
+
+    Body: ``{"directive": str, "slot_context": dict | null,
+    "reviewer": str | null, "l4_event_id": str | null}``.
+
+    On success returns ``{"record_ids": [...], "records": [...],
+    "re_manifestation_plans": [...]}``.  On A2 parse failure returns
+    HTTP 422 with the :class:`InterpreterError` message.  On ledger /
+    consistency-check failure returns HTTP 500 -- these indicate a
+    pipeline-invariant violation, not a reviewer mistake.
+
+    The heavy lifting (LLM call, file I/O, A5 + A6) is dispatched to a
+    thread-pool worker via :func:`asyncio.to_thread` so the asyncio event
+    loop stays responsive -- critically, the halt button endpoint keeps
+    answering while a directive is being parsed.
+    """
+    try:
+        body = await _safe_json_body(request)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    directive = body.get("directive")
+    if not isinstance(directive, str) or not directive.strip():
+        return JSONResponse(
+            {"error": "'directive' must be a non-empty string"},
+            status_code=400,
+        )
+    slot_context = body.get("slot_context")
+    reviewer = body.get("reviewer") or "l4-dashboard"
+    l4_event_id = body.get("l4_event_id") or f"l4-{uuid.uuid4().hex[:12]}"
+
+    try:
+        scope_hint = _slot_context_to_scope_hint(slot_context)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    return await asyncio.to_thread(
+        _run_directive_sync,
+        directive=directive.strip(),
+        reviewer=str(reviewer),
+        l4_event_id=str(l4_event_id),
+        scope_hint=scope_hint,
     )
 
 

@@ -493,6 +493,55 @@ def test_wait_for_approval_resumes_after_halt_cleared(output_dir, monkeypatch):
     assert elapsed < 1.5
 
 
+def test_mark_halted_at_stage_cannot_clobber_clear_halt(output_dir):
+    """Regression for the race pointed out on PR #181.
+
+    :func:`clear_halt` (server process, triggered by ``/api/halt/release``)
+    and :func:`mark_halted_at_stage` (pipeline process, called from the
+    approval-gate poll loop) share the halt-state file.  A naive
+    read-modify-write in ``mark_halted_at_stage`` could pick up a stale
+    ``halt_requested: True`` and clobber a ``clear_halt`` that landed in
+    between the read and the write -- silently re-engaging the halt the
+    reviewer just released.  The :func:`_file_lock` guard must serialise
+    the two cycles so this never happens.
+    """
+    import threading
+
+    dd.set_halt_requested(reviewer="tester")
+    assert dd.is_halt_requested() is True
+
+    errors: list[BaseException] = []
+
+    def _mark_many() -> None:
+        try:
+            for _ in range(200):
+                dd.mark_halted_at_stage("scenario")
+        except BaseException as exc:  # pragma: no cover -- defensive
+            errors.append(exc)
+
+    def _clear_once() -> None:
+        try:
+            # Let the marker loop get going, then release.
+            time.sleep(0.01)
+            dd.clear_halt()
+        except BaseException as exc:  # pragma: no cover -- defensive
+            errors.append(exc)
+
+    marker = threading.Thread(target=_mark_many)
+    clearer = threading.Thread(target=_clear_once)
+    marker.start()
+    clearer.start()
+    marker.join(timeout=5.0)
+    clearer.join(timeout=5.0)
+
+    assert not errors, errors
+    # After both threads finish, the halt flag MUST be cleared --
+    # mark_halted_at_stage cannot resurrect it.
+    assert dd.is_halt_requested() is False
+    state = dd._read_halt_state()
+    assert state["halt_requested"] is False
+
+
 # ---------------------------------------------------------------------------
 # Blackboard persistence
 # ---------------------------------------------------------------------------
