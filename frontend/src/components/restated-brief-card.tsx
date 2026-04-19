@@ -237,13 +237,17 @@ function RestatedBriefBody({
   if (state.status === "error") {
     // Per DESIGN-01 rule #3: don't show red on the primary surface
     // unless the user needs to act. A transient read error while the
-    // run is warming up isn't actionable — render it muted.
+    // run is warming up isn't actionable — render it muted. We only
+    // refresh on mount or on a ``run_started`` event, so the copy is
+    // deliberately honest about that cadence rather than promising a
+    // retry loop the component does not implement.
     return (
       <p
         className="text-sm text-muted-foreground"
         data-testid="restated-brief-error"
       >
-        I couldn&apos;t read the brief just now. Retrying&hellip;
+        I couldn&apos;t read the brief just now. It&apos;ll update the next
+        time a run starts.
       </p>
     );
   }
