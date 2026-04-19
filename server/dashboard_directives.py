@@ -471,6 +471,20 @@ async def halt_pipeline(request: Request):
         "reason": reason,
         "phase": "requested",
     })
+    # UI-01 (#186): narrator chat turn announcing the halt.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "halt_fired",
+            fields={
+                "stage": state.get("halted_at_stage") or "pipeline",
+                "checkpoint": state.get("halted_at_stage") or "next safe checkpoint",
+                "reason": reason or "",
+                "reviewer": reviewer,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort UI hook
+        logger.debug("chat_narrator halt_fired emission failed: %s", exc)
     return JSONResponse({"status": "halt_requested", **state})
 
 
@@ -905,11 +919,6 @@ def _run_directive_sync(
         "re_manifestation_plans": plan_payload,
     })
     for desc in step_descriptors:
-        # Two events per step: start (amber outline appears) + a terminal
-        # event (badge clears / turns red).  In the current MVP the
-        # executor dispatches synchronously, so we emit both here; real
-        # producers will emit the terminal event later when their B1
-        # tag lands.
         _emit("re_manifestation_progress", {
             **desc,
             "phase": "start",
@@ -919,6 +928,21 @@ def _run_directive_sync(
             **desc,
             "phase": terminal_phase,
         })
+
+    # UI-01 (#186): narrator chat turn. ``n_drifted`` is the count of
+    # re-manifestation plans actually scheduled.
+    try:
+        from agents.chat_narrator import emit_narrator_event  # type: ignore
+        emit_narrator_event(
+            "directive_applied",
+            fields={
+                "directive_text": directive,
+                "n_drifted": len(plan_payload),
+                "reviewer": reviewer,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort UI hook
+        logger.debug("chat_narrator directive_applied emission failed: %s", exc)
 
     return JSONResponse(
         {

@@ -29,7 +29,14 @@ from starlette.responses import Response, StreamingResponse
 
 load_dotenv()
 
-from ag_ui.core import CustomEvent, EventType, RunAgentInput
+from ag_ui.core import (
+    CustomEvent,
+    EventType,
+    RunAgentInput,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+)
 from ag_ui.encoder import EventEncoder
 from ag_ui_adk import ADKAgent
 from google.adk.apps import App
@@ -236,6 +243,38 @@ adk_agent = ADKAgent.from_app(
 _HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
 
 
+def _narrator_to_agui_events(payload: dict) -> list:
+    """Turn a narrator queue payload into an AG-UI TEXT_MESSAGE_* triplet.
+
+    The narrator publishes events as dicts with an ``id`` and a rendered
+    ``text`` (see :mod:`agents.chat_narrator`).  CopilotKit expects three
+    events per assistant turn: ``TEXT_MESSAGE_START`` ->
+    ``TEXT_MESSAGE_CONTENT`` (1..N chunks) -> ``TEXT_MESSAGE_END``.  We
+    emit a single CONTENT chunk per turn because narrator turns are
+    one-liners — streaming adds latency without a readability benefit.
+    """
+    message_id = str(payload.get("id") or "narrator")
+    text = str(payload.get("text") or "")
+    if not text:
+        return []
+    return [
+        TextMessageStartEvent(
+            type=EventType.TEXT_MESSAGE_START,
+            messageId=message_id,
+            role="assistant",
+        ),
+        TextMessageContentEvent(
+            type=EventType.TEXT_MESSAGE_CONTENT,
+            messageId=message_id,
+            delta=text,
+        ),
+        TextMessageEndEvent(
+            type=EventType.TEXT_MESSAGE_END,
+            messageId=message_id,
+        ),
+    ]
+
+
 @app.post("/")
 async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
     """AG-UI endpoint with unified SSE stream.
@@ -254,6 +293,16 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
 
     # Subscribe to pipeline events (artifacts, gatekeeper, escalations)
     pipeline_queue = subscribe_agui_events()
+
+    # Subscribe to narrator chat turns (UI-01 #186).  Each promoted event
+    # on this queue is fanned out to the stream as an assistant
+    # TEXT_MESSAGE_* triplet so CopilotKit renders it as a normal chat
+    # message on the same connection (no new channel).
+    from agents.chat_narrator import (  # local import to break import cycles
+        subscribe_narrator_events,
+        unsubscribe_narrator_events,
+    )
+    narrator_queue = subscribe_narrator_events()
 
     async def event_generator():
         merged: asyncio.Queue = asyncio.Queue()
@@ -280,8 +329,21 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
             except asyncio.CancelledError:
                 pass
 
+        async def narrator_reader():
+            """Poll the thread-safe narrator deque for chat turns."""
+            try:
+                while True:
+                    if narrator_queue:
+                        event = narrator_queue.popleft()
+                        await merged.put(("narrator", event))
+                    else:
+                        await asyncio.sleep(0.2)
+            except asyncio.CancelledError:
+                pass
+
         agent_task = asyncio.create_task(agent_reader())
         pipe_task = asyncio.create_task(pipeline_reader())
+        narrator_task = asyncio.create_task(narrator_reader())
 
         try:
             while True:
@@ -334,6 +396,16 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
                         yield encoder.encode(custom)
                     except Exception as enc_err:
                         logger.error("Pipeline event encoding error: %s", enc_err)
+                elif kind == "narrator":
+                    # UI-01 (#186): emit as an assistant TEXT_MESSAGE_* triplet
+                    # so CopilotKit renders it inline as a normal chat turn.
+                    for evt in _narrator_to_agui_events(payload):
+                        try:
+                            yield encoder.encode(evt)
+                        except Exception as enc_err:
+                            logger.error(
+                                "Narrator event encoding error: %s", enc_err
+                            )
 
             # Drain remaining pipeline events after agent finishes
             while pipeline_queue:
@@ -348,11 +420,24 @@ async def unified_agui_endpoint(input_data: RunAgentInput, request: Request):
                 except Exception:
                     pass
 
+            # Drain remaining narrator turns after agent finishes so the
+            # last one-liner (typically ``stage_completed`` for assembly)
+            # still reaches the reviewer.
+            while narrator_queue:
+                event = narrator_queue.popleft()
+                for evt in _narrator_to_agui_events(event):
+                    try:
+                        yield encoder.encode(evt)
+                    except Exception:
+                        pass
+
         finally:
             pipe_task.cancel()
+            narrator_task.cancel()
             if not agent_task.done():
                 agent_task.cancel()
             unsubscribe_agui_events(pipeline_queue)
+            unsubscribe_narrator_events(narrator_queue)
 
     return StreamingResponse(
         event_generator(),

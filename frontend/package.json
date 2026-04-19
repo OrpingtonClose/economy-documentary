@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@copilotkit/react-core": "^1.0.0",

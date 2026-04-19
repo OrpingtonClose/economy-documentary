@@ -39,6 +39,7 @@ import { SlotDetailPanel } from "@/components/slot-detail-panel";
 import { ReconciliationOverlay } from "@/components/reconciliation-overlay";
 import { ApprovalCard } from "@/components/approval-card";
 import { PreviewModal } from "@/components/preview-modal";
+import { subscribeSlotSelection } from "@/lib/selection-bus";
 
 const BACKEND_URL =
   process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
@@ -64,6 +65,17 @@ export function OtioTimeline() {
   const [zoom, setZoom] = useState<number>(40); // pixels per second
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [openBoundary, setOpenBoundary] = useState<string | null>(null);
+
+  // UI-01c (#195): react to chat-chip clicks by selecting the referenced
+  // slot.  The chip dispatches via the selection bus so the coupling
+  // stays one-way and the chat panel doesn't need a ref into the timeline.
+  useEffect(() => {
+    return subscribeSlotSelection((detail) => {
+      if (detail.source !== "timeline") {
+        setSelectedSlotId(detail.slotId);
+      }
+    });
+  }, []);
 
   if (!timeline) {
     return (

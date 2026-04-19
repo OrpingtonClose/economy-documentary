@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { CopilotChat } from "@copilotkit/react-ui";
 import { useState } from "react";
 import type { PipelinePhase } from "@/lib/types";
+import { NarratorAssistantMessage } from "@/components/narrator-assistant-message";
 
 // Dynamic imports with ssr:false to prevent hydration issues
 // that strip onClick handlers from buttons inside map loops
@@ -85,6 +86,7 @@ export default function Home() {
               initial:
                 "Enter a topic to start generating your documentary. I'll guide you through script creation, audio generation, visual planning, and final assembly.",
             }}
+            AssistantMessage={NarratorAssistantMessage}
           />
         </div>
       </div>
