@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type {
+  ApprovalGateEvent,
   OtioTimelineStatus,
   SlotStateEvent,
   SlotStatus,
@@ -32,10 +33,12 @@ export function useOtioStream(): {
   timeline: OtioTimelineStatus | null;
   error: string | null;
   connected: boolean;
+  openGates: ApprovalGateEvent[];
 } {
   const [timeline, setTimeline] = useState<OtioTimelineStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [openGates, setOpenGates] = useState<ApprovalGateEvent[]>([]);
   const esRef = useRef<EventSource | null>(null);
   const hasSnapshotRef = useRef(false);
 
@@ -103,6 +106,36 @@ export function useOtioStream(): {
       }
     });
 
+    // UI-03a (#198): inline approval card driver. Every wait_for_approval
+    // entry emits approval_gate_opened; the paired approval_gate_closed
+    // fires when the gate flips via /agui/approve OR via a stage-scoped
+    // directive (UI-03c, #200). The timeline listens here so the card
+    // mounts/unmounts on the unified AG-UI event bus -- no polling.
+    es.addEventListener("approval_gate_opened", (e: MessageEvent) => {
+      try {
+        const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
+        const evt = env.data;
+        if (!evt || !evt.stage) return;
+        setOpenGates((prev) => {
+          if (prev.some((g) => g.stage === evt.stage)) return prev;
+          return [...prev, evt];
+        });
+      } catch {
+        /* ignore malformed */
+      }
+    });
+
+    es.addEventListener("approval_gate_closed", (e: MessageEvent) => {
+      try {
+        const env = JSON.parse(e.data) as { data: ApprovalGateEvent };
+        const evt = env.data;
+        if (!evt || !evt.stage) return;
+        setOpenGates((prev) => prev.filter((g) => g.stage !== evt.stage));
+      } catch {
+        /* ignore malformed */
+      }
+    });
+
     es.addEventListener("error", () => {
       setConnected(false);
     });
@@ -114,7 +147,7 @@ export function useOtioStream(): {
     };
   }, []);
 
-  return { timeline, error, connected };
+  return { timeline, error, connected, openGates };
 }
 
 function applySlotState(

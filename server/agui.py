@@ -696,7 +696,12 @@ from callbacks.approval_gate import (
     is_stage_approved as _is_stage_approved,
 )
 
-_STAGE_ORDER = ["scenario", "prompts", "clips", "timeline", "assembly"]
+# Full sequence of human-in-the-loop gates. "audio" sits between
+# "scenario" and "prompts" -- pipeline.py's narration stage calls
+# wait_for_approval("audio") before handing off to the visual director,
+# so UI-03 (#188) needs it listed here so /agui/approve accepts it when
+# the inline approval card's Approve button posts {stage: "audio"}.
+_STAGE_ORDER = ["scenario", "audio", "prompts", "clips", "timeline", "assembly"]
 
 
 @router.get("/approval-state")

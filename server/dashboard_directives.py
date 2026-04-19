@@ -521,6 +521,37 @@ def _run_directive_sync(
                 status_code=500,
             )
 
+    # UI-03c (#200): a stage-scoped directive is a "reject with note" on
+    # an inline approval gate.  The ledger record has already been
+    # appended above; now flip the approval flag so the wait_for_approval
+    # poll loop exits and the pipeline moves on with the new directive
+    # applied as drift on downstream stages.  Outside the _state_lock:
+    # the approval state file is owned by callbacks.approval_gate and
+    # uses its own on-disk write.
+    released_stage: Optional[str] = None
+    if scope_hint is not None and scope_hint.get("scope") == "stage":
+        stage_ref = scope_hint.get("scope_ref")
+        if isinstance(stage_ref, str) and stage_ref.strip():
+            released_stage = stage_ref.strip()
+            try:
+                from callbacks.approval_gate import approve_stage
+
+                approve_stage(released_stage)
+                logger.info(
+                    "Stage-scoped directive released approval gate "
+                    "(stage=%s, reviewer=%s, event=%s)",
+                    released_stage,
+                    reviewer,
+                    l4_event_id,
+                )
+            except Exception as exc:  # pragma: no cover -- defensive
+                logger.warning(
+                    "Stage-scoped directive failed to release gate "
+                    "(stage=%s): %s",
+                    released_stage,
+                    exc,
+                )
+
     record_payload = [r.to_dict() for r in records]
     plan_payload = [_receipt_summary(r) for r in receipts]
     logger.info(
@@ -538,6 +569,7 @@ def _run_directive_sync(
             "records": record_payload,
             "re_manifestation_plans": plan_payload,
             "scope_hint": scope_hint,
+            "released_stage": released_stage,
         }
     )
 
