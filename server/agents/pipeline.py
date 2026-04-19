@@ -37,8 +37,10 @@ import logging
 from typing import Any, Optional
 
 from google.adk.agents import Agent, SequentialAgent
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.loop_agent import LoopAgent
+from google.adk.utils.context_utils import Aclosing
 from google.genai import types as genai_types
 
 from agents.assembler_agent import assembler_agent
@@ -628,6 +630,47 @@ constraint_gate_agent = Agent(
 )
 
 
+class _EscalateShield(BaseAgent):
+    """Wraps a sub-agent and strips ``escalate=True`` from its events.
+
+    ADK's :class:`LoopAgent` exits as soon as *any* event from a child
+    bubbles up with ``actions.escalate=True``.  :mod:`scenario_director`
+    is itself a ``LoopAgent`` whose evaluator calls ``exit_loop`` (which
+    escalates) when it rates a draft GOOD/EXCELLENT.  That escalation
+    would propagate straight through the outer ``scenario_with_gate``
+    loop and skip the R0 constraint gate entirely — meaning a short or
+    off-topic scenario could slip past pre-flight and only get caught
+    by the post-stage verifier, halting the run after GPU provisioning
+    was triggered.
+
+    This shield intercepts events from its single wrapped sub-agent,
+    clears ``escalate`` if set, and re-yields them.  The outer
+    ``scenario_with_gate`` LoopAgent then advances to the constraint
+    gate as intended and only exits when the gate itself escalates.
+    """
+
+    async def _run_async_impl(self, ctx):  # type: ignore[override]
+        if not self.sub_agents:
+            return
+        wrapped = self.sub_agents[0]
+        async with Aclosing(wrapped.run_async(ctx)) as agen:
+            async for event in agen:
+                if event.actions.escalate:
+                    event.actions.escalate = False
+                yield event
+
+
+scenario_director_shielded = _EscalateShield(
+    name="scenario_director_shield",
+    description=(
+        "Runs scenario_director but absorbs its inner LoopAgent "
+        "exit_loop escalation so the outer scenario_with_gate loop "
+        "can proceed to the R0 constraint gate."
+    ),
+    sub_agents=[scenario_director],
+)
+
+
 scenario_with_gate = LoopAgent(
     name="scenario_with_gate",
     description=(
@@ -636,7 +679,7 @@ scenario_with_gate = LoopAgent(
         "duration, required-topic, or forbidden-topic drift."
     ),
     max_iterations=MAX_GATE_ATTEMPTS,
-    sub_agents=[scenario_director, constraint_gate_agent],
+    sub_agents=[scenario_director_shielded, constraint_gate_agent],
     after_agent_callback=_scenario_stage_after,
 )
 

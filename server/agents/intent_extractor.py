@@ -612,6 +612,13 @@ def run_intent_extractor(
 
     intent = extract_intent(source, use_llm=use_llm)
     state[BRIEF_INTENT_KEY] = intent.to_json()
+    # Propagate the user-stated target into the legacy state keys that
+    # scenario_director's deterministic structural checks read.  Without
+    # this, target_duration_sec defaults to 0.0 and the "scenes must sum
+    # to >= 95% of target" check is silently skipped, allowing the LLM
+    # evaluator to rate short-duration drafts EXCELLENT and exit the
+    # pre-flight LoopAgent before the post-stage verifier halts the run.
+    state["target_duration_sec"] = intent.duration_sec
     _write_intent_backup(intent)
     logger.info(
         "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "
