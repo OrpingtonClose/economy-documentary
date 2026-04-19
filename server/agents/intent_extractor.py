@@ -26,7 +26,7 @@ Design invariants (enforced by ``tests/test_intent_extractor.py``):
   about the Periaqueductal Gray (PAG)..."``) parses to
   ``duration_sec == 420.0 ± 1`` regardless of LLM availability.
 * Every parsed :class:`BriefIntent` has ``tolerance_sec > 0`` (default
-  ``30.0`` seconds — the timing loop's soft budget) so the gate always
+  ``60.0`` seconds — the timing loop's soft budget) so the gate always
   has a finite window to validate against.
 * ``confidence`` is a ``dict[str, float]`` keyed by field name with
   values in ``[0.0, 1.0]`` so downstream code can distinguish "derived
@@ -227,7 +227,7 @@ HARD RULES:
 
 1. Return a single JSON object with EXACTLY these keys:
      duration_sec        (float, seconds)
-     tolerance_sec       (float, seconds; default 30.0 if not specified)
+     tolerance_sec       (float, seconds; default 60.0 if not specified)
      audience            (string; 'general', 'adhd-friendly', 'expert', ...)
      tone                (array of strings)
      corpus_paths        (array of strings)

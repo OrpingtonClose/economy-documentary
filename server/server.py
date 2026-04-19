@@ -299,6 +299,13 @@ _adk_app = App(
 )
 adk_agent = ADKAgent.from_app(
     app=_adk_app,
+    # PAG-class briefs routinely run 20-40 minutes wall-clock (GPU
+    # bootstrap + TTS timing loop + visual direction + assembly).  The
+    # ADK defaults (execution 600s, tool 300s) are far too tight and
+    # kill the run mid-audio-stage.  Bump to 4 h end-to-end with
+    # 30 min per tool call so the full pipeline can complete.
+    execution_timeout_seconds=4 * 60 * 60,
+    tool_timeout_seconds=30 * 60,
 )
 
 _HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
