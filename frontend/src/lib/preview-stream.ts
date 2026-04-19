@@ -84,29 +84,36 @@ export function usePreviewStream(): {
       events: ["preview_ready", "preview_failed", "slot_state"],
       onConnected: setConnected,
       onEvent: (evt, e) => {
+        // The AG-UI envelope wraps every event as
+        //   {"data": <payload>, "timestamp": <server-seconds>}
+        // (see ``server/agui.py::emit_agui_event``).  We thread the
+        // server timestamp through so stale detection stays inside the
+        // server's clock domain, matching ``rendered_at``.
+        let serverTsSec: number | undefined;
+        let payload: unknown;
+        try {
+          const env = JSON.parse(e.data) as {
+            data: unknown;
+            timestamp?: number;
+          };
+          payload = env.data;
+          if (typeof env.timestamp === "number") {
+            serverTsSec = env.timestamp;
+          }
+        } catch {
+          return; // malformed envelope
+        }
+
         if (evt === "preview_ready") {
-          try {
-            const env = JSON.parse(e.data) as { data: unknown };
-            const entry = parsePreviewReady(env.data);
-            if (entry) setState((prev) => upsertPreview(prev, entry));
-          } catch {
-            /* ignore malformed */
-          }
+          const entry = parsePreviewReady(payload, serverTsSec);
+          if (entry) setState((prev) => upsertPreview(prev, entry));
         } else if (evt === "preview_failed") {
-          try {
-            const env = JSON.parse(e.data) as { data: unknown };
-            const entry = parsePreviewFailed(env.data);
-            if (entry) setState((prev) => upsertPreview(prev, entry));
-          } catch {
-            /* ignore malformed */
-          }
+          const entry = parsePreviewFailed(payload, serverTsSec);
+          if (entry) setState((prev) => upsertPreview(prev, entry));
         } else if (evt === "slot_state") {
-          try {
-            const env = JSON.parse(e.data) as { data: SlotStateEvent };
-            setState((prev) => applySlotUpdate(prev, env.data));
-          } catch {
-            /* ignore malformed */
-          }
+          if (!payload || typeof payload !== "object") return;
+          const slot = payload as SlotStateEvent;
+          setState((prev) => applySlotUpdate(prev, slot, serverTsSec));
         }
       },
     });
@@ -120,7 +127,14 @@ export function usePreviewStream(): {
 // Pure helpers (exported for direct unit testing)
 // ---------------------------------------------------------------------------
 
-export function parsePreviewReady(raw: unknown): PreviewEntry | null {
+/** Parse a ``preview_ready`` payload into an entry.  ``serverTsSec``
+ *  is the envelope-level server timestamp (seconds since epoch); when
+ *  provided it is preferred over ``rendered_at`` for ``renderedAtMs``
+ *  so stale comparisons stay in the server clock domain. */
+export function parsePreviewReady(
+  raw: unknown,
+  serverTsSec?: number,
+): PreviewEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const boundary = typeof r.boundary === "string" ? r.boundary : "";
@@ -136,7 +150,7 @@ export function parsePreviewReady(raw: unknown): PreviewEntry | null {
           : 0,
     fileUrl: typeof r.file_url === "string" ? r.file_url : "",
     renderedAt: typeof r.rendered_at === "string" ? r.rendered_at : "",
-    renderedAtMs: parseIsoToMs(r.rendered_at),
+    renderedAtMs: renderedAtMsFor(r.rendered_at, serverTsSec),
     triggerReason:
       typeof r.trigger_reason === "string" ? r.trigger_reason : boundary,
     inputHash: typeof r.input_hash === "string" ? r.input_hash : "",
@@ -145,7 +159,10 @@ export function parsePreviewReady(raw: unknown): PreviewEntry | null {
   };
 }
 
-export function parsePreviewFailed(raw: unknown): PreviewEntry | null {
+export function parsePreviewFailed(
+  raw: unknown,
+  serverTsSec?: number,
+): PreviewEntry | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const boundary = typeof r.boundary === "string" ? r.boundary : "";
@@ -156,7 +173,7 @@ export function parsePreviewFailed(raw: unknown): PreviewEntry | null {
     durationSec: 0,
     fileUrl: typeof r.file_url === "string" ? r.file_url : "",
     renderedAt: typeof r.rendered_at === "string" ? r.rendered_at : "",
-    renderedAtMs: parseIsoToMs(r.rendered_at),
+    renderedAtMs: renderedAtMsFor(r.rendered_at, serverTsSec),
     triggerReason:
       typeof r.trigger_reason === "string" ? r.trigger_reason : boundary,
     inputHash: typeof r.input_hash === "string" ? r.input_hash : "",
@@ -182,11 +199,22 @@ export function upsertPreview(
   };
 }
 
+/** Record a slot update.  ``serverTsSec`` is the envelope-level server
+ *  timestamp (seconds since epoch) — using it keeps stale detection
+ *  inside the same clock domain as ``rendered_at`` timestamps emitted
+ *  by ``emit_preview_ready`` / ``emit_preview_failed``.  When the
+ *  envelope did not carry a timestamp (legacy event, tests, …) we
+ *  fall back to ``Date.now()`` — this preserves the previous
+ *  behaviour but triggers the same class of skew warnings. */
 export function applySlotUpdate(
   prev: PreviewState,
   evt: SlotStateEvent,
+  serverTsSec?: number,
 ): PreviewState {
-  const now = Date.now();
+  const now =
+    typeof serverTsSec === "number" && Number.isFinite(serverTsSec)
+      ? serverTsSec * 1000
+      : Date.now();
   const sceneUpdates = { ...prev.lastUpdateByScene };
   if (typeof evt.scene_num === "number") {
     sceneUpdates[evt.scene_num] = now;
@@ -278,4 +306,27 @@ function parseIsoToMs(iso: unknown): number {
   if (typeof iso !== "string" || !iso) return 0;
   const t = Date.parse(iso);
   return Number.isFinite(t) ? t : 0;
+}
+
+/** Choose a ``renderedAtMs`` that stays inside the server clock domain.
+ *
+ *  Preference order:
+ *    1. ``serverTsSec`` from the SSE envelope (``emit_agui_event``
+ *       timestamps each event with ``time.time()``) — this is the same
+ *       clock that stamps ``lastSlotUpdateAt`` via ``applySlotUpdate``,
+ *       so the stale-vs-fresh comparison is consistent.
+ *    2. ``rendered_at`` ISO-8601 string from the payload — also server
+ *       clock, but parsed by the browser with ``Date.parse``.  Slot
+ *       updates that use ``serverTsSec`` will still compare cleanly
+ *       against this value because both originate on the server.
+ *    3. ``0`` — ``isPreviewStale`` treats this as "never stale".
+ */
+export function renderedAtMsFor(
+  renderedAt: unknown,
+  serverTsSec: number | undefined,
+): number {
+  if (typeof serverTsSec === "number" && Number.isFinite(serverTsSec)) {
+    return serverTsSec * 1000;
+  }
+  return parseIsoToMs(renderedAt);
 }
