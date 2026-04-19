@@ -447,8 +447,9 @@ async def unified_agui_endpoint(request: Request):
     async def event_generator():
         # Announce the run id BEFORE any agent/pipeline traffic so the
         # frontend can stamp the URL immediately (UI-07a).
-        seq = registry.append(run_id, _run_started_event(run_id))
-        yield _tagged(seq, _run_started_event(run_id))
+        run_started_sse = _run_started_event(run_id)
+        seq = registry.append(run_id, run_started_sse)
+        yield _tagged(seq, run_started_sse)
 
         merged: asyncio.Queue = asyncio.Queue()
 
