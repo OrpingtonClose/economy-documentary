@@ -87,6 +87,11 @@ def build_pipeline_state() -> dict:
         "quick_test_rules": "",
         "max_scene_duration": "45",
         "max_words_per_scene": "112",
+        # INTENT-02 (#266): targeted critique the R0 constraint gate
+        # injects between LoopAgent iterations so the scenario director
+        # knows exactly what to fix on its next attempt.  Empty by
+        # default; run_preflight_gate rewrites this on every failure.
+        "_intent_gate_critique_block": "",
         # ARCH-A1 / ARCH-B1 substrate — empty by default; producers tag as
         # they emit artifacts, and the consistency checker reads both.
         PREFERENCE_LEDGER_KEY: "[]",

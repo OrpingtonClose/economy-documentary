@@ -46,6 +46,15 @@ GATE_VERDICT_KEY: str = "_intent_gate_verdict"
 #: should address on the next attempt.  Absent when the gate passed.
 GATE_CRITIQUE_KEY: str = "_intent_gate_critique"
 
+#: Template-var key read by ``scenario_director``'s generator
+#: instruction.  We mirror the critique text here (wrapped in a
+#: header+footer block) so ADK resolves the ``{_intent_gate_critique_block}``
+#: template var to a visible "R0 CONSTRAINT GATE CRITIQUE" section at
+#: the top of the director's prompt on every retry.  Kept in lock-step
+#: with :data:`GATE_CRITIQUE_KEY`: an empty string when the gate passed
+#: so the block disappears, a formatted block when it failed.
+GATE_CRITIQUE_BLOCK_KEY: str = "_intent_gate_critique_block"
+
 #: Blackboard key storing the attempt counter across director reruns.
 GATE_ATTEMPT_KEY: str = "_intent_gate_attempt"
 
@@ -254,12 +263,45 @@ def _record_verdict(state: MutableMapping[str, Any], verdict: GateVerdict) -> No
     state[GATE_VERDICT_KEY] = json.dumps(verdict.to_dict())
 
 
-def _record_critique(state: MutableMapping[str, Any], critique: str) -> None:
+def _format_critique_block(critique: str, *, attempt: int, max_attempts: int) -> str:
+    """Wrap ``critique`` in a prompt-ready block the director can't miss.
+
+    The returned string is injected verbatim via the
+    ``{_intent_gate_critique_block}`` template var, so it must render
+    cleanly when dropped into the middle of a long instruction.  An
+    empty return removes the block entirely (used after a pass).
+    """
+    if not critique:
+        return ""
+    header = (
+        f"R0 CONSTRAINT GATE CRITIQUE "
+        f"(attempt {attempt}/{max_attempts} — retry in progress):"
+    )
+    footer = (
+        "You MUST address every bullet above on this attempt.  "
+        "Failing the gate after the final attempt halts the whole run."
+    )
+    return f"\n{header}\n{critique}\n{footer}\n"
+
+
+def _record_critique(
+    state: MutableMapping[str, Any],
+    critique: str,
+    *,
+    attempt: int,
+    max_attempts: int,
+) -> None:
     state[GATE_CRITIQUE_KEY] = critique
+    state[GATE_CRITIQUE_BLOCK_KEY] = _format_critique_block(
+        critique, attempt=attempt, max_attempts=max_attempts,
+    )
 
 
 def _clear_critique(state: MutableMapping[str, Any]) -> None:
     state.pop(GATE_CRITIQUE_KEY, None)
+    # Keep the template var present but empty so ADK's instruction
+    # formatter doesn't raise on the missing key.
+    state[GATE_CRITIQUE_BLOCK_KEY] = ""
 
 
 def _emit_halt(verdict: GateVerdict, *, max_attempts: int) -> None:
@@ -330,7 +372,12 @@ def run_preflight_gate(
         "intent_gate: FAIL on attempt %d/%d — %s",
         attempt, max_attempts, "; ".join(verdict.failures),
     )
-    _record_critique(state, build_critique(verdict))
+    _record_critique(
+        state,
+        build_critique(verdict),
+        attempt=attempt,
+        max_attempts=max_attempts,
+    )
 
     if attempt >= max_attempts:
         _emit_halt(verdict, max_attempts=max_attempts)
@@ -369,6 +416,7 @@ def reset_intent_gate() -> None:
 
 __all__ = [
     "GATE_ATTEMPT_KEY",
+    "GATE_CRITIQUE_BLOCK_KEY",
     "GATE_CRITIQUE_KEY",
     "GATE_VERDICT_KEY",
     "GateVerdict",

@@ -55,7 +55,7 @@ You MUST follow these STRICT constraints for a ~1-minute test movie:
 
 _GENERATOR_INSTRUCTION = """\
 You are the Scenario Director for an ADHD-friendly documentary pipeline.
-
+{_intent_gate_critique_block}
 Read the research corpus from {corpus_path} and the topic "{topic}".
 
 You must output THREE things — the scenario creator IS the intelligence layer.

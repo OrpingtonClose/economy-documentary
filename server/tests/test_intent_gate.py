@@ -28,6 +28,7 @@ if str(_SERVER_DIR) not in sys.path:
 from agents.intent_extractor import BriefIntent, BRIEF_INTENT_KEY  # noqa: E402
 from callbacks.intent_gate import (  # noqa: E402
     GATE_ATTEMPT_KEY,
+    GATE_CRITIQUE_BLOCK_KEY,
     GATE_CRITIQUE_KEY,
     GATE_VERDICT_KEY,
     INTENT_GATE_PASSED,
@@ -170,6 +171,62 @@ def test_run_preflight_gate_fail_writes_critique():
     assert GATE_CRITIQUE_KEY in state
     assert state[GATE_ATTEMPT_KEY] == 1
     assert not INTENT_GATE_PASSED.is_set()
+
+
+def test_run_preflight_gate_fail_writes_critique_block_template_var():
+    """Critique must flow into the scenario_director template var.
+
+    The block key is what ``_GENERATOR_INSTRUCTION`` reads via
+    ``{_intent_gate_critique_block}``.  Without it the director's retry
+    is blind to the constraint it just violated.
+    """
+    intent = _pag_intent()
+    scenes = [_scene(100, text="PAG opioid chemistry")]
+    state = _state_with_intent(intent, scenes)
+
+    run_preflight_gate(state, max_attempts=3)
+    block = state.get(GATE_CRITIQUE_BLOCK_KEY)
+    assert isinstance(block, str)
+    assert "R0 CONSTRAINT GATE CRITIQUE" in block
+    assert "attempt 1/3" in block
+    assert state[GATE_CRITIQUE_KEY] in block
+
+
+def test_run_preflight_gate_pass_clears_critique_block():
+    """Pass must leave the template var as an empty string.
+
+    Leaving a stale block in state would inject the previous failure's
+    critique into subsequent director runs — worse than no block at all.
+    """
+    intent = _pag_intent()
+    bad_scenes = [_scene(50, text="PAG opioid chemistry")]
+    state = _state_with_intent(intent, bad_scenes)
+
+    run_preflight_gate(state)
+    assert state.get(GATE_CRITIQUE_BLOCK_KEY)  # non-empty after fail
+
+    good_text = "PAG and opioid chemistry."
+    state["scenes"] = [_scene(210, text=good_text), _scene(210, text=good_text)]
+    run_preflight_gate(state)
+    assert state.get(GATE_CRITIQUE_BLOCK_KEY) == ""
+    assert GATE_CRITIQUE_KEY not in state
+
+
+def test_scenario_director_instruction_references_critique_block():
+    """Pin the wiring: scenario_director reads the critique template var.
+
+    The retry loop is only useful if the director's prompt actually
+    contains ``{_intent_gate_critique_block}`` — otherwise ADK never
+    substitutes the critique into the instruction and the gate writes
+    to a state key no agent reads.
+
+    We read the source file directly so the assertion does not depend
+    on ``google.adk`` being importable in the test environment.
+    """
+    source = (
+        Path(_SERVER_DIR) / "agents" / "scenario_director.py"
+    ).read_text(encoding="utf-8")
+    assert "{_intent_gate_critique_block}" in source
 
 
 def test_run_preflight_gate_halts_after_max_attempts():

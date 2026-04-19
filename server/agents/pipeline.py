@@ -575,7 +575,11 @@ _b2_wired_agents = wire_consistency_checks_into_agents(
     _SimpleNamespace(
         name="_arch_b2_wiring_root",
         sub_agents=[
-            scenario_director,
+            # Walk the outer LoopAgent so _iter_agent_tree reaches both
+            # scenario_director and constraint_gate_agent — wiring the
+            # raw scenario_director here would leave the R0 gate and the
+            # outer LoopAgent's after_agent_callback unchecked.
+            scenario_with_gate,
             timing_loop,
             visual_director,
             production_supervisor,
