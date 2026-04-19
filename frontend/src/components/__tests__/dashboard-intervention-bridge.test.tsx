@@ -224,6 +224,37 @@ describe("UI-02 intervention bar bridge", () => {
     expect(screen.queryByTestId("directive-scope-clear")).toBeNull();
   });
 
+  test("override prop wins over a concurrent store selection", async () => {
+    // When both the override prop and the store carry values, the
+    // override is what goes to the backend AND what the chip describes.
+    // The store-backed slot meta must NOT leak into the label.
+    act(() => {
+      selectionStore.getState().selectSlot("scene3_narr", "timeline");
+    });
+    render(
+      <DashboardIntervention
+        selectedSlot={{ scope: "element", scope_ref: "override_slot" }}
+      />,
+    );
+    const chip = await screen.findByTestId("directive-scope-chip");
+    expect(chip).toHaveTextContent(/override_slot/i);
+    // The store's scene-3 slot must not appear in the label.
+    expect(chip).not.toHaveTextContent(/scene 3/i);
+    // No × — parent owns clearing.
+    expect(screen.queryByTestId("directive-scope-clear")).toBeNull();
+  });
+
+  test("explicit null override suppresses the chip even if store has a selection", async () => {
+    // Parent says "I want global scope" by passing null. The store's
+    // selection must not resurrect the chip or send a slot_context.
+    act(() => {
+      selectionStore.getState().selectSlot("scene3_narr", "timeline");
+    });
+    render(<DashboardIntervention selectedSlot={null} />);
+    // Scope chip must not appear — the effective scope is global.
+    expect(screen.queryByTestId("directive-scope-chip")).toBeNull();
+  });
+
   test("deriveSlotContext produces the expected backend payload", () => {
     expect(deriveSlotContext("scene3_narr", null)).toEqual({
       scope: "element",

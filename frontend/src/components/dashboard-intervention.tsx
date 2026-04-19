@@ -124,12 +124,16 @@ export function DashboardIntervention({
     const slot = timeline ? findSlotInSnapshot(timeline, selectedSlotId) : null;
     return deriveSlotContext(selectedSlotId, slot);
   }, [selectedSlotOverride, selectedSlotId, timeline]);
+  // Only resolve meta from the store when there is no prop override.
+  // If a parent is driving `selectedSlot` explicitly, the store's id is
+  // irrelevant — the chip label and visibility must follow the override
+  // so the UI agrees with the `slot_context` we actually POST.
   const selectedSlotMeta = useMemo(
     () =>
-      selectedSlotId && timeline
+      selectedSlotOverride === undefined && selectedSlotId && timeline
         ? findSlotInSnapshot(timeline, selectedSlotId)
         : null,
-    [selectedSlotId, timeline],
+    [selectedSlotOverride, selectedSlotId, timeline],
   );
   const [directive, setDirective] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -304,12 +308,21 @@ export function DashboardIntervention({
     ? describeSelectedSlot(selectedSlot)
     : null;
   const scopeLabel = humanScopeLabel ?? "global (no slot selected)";
-  const showScopeChip = selectedSlotId != null || selectedSlotOverride != null;
+  // The chip mirrors whichever selection source is actually driving the
+  // directive payload — the override prop when one is provided (even if
+  // explicitly `null`, which means the parent is intentionally scoping
+  // to global), and the store otherwise. This keeps the visible chip in
+  // lockstep with the `slot_context` we POST.
+  const showScopeChip =
+    selectedSlotOverride !== undefined
+      ? selectedSlotOverride != null
+      : selectedSlotId != null;
   // Only the store-backed path can actually be cleared from here. When
   // a parent provides `selectedSlot` as a prop override, the parent owns
   // its lifecycle — rendering a × that calls `clearSelection()` would
   // appear non-functional (see Devin Review on PR #219).
-  const showScopeClear = selectedSlotId != null && selectedSlotOverride == null;
+  const showScopeClear =
+    selectedSlotOverride === undefined && selectedSlotId != null;
 
   return (
     <div className="flex flex-col gap-2 border-b border-pipeline-blue bg-pipeline-card px-4 py-3">
