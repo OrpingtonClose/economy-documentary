@@ -85,7 +85,51 @@ def test_evaluate_gate_passes_when_in_tolerance():
     assert verdict.passed is True
     assert verdict.failures == []
     assert verdict.missing_required_topics == []
+    # Two voice-less scenes: only 1 inter-scene gap of 2.5s → movie=422.5
     assert verdict.total_scene_duration_sec == pytest.approx(420.0)
+    assert verdict.movie_duration_sec == pytest.approx(422.5)
+
+
+def test_evaluate_gate_checks_movie_total_not_raw_narration():
+    """Regression for run #3: deterministic_steps scales scene
+    durations so scene_sum + gaps = movie_target.  The gate must
+    compare against MOVIE duration so post-scaling scenes that still
+    produce a 420s film pass cleanly, instead of being flagged for
+    being "only 386.5s of narration" as in run #3.
+    """
+    intent = _pag_intent(tolerance_sec=5.0)  # tight window
+    # Build 12 scenes with 3 active voices each that sum to 386.5s of
+    # narration.  Voice gaps: 12 scenes × (3-1) × 1.5 = 36s.  Scene
+    # gaps: 11 × 2.5 = 27.5s.  Total gaps = 63.5s.  Movie = 450s —
+    # OUTSIDE 420 ± 5s window (gate correctly rejects).
+    scenes_450 = [
+        {
+            "scene_num": i,
+            "title": f"s{i}",
+            "duration_sec": 386.5 / 12,
+            "voices": [
+                {"voice": "V1", "text": "PAG opioid chemistry"},
+                {"voice": "V2", "text": "fight-flight-freeze circuits"},
+                {"voice": "V3", "text": "panic and defense systems"},
+            ],
+        }
+        for i in range(1, 13)
+    ]
+    verdict_bad = evaluate_gate(intent, scenes_450)
+    assert verdict_bad.passed is False
+    assert verdict_bad.movie_duration_sec == pytest.approx(450.0, abs=0.5)
+    assert any("runtime" in f for f in verdict_bad.failures)
+
+    # If the scenario director drafts narration that sums with the
+    # gaps to exactly 420s (narration 356.5s + 63.5s gaps), the gate
+    # must PASS because the delivered mp4 will be exactly 420s.
+    scenes_420 = [
+        {**s, "duration_sec": 356.5 / 12}
+        for s in scenes_450
+    ]
+    verdict_ok = evaluate_gate(intent, scenes_420)
+    assert verdict_ok.passed is True
+    assert verdict_ok.movie_duration_sec == pytest.approx(420.0, abs=0.5)
 
 
 def test_evaluate_gate_fails_when_duration_short():

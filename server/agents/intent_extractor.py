@@ -258,6 +258,71 @@ _DURATION_PATTERNS: tuple[tuple[re.Pattern[str], float], ...] = (
 _ADHD_HINTS = ("adhd", "adhd-friendly", "neurodivergent", "short attention")
 _EXPERT_HINTS = ("expert", "technical", "academic", "peer-review")
 
+# Audience-attribute tokens that describe HOW the film should be presented,
+# not subject matter the film must cover.  These must never leak into
+# ``required_topics`` — otherwise the per-stage verifier hunts for the
+# literal token in scene text and fails on perfectly good scenarios.
+# Observed in run #3: the heuristic acronym extractor picked up "ADHD"
+# from "7-minute ADHD-friendly documentary" and emitted it as both
+# audience="adhd-friendly" AND required_topics=["ADHD"], which halted
+# the whole pipeline because no neuroscience scene naturally says
+# "ADHD".  The filter is applied to both heuristic and LLM output
+# paths so either extraction source stays safe.
+_AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
+    {
+        "adhd",
+        "adhd-friendly",
+        "adhd friendly",
+        "add",
+        "neurodivergent",
+        "neurotypical",
+        "general",
+        "expert",
+        "technical",
+        "academic",
+        "layperson",
+        "beginner",
+        "child",
+        "children",
+        "kids",
+    }
+)
+
+
+def _filter_required_topics(
+    required: list[str], audience: str
+) -> list[str]:
+    """Drop audience-descriptor tokens from ``required``.
+
+    A required topic must be subject matter the documentary covers
+    (e.g. "PAG", "opioid analgesia"), not an audience attribute
+    (e.g. "ADHD", "expert").  We filter against a fixed stopword set
+    plus the detected ``audience`` label so every extraction path
+    produces the same invariant.
+    """
+    audience_norm = (audience or "").strip().lower()
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for topic in required:
+        if not isinstance(topic, str):
+            continue
+        key = topic.strip().lower()
+        if not key:
+            continue
+        if key in _AUDIENCE_STOPWORDS:
+            continue
+        if audience_norm and key == audience_norm:
+            continue
+        # Trim off "-friendly" variants like "adhd-friendly" that the
+        # LLM sometimes emits as a topic.
+        if audience_norm and key.startswith(audience_norm + "-"):
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(topic)
+    return cleaned
+
 
 def _heuristic_duration_sec(brief: str) -> tuple[float, float]:
     """Return ``(duration_sec, confidence)`` from the brief text."""
@@ -355,6 +420,9 @@ def _heuristic_intent(brief: str) -> BriefIntent:
     audience, conf_audience = _heuristic_audience(brief)
     tone, conf_tone = _heuristic_tone(brief)
     required, forbidden, conf_topics = _heuristic_topics(brief)
+    # INTENT-EXTR-A: audience descriptors must never become required_topics.
+    required = _filter_required_topics(required, audience)
+    forbidden = _filter_required_topics(forbidden, audience)
     return BriefIntent(
         duration_sec=duration_sec,
         tolerance_sec=DEFAULT_TOLERANCE_SEC,
@@ -408,11 +476,26 @@ def _parse_llm_intent(text: str) -> BriefIntent:
             f"got {type(data).__name__}"
         )
     try:
-        return BriefIntent.model_validate(dict(data))
+        intent = BriefIntent.model_validate(dict(data))
     except Exception as exc:  # pydantic ValidationError, TypeError, ...
         raise IntentExtractionError(
             f"intent-extractor LLM response failed schema validation: {exc}"
         ) from exc
+    # INTENT-EXTR-A: apply the same audience-stopword filter to LLM output.
+    # The LLM (e.g. gemini-2.5-flash) has been observed to classify
+    # "ADHD-friendly" as both audience AND required_topic; we scrub
+    # required_topics / forbidden_topics defensively.
+    intent = intent.model_copy(
+        update={
+            "required_topics": _filter_required_topics(
+                intent.required_topics, intent.audience
+            ),
+            "forbidden_topics": _filter_required_topics(
+                intent.forbidden_topics, intent.audience
+            ),
+        }
+    )
+    return intent
 
 
 def _llm_intent(brief: str) -> Optional[BriefIntent]:

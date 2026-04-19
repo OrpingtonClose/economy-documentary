@@ -18,7 +18,6 @@ Covers the invariants declared in
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -83,6 +82,46 @@ def test_pag_brief_required_topics_heuristic():
     assert "pag" in topics_lower
     assert any("opioid" in t or "chemistry" in t for t in topics_lower)
     assert any("fight" in t or "freeze" in t for t in topics_lower)
+
+
+def test_audience_descriptor_never_in_required_topics():
+    """INTENT-EXTR-A regression: "ADHD-friendly" is an audience hint, not a
+    required topic.  In run #3 the heuristic acronym matcher emitted
+    ``ADHD`` as a required topic, which then halted the pipeline when
+    no neuroscience scene mentioned the literal token.  Guard forever.
+    """
+    intent = extract_intent(PAG_BRIEF, use_llm=False)
+    topics_lower = {t.lower() for t in intent.required_topics}
+    assert "adhd" not in topics_lower
+    assert "adhd-friendly" not in topics_lower
+    assert intent.audience == "adhd-friendly"
+
+
+def test_audience_stopword_filter_on_llm_output(tmp_output_dir, monkeypatch):
+    """The same stopword filter applies to LLM responses — the model
+    has been observed to classify audience descriptors as topics too.
+    """
+    from agents.intent_extractor import set_llm_client_factory
+
+    def fake_llm(_model, _system, _brief):
+        return json.dumps({
+            "duration_sec": 420.0,
+            "tolerance_sec": 30.0,
+            "audience": "adhd-friendly",
+            "tone": [],
+            "corpus_paths": [],
+            "required_topics": ["ADHD", "Periaqueductal Gray (PAG)"],
+            "forbidden_topics": [],
+            "format_hints": {},
+            "confidence": {},
+            "raw_brief": PAG_BRIEF,
+        })
+
+    set_llm_client_factory(lambda: fake_llm)
+    intent = extract_intent(PAG_BRIEF, use_llm=True)
+    topics_lower = {t.lower() for t in intent.required_topics}
+    assert "adhd" not in topics_lower
+    assert any("pag" in t or "periaqueductal" in t for t in topics_lower)
 
 
 def test_pag_brief_forbidden_topics_heuristic():

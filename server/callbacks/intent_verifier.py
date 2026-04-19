@@ -111,6 +111,30 @@ def _sum_scene_duration_sec(scenes: list[dict]) -> float:
     return total
 
 
+# Silence-gap constants.  MUST stay in lockstep with the values in
+# :mod:`callbacks.intent_gate` and :mod:`callbacks.deterministic_steps`
+# so the pre-flight gate, the per-stage verifier, and the actual audio
+# pipeline agree on what "movie duration" means.
+_INTER_VOICE_PAUSE_SEC: float = 1.5
+_INTER_SCENE_PAUSE_SEC: float = 2.5
+
+
+def _compute_gap_overhead_sec(scenes: list[dict]) -> float:
+    total_voice_gaps = 0.0
+    for scene in scenes:
+        voices = scene.get("voices") or []
+        active = 0
+        for voice in voices:
+            if not isinstance(voice, Mapping):
+                continue
+            text = voice.get("text") or ""
+            if isinstance(text, str) and text.strip():
+                active += 1
+        total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE_SEC
+    total_scene_gaps = max(0, len(scenes) - 1) * _INTER_SCENE_PAUSE_SEC
+    return total_voice_gaps + total_scene_gaps
+
+
 def _scene_text_blob(scenes: list[dict]) -> str:
     parts: list[str] = []
     for scene in scenes:
@@ -198,15 +222,25 @@ def _format_aspect_ratio(state: Mapping[str, Any]) -> Optional[str]:
 def _verify_scenario(intent, state: Mapping[str, Any]) -> VerificationRecord:
     scenes = _load_scenes(state)
     total = _sum_scene_duration_sec(scenes)
+    gap_overhead = _compute_gap_overhead_sec(scenes)
+    movie_duration = total + gap_overhead
     failures: list[str] = []
 
+    # Compare MOVIE runtime (narration + silence gaps) against target —
+    # same semantics as the pre-flight gate.  See #263 follow-up: the
+    # verifier used to check the raw narration sum, which meant the
+    # deterministic_steps gap-scaling pass silently shifted the metric
+    # out of range (run #3: 386.5s narration vs. 420s target while
+    # movie runtime was exactly 450s) and triggered false-negative
+    # halts on reasonable scenarios.
     lower = intent.duration_sec - intent.tolerance_sec
     upper = intent.duration_sec + intent.tolerance_sec
     if not scenes:
         failures.append("scenario artefact has zero scenes")
-    elif total < lower or total > upper:
+    elif movie_duration < lower or movie_duration > upper:
         failures.append(
-            f"scenario total duration {total:.1f}s outside "
+            f"scenario film runtime {movie_duration:.1f}s (narration "
+            f"{total:.1f}s + gaps {gap_overhead:.1f}s) outside "
             f"{intent.duration_sec:.1f}s ± {intent.tolerance_sec:.1f}s"
         )
 
@@ -232,6 +266,8 @@ def _verify_scenario(intent, state: Mapping[str, Any]) -> VerificationRecord:
         failures=failures,
         metrics={
             "total_scene_duration_sec": total,
+            "movie_duration_sec": movie_duration,
+            "gap_overhead_sec": gap_overhead,
             "target_duration_sec": intent.duration_sec,
             "tolerance_sec": intent.tolerance_sec,
             "scene_count": len(scenes),
