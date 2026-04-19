@@ -344,24 +344,35 @@ def _buffer_overflow_event(run_id: str, last_seq: int) -> str:
     return EventEncoder().encode(custom)
 
 
-def _run_started_event(run_id: str) -> str:
-    """Return an SSE chunk carrying the pipeline run id.
+def _run_started_event(
+    run_id: str,
+    *,
+    thread_id: Optional[str] = None,
+    adk_run_id: Optional[str] = None,
+) -> str:
+    """Return an SSE chunk announcing the start of a pipeline run.
 
-    Emitted as the very first event on every fresh POST /. The frontend
-    uses this to stamp ``?run={id}`` into the URL so refresh preserves
-    the session.
+    AG-UI requires the very first event on a streaming connection to be
+    ``RUN_STARTED``.  CopilotKit enforces this strictly and rejects the
+    stream with ``"First event must be 'RUN_STARTED'"`` otherwise.
+
+    We emit a real :class:`RunStartedEvent` using the ADK-supplied
+    ``thread_id`` / ``run_id`` (so the protocol is happy and downstream
+    consumers can correlate events).  The pipeline's own server-side
+    ring-buffer ``run_id`` is still surfaced to the browser through the
+    ``X-Pipeline-Run-Id`` response header and ``GET /api/current-run``
+    polling path (see :mod:`run_registry`, ``run-session.ts``), so
+    URL-stamping + replay continue to work without a second CUSTOM
+    announcement.
     """
-    payload = {
-        "type": "run_started",
-        "run_id": run_id,
-        "timestamp": time.time(),
-    }
-    custom = CustomEvent(
-        type=EventType.CUSTOM,
-        name="run_started",
-        value=payload,
+    from ag_ui.core import RunStartedEvent
+
+    run_started = RunStartedEvent(
+        type=EventType.RUN_STARTED,
+        thread_id=thread_id or run_id,
+        run_id=adk_run_id or run_id,
     )
-    return EventEncoder().encode(custom)
+    return EventEncoder().encode(run_started)
 
 
 async def _replay_stream(run_id: str, last_event_id: int):
@@ -533,18 +544,42 @@ async def unified_agui_endpoint(request: Request):
     narrator_queue = subscribe_narrator_events()
 
     async def event_generator():
-        # Announce the run id BEFORE any agent/pipeline traffic so the
-        # frontend can stamp the URL immediately (UI-07a).
-        run_started_sse = _run_started_event(run_id)
+        # AG-UI protocol: the very first event on the wire MUST be
+        # RUN_STARTED.  Previously we emitted a CustomEvent(name="run_started")
+        # here as an URL-stamp signal, which violated the protocol and
+        # caused CopilotKit to reject the stream with
+        # "First event must be 'RUN_STARTED'" -- breaking every chat
+        # submission end-to-end.  We now emit a real RunStartedEvent
+        # carrying the ADK thread/run ids, and swallow the ADK agent's
+        # own duplicate RUN_STARTED below so the client sees exactly one.
+        run_started_sse = _run_started_event(
+            run_id,
+            thread_id=input_data.thread_id,
+            adk_run_id=input_data.run_id,
+        )
         seq = registry.append(run_id, run_started_sse)
         yield _tagged(seq, run_started_sse)
 
         merged: asyncio.Queue = asyncio.Queue()
 
         async def agent_reader():
-            """Read AG-UI events from the ADK agent and forward to merged queue."""
+            """Read AG-UI events from the ADK agent and forward to merged queue.
+
+            The ADK agent emits its own ``RUN_STARTED`` as the first event
+            in its stream; we skip it because the outer ``event_generator``
+            already emitted one above (see AG-UI protocol note).  We also
+            drop the matching ``RUN_FINISHED`` so the client receives a
+            single, balanced run lifecycle.  Agent-level errors still
+            surface via the ``agent_error`` branch.
+            """
             try:
                 async for event in adk_agent.run(input_data):
+                    event_type = getattr(event, "type", None)
+                    if event_type in (
+                        EventType.RUN_STARTED,
+                        EventType.RUN_FINISHED,
+                    ):
+                        continue
                     await merged.put(("agent", event))
             except Exception as exc:
                 await merged.put(("agent_error", exc))
@@ -678,6 +713,23 @@ async def unified_agui_endpoint(request: Request):
                         yield _tagged(seq, sse)
                     except Exception:
                         pass
+
+            # Close the run lifecycle: we swallowed ADK's own RUN_FINISHED
+            # in ``agent_reader`` (since we emitted the matching RUN_STARTED
+            # up-top), so emit our own here to balance the protocol.
+            try:
+                from ag_ui.core import RunFinishedEvent
+
+                run_finished = RunFinishedEvent(
+                    type=EventType.RUN_FINISHED,
+                    thread_id=input_data.thread_id,
+                    run_id=input_data.run_id,
+                )
+                sse = encoder.encode(run_finished)
+                seq = registry.append(run_id, sse)
+                yield _tagged(seq, sse)
+            except Exception as enc_err:  # pragma: no cover -- defensive
+                logger.error("RunFinishedEvent encoding error: %s", enc_err)
 
         finally:
             pipe_task.cancel()
