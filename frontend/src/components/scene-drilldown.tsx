@@ -252,6 +252,14 @@ export function SceneDrilldown({
     | { kind: "error"; message: string }
   >({ kind: "idle" });
 
+  // Reset the redo banner whenever the drilldown swaps to a different
+  // scene — otherwise a stale "Redo queued"/error banner from Scene 3
+  // would persist when the reviewer selects Scene 5.
+  useEffect(() => {
+    setRedoStatus({ kind: "idle" });
+    setRedoSubmitting(false);
+  }, [effectiveSlotId]);
+
   const handleClose = useCallback(() => {
     if (onCloseOverride) onCloseOverride();
     else clearSelection();
