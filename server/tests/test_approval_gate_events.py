@@ -205,6 +205,30 @@ def test_wait_for_approval_auto_approve_emits_no_events(
     ), events
 
 
+def test_approve_endpoint_accepts_every_gated_pipeline_stage(output_dir):
+    """Regression: the inline approval card POSTs ``/agui/approve``
+    with ``{stage: gate.stage}`` for whichever gate is currently open.
+    ``pipeline.py`` opens gates for ``scenario``, ``audio``, ``prompts``,
+    and ``clips``; all four MUST be accepted by the endpoint or the
+    Approve button would return 400 for ``audio``.
+    """
+    # Late import to avoid circulars at test-collection time and so the
+    # output_dir monkeypatches are in effect.
+    import agui as agui_module
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(agui_module.router)
+    client = TestClient(app)
+
+    for stage in ("scenario", "audio", "prompts", "clips"):
+        r = client.post("/agui/approve", json={"stage": stage})
+        assert r.status_code == 200, (stage, r.text)
+        assert r.json() == {"status": "approved", "stage": stage}
+        assert approval_gate.is_stage_approved(stage) is True
+
+
 def test_approve_stage_marks_flag_and_lets_gate_close(output_dir):
     """``/agui/approve`` flips the approval flag; this test mirrors that
     surface and checks the gate loop observes it and fires close."""
