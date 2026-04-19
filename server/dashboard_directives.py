@@ -478,7 +478,7 @@ async def halt_pipeline(request: Request):
             "halt_fired",
             fields={
                 "stage": state.get("halted_at_stage") or "pipeline",
-                "checkpoint": state.get("halted_at_stage") or "next safe checkpoint",
+                "checkpoint": state.get("halt_last_checkpoint") or "next safe checkpoint",
                 "reason": reason or "",
                 "reviewer": reviewer,
             },
