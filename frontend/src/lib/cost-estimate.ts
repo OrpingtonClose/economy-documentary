@@ -118,7 +118,10 @@ export function estimateDirectiveLocal(
   const dollarsPerStage = stageDollars(ctx.stage);
   const eta_minutes = Math.max(1, Math.round(stages * minutesPerStage));
   const dollars = Math.round(stages * dollarsPerStage * 100) / 100;
-  const stage_label = sceneScoped ? "scene" : "scene";
+  // Scene-scoped work is counted in scenes; pipeline-wide work is
+  // counted in stages (matches the documented `stage_label` contract
+  // on :type:`CostEstimate`).
+  const stage_label = sceneScoped ? "scene" : "stage";
   const unit =
     stages === 1 ? `${stage_label}` : `${stage_label}s`;
   const summary = `This will rerun ${stages} ${unit}, add about ${eta_minutes} minutes, and cost about $${dollars.toFixed(2)}.`;

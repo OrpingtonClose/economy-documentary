@@ -126,10 +126,13 @@ describe("estimateDirectiveLocal fallback", () => {
     expect(est.summary).toMatch(/rerun 1 scene,/);
   });
 
-  test("global scope widens to three scenes by default", () => {
+  test("global scope widens to three stages by default", () => {
+    // No slot context => pipeline-wide; the summary must describe the
+    // unit of work in "stage(s)", per the CostEstimate contract.
     const est = estimateDirectiveLocal({ slot_context: null });
     expect(est.stages).toBe(3);
-    expect(est.summary).toMatch(/rerun 3 scenes,/);
+    expect(est.stage_label).toBe("stage");
+    expect(est.summary).toMatch(/rerun 3 stages,/);
   });
 
   test("stage-specific estimate uses the per-stage cost table", () => {

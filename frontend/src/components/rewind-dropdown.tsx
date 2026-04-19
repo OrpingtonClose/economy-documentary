@@ -142,14 +142,22 @@ export function RewindDropdown({
   const [abandonText, setAbandonText] = React.useState("");
   const [abandonSubmitting, setAbandonSubmitting] = React.useState(false);
 
+  // Monotonic fetch id guards against a stale estimate response
+  // overwriting a newer one if the reviewer cancels and picks a
+  // different stage before the first fetch settles. Without this,
+  // the dialog could briefly show the previous stage's cost under
+  // the newer stage's title.
+  const fetchIdRef = React.useRef(0);
+
   const openRewindPreview = React.useCallback(
     (stage: PendingStage) => {
       setPending(stage);
       setEstimate(null);
       setEstimateLoading(true);
-      // Kick off a cost-estimate fetch. The helper never throws -- on
-      // any failure it returns a client-side fallback estimate so the
-      // dialog always has numbers to render.
+      const myId = ++fetchIdRef.current;
+      // The helper never throws -- on any failure it returns a
+      // client-side fallback estimate so the dialog always has
+      // numbers to render.
       void fetchDirectiveEstimate(
         {
           stage: stage.stage,
@@ -158,6 +166,9 @@ export function RewindDropdown({
         },
         { backendUrl },
       ).then((est) => {
+        // Drop stale responses so we never render cost numbers that
+        // belong to a different stage than the one shown in the title.
+        if (fetchIdRef.current !== myId) return;
         setEstimate(est);
         setEstimateLoading(false);
       });
