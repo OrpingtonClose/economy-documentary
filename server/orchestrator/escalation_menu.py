@@ -47,14 +47,36 @@ from typing import Any, Literal, Optional, get_args
 # or ``generate_extension_clip`` (both REPLACE / EXTEND) or escalate to
 # ``rewrite_scene`` / ``abort_run``.
 ActionName = Literal[
+    # Creative / timeline actions (PR-0 menu; ARCH-F-trimmed)
     "regenerate_clip",
     "generate_extension_clip",
     "replace_with_brand_card",
     "rewrite_scene",
     "abort_run",
+    # Ops / deployment actions (PR-2 — deployment planner participation)
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
 ]
 
 ACTION_NAMES: tuple[str, ...] = tuple(get_args(ActionName))
+
+# Canonical subsets so callers / tests can reason about the two families
+# without re-listing them.
+CREATIVE_ACTION_NAMES: tuple[str, ...] = (
+    "regenerate_clip",
+    "generate_extension_clip",
+    "replace_with_brand_card",
+    "rewrite_scene",
+    "abort_run",
+)
+OPS_ACTION_NAMES: tuple[str, ...] = (
+    "recycle_worker",
+    "provision_extra_worker",
+    "wait_for_worker_recovery",
+    "freeze_batch_and_replan",
+)
 
 # Which escalation level each action belongs to (per spec).
 ACTION_LEVELS: dict[str, int] = {
@@ -63,6 +85,11 @@ ACTION_LEVELS: dict[str, int] = {
     "replace_with_brand_card": 2,
     "rewrite_scene": 3,
     "abort_run": 3,
+    # Ops actions
+    "wait_for_worker_recovery": 1,    # cheapest — just wait
+    "recycle_worker": 2,              # destroy + reprovision a single worker
+    "provision_extra_worker": 2,      # add capacity
+    "freeze_batch_and_replan": 3,     # structural — halt in-flight + replan
 }
 
 # Required parameter names and expected types per action.
@@ -72,7 +99,17 @@ ACTION_SIGNATURES: dict[str, dict[str, type]] = {
     "replace_with_brand_card": {"scene_id": str},
     "rewrite_scene": {"scene_id": str, "guidance": str},
     "abort_run": {"reason": str},
+    # Ops actions
+    "recycle_worker": {"worker_url": str, "reason": str},
+    "provision_extra_worker": {"role": str, "count": int},
+    "wait_for_worker_recovery": {"worker_url": str, "timeout_sec": float},
+    "freeze_batch_and_replan": {"reason": str},
 }
+
+# Hard bounds enforced in __post_init__ for ops actions.
+MAX_PROVISION_COUNT: int = 4          # don't let the agent spin up a farm
+MAX_WAIT_TIMEOUT_SEC: float = 1800.0  # 30 minutes — hard cap on "just wait"
+OPS_VALID_ROLES: tuple[str, ...] = ("tts", "video", "whisperx")
 
 
 class EscalationActionError(ValueError):
@@ -99,12 +136,18 @@ class EscalationAction:
     clip_id: Optional[str] = None
     scene_id: Optional[str] = None
 
-    # Per-action parameters.
+    # Per-action parameters (creative menu).
     prompt_delta: Optional[str] = None
     seed_delta: Optional[int] = None
     duration_needed: Optional[float] = None
     guidance: Optional[str] = None
     reason: Optional[str] = None
+
+    # Per-action parameters (ops menu).
+    worker_url: Optional[str] = None
+    role: Optional[str] = None
+    count: Optional[int] = None
+    timeout_sec: Optional[float] = None
 
     # Audit metadata populated by ``supervisor_escalate``.
     llm_model: str = ""
@@ -159,11 +202,36 @@ class EscalationAction:
                 raise EscalationActionError(
                     "regenerate_clip: seed_delta must be non-zero"
                 )
+        if self.action == "provision_extra_worker":
+            assert self.count is not None
+            if self.count <= 0 or self.count > MAX_PROVISION_COUNT:
+                raise EscalationActionError(
+                    f"provision_extra_worker: count must be in "
+                    f"[1, {MAX_PROVISION_COUNT}], got {self.count}"
+                )
+            assert self.role is not None
+            if self.role not in OPS_VALID_ROLES:
+                raise EscalationActionError(
+                    f"provision_extra_worker: role must be one of "
+                    f"{OPS_VALID_ROLES}, got {self.role!r}"
+                )
+        if self.action == "wait_for_worker_recovery":
+            assert self.timeout_sec is not None
+            if self.timeout_sec <= 0 or self.timeout_sec > MAX_WAIT_TIMEOUT_SEC:
+                raise EscalationActionError(
+                    f"wait_for_worker_recovery: timeout_sec must be in "
+                    f"(0, {MAX_WAIT_TIMEOUT_SEC}], got {self.timeout_sec}"
+                )
 
     @property
     def level(self) -> int:
         """Escalation level (1, 2, or 3)."""
         return ACTION_LEVELS[self.action]
+
+    @property
+    def is_ops(self) -> bool:
+        """True if this action targets the fleet rather than an artifact."""
+        return self.action in OPS_ACTION_NAMES
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a compact dict (drops None / empty values)."""
@@ -249,7 +317,20 @@ class EscalationContext:
 # Menu prompt (rendered into the supervisor LLM prompt)
 # ---------------------------------------------------------------------------
 
-ACTION_MENU_DESCRIPTION = """\
+# The action menu is assembled in two parts so callers that only
+# support a subset of the action family (e.g. the push-based supervisor
+# in ``agents/production_supervisor.py``, whose downstream mapping in
+# ``recovery._CANONICAL_TO_CALLER`` only covers creative actions) can
+# render a creative-only prompt without ops-action leakage.
+#
+#   * CREATIVE_ACTION_MENU_DESCRIPTION -- creative actions + decision rule.
+#     Use this when the caller can only act on creative actions.
+#   * OPS_ACTION_MENU_SECTION -- the ops-family subsection.
+#   * ACTION_MENU_DESCRIPTION -- full menu (creative + ops). Use this
+#     when the caller has deployment / ops-executor capability (the
+#     pull-based escalation supervisor in
+#     ``agents/escalation_supervisor.py``).
+CREATIVE_ACTION_MENU_DESCRIPTION = """\
 CANONICAL ESCALATION ACTIONS -- you MUST choose EXACTLY ONE.
 
 Per the Media Immutability Invariant (ARCH-F / #128), once media is
@@ -290,9 +371,80 @@ abort is exactly the #102 regression.
 """
 
 
+OPS_ACTION_MENU_SECTION = """\
+
+OPS ACTIONS (fleet / deployment — pick these when the root cause is
+infrastructural rather than artifact-level; e.g. worker OOM, stage
+timeout, cost burn, capacity shortfall).  The pipeline routes infra
+failures via the diagnostic classifier (ARCH-C / diagram 8); when the
+failure class is `infra`, prefer an ops action over a creative action.
+
+Level 1 (cheapest ops — just wait):
+  - wait_for_worker_recovery(worker_url, timeout_sec)
+      Pause and poll ``infra_agent`` until the given worker becomes
+      healthy again, or until ``timeout_sec`` elapses (hard-capped at
+      1800s).  Correct choice when telemetry suggests a transient
+      disruption (network blip, brief thermal throttle).
+
+Level 2 (targeted fleet mutation):
+  - recycle_worker(worker_url, reason)
+      Destroy + reprovision a single degraded worker.  Use when a
+      specific worker has accumulated multiple independent failure
+      signals (see ARCH-C4 / #143 — two signals required before
+      condemning).  ``reason`` is a short human-readable tag.
+  - provision_extra_worker(role, count)
+      Add ``count`` extra workers of the given ``role`` to the fleet.
+      ``role`` must be one of ``tts``, ``video``, or ``whisperx``;
+      ``count`` is bounded to [1, 4] to prevent runaway provisioning.
+      Use when the stage is capacity-starved but existing workers are
+      healthy.
+
+Level 3 (structural — halt + replan):
+  - freeze_batch_and_replan(reason)
+      Halt in-flight batch work via ``infra_agent.pause`` and ask the
+      orchestrator to regenerate the remaining scenes.  Use when the
+      infrastructure condition is too broad for per-worker fixes (fleet
+      saturation, budget exhausted, provider outage with no fallback).
+
+Cross-family decision rule: when the root cause is clearly
+artifact-level (QA fail, critic reject, prompt mismatch), pick a
+creative action.  When the root cause is clearly infra-level (worker
+unreachable, OOM, cost exceeded, stage timeout), pick an ops action.
+When uncertain, prefer the cheaper family first.
+"""
+
+
+ACTION_MENU_DESCRIPTION = (
+    CREATIVE_ACTION_MENU_DESCRIPTION + OPS_ACTION_MENU_SECTION
+)
+
+
 # JSON schema for Gemini structured output.  Kept flat (Gemini's
 # structured-output API does not support oneOf); per-action signature
 # validation happens in ``EscalationAction.__post_init__`` after parsing.
+#
+# Two variants: ``CREATIVE_ESCALATION_ACTION_JSON_SCHEMA`` restricts the
+# ``action`` enum to creative actions only (for the push-based
+# supervisor whose downstream mapping cannot honour ops actions), and
+# ``ESCALATION_ACTION_JSON_SCHEMA`` is the full schema for the
+# pull-based supervisor which owns ops-executor delegation.
+CREATIVE_ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": list(CREATIVE_ACTION_NAMES)},
+        "clip_id": {"type": "string"},
+        "scene_id": {"type": "string"},
+        "prompt_delta": {"type": "string"},
+        "seed_delta": {"type": "integer"},
+        "duration_needed": {"type": "number"},
+        "guidance": {"type": "string"},
+        "reason": {"type": "string"},
+        "llm_reasoning": {"type": "string"},
+    },
+    "required": ["action"],
+}
+
+
 ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -304,6 +456,10 @@ ESCALATION_ACTION_JSON_SCHEMA: dict[str, Any] = {
         "duration_needed": {"type": "number"},
         "guidance": {"type": "string"},
         "reason": {"type": "string"},
+        "worker_url": {"type": "string"},
+        "role": {"type": "string"},
+        "count": {"type": "integer"},
+        "timeout_sec": {"type": "number"},
         "llm_reasoning": {"type": "string"},
     },
     "required": ["action"],
@@ -350,13 +506,21 @@ def assert_escalation_invariant(
 __all__ = [
     "ActionName",
     "ACTION_NAMES",
+    "CREATIVE_ACTION_NAMES",
+    "OPS_ACTION_NAMES",
     "ACTION_LEVELS",
     "ACTION_SIGNATURES",
     "ACTION_MENU_DESCRIPTION",
+    "CREATIVE_ACTION_MENU_DESCRIPTION",
+    "OPS_ACTION_MENU_SECTION",
     "ESCALATION_ACTION_JSON_SCHEMA",
+    "CREATIVE_ESCALATION_ACTION_JSON_SCHEMA",
     "EscalationAction",
     "EscalationActionError",
     "EscalationContext",
     "EscalationInvariantViolation",
+    "MAX_PROVISION_COUNT",
+    "MAX_WAIT_TIMEOUT_SEC",
+    "OPS_VALID_ROLES",
     "assert_escalation_invariant",
 ]
