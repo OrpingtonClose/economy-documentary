@@ -20,7 +20,7 @@
  *      flows from the timeline (preference interpreter is H4).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOtioStream } from "@/lib/otio-stream";
 import type {
   OtioSlot,
@@ -392,7 +392,7 @@ function slotTooltip(slot: OtioSlot): string {
 function WaveformStrip({ url }: { url: string }) {
   const [samples, setSamples] = useState<number[] | null>(null);
 
-  useMemo(() => {
+  useEffect(() => {
     let cancelled = false;
     fetch(url)
       .then((r) => (r.ok ? r.json() : Promise.reject(r.statusText)))

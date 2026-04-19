@@ -1236,7 +1236,7 @@ async def get_otio_state_view():
     """
     from otio_timeline_model import build_timeline_view
 
-    artifacts = [a.to_dict() for a in _store.get_all_artifacts()]
+    artifacts = _store.get_all_artifacts()
     view = build_timeline_view(_OUTPUT_DIR, feedback_artifacts=artifacts)
     return JSONResponse(view.to_dict())
 
@@ -1256,7 +1256,7 @@ async def get_slot_detail(slot_id: str):
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    artifacts = [a.to_dict() for a in _store.get_all_artifacts()]
+    artifacts = _store.get_all_artifacts()
     detail = build_slot_detail(
         slot_id,
         _OUTPUT_DIR,
@@ -1408,7 +1408,7 @@ async def stream_events(request: Request):
             # Kick the connection with an initial snapshot event so late
             # subscribers see the current OTIO state without re-fetching.
             from otio_timeline_model import build_timeline_view
-            artifacts = [a.to_dict() for a in _store.get_all_artifacts()]
+            artifacts = _store.get_all_artifacts()
             view = build_timeline_view(_OUTPUT_DIR, feedback_artifacts=artifacts)
             snapshot = {
                 "type": "otio_snapshot",

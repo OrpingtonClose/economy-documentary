@@ -213,8 +213,12 @@ def _extract_scene_phrase(name: str, metadata: dict) -> tuple[int, int]:
     """
     doc_meta = (metadata or {}).get("documentary") or {}
     if doc_meta:
-        s = doc_meta.get("scene_num") or doc_meta.get("scene")
-        p = doc_meta.get("phrase_idx") or doc_meta.get("phrase")
+        s = doc_meta.get("scene_num")
+        if s is None:
+            s = doc_meta.get("scene")
+        p = doc_meta.get("phrase_idx")
+        if p is None:
+            p = doc_meta.get("phrase")
         if isinstance(s, int) and isinstance(p, int):
             return s, p
     # Direct keys on metadata root
