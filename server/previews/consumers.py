@@ -527,7 +527,7 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
         emit_narrator_event(
             "preview_ready",
             fields={
-                "boundary": manifest.kind or manifest.trigger_reason or "preview",
+                "boundary": boundary,
                 "duration_sec": manifest.total_duration_sec,
                 "preview_path": manifest.preview_path,
             },
