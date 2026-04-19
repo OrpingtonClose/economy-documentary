@@ -183,6 +183,96 @@ export interface ProposedAction {
   risk_level: "low" | "medium" | "high";
 }
 
+// ---------------------------------------------------------------------------
+// ARCH-H1 / ARCH-H2 / ARCH-H3 — OTIO centrepiece timeline types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle state of the OTIO timeline. ``authoritative`` locks the scale
+ * and drops the reconciliation overlay. */
+export type OtioState = "draft" | "authoritative";
+
+/** Per-slot lifecycle used on the centrepiece dashboard.
+ *
+ * ``gap`` is a real OTIO gap segment (pacing silence), rendered as empty
+ * space — not a failure state. */
+export type SlotStatus =
+  | "pending"
+  | "in_progress"
+  | "delivered"
+  | "failed"
+  | "gap";
+
+/** Scale-accurate slot on one of the three canonical tracks. */
+export interface OtioSlot {
+  slot_id: string;
+  track: "V1_Video" | "A1_Narration" | "A2_Music";
+  scene_num: number;
+  phrase_idx: number;
+  start_sec: number;
+  duration_sec: number;
+  status: SlotStatus;
+  label: string;
+  preview_url: string;
+  thumbnail_url: string;
+  waveform_url: string;
+  failure_reason: string;
+  rung: string;
+  scripted_duration_sec: number | null;
+  measured_duration_sec: number | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface OtioTrack {
+  name: "V1_Video" | "A1_Narration" | "A2_Music";
+  kind: "video" | "audio";
+  slots: OtioSlot[];
+  total_slots: number;
+}
+
+export interface OtioReconciliationRow {
+  slot_id: string;
+  scene_num: number;
+  phrase_idx: number;
+  start_sec: number;
+  scripted_duration_sec: number;
+  measured_duration_sec: number | null;
+  skew_sec: number | null;
+}
+
+export interface OtioTimelineStatus {
+  state: OtioState;
+  total_duration_sec: number;
+  tracks: OtioTrack[];
+  reconciliation: OtioReconciliationRow[];
+  source_file: string;
+}
+
+export interface SlotStateEvent {
+  slot_id: string;
+  track: OtioTrack["name"];
+  scene_num: number;
+  phrase_idx: number;
+  status: SlotStatus;
+  artifact_id: string;
+  artifact_status: string;
+  preview_url: string;
+  duration_sec: number;
+  qa_scores: Record<string, number>;
+}
+
+export interface SlotDetailView {
+  slot_id: string;
+  track: OtioTrack["name"];
+  scene_num: number;
+  phrase_idx: number;
+  artifact_history: Array<Record<string, unknown>>;
+  qa_verdicts: Array<Record<string, unknown>>;
+  reasoning_digests: Array<Record<string, unknown>>;
+  ledger_records: Array<Record<string, unknown>>;
+  current_rung: Record<string, unknown>;
+  latest_preview: Record<string, unknown>;
+}
+
 // Reasoning trace types — live agent thinking surfaced to the observer
 
 export interface ReasoningDigest {

@@ -183,6 +183,22 @@ def set_otio_state(
         prior, new_state, phase or "?", reason or "-",
     )
 
+    # ARCH-H2: emit the crystallisation event onto the AG-UI bus so the
+    # centrepiece dashboard can drop its reconciliation overlay without
+    # polling.  Best-effort: we never want an SSE publish to destabilise
+    # the OTIO state machine itself.
+    if (
+        new_state == OTIO_STATE_AUTHORITATIVE
+        and prior != OTIO_STATE_AUTHORITATIVE
+    ):
+        try:
+            from agui import emit_otio_authoritative  # local import; avoid cycle
+            emit_otio_authoritative(timeline_path=tp, reason=reason)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "otio_state: failed to emit authoritative event: %r", exc
+            )
+
 
 def mark_timeline_draft(state: Any, *, timeline_path: Optional[str] = None) -> None:
     """Stamp a freshly-created timeline as ``draft``.
