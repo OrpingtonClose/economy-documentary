@@ -556,3 +556,69 @@ def test_slotplan_imports_ok():
     assert SlotKind.VIDEO.value == "video"
     assert SlotStatus.DELIVERED.value == "delivered"
     assert SlotPlan.__name__ == "SlotPlan"
+
+
+# ---------------------------------------------------------------------------
+# UI-06a (#208) — preview_failed emission on render failure
+# ---------------------------------------------------------------------------
+
+
+class TestPreviewFailedEmission:
+    """When the builder raises ``PreviewRenderError`` the trigger must
+    still surface the failure on the dashboard via ``preview_failed``
+    — never silently degrade.
+    """
+
+    def test_render_error_emits_preview_failed(self, tmp_path):
+        from previews.builder import PreviewRenderError
+
+        tl_path = _build_timeline(
+            tmp_path,
+            scenes=[{
+                "scene_num": 1, "video_status": "delivered",
+                "narration_status": "delivered", "duration_sec": 1.0,
+            }],
+        )
+        state = {"_timeline_path": tl_path}
+
+        with mock.patch.object(
+            preview_triggers, "build_preview",
+            side_effect=PreviewRenderError("ffmpeg missing"),
+        ):
+            with mock.patch(
+                "previews.consumers.emit_preview_failed"
+            ) as mock_failed:
+                preview_triggers_after_agent_callback(_ctx(state))
+
+        assert mock_failed.call_count >= 1
+        # The trigger reason must reach the dashboard verbatim so the UI
+        # can normalise via derive_boundary.
+        trigger_reason, error = mock_failed.call_args_list[0].args
+        assert trigger_reason
+        assert "ffmpeg" in error
+        # The run must not have crashed — triggers swallow builder
+        # failures by design.
+        assert LATEST_PREVIEW_KEY not in state
+
+    def test_unexpected_error_also_emits_preview_failed(self, tmp_path):
+        tl_path = _build_timeline(
+            tmp_path,
+            scenes=[{
+                "scene_num": 1, "video_status": "delivered",
+                "narration_status": "delivered", "duration_sec": 1.0,
+            }],
+        )
+        state = {"_timeline_path": tl_path}
+
+        with mock.patch.object(
+            preview_triggers, "build_preview",
+            side_effect=RuntimeError("disk full"),
+        ):
+            with mock.patch(
+                "previews.consumers.emit_preview_failed"
+            ) as mock_failed:
+                preview_triggers_after_agent_callback(_ctx(state))
+
+        assert mock_failed.call_count >= 1
+        _, error = mock_failed.call_args_list[0].args
+        assert "disk full" in error

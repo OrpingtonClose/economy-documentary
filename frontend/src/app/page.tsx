@@ -46,6 +46,10 @@ const DashboardIntervention = dynamic(
     ),
   { ssr: false }
 );
+const PreviewChips = dynamic(
+  () => import("@/components/preview-chips").then((m) => m.PreviewChips),
+  { ssr: false }
+);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<string>("otio");
@@ -73,6 +77,7 @@ export default function Home() {
             ADHD-friendly AI documentary generation
           </p>
         </div>
+        <PreviewChips />
         <div className="flex-1 overflow-hidden">
           <CopilotChat
             labels={{
