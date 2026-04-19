@@ -546,14 +546,27 @@ def _trim_text_to_budget(text: str, actual_duration: float, budget: float) -> st
         return text
 
     ratio = budget / actual_duration  # e.g. 0.85 means keep 85%
-    if ratio < 0.6:
-        # Would remove >40% — flag for scenario adjustment instead
+    # Previously we refused to trim below 60% and left the scenario
+    # refiner to shrink the narration — but the refiner frequently
+    # hallucinates unrelated content (e.g. "Amazon rainforest" for a
+    # PAG brief), and when the LLM simply wrote too verbose a script
+    # the only path to a finished film is aggressive sentence-level
+    # trimming.  Lower the floor to 30% (remove up to 70% of text)
+    # and keep the warning so downstream can see it happened.
+    if ratio < 0.3:
         logger.warning(
             "Narration trimming would remove %.0f%% of text "
-            "(actual=%.1fs, budget=%.1fs) — too aggressive, skipping trim",
+            "(actual=%.1fs, budget=%.1fs) — exceeds 70%% floor, "
+            "keeping original and letting scenario refiner retry",
             (1 - ratio) * 100, actual_duration, budget,
         )
         return text
+    if ratio < 0.6:
+        logger.warning(
+            "Narration trimming removing %.0f%% of text "
+            "(actual=%.1fs, budget=%.1fs) — aggressive trim to fit budget",
+            (1 - ratio) * 100, actual_duration, budget,
+        )
 
     words = text.split()
     target_words = max(1, int(len(words) * ratio))
