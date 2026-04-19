@@ -1514,3 +1514,505 @@ async def stream_events(request: Request):
 
     return StreamingResponse(_event_gen(), media_type="text/event-stream")
 
+
+# ---------------------------------------------------------------------------
+# UI-04 — full slot drilldown (#189 / #201 / #204)
+# ---------------------------------------------------------------------------
+#
+# Two endpoints back the rebuilt right-rail slot panel:
+#
+# * ``GET /api/slots/{slot_id}/full``  — single aggregation call that
+#   returns slot + takes + critiques + QA + artifacts + ledger records +
+#   reasoning trace preview. Uses :func:`slot_detail_model.build_slot_detail`
+#   as the foundation and enriches with per-artifact critique store reads,
+#   scope-resolved ledger records (``records_applying_to_slot``), and a
+#   preview of the latest reasoning digests scoped to the slot.
+#
+# * ``GET /api/reasoning/raw?slot_id=...`` — raw reasoning events filtered
+#   to a single slot, for the advanced-mode virtualised subsection. The
+#   slot-qualifier substring scan mirrors
+#   :func:`slot_detail_model._reasoning_digests_for_slot`.
+
+
+# Long track name -> short ``_TRACK_SHORT`` form, kept local so the
+# aggregator does not import the OTIO model just for this.
+_SLOT_TRACK_SHORT: dict[str, str] = {
+    "V1_Video": "V1",
+    "A1_Narration": "A1",
+    "A2_Music": "A2",
+}
+
+
+# Track -> critique store ``artifact_type``. The critique layer uses a
+# different taxonomy than the feedback store (see ``critique/record.py``):
+# ``clip`` / ``audio`` / ``music`` instead of ``video_clip`` / ``narration``
+# / ``music``. We probe both so we pick up records regardless of which
+# producer wrote them.
+_SLOT_CRITIQUE_TYPES: dict[str, tuple[str, ...]] = {
+    "V1_Video": ("clip", "video_clip"),
+    "A1_Narration": ("audio", "narration"),
+    "A2_Music": ("audio", "music"),
+}
+
+
+def _slot_reasoning_match_terms(
+    short_track: str, scene_num: int, phrase_idx: int
+) -> tuple[list[str], str]:
+    """Return (substring needles, track keyword) for slot-aware matching.
+
+    The reasoning store is free-form text — we do a case-insensitive
+    substring scan against ``content`` and ``metadata`` JSON using the
+    same conventions the digest engine tags with (see
+    :func:`slot_detail_model._reasoning_digests_for_slot`).
+    """
+    needles = [
+        f"{short_track}:{scene_num}:{phrase_idx}",
+        f"scene {scene_num} phrase {phrase_idx}",
+        f"scene_{scene_num}_phrase_{phrase_idx}",
+        f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}",
+        f"s{scene_num:03d}_p{phrase_idx:03d}",
+        f"s{scene_num}p{phrase_idx}",
+    ]
+    track_keyword = {
+        "V1": "video",
+        "A1": "narration",
+        "A2": "music",
+    }.get(short_track, "")
+    return needles, track_keyword
+
+
+def _load_dashboard_blackboard_state() -> dict:
+    """Best-effort snapshot of the shared dashboard blackboard.
+
+    The slot-full endpoint is read-only; we never mutate the blackboard.
+    If the file is missing or unreadable we return an empty dict — the
+    downstream helpers (``records_applying_to_slot``) handle that
+    gracefully by returning an empty record list.
+    """
+    try:
+        from dashboard_directives import _load_blackboard
+        return dict(_load_blackboard())
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("slot/full: blackboard unavailable: %s", exc)
+        return {}
+
+
+def _slot_view_for(slot_id: str) -> dict:
+    """Return the canonical ``SlotView`` dict for ``slot_id``.
+
+    Pulls from the same ``build_timeline_view`` used by
+    ``/agui/otio/state`` so the panel header matches the timeline
+    exactly. When the slot is not yet on the timeline we synthesise a
+    minimal stub so the panel can still render (header + sections that
+    exist).
+    """
+    from otio_timeline_model import build_timeline_view, parse_slot_id
+
+    track, scene, phrase = parse_slot_id(slot_id)
+    try:
+        artifacts = _store.get_all_artifacts()
+        view = build_timeline_view(_OUTPUT_DIR, feedback_artifacts=artifacts)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("slot/full: timeline view unavailable: %s", exc)
+        view = None
+
+    if view is not None:
+        for track_view in view.tracks:
+            if track_view.name != track:
+                continue
+            for slot in track_view.slots:
+                if slot.slot_id == slot_id:
+                    return slot.to_dict()
+
+    # Fallback: synthesise a minimal stub.
+    return {
+        "slot_id": slot_id,
+        "track": track,
+        "scene_num": scene,
+        "phrase_idx": phrase,
+        "start_sec": 0.0,
+        "duration_sec": 0.0,
+        "status": "pending",
+        "label": "",
+        "preview_url": "",
+        "thumbnail_url": "",
+        "waveform_url": "",
+        "failure_reason": "",
+        "rung": "",
+        "scripted_duration_sec": None,
+        "measured_duration_sec": None,
+        "metadata": {},
+    }
+
+
+def _critique_record_for_slot(track: str, scene_num: int, phrase_idx: int) -> dict:
+    """Read the critique-store record for this slot, across id conventions.
+
+    Returns the record's ``to_dict()`` form plus the ``(artifact_type,
+    artifact_id)`` pair we matched, so the caller can surface which
+    taxonomy hit. Empty dict when no record is found.
+    """
+    try:
+        from critique.store import get_critique_store
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        store = get_critique_store()
+    except Exception:  # noqa: BLE001
+        return {}
+
+    candidate_ids = (
+        f"s{scene_num:03d}_p{phrase_idx:03d}",
+        f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}",
+        f"{scene_num}_{phrase_idx}",
+    )
+    for artifact_type in _SLOT_CRITIQUE_TYPES.get(track, ()):
+        for aid in candidate_ids:
+            try:
+                record = store.read(artifact_type, aid)  # type: ignore[arg-type]
+            except Exception:  # noqa: BLE001
+                continue
+            if record is None:
+                continue
+            try:
+                payload = record.to_dict()
+            except Exception:  # noqa: BLE001
+                continue
+            payload["_matched_artifact_type"] = artifact_type
+            payload["_matched_artifact_id"] = aid
+            return payload
+    return {}
+
+
+def _takes_from_detail(
+    detail_dict: dict, slot_view: dict
+) -> list[dict]:
+    """Normalise artifact history into the ``takes`` response shape.
+
+    Each take carries ``revision``, ``outcome`` (approved / rejected /
+    pending / failed / generating), the preview url, and — when the
+    pipeline has stamped one — the ledger revision at derivation.
+    """
+    _OUTCOME = {
+        "approved": "accepted",
+        "rejected": "rejected",
+        "pending_review": "pending",
+        "regenerating": "regenerating",
+        "generating": "generating",
+        "failed": "failed",
+    }
+    history = list(detail_dict.get("artifact_history") or [])
+    out: list[dict] = []
+    for idx, art in enumerate(history):
+        status = str(art.get("status", ""))
+        out.append(
+            {
+                "revision": idx,
+                "artifact_id": art.get("id", ""),
+                "status": status,
+                "outcome": _OUTCOME.get(status, status or "unknown"),
+                "timestamp": art.get("timestamp"),
+                "preview_url": art.get("preview_url", ""),
+                "b2_url": (art.get("metadata") or {}).get("b2_url", "") or art.get("preview_url", ""),
+                "qa_scores": art.get("qa_scores", {}),
+                "ledger_revision_at_derivation": art.get(
+                    "ledger_revision_at_derivation"
+                ),
+            }
+        )
+    if not out and slot_view.get("preview_url"):
+        out.append(
+            {
+                "revision": 0,
+                "artifact_id": "",
+                "status": slot_view.get("status", ""),
+                "outcome": _OUTCOME.get(
+                    slot_view.get("status", ""),
+                    slot_view.get("status", "unknown"),
+                ),
+                "timestamp": None,
+                "preview_url": slot_view.get("preview_url", ""),
+                "b2_url": slot_view.get("preview_url", ""),
+                "qa_scores": {},
+                "ledger_revision_at_derivation": None,
+            }
+        )
+    return out
+
+
+def _artifacts_from_slot(slot_view: dict, takes: list[dict]) -> list[dict]:
+    """Normalised list of media artifacts + thumbnails + waveforms."""
+    entries: list[dict] = []
+    if slot_view.get("preview_url"):
+        entries.append(
+            {
+                "kind": "preview",
+                "url": slot_view["preview_url"],
+                "label": "Current preview",
+            }
+        )
+    if slot_view.get("thumbnail_url"):
+        entries.append(
+            {
+                "kind": "thumbnail",
+                "url": slot_view["thumbnail_url"],
+                "label": "Thumbnail",
+            }
+        )
+    if slot_view.get("waveform_url"):
+        entries.append(
+            {
+                "kind": "waveform",
+                "url": slot_view["waveform_url"],
+                "label": "Waveform",
+            }
+        )
+    for take in takes:
+        url = take.get("b2_url") or take.get("preview_url")
+        if not url:
+            continue
+        entries.append(
+            {
+                "kind": "take",
+                "url": url,
+                "label": f"Revision {take.get('revision')}",
+                "revision": take.get("revision"),
+                "outcome": take.get("outcome"),
+            }
+        )
+    return entries
+
+
+@api_router.get("/slots/{slot_id}/full")
+async def get_slot_full(slot_id: str):
+    """Aggregation endpoint backing the UI-04 slot drilldown panel (#201).
+
+    Single request returns everything the right-rail panel needs:
+
+    * ``slot`` — header info (scene/phrase/duration/status/label).
+    * ``takes`` — ordered artifact revisions with outcome and B2 url.
+    * ``critiques`` — per-critic rationale from the critique store.
+    * ``qa_results`` — numerical QA verdicts (LUFS, motion stability, ...).
+    * ``artifacts`` — flat list of media URLs (preview / waveform / takes).
+    * ``ledger_records`` — resolved via
+      :func:`callbacks.preference_ledger.records_applying_to_slot`.
+    * ``reasoning_trace_preview`` — last 20 digests that mention the slot.
+
+    Pure read-only. Never mutates any store or state.
+    """
+    from otio_timeline_model import parse_slot_id
+    from slot_detail_model import build_slot_detail
+
+    try:
+        track, scene_num, phrase_idx = parse_slot_id(slot_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    # Base slot view (header info).
+    slot_view = _slot_view_for(slot_id)
+
+    # Per-artifact detail (history + digests + ledger scope probe + rung).
+    state = _load_dashboard_blackboard_state()
+    try:
+        artifacts_store = _store.get_all_artifacts()
+    except Exception:  # noqa: BLE001
+        artifacts_store = []
+
+    try:
+        detail = build_slot_detail(
+            slot_id,
+            _OUTPUT_DIR,
+            feedback_artifacts=artifacts_store,
+            state=state or None,
+        )
+        detail_dict = detail.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("slot/full: build_slot_detail failed for %s: %s", slot_id, exc)
+        detail_dict = {
+            "artifact_history": [],
+            "qa_verdicts": [],
+            "reasoning_digests": [],
+            "ledger_records": [],
+            "current_rung": {},
+            "latest_preview": {},
+        }
+
+    # Takes + artifacts from the detail + slot view.
+    takes = _takes_from_detail(detail_dict, slot_view)
+    artifacts = _artifacts_from_slot(slot_view, takes)
+
+    # Critique-store record — one per (type, id). We surface the per-critic
+    # ``critiques`` list and the deterministic ``qa_results`` list separately.
+    critique_record = _critique_record_for_slot(track, scene_num, phrase_idx)
+    critiques = list(critique_record.get("critiques") or [])
+    qa_results = list(critique_record.get("qa_results") or [])
+    # Fallback: if the critique store is empty, surface any QA verdicts the
+    # stylistic QA pipeline emitted directly (these are already in detail).
+    if not qa_results:
+        qa_results = list(detail_dict.get("qa_verdicts") or [])
+
+    # Ledger records scoped to the slot via #202's helper.
+    try:
+        from callbacks.preference_ledger import records_applying_to_slot
+        resolved = records_applying_to_slot(state, slot_id)
+        ledger_records = [r.to_dict() for r in resolved]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("slot/full: ledger resolution failed for %s: %s", slot_id, exc)
+        ledger_records = []
+
+    # Reasoning trace preview — last 20 digest entries scoped to slot.
+    reasoning_trace_preview = list(detail_dict.get("reasoning_digests") or [])[-20:]
+
+    payload = {
+        "slot": slot_view,
+        "takes": takes,
+        "critiques": critiques,
+        "qa_results": qa_results,
+        "artifacts": artifacts,
+        "ledger_records": ledger_records,
+        "reasoning_trace_preview": reasoning_trace_preview,
+        # Supplementary context the panel may render even when sections
+        # above are empty (current rung, latest assembly preview).
+        "current_rung": detail_dict.get("current_rung") or {},
+        "latest_preview": detail_dict.get("latest_preview") or {},
+    }
+    return JSONResponse(payload)
+
+
+@api_router.get("/reasoning/raw")
+async def get_reasoning_raw_for_slot(
+    slot_id: str | None = None,
+    limit: int = 100,
+    since: float | None = None,
+):
+    """Raw reasoning entries, optionally filtered to a single slot (#204).
+
+    Query params:
+
+    * ``slot_id`` — when set, only entries whose content or metadata
+      contains a recognised slot-qualifier substring are returned.
+    * ``limit`` — max rows (default 100, clamped to 1000). Designed so
+      the frontend's virtualised list can request up to 1000 entries in
+      one fetch without chunking.
+    * ``since`` — only rows after this Unix timestamp (for polling).
+
+    The response shape matches ``/agui/reasoning/raw`` so the frontend
+    can share a single ``RawTrace`` type: ``{traces: [...], count: N}``.
+    Each trace carries ``id``, ``timestamp``, ``event_type``,
+    ``agent_name``, ``model``, ``content``, ``tokens_in``, ``tokens_out``,
+    ``metadata``.
+    """
+    limit = max(1, min(int(limit or 100), 1000))
+
+    filter_terms: list[str] = []
+    track_keyword = ""
+    if slot_id:
+        try:
+            from otio_timeline_model import parse_slot_id
+            track, scene_num, phrase_idx = parse_slot_id(slot_id)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        short = _SLOT_TRACK_SHORT.get(track, track[:2])
+        filter_terms, track_keyword = _slot_reasoning_match_terms(
+            short, scene_num, phrase_idx
+        )
+
+    try:
+        from plugins.reasoning_trace import _REASONING_DB
+        import sqlite3 as _sqlite3
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"traces": [], "count": 0, "error": f"reasoning store unavailable: {exc}"},
+            status_code=200,
+        )
+
+    try:
+        conn = _sqlite3.connect(_REASONING_DB, timeout=5)
+        conn.row_factory = _sqlite3.Row
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"traces": [], "count": 0, "error": f"reasoning db open failed: {exc}"},
+            status_code=200,
+        )
+
+    try:
+        # If we have substring filters the DB-side LIKE narrows the set
+        # before Python-side track-keyword filtering. Without a slot_id
+        # we return the most recent ``limit`` entries verbatim.
+        query = "SELECT * FROM reasoning_log WHERE 1=1"
+        params: list = []
+
+        if since:
+            query += " AND timestamp > ?"
+            params.append(float(since))
+
+        if filter_terms:
+            clauses = []
+            for term in filter_terms:
+                clauses.append("(content LIKE ? OR metadata LIKE ?)")
+                like = f"%{term}%"
+                params.extend([like, like])
+            query += " AND (" + " OR ".join(clauses) + ")"
+
+        # Over-fetch by a factor of 4 so track-keyword post-filtering can
+        # still return up to ``limit`` rows. Bounded at 4000.
+        fetch_limit = min(limit * 4, 4000) if filter_terms else limit
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(fetch_limit)
+
+        try:
+            rows = conn.execute(query, params).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"traces": [], "count": 0, "error": f"reasoning query failed: {exc}"},
+            status_code=200,
+        )
+
+    traces: list[dict] = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+        except Exception:  # noqa: BLE001
+            metadata = {}
+
+        if filter_terms and track_keyword:
+            haystack = (
+                (row["content"] or "").lower()
+                + " "
+                + json.dumps(metadata, default=str).lower()
+                + " "
+                + (row["agent_name"] or "").lower()
+            )
+            if track_keyword not in haystack:
+                # The entry matched one of the slot needles but not the
+                # track keyword — skip unless it's a generic digest with
+                # no track signal at all (in which case we keep it).
+                if any(
+                    other in haystack
+                    for other in ("video", "narration", "music")
+                    if other != track_keyword
+                ):
+                    continue
+
+        traces.append(
+            {
+                "id": row["id"],
+                "timestamp": row["timestamp"],
+                "event_type": row["event_type"],
+                "agent_name": row["agent_name"],
+                "model": row["model"],
+                "content": row["content"],
+                "tokens_in": row["tokens_in"],
+                "tokens_out": row["tokens_out"],
+                "metadata": metadata,
+            }
+        )
+        if len(traces) >= limit:
+            break
+
+    # Chronological order for the UI's virtualised timeline.
+    traces.reverse()
+    return JSONResponse({"traces": traces, "count": len(traces)})
+

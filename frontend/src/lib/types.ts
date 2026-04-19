@@ -273,6 +273,76 @@ export interface SlotDetailView {
   latest_preview: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// UI-04 — full slot drilldown (issue #189 / #201 / #204)
+// ---------------------------------------------------------------------------
+
+/** A single artifact revision recorded against a slot.
+ *
+ * ``outcome`` is the normalised lifecycle: ``accepted`` / ``rejected`` /
+ * ``pending`` / ``regenerating`` / ``generating`` / ``failed``. ``b2_url``
+ * is the canonical download URL for the take's media when B2 uploads are
+ * present; otherwise it falls back to ``preview_url``.
+ */
+export interface SlotTake {
+  revision: number;
+  artifact_id: string;
+  status: string;
+  outcome: string;
+  timestamp: number | null;
+  preview_url: string;
+  b2_url: string;
+  qa_scores: Record<string, string | number>;
+  ledger_revision_at_derivation: { revision: number } | null;
+}
+
+/** One LLM critic's structured perspective on the current artifact. */
+export interface SlotCritique {
+  source: string;
+  voter_model: string;
+  rating: "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "UNKNOWN";
+  score: number | null;
+  summary: string;
+  issues: string[];
+  suggestions: string[];
+  timestamp?: number;
+  iteration?: number;
+}
+
+/** One deterministic QA evaluator verdict. */
+export interface SlotQaResult {
+  source: string;
+  status: "pass" | "warn" | "escalate" | "fail";
+  score: number | null;
+  summary: string;
+  measurements: Record<string, number | string>;
+  timestamp?: number;
+  // Loose shape — evaluators emit heterogeneous fields.
+  [key: string]: unknown;
+}
+
+/** A media artifact reference (preview / waveform / thumbnail / take). */
+export interface SlotArtifactRef {
+  kind: "preview" | "thumbnail" | "waveform" | "take";
+  url: string;
+  label: string;
+  revision?: number;
+  outcome?: string;
+}
+
+/** Full drilldown payload returned by ``GET /api/slots/{slot_id}/full``. */
+export interface SlotFullView {
+  slot: OtioSlot;
+  takes: SlotTake[];
+  critiques: SlotCritique[];
+  qa_results: SlotQaResult[];
+  artifacts: SlotArtifactRef[];
+  ledger_records: Array<Record<string, unknown>>;
+  reasoning_trace_preview: Array<Record<string, unknown>>;
+  current_rung: Record<string, unknown>;
+  latest_preview: Record<string, unknown>;
+}
+
 // Reasoning trace types — live agent thinking surfaced to the observer
 
 export interface ReasoningDigest {
