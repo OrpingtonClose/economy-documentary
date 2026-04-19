@@ -44,6 +44,7 @@ from dashboard.collector import PipelineCollector
 from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
 from agui import router as agui_router, subscribe_agui_events, unsubscribe_agui_events
 from dashboard.sse import router as dashboard_router
+from dashboard_directives import router as dashboard_directives_router
 from fleet.router import router as fleet_router
 from plugins import build_plugins, setup_otel
 
@@ -204,6 +205,9 @@ app.include_router(dashboard_router)
 
 # AG-UI routes (artifact feedback, escalations, regeneration)
 app.include_router(agui_router)
+
+# ARCH-H4 (#159): dashboard halt button + directive injection
+app.include_router(dashboard_directives_router)
 
 # Fleet coordination routes (pull-work, report, queue status)
 app.include_router(fleet_router)
