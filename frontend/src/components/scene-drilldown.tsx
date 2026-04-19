@@ -333,8 +333,15 @@ export function SceneDrilldown({
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      if (redoRequestIdRef.current === requestId) setRedoSubmitting(false);
-      setPreviewOpen(false);
+      // JavaScript runs `finally` even after an early `return`, so both
+      // of these must be guarded on the captured requestId. Otherwise a
+      // stale Scene 3 redo landing after the reviewer has moved to
+      // Scene 5 would flip `redoSubmitting` off and — worse — close the
+      // Scene 5 cost-preview dialog that just opened.
+      if (redoRequestIdRef.current === requestId) {
+        setRedoSubmitting(false);
+        setPreviewOpen(false);
+      }
     }
   }, [scene, redoSubmitting]);
 

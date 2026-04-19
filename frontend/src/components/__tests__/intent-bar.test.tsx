@@ -224,6 +224,34 @@ describe("IntentBar", () => {
     expect(calls.length).toBe(0);
   });
 
+  test("closes the cost-preview dialog on /api/directive error so the error banner is visible", async () => {
+    // Regression for the Devin Review finding on PR #279: before this
+    // fix, an HTTP error from /api/directive left the Radix portal
+    // dialog open, hiding the intent-bar error banner behind it.
+    (global as unknown as { fetch: jest.Mock }).fetch = jest.fn(
+      async (url: string) => {
+        if (url.endsWith("/agui/otio/state")) return jsonResponse(timeline());
+        if (url.endsWith("/dashboard/latest")) {
+          return jsonResponse({ status: "running", active_phase: "scenario" });
+        }
+        if (url.endsWith("/api/directive")) {
+          return jsonResponse({ detail: "nope" }, 500);
+        }
+        return jsonResponse({}, 404);
+      },
+    ) as unknown as jest.Mock;
+    const user = userEvent.setup();
+    render(<IntentBar stageOverride="scenario" />);
+    const chip = await screen.findByTestId("intent-chip-make-it-tighter");
+    await user.click(chip);
+    const confirm = await screen.findByTestId("intent-cost-preview-confirm");
+    await user.click(confirm);
+    await screen.findByTestId("intent-status-error");
+    await waitFor(() => {
+      expect(screen.queryByTestId("intent-cost-preview")).toBeNull();
+    });
+  });
+
   test("typed submit on a selected scene posts scope=scene with scene_num", async () => {
     const calls: Array<[string, RequestInit | undefined]> = [];
     installFetch(calls);

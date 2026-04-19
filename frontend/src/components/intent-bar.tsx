@@ -258,7 +258,6 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
         });
         setValue("");
         setShowSuggestions(false);
-        setPreviewOpen(false);
       } catch (err) {
         setStatus({
           kind: "error",
@@ -266,6 +265,12 @@ export function IntentBar({ stageOverride }: IntentBarProps = {}) {
         });
       } finally {
         setSubmitting(false);
+        // Always close the cost-preview dialog when a submission
+        // settles -- success, HTTP error, or network error. The
+        // intent-bar renders its own status banner outside the dialog,
+        // and the Radix portal would otherwise hide that banner behind
+        // a still-open "Continue / Cancel" modal on failure.
+        setPreviewOpen(false);
       }
     },
     [submitting, sceneNum],
