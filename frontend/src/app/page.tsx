@@ -10,6 +10,7 @@ import { BriefUserMessage } from "@/components/brief-user-message";
 import { ChatErrorMessage } from "@/components/chat-error-message";
 import { ChatHeartbeat } from "@/components/chat-heartbeat";
 import { ProgressStrip } from "@/components/progress-strip";
+import { RestatedBriefCard } from "@/components/restated-brief-card";
 
 // Dynamic imports with ssr:false to prevent hydration issues
 // that strip onClick handlers from buttons inside map loops
@@ -82,8 +83,11 @@ export default function Home() {
 
   return (
     <main className="flex h-screen">
-      {/* Left panel: CopilotKit chat */}
-      <div className="w-1/3 border-r border-pipeline-blue flex flex-col">
+      {/* DESIGN-01 (#253): the chat is the primary status surface, so
+        * it takes the widest fixed column on the page. We pin a minimum
+        * width so the chat is never narrower than the debug panels in
+        * the Advanced tab (which run on a `flex-1` basis). */}
+      <div className="w-2/5 min-w-[420px] border-r border-pipeline-blue flex flex-col">
         <div className="p-4 border-b border-pipeline-blue">
           <h1 className="text-xl font-bold text-pipeline-accent">
             Documentary Pipeline
@@ -112,7 +116,7 @@ export default function Home() {
       </div>
 
       {/* Right panel: tabbed content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col">
         {/* UI-07: banner for reconnect / buffer-overflow / stale run-id. */}
         <RunReconnectBanner session={runSession} />
 
@@ -176,6 +180,12 @@ export default function Home() {
 
         {/* Tab content */}
         <div className="flex-1 overflow-auto p-4">
+          {/* DESIGN-03 (#255): restated-brief card always sits above
+            * the primary timeline so the user can see — at a glance —
+            * what the machine understood them to be asking for. */}
+          {primaryTab === "film" && (
+            <RestatedBriefCard className="mb-4" />
+          )}
           {primaryTab === "film" && <OtioTimeline />}
           {primaryTab === "advanced" && advancedTab === "dashboard" && <PipelineDashboard />}
           {primaryTab === "advanced" && advancedTab === "reasoning" && <ReasoningTracePanel />}
