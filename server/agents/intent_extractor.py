@@ -378,22 +378,44 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
         required.append(token)
 
     # Clauses following "must cover" / "covering" / ...
+    # INTENT-EXTR-B: a new sentence is a new clause, not a continuation
+    # of the "must cover" list.  Observed in PAG run #4: the brief
+    # "It must cover opioid chemistry and fight-flight-freeze circuitry.
+    # Do not discuss recreational drug use." used to merge into a single
+    # required topic "fight-flight-freeze circuitry. Do not discuss
+    # recreational drug use" because the splitter walked 240 chars past
+    # "must cover" without honouring sentence terminators.  We now
+    # truncate ``tail`` at the first sentence-ending punctuation.
     for match in _REQUIRED_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 240]
+        sentence_end = re.search(r"[.!?](?:\s|$)", tail)
+        if sentence_end:
+            tail = tail[: sentence_end.start()]
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
             cleaned = item.strip().rstrip(".")
             if not cleaned:
                 continue
             if len(cleaned) > 80:
                 continue
+            # Defensive: if an item still contains sentence-break
+            # punctuation after splitting, keep only the first clause.
+            if re.search(r"[.!?]\s+[A-Z]", cleaned):
+                cleaned = re.split(r"[.!?]\s+", cleaned, maxsplit=1)[0].strip()
+                if not cleaned:
+                    continue
             key = cleaned.lower()
             if key in seen_required:
                 continue
             seen_required.add(key)
             required.append(cleaned)
 
+    # Same sentence-boundary treatment for forbidden clauses: "Do not X.
+    # It must cover Y" must not leak "X. It must cover Y" as forbidden.
     for match in _FORBIDDEN_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 120]
+        sentence_end = re.search(r"[.!?](?:\s|$)", tail)
+        if sentence_end:
+            tail = tail[: sentence_end.start()]
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
             cleaned = item.strip().rstrip(".")
             if cleaned and len(cleaned) <= 80:
