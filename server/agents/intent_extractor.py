@@ -289,6 +289,38 @@ _AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
+_SENTENCE_BREAK = re.compile(r"[.!?](?:\s+|$)")
+
+
+def _split_sentence_concat(topic: str) -> list[str]:
+    """Break a single topic string on sentence boundaries.
+
+    Observed in PAG run #4: gemini-2.5-flash emitted
+    ``required_topics = ['fight-flight-freeze circuitry. Do not discuss
+    recreational drug use']`` — both clauses in one item.  No scenario
+    can contain that literal string, so the verifier halted every
+    draft.  The heuristic path had the same bug when the "must cover"
+    clause ran into a following sentence.
+
+    We split on ``.!?`` followed by whitespace (or end-of-string) and
+    keep only non-empty, non-trivial pieces.  If the item contains no
+    sentence break we return it unchanged.
+    """
+    if not isinstance(topic, str):
+        return []
+    stripped = topic.strip()
+    if not stripped:
+        return []
+    if not _SENTENCE_BREAK.search(stripped):
+        return [stripped]
+    # Split, then drop empty / too-short pieces (pure punctuation or a
+    # trailing fragment like "use").  "Do not" clauses almost always
+    # also match ``_FORBIDDEN_TOPIC_SPLIT`` so they'll still be captured
+    # as forbidden topics on the heuristic path.
+    parts = [p.strip().rstrip(".!?") for p in _SENTENCE_BREAK.split(stripped) if p.strip()]
+    return [p for p in parts if p and len(p) >= 3]
+
+
 def _filter_required_topics(
     required: list[str], audience: str
 ) -> list[str]:
@@ -299,28 +331,38 @@ def _filter_required_topics(
     (e.g. "ADHD", "expert").  We filter against a fixed stopword set
     plus the detected ``audience`` label so every extraction path
     produces the same invariant.
+
+    We also split each input item on sentence boundaries so multi-
+    sentence topics emitted by the LLM (e.g. "X circuitry. Do not
+    discuss Y") get decomposed before the stopword filter — see
+    :func:`_split_sentence_concat`.
     """
     audience_norm = (audience or "").strip().lower()
     cleaned: list[str] = []
     seen: set[str] = set()
-    for topic in required:
-        if not isinstance(topic, str):
-            continue
-        key = topic.strip().lower()
-        if not key:
-            continue
-        if key in _AUDIENCE_STOPWORDS:
-            continue
-        if audience_norm and key == audience_norm:
-            continue
-        # Trim off "-friendly" variants like "adhd-friendly" that the
-        # LLM sometimes emits as a topic.
-        if audience_norm and key.startswith(audience_norm + "-"):
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(topic)
+    for raw in required:
+        for topic in _split_sentence_concat(raw):
+            key = topic.strip().lower()
+            if not key:
+                continue
+            if key in _AUDIENCE_STOPWORDS:
+                continue
+            if audience_norm and key == audience_norm:
+                continue
+            # Trim off "-friendly" variants like "adhd-friendly" that the
+            # LLM sometimes emits as a topic.
+            if audience_norm and key.startswith(audience_norm + "-"):
+                continue
+            # Reject obvious forbidden-topic fragments that survive the
+            # sentence-split: a required topic cannot start with "do not",
+            # "don't", "avoid", "exclude", "no ".  The forbidden_topics
+            # list is the right destination for those clauses.
+            if re.match(r"^(do not|don'?t|avoid\b|exclude\b|no\s)", key):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(topic)
     return cleaned
 
 
