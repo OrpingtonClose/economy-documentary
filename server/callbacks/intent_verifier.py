@@ -180,7 +180,9 @@ def _token_in_blob(tok: str, blob: str) -> bool:
 
     if len(tok) <= 4:
         return tok in blob
-    if tok in blob:
+    # Fast path: whole-word match (anchored at both word boundaries) so
+    # e.g. ``"freeze"`` does NOT match inside ``"antifreeze"``.
+    if _re.search(rf"\b{_re.escape(tok)}\b", blob) is not None:
         return True
     stem = tok[:5]
     # Anchor the stem at a word boundary so it only matches at the start
