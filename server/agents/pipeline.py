@@ -765,7 +765,7 @@ class _ScenarioWithGate(BaseAgent):
         # a non-passing verdict without raising on the last attempt, this
         # fallback guarantees the outer SequentialAgent sees the halt and
         # stops before the audio/visual/production stages run.
-        from google.adk.events import Event as _Event
+        from google.adk.events.event import Event as _Event
         from google.adk.events.event_actions import EventActions as _EventActions
         from google.genai import types as _genai_types
 

@@ -334,9 +334,18 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         # duration / topic keys via ``run_intent_extractor`` →
         # ``_mirror_intent_into_state``, but until that call runs, the
         # pre-computed fresh values must win.
+        # Import the canonical gate-state key constants so a rename in
+        # ``callbacks/intent_gate.py`` doesn't silently break this
+        # blocklist.  The four template keys are set unconditionally by
+        # ``_mirror_intent_into_state`` in
+        # ``agents/intent_extractor.py`` — keep the two in sync.
+        from callbacks.intent_gate import (
+            GATE_ATTEMPT_KEY as _GATE_ATTEMPT_KEY,
+            GATE_CRITIQUE_KEY as _GATE_CRITIQUE_KEY,
+        )
         _INTENT_RESTORE_BLOCKLIST: frozenset[str] = frozenset({
-            "_intent_gate_critique",
-            "_intent_gate_attempt",
+            _GATE_CRITIQUE_KEY,
+            _GATE_ATTEMPT_KEY,
             "target_duration_sec",
             "target_tolerance_sec",
             "min_scene_count",
