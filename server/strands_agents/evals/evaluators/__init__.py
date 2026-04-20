@@ -4,23 +4,37 @@ See ``docs/strands-migration/eval-framework/CUSTOM_EVALUATORS.md`` for
 the full list and ``EVAL_ARCHITECTURE.md`` §7 for orchestration-layer
 evaluators.
 
-PR 1/3 (this file): deterministic evaluators only. LLM-as-judge
-evaluators (VisualCoherence, EscalationDecision) and orchestration
-evaluators land in PR 2/3.
+PR 1/3 added the deterministic evaluators; PR 2/3 adds the two
+LLM-as-judge evaluators (VisualCoherence, EscalationDecision) and the
+four orchestration evaluators (PipelineTrajectory, ParallelLaunch,
+MemoryHonoring, ApprovalGateTrajectory). AsyncTaskPool + Langfuse
+wiring lands in PR 3/3.
 """
 
 from __future__ import annotations
 
+from .approval_gate_trajectory import ApprovalGateTrajectoryEvaluator
 from .audio_invariant import AudioInvariantEvaluator
 from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
+from .escalation_decision import EscalationDecisionEvaluator
+from .memory_honoring import MemoryHonoringEvaluator
+from .parallel_launch import ParallelLaunchEvaluator
+from .pipeline_trajectory import PipelineTrajectoryEvaluator
 from .scenario_quality import ScenarioQualityEvaluator
 from .timeline_compliance import TimelineComplianceEvaluator
+from .visual_coherence import VisualCoherenceEvaluator
 
 __all__ = [
+    "ApprovalGateTrajectoryEvaluator",
     "AudioInvariantEvaluator",
     "ContractComplianceEvaluator",
     "CritiqueStoreEvaluator",
+    "EscalationDecisionEvaluator",
+    "MemoryHonoringEvaluator",
+    "ParallelLaunchEvaluator",
+    "PipelineTrajectoryEvaluator",
     "ScenarioQualityEvaluator",
     "TimelineComplianceEvaluator",
+    "VisualCoherenceEvaluator",
 ]

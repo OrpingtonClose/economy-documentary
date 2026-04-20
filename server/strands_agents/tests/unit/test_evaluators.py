@@ -18,16 +18,26 @@ from typing import Any
 import pytest
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 
+from unittest.mock import MagicMock, patch
+
 from contracts import SCENARIO_CONTRACT, AUDIO_CONTRACT, StageContract
 from critique.record import ArtifactCritiqueRecord, QaVerdict
 from critique.store import ArtifactCritiqueStore
 from strands_agents.evals.evaluators import (
+    ApprovalGateTrajectoryEvaluator,
     AudioInvariantEvaluator,
     ContractComplianceEvaluator,
     CritiqueStoreEvaluator,
+    EscalationDecisionEvaluator,
+    MemoryHonoringEvaluator,
+    ParallelLaunchEvaluator,
+    PipelineTrajectoryEvaluator,
     ScenarioQualityEvaluator,
     TimelineComplianceEvaluator,
+    VisualCoherenceEvaluator,
 )
+from strands_agents.evals.evaluators.escalation_decision import EscalationDecisionRating
+from strands_agents.evals.evaluators.visual_coherence import VisualCoherenceRating
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +464,704 @@ def test_critique_store_empty_record_defaults_to_pass(tmp_path: Path) -> None:
     assert len(outputs) == 1
     assert outputs[0].score == 1.0
     assert outputs[0].test_pass is True
+
+
+# ---------------------------------------------------------------------------
+# VisualCoherenceEvaluator (LLM-as-judge, mocked)
+# ---------------------------------------------------------------------------
+
+
+def _mock_agent_factory(rating_obj: Any):
+    """Build a patcher that makes `Agent(...)(prompt, ...)` return rating_obj."""
+
+    class _FakeResult:
+        def __init__(self, structured: Any) -> None:
+            self.structured_output = structured
+
+    agent_instance = MagicMock()
+    agent_instance.return_value = _FakeResult(rating_obj)
+    factory = MagicMock(return_value=agent_instance)
+    return factory, agent_instance
+
+
+def test_visual_coherence_no_concepts_hard_fails() -> None:
+    evaluator = VisualCoherenceEvaluator()
+    case = EvaluationData[str, dict[str, Any]](
+        input="inflation",
+        actual_output={"visual_concepts": []},
+    )
+    outputs = evaluator.evaluate(case)
+    assert len(outputs) == 1
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "UNKNOWN"
+
+
+@pytest.mark.parametrize(
+    ("rating_label", "expected_score", "expected_pass"),
+    [
+        ("EXCELLENT", 1.0, True),
+        ("GOOD", 0.75, True),
+        ("FAIR", 0.5, True),
+        ("POOR", 0.25, False),
+        ("UNKNOWN", 0.0, False),
+    ],
+)
+def test_visual_coherence_maps_rating_to_score(
+    rating_label: str,
+    expected_score: float,
+    expected_pass: bool,
+) -> None:
+    rating = VisualCoherenceRating(reasoning="test rationale", rating=rating_label)
+    factory, _ = _mock_agent_factory(rating)
+
+    with patch(
+        "strands_agents.evals.evaluators.visual_coherence.Agent",
+        factory,
+    ):
+        evaluator = VisualCoherenceEvaluator()
+        case = EvaluationData[str, dict[str, Any]](
+            input="inflation",
+            actual_output={
+                "visual_concepts": [
+                    {"scene_num": 1, "visual_direction": "a", "camera": "wide"},
+                    {"scene_num": 2, "visual_direction": "b", "camera": "close"},
+                ],
+                "style_lock": {"dominant_style": "cinematic"},
+            },
+        )
+        outputs = evaluator.evaluate(case)
+
+    assert len(outputs) == 1
+    assert outputs[0].score == expected_score
+    assert outputs[0].test_pass is expected_pass
+    assert outputs[0].label == rating_label
+    assert outputs[0].reason == "test rationale"
+
+
+def test_visual_coherence_unknown_label_clamps_to_unknown() -> None:
+    rating = VisualCoherenceRating(reasoning="junk", rating="SPLENDID")
+    factory, _ = _mock_agent_factory(rating)
+
+    with patch(
+        "strands_agents.evals.evaluators.visual_coherence.Agent",
+        factory,
+    ):
+        evaluator = VisualCoherenceEvaluator()
+        case = EvaluationData[str, dict[str, Any]](
+            input="topic",
+            actual_output={
+                "visual_concepts": [{"scene_num": 1, "visual_direction": "x"}],
+            },
+        )
+        outputs = evaluator.evaluate(case)
+
+    assert outputs[0].label == "UNKNOWN"
+    assert outputs[0].test_pass is False
+
+
+def test_visual_coherence_judge_error_fails_soft() -> None:
+    agent_instance = MagicMock(side_effect=RuntimeError("boom"))
+    factory = MagicMock(return_value=agent_instance)
+
+    with patch(
+        "strands_agents.evals.evaluators.visual_coherence.Agent",
+        factory,
+    ):
+        evaluator = VisualCoherenceEvaluator()
+        case = EvaluationData[str, dict[str, Any]](
+            input="topic",
+            actual_output={
+                "visual_concepts": [{"scene_num": 1, "visual_direction": "x"}],
+            },
+        )
+        outputs = evaluator.evaluate(case)
+
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "UNKNOWN"
+    assert "boom" in (outputs[0].reason or "")
+
+
+# ---------------------------------------------------------------------------
+# EscalationDecisionEvaluator (LLM-as-judge, mocked)
+# ---------------------------------------------------------------------------
+
+
+def test_escalation_missing_action_hard_fails() -> None:
+    evaluator = EscalationDecisionEvaluator()
+    case = EvaluationData[dict[str, Any], dict[str, Any]](
+        input={},
+        actual_output={},
+        metadata={"diagnostic": {"error": "timeout"}},
+    )
+    outputs = evaluator.evaluate(case)
+    assert len(outputs) == 1
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "HARMFUL"
+
+
+def test_escalation_unknown_action_hard_fails() -> None:
+    evaluator = EscalationDecisionEvaluator()
+    case = EvaluationData[dict[str, Any], dict[str, Any]](
+        input={},
+        actual_output={"action": "teleport"},
+        metadata={"diagnostic": {"error": "timeout"}},
+    )
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert "teleport" in (outputs[0].reason or "")
+
+
+def test_escalation_missing_diagnostic_hard_fails() -> None:
+    evaluator = EscalationDecisionEvaluator()
+    case = EvaluationData[dict[str, Any], dict[str, Any]](
+        input={},
+        actual_output={"action": "retry"},
+    )
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert "diagnostic" in (outputs[0].reason or "")
+
+
+@pytest.mark.parametrize(
+    ("verdict", "expected_score", "expected_pass"),
+    [
+        ("CORRECT", 1.0, True),
+        ("REASONABLE", 0.5, True),
+        ("HARMFUL", 0.0, False),
+    ],
+)
+def test_escalation_maps_verdict_to_score(
+    verdict: str,
+    expected_score: float,
+    expected_pass: bool,
+) -> None:
+    rating = EscalationDecisionRating(reasoning="test", verdict=verdict)
+    factory, _ = _mock_agent_factory(rating)
+    with patch(
+        "strands_agents.evals.evaluators.escalation_decision.Agent",
+        factory,
+    ):
+        evaluator = EscalationDecisionEvaluator()
+        case = EvaluationData[dict[str, Any], dict[str, Any]](
+            input={},
+            actual_output={
+                "action": "retry",
+                "reasoning": "transient",
+                "state_patches": {"attempts": 1},
+            },
+            metadata={"diagnostic": {"error": "network timeout", "attempt": 1}},
+        )
+        outputs = evaluator.evaluate(case)
+
+    assert outputs[0].score == expected_score
+    assert outputs[0].test_pass is expected_pass
+    assert outputs[0].label == verdict
+
+
+def test_escalation_judge_error_hard_fails() -> None:
+    agent_instance = MagicMock(side_effect=RuntimeError("boom"))
+    factory = MagicMock(return_value=agent_instance)
+    with patch(
+        "strands_agents.evals.evaluators.escalation_decision.Agent",
+        factory,
+    ):
+        evaluator = EscalationDecisionEvaluator()
+        case = EvaluationData[dict[str, Any], dict[str, Any]](
+            input={},
+            actual_output={"action": "retry"},
+            metadata={"diagnostic": {"error": "x"}},
+        )
+        outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "HARMFUL"
+
+
+# ---------------------------------------------------------------------------
+# PipelineTrajectoryEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_trajectory_requires_expected_sequence() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["a", "b"],
+    )
+    outputs = evaluator.evaluate(case)
+    assert len(outputs) == 1
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "trajectory.missing_expected"
+
+
+def test_trajectory_subsequence_passes() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["scenario", "audio", "timing", "assemble"],
+        metadata={
+            "expected_tool_sequence": ["scenario", "timing", "assemble"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    order = next(o for o in outputs if o.label == "trajectory.order")
+    assert coverage.test_pass is True
+    assert coverage.score == 1.0
+    assert order.test_pass is True
+
+
+def test_trajectory_out_of_order_fails_order_check() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["assemble", "scenario", "timing"],
+        metadata={
+            "expected_tool_sequence": ["scenario", "timing", "assemble"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    order = next(o for o in outputs if o.label == "trajectory.order")
+    assert coverage.test_pass is True  # all tools present
+    assert order.test_pass is False  # but not in order
+
+
+def test_trajectory_missing_tool_fails_coverage() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["scenario", "timing"],
+        metadata={
+            "expected_tool_sequence": ["scenario", "timing", "assemble"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    assert coverage.test_pass is False
+    assert coverage.score == pytest.approx(2 / 3)
+
+
+def test_trajectory_accepts_dict_shape() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[{"name": "a"}, {"name": "b"}, {"name": "c"}],
+        metadata={"expected_tool_sequence": ["a", "c"]},
+    )
+    outputs = evaluator.evaluate(case)
+    order = next(o for o in outputs if o.label == "trajectory.order")
+    assert order.test_pass is True
+
+
+def test_trajectory_non_strict_skips_order_check() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["c", "b", "a"],
+        metadata={
+            "expected_tool_sequence": ["a", "b", "c"],
+            "strict_order": False,
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert "trajectory.order" not in labels
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    assert coverage.test_pass is True
+
+
+def test_trajectory_duplicate_expected_requires_duplicate_actual() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["scenario", "audio"],
+        metadata={
+            "expected_tool_sequence": ["scenario", "audio", "scenario"],
+            "strict_order": False,
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    assert coverage.test_pass is False
+    assert "scenario" in (coverage.reason or "")
+
+
+# ---------------------------------------------------------------------------
+# ParallelLaunchEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_parallel_requires_config() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[{"name": "launch_tts", "at_turn": 1}],
+    )
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "parallel.missing_config"
+
+
+def test_parallel_all_batched_passes() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "plan", "at_turn": 0},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks", "at_turn": 2},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 3,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is True
+    assert by_label["parallel.batched"].test_pass is True
+    assert by_label["parallel.awaited"].test_pass is True
+
+
+def test_parallel_wrong_count_fails() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"tool_name": "launch_tts", "expected_count": 3},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is False
+    # When count is wrong, batched can't be true either.
+    assert by_label["parallel.batched"].test_pass is False
+
+
+def test_parallel_spread_across_turns_fails_batched() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 2},
+        {"name": "launch_tts", "at_turn": 3},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"tool_name": "launch_tts", "expected_count": 3},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is True
+    assert by_label["parallel.batched"].test_pass is False
+
+
+def test_parallel_missing_at_turn_on_some_launches_fails_batched() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts"},  # missing at_turn
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"tool_name": "launch_tts", "expected_count": 3},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is True
+    assert by_label["parallel.batched"].test_pass is False
+    assert "at_turn" in (by_label["parallel.batched"].reason or "")
+
+
+def test_parallel_awaited_before_launch_fails() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "await_tasks", "at_turn": 0},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 2,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.awaited"].test_pass is False
+
+
+def test_parallel_awaited_missing_at_turn_fails() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks"},  # missing at_turn - no ordering evidence
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 2,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.awaited"].test_pass is False
+
+
+# ---------------------------------------------------------------------------
+# MemoryHonoringEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_memory_requires_before_seed() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=[])
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "memory.missing_seed"
+
+
+def test_memory_ordering_honoured_passes() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"name": "launch_tts", "at_turn": 1},
+            {"name": "launch_assembly", "at_turn": 5},
+        ],
+        metadata={
+            "agents_md_before": "# AGENTS.md\n- Run TTS before assembly.\n",
+            "agents_md_after": "# AGENTS.md\n- Run TTS before assembly.\n",
+            "forbidden_sequences": [
+                {"before": "launch_tts", "after": "launch_assembly"},
+            ],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["memory.order[launch_tts->launch_assembly]"].test_pass is True
+    assert by_label["memory.integrity"].test_pass is True
+
+
+def test_memory_ordering_violated_fails() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"name": "launch_assembly", "at_turn": 1},
+            {"name": "launch_tts", "at_turn": 2},
+        ],
+        metadata={
+            "agents_md_before": "seed",
+            "forbidden_sequences": [
+                {"before": "launch_tts", "after": "launch_assembly"},
+            ],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    order_out = next(
+        o for o in outputs
+        if o.label == "memory.order[launch_tts->launch_assembly]"
+    )
+    assert order_out.test_pass is False
+
+
+def test_memory_after_token_check() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": "# AGENTS.md\n- Learned: LUFS floor is -23.\n",
+            "required_tokens": ["Learned: LUFS floor"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    token_outs = [o for o in outputs if o.label == "memory.required_token"]
+    assert token_outs[0].test_pass is True
+
+
+def test_memory_missing_required_token_fails() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": "# AGENTS.md\n(no reflection written)\n",
+            "required_tokens": ["Learned: LUFS floor"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    token_out = next(o for o in outputs if o.label == "memory.required_token")
+    assert token_out.test_pass is False
+
+
+def test_memory_corrupted_after_fails_integrity() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": "   ",  # blank
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    integrity = next(o for o in outputs if o.label == "memory.integrity")
+    assert integrity.test_pass is False
+
+
+def test_memory_null_bytes_flagged_as_corrupted() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": "# AGENTS.md\n\x00\x00garbage\x00",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    integrity = next(o for o in outputs if o.label == "memory.integrity")
+    assert integrity.test_pass is False
+
+
+def test_memory_high_non_printable_flagged_as_corrupted() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    # bytes 0-255 decoded via latin-1 is a classic "binary-via-str" smuggling
+    # vector; `.encode("utf-8")` alone does not catch it.
+    payload = bytes(range(256)).decode("latin-1")
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": payload,
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    integrity = next(o for o in outputs if o.label == "memory.integrity")
+    assert integrity.test_pass is False
+
+
+# ---------------------------------------------------------------------------
+# ApprovalGateTrajectoryEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_approval_requires_config() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=[])
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "approval.missing_config"
+
+
+def test_approval_no_interrupt_fails() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[{"name": "launch_b2_sync", "kind": "tool_call"}],
+        metadata={
+            "gated_tool": "launch_b2_sync",
+            "expected_decision": "approve",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    assert outputs[0].test_pass is False
+    assert outputs[0].label == "approval.raised"
+
+
+def test_approval_approved_and_followed_through_passes() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"kind": "interrupt", "tool": "launch_b2_sync", "decision": "approve"},
+            {"kind": "tool_call", "name": "launch_b2_sync", "at_turn": 3},
+        ],
+        metadata={
+            "gated_tool": "launch_b2_sync",
+            "expected_decision": "approve",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["approval.raised"].test_pass is True
+    assert by_label["approval.decision"].test_pass is True
+    assert by_label["approval.followthrough"].test_pass is True
+
+
+def test_approval_rejected_and_not_leaked_passes() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"kind": "interrupt", "tool": "launch_b2_sync", "decision": "reject"},
+            {"kind": "tool_call", "name": "notify_user"},
+        ],
+        metadata={
+            "gated_tool": "launch_b2_sync",
+            "expected_decision": "reject",
+            "forbidden_on_reject": ["publish_to_youtube"],
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["approval.raised"].test_pass is True
+    assert by_label["approval.decision"].test_pass is True
+    assert by_label["approval.no_leak"].test_pass is True
+
+
+def test_approval_rejected_but_gated_tool_still_ran_fails() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"kind": "interrupt", "tool": "launch_b2_sync", "decision": "reject"},
+            {"kind": "tool_call", "name": "launch_b2_sync"},
+        ],
+        metadata={
+            "gated_tool": "launch_b2_sync",
+            "expected_decision": "reject",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["approval.no_leak"].test_pass is False
+
+
+def test_approval_decision_mismatch_fails() -> None:
+    evaluator = ApprovalGateTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[
+            {"kind": "interrupt", "tool": "launch_b2_sync", "decision": "approve"},
+            {"kind": "tool_call", "name": "launch_b2_sync"},
+        ],
+        metadata={
+            "gated_tool": "launch_b2_sync",
+            "expected_decision": "reject",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["approval.decision"].test_pass is False
