@@ -13,7 +13,9 @@ Input shape
   (optionally) ``style_lock`` / ``pronunciation_hints`` keys.
 * ``metadata``: optional knobs — ``target_duration_sec`` (float),
   ``wpm`` (int), ``seconds_per_scene`` (int), ``start_verdict`` (str),
-  ``pronunciation_whitelist`` (iterable[str]).
+  ``pronunciation_whitelist`` (iterable[str]). Any key the caller
+  omits falls through to the underlying ``run_all_structural_checks``
+  default (e.g. ``wpm=150`` from ``_WORDS_PER_MINUTE_DEFAULT``).
 
 Output
 ------
@@ -54,15 +56,22 @@ class ScenarioQualityEvaluator(Evaluator[str, dict[str, Any]]):
         metadata = evaluation_case.metadata or {}
         user_prompt = evaluation_case.input or ""
 
-        report: EvaluatorReport = run_all_structural_checks(
-            scenario,
-            user_prompt=user_prompt,
-            target_duration_sec=float(metadata.get("target_duration_sec", 0.0) or 0.0),
-            wpm=int(metadata.get("wpm", 155)),
-            seconds_per_scene=int(metadata.get("seconds_per_scene", 45)),
-            pronunciation_whitelist=metadata.get("pronunciation_whitelist"),
-            start_verdict=str(metadata.get("start_verdict", "EXCELLENT")),
-        )
+        # Only forward keys the caller explicitly provided; anything else
+        # falls through to the run_all_structural_checks defaults so the
+        # two call sites can't drift (wpm, seconds_per_scene, etc.).
+        kwargs: dict[str, Any] = {"user_prompt": user_prompt}
+        if "target_duration_sec" in metadata:
+            kwargs["target_duration_sec"] = float(metadata["target_duration_sec"])
+        if "wpm" in metadata:
+            kwargs["wpm"] = int(metadata["wpm"])
+        if "seconds_per_scene" in metadata:
+            kwargs["seconds_per_scene"] = int(metadata["seconds_per_scene"])
+        if "pronunciation_whitelist" in metadata:
+            kwargs["pronunciation_whitelist"] = metadata["pronunciation_whitelist"]
+        if "start_verdict" in metadata:
+            kwargs["start_verdict"] = str(metadata["start_verdict"])
+
+        report: EvaluatorReport = run_all_structural_checks(scenario, **kwargs)
 
         return [_check_to_output(check) for check in report.results]
 
