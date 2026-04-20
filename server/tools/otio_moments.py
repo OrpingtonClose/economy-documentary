@@ -41,7 +41,18 @@ logger = logging.getLogger(__name__)
 # Per-clip audio tolerance: spoken narration may run over/under the
 # per-voice budget a little bit without breaking the pipeline. The scene
 # total check (in callbacks.timeline_guardian) is the hard boundary.
-AUDIO_CLIP_TOLERANCE_SEC = 1.5
+#
+# Previously 1.5s: far too tight when the per-voice budget is derived as
+# ``scene.duration_sec / num_voices`` (equal split), while voices have
+# very uneven word counts.  A voice with 11 words naturally lands at
+# ~5s regardless of its 11.65s equal-share budget, so the check fired
+# on every well-formed clip and drove the recovery ladder into
+# pointless regeneration loops.  4.0s is roughly 35% of a typical
+# 11-12s per-voice budget — wide enough to absorb TTS jitter and
+# uneven word counts, narrow enough that a genuinely off clip still
+# trips the gate.  The scene-total (hard) boundary in
+# ``callbacks.timeline_guardian`` remains the real invariant.
+AUDIO_CLIP_TOLERANCE_SEC = 4.0
 
 # LTX-Video 2.3 hard cap per clip (seconds). When narration exceeds this
 # the pipeline MUST generate an extension clip — we cannot rescale in place.

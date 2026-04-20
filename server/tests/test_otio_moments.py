@@ -107,15 +107,16 @@ class TestValidateAudioDuration:
 
     def test_exceeds_tolerance_fails(self):
         # 30s target, 3 voices -> per-voice budget 10s.
-        # Actual 13.84s mirrors the parent-run Scene 5 phrase 2 failure
-        # (narration 13.84s vs video capped at 10s).
+        # Default tolerance is 4.0s (raised from 1.5s to absorb TTS
+        # jitter + uneven word counts) — use 16.5s actual so drift
+        # 6.5s exceeds tolerance.
         err = validate_audio_duration_vs_scene_target(
             scene_num=5, voice="V2",
-            actual_duration_sec=13.84,
+            actual_duration_sec=16.5,
             scene=self._scene(30.0, num_voices=3),
         )
         assert err is not None
-        assert "13.84" in err and "10.00" in err
+        assert "16.50" in err and "10.00" in err
         assert "scene 5" in err and "V2" in err
 
     def test_zero_duration_fails(self):
