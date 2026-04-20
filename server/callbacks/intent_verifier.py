@@ -181,9 +181,23 @@ def _token_in_blob(tok: str, blob: str) -> bool:
     return stem in blob
 
 
-def _topic_covers(blob: str, topic: str) -> bool:
-    """Return True iff all content tokens of ``topic`` semantically
-    appear in ``blob`` (via :func:`_token_in_blob`).
+def _topic_covers(blob: str, topic: str, *, strict: bool = False) -> bool:
+    """Return True iff ``topic`` is present in ``blob``.
+
+    ``strict=False`` (default) uses lenient token-based matching: all
+    content tokens of ``topic`` semantically appear anywhere in ``blob``
+    (via :func:`_token_in_blob`).  Safe for **required topics** —
+    lenient matching avoids halting valid scenarios that happen to
+    phrase the topic differently (e.g. "fight-or-flight" vs. "fight
+    flight").
+
+    ``strict=True`` requires the full lowercased topic phrase to appear
+    verbatim in ``blob``.  Used for **forbidden topics** where the
+    lenient path would false-positive on coincidental co-occurrence of
+    each token in separate contexts (e.g. forbidden="recreational drug
+    use" would wrongly trigger on a blob mentioning "recreational
+    activities" + "drug interactions" + "use of medication" in unrelated
+    sentences).
 
     Falls back to substring match when the topic has no content tokens
     (e.g. it was pure punctuation after filtering) to preserve legacy
@@ -192,6 +206,8 @@ def _topic_covers(blob: str, topic: str) -> bool:
     tokens = _topic_tokens(topic)
     if not tokens:
         return bool(topic) and topic.lower() in blob
+    if strict:
+        return bool(topic) and topic.strip().lower() in blob
     return all(_token_in_blob(tok, blob) for tok in tokens)
 
 
@@ -312,7 +328,8 @@ def _verify_scenario(intent, state: Mapping[str, Any]) -> VerificationRecord:
             + ", ".join(repr(t) for t in missing)
         )
     present_forbidden = [
-        t for t in intent.forbidden_topics if t and _topic_covers(blob, t)
+        t for t in intent.forbidden_topics
+        if t and _topic_covers(blob, t, strict=True)
     ]
     if present_forbidden:
         failures.append(

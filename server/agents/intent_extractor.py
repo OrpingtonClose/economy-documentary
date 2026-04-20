@@ -289,15 +289,29 @@ _AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-# Sentence break: ``.!?`` preceded by at least 3 word-characters AND
-# followed by whitespace + an uppercase letter (or end-of-string
-# trailing punctuation).  The 3-char lookbehind catches 3-letter
-# acronyms common in documentary briefs (PAG, RNA, DNA, GDP) while
-# still protecting 2-char abbreviations like "Dr. Smith", "St. Louis",
-# "Mr. Brown", "Jr. Smith".  "U.S. policy" is also safe because each
-# single-char token ("U", "S") fails the ≥3 check.  The uppercase-
-# letter lookahead ensures we only split at true sentence starts.
-_SENTENCE_BREAK = re.compile(r"(?<=\w{3})[.!?]\s+(?=[A-Z])|[.!?]$")
+# Sentence break: ``.!?`` preceded by EITHER
+#   (a) 4+ word characters (normal words like "circuitry.", "WWII.")
+#   (b) 3+ uppercase letters (all-caps acronyms like "PAG.", "RNA.",
+#       "DNA.", "GDP.", "API.")
+# AND followed by whitespace + an uppercase letter (or end-of-string
+# trailing punctuation).
+#
+# This combination catches 3-letter ALL-CAPS acronyms common in
+# documentary briefs while protecting mixed-case 3-4 char abbreviations
+# that are NOT sentence boundaries:
+#   - "Dr. Smith"   (2 chars, not uppercase triple) — not split ✓
+#   - "St. Louis"   (2 chars) — not split ✓
+#   - "Gen. Patton" (3 mixed case, only 1 uppercase) — not split ✓
+#   - "Sen. Brown", "Rep. Jones", "Gov. Reed" — not split ✓
+#   - "Fig. 1 shows", "Sgt. Doe" — not split ✓
+#   - "U.S. policy"  (single-char tokens) — not split ✓
+# And it DOES split on genuine sentence ends:
+#   - "circuitry. Do not" ✓ (4 word chars)
+#   - "PAG. Do not"      ✓ (3 uppercase)
+#   - "WWII. The next"   ✓ (4 word chars)
+_SENTENCE_BREAK = re.compile(
+    r"(?:(?<=\w{4})|(?<=[A-Z]{3}))[.!?]\s+(?=[A-Z])|[.!?]$"
+)
 
 
 def _split_sentence_concat(topic: str) -> list[str]:

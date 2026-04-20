@@ -246,7 +246,12 @@ def evaluate_gate(
 
     present_forbidden: list[str] = []
     for topic in intent.forbidden_topics:
-        if topic and _topic_covers(blob, topic):
+        # Forbidden topics use strict (verbatim phrase) matching so we
+        # don't halt on coincidental token co-occurrence across
+        # unrelated sentences (e.g. "recreational activities" +
+        # "drug interactions" + "use of X" should NOT falsely trigger
+        # forbidden="recreational drug use").
+        if topic and _topic_covers(blob, topic, strict=True):
             present_forbidden.append(topic)
     if present_forbidden:
         failures.append(
