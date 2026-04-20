@@ -27,7 +27,16 @@ dev = [
     # The production install (``google-adk >= 1.0.0`` above) stays unpinned.
     "google-adk (==1.29.0)",
 ]
+# Strands reimplementation lives behind its own dep group so ADK installs
+# stay unchanged. Enable with ``poetry install --with strands``. Exact
+# pins match docs/strands-migration/ expectations; bumping a minor
+# requires a bake week.
+strands = [
+    "strands-agents (==1.36.0)",
+    "strands-agents-evals (==0.1.15)",
+    "deepagents (==0.5.3)",
+]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "adk_eval"]
+testpaths = ["tests", "adk_eval", "strands_agents/tests"]
 pythonpath = ["."]
