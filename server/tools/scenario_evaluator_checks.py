@@ -141,6 +141,7 @@ def check_duration_compliance(
     target_duration_sec: float,
     *,
     tolerance: float = 0.05,
+    tolerance_sec: Optional[float] = None,
 ) -> CheckResult:
     """Delivered film runtime (scene_sum + silence gaps) must be near target.
 
@@ -196,11 +197,20 @@ def check_duration_compliance(
             },
         )
 
-    # Two-sided window: |movie_duration - target| <= tolerance * target.
-    # Raw scene sum alone could pass the old "at least 95%" test while the
-    # delivered movie runtime still overshoots the ±tolerance window.
-    min_acceptable = target * (1.0 - tolerance)
-    max_acceptable = target * (1.0 + tolerance)
+    # Two-sided window: |movie_duration - target| <= tolerance.
+    # Prefer absolute tolerance_sec (matching the R0 intent-gate default of
+    # 30s) when provided by the caller; otherwise fall back to the relative
+    # ``tolerance`` ratio (5% default).  The R0 gate uses an absolute window
+    # so we must align here — otherwise a draft that passes the gate can be
+    # rejected by this evaluator (or vice versa) at the boundary, and the
+    # inner scenario LoopAgent will iterate against a window the outer gate
+    # has already accepted.
+    if tolerance_sec is not None and tolerance_sec > 0:
+        abs_tol = float(tolerance_sec)
+    else:
+        abs_tol = target * tolerance
+    min_acceptable = max(0.0, target - abs_tol)
+    max_acceptable = target + abs_tol
     passed = min_acceptable <= movie_duration <= max_acceptable
     drift_pct = abs(movie_duration - target) / target * 100.0 if target > 0 else 0.0
     return CheckResult(
@@ -754,6 +764,7 @@ def run_all_structural_checks(
     *,
     user_prompt: str = "",
     target_duration_sec: float = 0.0,
+    tolerance_sec: Optional[float] = None,
     wpm: int = _WORDS_PER_MINUTE_DEFAULT,
     seconds_per_scene: int = 45,
     rhetorical_classify: Optional[Callable[[str], str]] = None,
@@ -785,7 +796,11 @@ def run_all_structural_checks(
     narration = collect_narration(scenes)
 
     results: list[CheckResult] = [
-        check_duration_compliance(scenes, target_duration_sec),
+        check_duration_compliance(
+            scenes,
+            target_duration_sec,
+            tolerance_sec=tolerance_sec,
+        ),
         check_scene_count(scenes, target_duration_sec, seconds_per_scene=seconds_per_scene),
         check_word_count(scenes, target_duration_sec, wpm=wpm),
         check_hook_spec_present(scenes, user_prompt=user_prompt),

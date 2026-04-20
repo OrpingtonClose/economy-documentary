@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Optional
 
 from google.adk.agents import Agent
 from google.adk.tools.exit_loop_tool import exit_loop
@@ -433,11 +434,26 @@ def _run_structural_checks_before_evaluator(callback_context):
             except (TypeError, ValueError):
                 continue
 
+    # Pull tolerance_sec from BriefIntent so the evaluator window lines up
+    # with the R0 intent-gate (same metric, same tolerance — otherwise the
+    # inner scenario LoopAgent can chase drafts the outer gate has already
+    # accepted).
+    tolerance_sec: Optional[float] = None
+    try:
+        from agents.intent_extractor import get_brief_intent
+
+        intent = get_brief_intent(state)
+        if intent is not None:
+            tolerance_sec = float(intent.tolerance_sec)
+    except Exception:  # pragma: no cover — defensive
+        tolerance_sec = None
+
     scenario = {"scenes": scenes, "style_lock": style_lock_raw or {}}
     report = run_all_structural_checks(
         scenario,
         user_prompt=user_prompt,
         target_duration_sec=target_duration_sec,
+        tolerance_sec=tolerance_sec,
     )
     formatted = format_report(report)
     state["structural_report"] = formatted
