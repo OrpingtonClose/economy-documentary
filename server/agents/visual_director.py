@@ -171,6 +171,15 @@ OUTPUT: JSON array of visual concepts, each containing:
 - camera_movement, environment, mood
 
 Store the result in state["visual_concepts"].
+
+OUTPUT FORMAT RULES — STRICT, NON-NEGOTIABLE:
+- Respond with ONLY a raw JSON array.
+- Your FIRST character MUST be `[` and your LAST character MUST be `]`.
+- Do NOT include any preamble ("Below, I've crafted...", "Here are the concepts...", "I've prepared...", etc.).
+- Do NOT include any trailing commentary, explanation, or sign-off.
+- Do NOT wrap the output in markdown code fences (no ```json ... ```).
+- No headings. No bullet points. No prose. Just the JSON array, nothing else.
+- Downstream parsers WILL fail on anything other than a bare JSON array.
 """
 
 async def _visual_concepter_before_model(callback_context, llm_request):
@@ -274,25 +283,34 @@ async def _visual_concepter_before_model(callback_context, llm_request):
             )
             raw_text = resp.choices[0].message.content or ""
 
-            # Parse concepts from response
-            text = raw_text.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                text = "\n".join(lines)
-
-            parsed = _json.loads(text)
+            # Parse concepts from response — robust to preamble, markdown
+            # fences, and trailing commentary.  extract_json_array implements
+            # the preamble-tolerant bracket scan used across the pipeline.
+            from callbacks.deterministic_steps import (
+                extract_json_array, extract_json_object,
+            )
+            parsed = extract_json_array(raw_text)
+            if parsed is None:
+                obj = extract_json_object(raw_text)
+                if isinstance(obj, dict):
+                    for _k in ("concepts", "visual_concepts", "shots", "visuals"):
+                        if isinstance(obj.get(_k), list):
+                            parsed = obj[_k]
+                            break
             if isinstance(parsed, list):
                 accumulated.extend(parsed)
-            elif isinstance(parsed, dict) and "concepts" in parsed:
-                accumulated.extend(parsed["concepts"])
+                yielded = len(parsed)
+            else:
+                yielded = 0
+                logger.warning(
+                    "Visual concepter: chunk %d/%d — could not extract JSON "
+                    "array from LLM output (first 200 chars: %r)",
+                    chunk_idx + 1, total_chunks, (raw_text or "")[:200],
+                )
 
             logger.info(
                 "Visual concepter: chunk %d/%d yielded %d concepts",
-                chunk_idx + 1, total_chunks,
-                len(parsed) if isinstance(parsed, list) else len(parsed.get("concepts", [])),
+                chunk_idx + 1, total_chunks, yielded,
             )
         except Exception as exc:
             logger.warning(
@@ -384,21 +402,26 @@ def _visual_concepter_after_model(callback_context, llm_response):
 
     last_chunk_concepts = []
     if raw_llm_text.strip():
-        text = raw_llm_text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
-        try:
-            parsed = _json.loads(text)
-            if isinstance(parsed, list):
-                last_chunk_concepts = parsed
-            elif isinstance(parsed, dict) and "concepts" in parsed:
-                last_chunk_concepts = parsed["concepts"]
-        except (_json.JSONDecodeError, TypeError):
-            pass
+        # Robust to preamble, markdown fences, and trailing commentary.
+        from callbacks.deterministic_steps import (
+            extract_json_array, extract_json_object,
+        )
+        parsed = extract_json_array(raw_llm_text)
+        if parsed is None:
+            obj = extract_json_object(raw_llm_text)
+            if isinstance(obj, dict):
+                for _k in ("concepts", "visual_concepts", "shots", "visuals"):
+                    if isinstance(obj.get(_k), list):
+                        parsed = obj[_k]
+                        break
+        if isinstance(parsed, list):
+            last_chunk_concepts = parsed
+        else:
+            logger.warning(
+                "Visual concepter (last chunk): could not extract JSON array "
+                "from LLM output (first 200 chars: %r)",
+                (raw_llm_text or "")[:200],
+            )
 
     # Merge: pre-accumulated (earlier chunks) + last chunk
     all_concepts = pre_accumulated + last_chunk_concepts

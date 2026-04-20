@@ -166,6 +166,16 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
             target_duration * _TIMING_TOLERANCE_PCT,
             _TIMING_TOLERANCE_MIN_SEC,
         )
+    # In auto-approve / simulation mode the final assembly pads/trims to
+    # the exact target duration, so a wide pre-assembly tolerance lets
+    # the pipeline reach the video + assembly stages instead of burning
+    # the whole iteration budget on sub-±2s narration-length convergence
+    # (which in practice can take >10 LLM+TTS rounds when target
+    # duration is large).
+    if os.environ.get(
+        "DOCUMENTARY_AUTO_APPROVE", ""
+    ).strip().lower() in ("1", "true", "yes"):
+        tolerance_sec = max(tolerance_sec, 30.0)
     deviation_pct = abs(deviation_sec) / target_duration if target_duration > 0 else 0
 
     passed = abs(deviation_sec) <= tolerance_sec
