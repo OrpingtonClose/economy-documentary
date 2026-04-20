@@ -165,8 +165,14 @@ def _completion_after_batch(
         if call.get("name") != completion_tool:
             continue
         at_turn = call.get("at_turn")
-        if launch_turn is None or at_turn is None:
+        # When the launch batch could not be pinned to a specific turn (e.g.
+        # batching already failed upstream), accept any completion call so we
+        # surface a single failure rather than cascading them.
+        if launch_turn is None:
             return True
-        if at_turn > launch_turn:
+        # Missing ``at_turn`` on the completion call offers no ordering
+        # evidence. Treat it as a miss so callers cannot mask an out-of-order
+        # completion by omitting the marker.
+        if at_turn is not None and at_turn > launch_turn:
             return True
     return False

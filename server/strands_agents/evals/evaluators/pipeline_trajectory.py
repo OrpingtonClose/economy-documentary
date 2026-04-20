@@ -78,7 +78,17 @@ class PipelineTrajectoryEvaluator(Evaluator[Any, Any]):
                 )
             ]
 
-        missing = [name for name in expected if name not in actual_names]
+        # Count-aware coverage: duplicates in ``expected`` must be matched by
+        # duplicates in ``actual_names``. A plain ``name not in actual_names``
+        # membership test reports ["a","a","b"] vs ["a","b"] as full coverage,
+        # silently passing cases where a tool was expected to run twice.
+        remaining = list(actual_names)
+        missing: list[str] = []
+        for name in expected:
+            try:
+                remaining.remove(name)
+            except ValueError:
+                missing.append(name)
         coverage = (len(expected) - len(missing)) / len(expected)
         coverage_output = EvaluationOutput(
             score=coverage,

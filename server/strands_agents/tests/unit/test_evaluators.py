@@ -770,6 +770,22 @@ def test_trajectory_non_strict_skips_order_check() -> None:
     assert coverage.test_pass is True
 
 
+def test_trajectory_duplicate_expected_requires_duplicate_actual() -> None:
+    evaluator = PipelineTrajectoryEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=["scenario", "audio"],
+        metadata={
+            "expected_tool_sequence": ["scenario", "audio", "scenario"],
+            "strict_order": False,
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    coverage = next(o for o in outputs if o.label == "trajectory.coverage")
+    assert coverage.test_pass is False
+    assert "scenario" in (coverage.reason or "")
+
+
 # ---------------------------------------------------------------------------
 # ParallelLaunchEvaluator
 # ---------------------------------------------------------------------------
@@ -872,6 +888,27 @@ def test_parallel_awaited_before_launch_fails() -> None:
         {"name": "await_tasks", "at_turn": 0},
         {"name": "launch_tts", "at_turn": 1},
         {"name": "launch_tts", "at_turn": 1},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 2,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.awaited"].test_pass is False
+
+
+def test_parallel_awaited_missing_at_turn_fails() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks"},  # missing at_turn - no ordering evidence
     ]
     case = EvaluationData[Any, Any](
         input=None,
