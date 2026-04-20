@@ -600,6 +600,24 @@ def verify_and_log(
     log_verification(record, state)
     if not record.passed:
         emit_drift_narration(record)
+    # INTENT-05: signal downstream lazy GPU provisioner that the
+    # scenario has passed R0 verification.  The pre-flight
+    # ``constraint_gate_agent`` sub-agent is preempted by ADK's LoopAgent
+    # escalate propagation from the inner scenario_director LoopAgent, so
+    # we must fire the signal here from the post-stage verifier.  The
+    # audio/visual gatekeepers block downstream bad-scenario output, so
+    # signalling here is safe.
+    if stage == STAGE_SCENARIO and record.passed:
+        try:
+            from callbacks.intent_gate import INTENT_GATE_PASSED
+            if not INTENT_GATE_PASSED.is_set():
+                INTENT_GATE_PASSED.set()
+                logger.info(
+                    "intent_verifier: scenario passed — INTENT_GATE_PASSED "
+                    "signalled (unblocks lazy GPU provisioning)"
+                )
+        except Exception as exc:  # pragma: no cover -- defensive
+            logger.debug("intent_verifier: gate signal failed: %s", exc)
     return record
 
 
