@@ -142,11 +142,18 @@ def check_duration_compliance(
     *,
     tolerance: float = 0.05,
 ) -> CheckResult:
-    """Sum of scene duration_sec must be >= target (within tolerance).
+    """Delivered film runtime (scene_sum + silence gaps) must be near target.
 
     PAG run: user asked for 7 minutes (420s), pipeline produced 3:50 (230s).
     Evaluator rated GOOD despite a 36% shortfall.  We cap at POOR on any
-    shortfall beyond ``tolerance`` (default 5%).
+    drift beyond ``tolerance`` (default 5%).
+
+    Previously this checked raw scene sum >= target, which was incompatible
+    with the R0 intent-gate (which checks scene_sum + silence_gaps <= target
+    + tolerance).  With ~52s of gap overhead for a 10-scene / 3-voice doc,
+    those two windows did not overlap and any LLM draft would fail one or
+    the other.  We now check delivered-movie runtime (scene_sum + gaps) vs
+    target, same metric as the R0 gate.
     """
     total = 0.0
     for s in scenes or []:
@@ -155,6 +162,24 @@ def check_duration_compliance(
         except (TypeError, ValueError):
             continue
 
+    # Silence gap overhead: 2 inter-voice gaps * 1.5s per scene + 2.5s
+    # between scenes.  Mirrors ``callbacks.intent_gate._compute_gap_overhead_sec``
+    # — keep the constants in sync if they change there.
+    _INTER_VOICE_PAUSE_SEC = 1.5
+    _INTER_SCENE_PAUSE_SEC = 2.5
+    total_voice_gaps = 0.0
+    for s in scenes or []:
+        voices = s.get("voices") or []
+        active = 0
+        for v in voices:
+            text = (v or {}).get("text") if isinstance(v, dict) else None
+            if isinstance(text, str) and text.strip():
+                active += 1
+        total_voice_gaps += max(0, active - 1) * _INTER_VOICE_PAUSE_SEC
+    total_scene_gaps = max(0, len(scenes or []) - 1) * _INTER_SCENE_PAUSE_SEC
+    gap_overhead_sec = total_voice_gaps + total_scene_gaps
+    movie_duration = total + gap_overhead_sec
+
     target = max(0.0, float(target_duration_sec or 0))
     if target <= 0:
         # No target given — pass trivially but record.
@@ -162,27 +187,40 @@ def check_duration_compliance(
             name="duration_compliance",
             passed=True,
             verdict_cap="EXCELLENT",
-            details=f"no target duration provided; sum={total:.1f}s",
-            data={"sum_duration_sec": total, "target_duration_sec": target},
+            details=f"no target duration provided; movie_runtime={movie_duration:.1f}s",
+            data={
+                "sum_duration_sec": total,
+                "movie_duration_sec": movie_duration,
+                "gap_overhead_sec": gap_overhead_sec,
+                "target_duration_sec": target,
+            },
         )
 
+    # Two-sided window: |movie_duration - target| <= tolerance * target.
+    # Raw scene sum alone could pass the old "at least 95%" test while the
+    # delivered movie runtime still overshoots the ±tolerance window.
     min_acceptable = target * (1.0 - tolerance)
-    passed = total >= min_acceptable
-    shortfall_pct = 0.0 if passed else (1.0 - total / target) * 100.0
+    max_acceptable = target * (1.0 + tolerance)
+    passed = min_acceptable <= movie_duration <= max_acceptable
+    drift_pct = abs(movie_duration - target) / target * 100.0 if target > 0 else 0.0
     return CheckResult(
         name="duration_compliance",
         passed=passed,
         verdict_cap="POOR",
         details=(
-            f"sum(duration_sec)={total:.1f}s vs target={target:.1f}s "
-            f"(min acceptable={min_acceptable:.1f}s, "
-            f"shortfall={shortfall_pct:.1f}%)"
+            f"movie_runtime={movie_duration:.1f}s (scene_sum={total:.1f}s + "
+            f"gaps={gap_overhead_sec:.1f}s) vs target={target:.1f}s "
+            f"(acceptable {min_acceptable:.1f}–{max_acceptable:.1f}s, "
+            f"drift={drift_pct:.1f}%)"
         ),
         data={
             "sum_duration_sec": total,
+            "movie_duration_sec": movie_duration,
+            "gap_overhead_sec": gap_overhead_sec,
             "target_duration_sec": target,
             "min_acceptable_sec": min_acceptable,
-            "shortfall_pct": shortfall_pct,
+            "max_acceptable_sec": max_acceptable,
+            "drift_pct": drift_pct,
         },
     )
 

@@ -93,7 +93,7 @@ _FILLER = (
 )
 
 
-def _make_good_scenario(num_scenes: int = 10, scene_duration: float = 45.0) -> dict:
+def _make_good_scenario(num_scenes: int = 10, scene_duration: float = 36.8) -> dict:
     """Build a scenario that should pass every structural check."""
     scenes = []
     for i in range(num_scenes):
@@ -171,24 +171,39 @@ def test_cap_verdict_unknown_defaults_to_excellent():
 # ---------------------------------------------------------------------------
 
 
-def test_duration_compliance_passes_exact_target():
-    scenes = [_make_scene(i + 1, 45.0, "x", "y", "z") for i in range(10)]
+def test_duration_compliance_passes_on_movie_runtime_near_target():
+    # 10 scenes × 36.8s = 368s + ~52.5s silence gaps = ~420.5s ≈ 420s target.
+    scenes = [_make_scene(i + 1, 36.8, "x", "y", "z") for i in range(10)]
     r = check_duration_compliance(scenes, 420.0)
     assert r.passed
-    assert r.data["sum_duration_sec"] == 450.0
+    assert abs(r.data["movie_duration_sec"] - 420.0) < 1.0
 
 
 def test_duration_compliance_pag_shortfall_fails():
     # PAG run: user said 7 minutes (420s), pipeline produced 3:50 (230s).
+    # 5 scenes × 45s + gaps ≈ 250s — far below 420 ± 5%.
     scenes = [_make_scene(i + 1, 45.0, "x", "y", "z") for i in range(5)]
     r = check_duration_compliance(scenes, 420.0)
     assert not r.passed
     assert r.verdict_cap == "POOR"
-    assert r.data["shortfall_pct"] > 30.0
+    assert r.data["drift_pct"] > 30.0
+
+
+def test_duration_compliance_movie_overshoot_fails():
+    # 10 scenes × 45s = 450s raw + 52.5s gaps = 502.5s movie runtime — over
+    # the 420 ± 5% (441s) ceiling.  Old check would have passed this because
+    # raw scene sum was >= 95% of target; the new check fails it because the
+    # delivered movie drifts +20%.
+    scenes = [_make_scene(i + 1, 45.0, "x", "y", "z") for i in range(10)]
+    r = check_duration_compliance(scenes, 420.0)
+    assert not r.passed
+    assert r.verdict_cap == "POOR"
 
 
 def test_duration_compliance_within_tolerance_passes():
-    scenes = [_make_scene(i + 1, 40.0, "x", "y", "z") for i in range(10)]  # 400s
+    # 10 × 36s = 360s + ~52.5s gaps = ~412.5s movie runtime vs 420s target,
+    # drift ~1.8%, well inside the 5% window.
+    scenes = [_make_scene(i + 1, 36.0, "x", "y", "z") for i in range(10)]
     r = check_duration_compliance(scenes, 420.0, tolerance=0.05)
     assert r.passed
 

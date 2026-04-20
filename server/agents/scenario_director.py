@@ -98,19 +98,22 @@ CRITICAL — TOTAL DURATION TARGET:
 The user's brief demands a documentary of EXACTLY {target_duration_sec}
 seconds (tolerance: {target_tolerance_sec} seconds).
 
-TARGET the sum of duration_sec values at ~{target_duration_sec} seconds
-MINUS approximately (N-1)*3 seconds of inter-scene silence (the assembler
-inserts a short gap between scenes).  Aim for around {min_scene_count}
-scenes at roughly 40 seconds each — do NOT stack extra scenes, that
-overshoots the target.  A structural check runs BEFORE the LLM
-evaluator; it caps the verdict at POOR if:
+The delivered film runtime = SUM(duration_sec across scenes) +
+silence gaps inserted by the assembler.  Silence gaps for N scenes
+with 3 voices each = (N-1)*2.5s inter-scene + N*2*1.5s inter-voice.
+For N={min_scene_count}: gaps ≈ {min_scene_count}*3 + ({min_scene_count}-1)*2.5s.
+
+TARGET the SUM of scene duration_sec values at
+(target_duration_sec - silence_gap_overhead).  With {min_scene_count}
+scenes the gap overhead is roughly 50–55s, so aim for scene duration
+sum ≈ {target_duration_sec} - 52 seconds.
+
+Plan for {min_scene_count}±1 scenes. Each scene 32-40s (NOT 40-45s —
+that overshoots).  A structural check runs BEFORE the LLM evaluator;
+it caps the verdict at POOR if:
   * sum(duration_sec) < 95% of target, OR
   * number_of_scenes < ceil(target_seconds / 45), OR
   * sum of narration words < target_seconds / 60 * 150 (wpm).
-
-Plan for {min_scene_count}±1 scenes. Each scene 30-45s.  The SUM of
-duration_sec across all scenes should land within 10s of
-(target_duration_sec - (min_scene_count - 1) * 3).
 Rule of thumb: at the 150 wpm natural pace, each scene's three voice
 blocks together must carry ceil(scene_duration * 150 / 60) words of
 narration — do not write more or fewer words per scene.
@@ -118,7 +121,7 @@ narration — do not write more or fewer words per scene.
 Each scene MUST have:
 - scene_num: integer (1-based)
 - title: short descriptive title
-- duration_sec: target duration (30-45 seconds per scene, MAX {max_scene_duration}s)
+- duration_sec: target duration (32-40 seconds per scene, MAX {max_scene_duration}s) — see TOTAL DURATION TARGET above; do NOT push to 45s, that overshoots when summed across scenes
 - voices: array of exactly 3 voice blocks:
   - V1: "The Hook" — provocative opener, challenges assumptions
   - V2: "The Expert" — provides data, evidence, nuance
