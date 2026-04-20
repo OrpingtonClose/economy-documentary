@@ -538,6 +538,21 @@ def _run_per_moment_audio_check(
             "(%.2fs over budget) — continuing pipeline",
             action, scene_num, voice, actual_duration_sec,
         )
+        # Clear the residual ``otio_violation`` so downstream stage
+        # gates (e.g. ``deterministic_audio_callback`` line 608+) do
+        # not abort the pipeline on a violation that recovery has
+        # already chosen to absorb.  The macro ``timing_loop`` at the
+        # movie level will still catch aggregate drift from R0 and
+        # trigger a script redraft if needed; per-voice drift is
+        # tolerated here because retry_with_fix means "this clip
+        # stays, redrive happens at a higher level".
+        state.pop("otio_violation", None)
+        # When recovery elects retry_with_fix, also signal the audio
+        # stage to be re-driven so the timing_loop's redraft can
+        # actually take effect (otherwise the orchestrator would
+        # advance past the audio stage with the short clip in place).
+        if action == "retry_with_fix":
+            state["_audio_needs_regeneration"] = True
         return
     if action == "abort":
         raise RuntimeError(f"per-moment audio violation (abort): {err}")
@@ -1228,6 +1243,10 @@ def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
             "SCENE %d ASSEMBLY: recovery decided '%s' — continuing pipeline",
             scene_num, action,
         )
+        # Same as per-moment audio: clear the residual ``otio_violation``
+        # so downstream stage gates do not abort on a violation that
+        # recovery has already chosen to absorb.
+        state.pop("otio_violation", None)
         return
     if action == "abort":
         raise RuntimeError(f"scene {scene_num} assembly violation (abort): {err}")
