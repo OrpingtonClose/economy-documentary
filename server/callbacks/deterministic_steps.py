@@ -1693,16 +1693,55 @@ def write_visual_metadata_to_otio(
                     logger.info("Extracted visual_concepts via text search: %d concepts", len(concepts))
 
     if not concepts:
-        logger.warning("No visual concepts found to write to OTIO (raw=%s...)",
-                       raw_str[:200] if raw_str else "empty")
-        # Notify stage complete so the timing watchdog doesn't fire spuriously
-        from infra_agent import get_infra_agent
-        _infra = get_infra_agent()
-        if _infra:
-            _infra.notify_stage_complete("visual_direction")
-        # Still run timeline guardian
-        from callbacks.timeline_guardian import timeline_guardian_callback
-        return timeline_guardian_callback(callback_context)
+        # The LLM visual_concepter (Agent + LoopAgent) sometimes emits
+        # prose commentary instead of a JSON array (model drift, tool-
+        # budget, etc.).  When that happens the gaps on V1_Video never
+        # receive ``prompt`` + ``lora_id`` metadata, and the timeline
+        # guardian halts visual_direction with "missing prompt
+        # metadata" for every scene.
+        #
+        # Rather than halting the whole pipeline on an LLM output bug —
+        # which bricks every downstream stage even though the scenario
+        # and narration are already on disk — fall through to the same
+        # deterministic generator used by ``DOCUMENTARY_QUICK_TEST``:
+        # it builds LTX-2.3 prompts from scene titles, visual_notes,
+        # and the OTIO narration phrase timings.  That IS the pipeline
+        # doing its job — this is the legal recovery path, not a
+        # freeze-frame / silent-fill cheat.
+        logger.warning(
+            "No visual concepts found to write to OTIO (raw=%s...) — "
+            "falling back to deterministic scene-based concepts "
+            "(LLM visual_concepter produced non-JSON output).",
+            raw_str[:200] if raw_str else "empty",
+        )
+        try:
+            from agents.visual_director import _generate_quick_test_concepts
+            concepts = _generate_quick_test_concepts(state)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.error(
+                "Deterministic concept fallback failed: %s", exc
+            )
+            concepts = []
+
+        if not concepts:
+            # Still nothing — notify stage complete and let the timeline
+            # guardian halt visibly (no unapproved scenario proceeds
+            # silently).
+            from infra_agent import get_infra_agent
+            _infra = get_infra_agent()
+            if _infra:
+                _infra.notify_stage_complete("visual_direction")
+            from callbacks.timeline_guardian import timeline_guardian_callback
+            return timeline_guardian_callback(callback_context)
+
+        # Store the deterministic concepts so production uses them and
+        # so the B2 upload below persists the real metadata (not prose).
+        state["visual_concepts"] = json.dumps(concepts, ensure_ascii=False)
+        logger.info(
+            "Deterministic fallback generated %d visual concepts from "
+            "scenes",
+            len(concepts),
+        )
 
     # ── ARCHITECTURE: normalize concept durations to match VIDEO slots ──
     # The LLM controls WHERE visual breaks happen.  This normalizer
