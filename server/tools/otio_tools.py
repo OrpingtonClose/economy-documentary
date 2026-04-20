@@ -546,7 +546,12 @@ def _run_per_moment_audio_check(
         # trigger a script redraft if needed; per-voice drift is
         # tolerated here because retry_with_fix means "this clip
         # stays, redrive happens at a higher level".
-        state.pop("otio_violation", None)
+        #
+        # NOTE: ADK's State object does not implement ``.pop`` /
+        # ``__delitem__`` — clearing MUST use assignment.  See the
+        # same pattern in ``callbacks/timeline_guardian.py:473``,
+        # ``callbacks/intent_gate.py:335``, and ``callbacks/state_manager.py``.
+        state["otio_violation"] = None
         # When recovery elects retry_with_fix, also signal the audio
         # stage to be re-driven so the timing_loop's redraft can
         # actually take effect (otherwise the orchestrator would
@@ -1245,8 +1250,9 @@ def _maybe_run_scene_assembly_check(state: dict, scene_num: int) -> None:
         )
         # Same as per-moment audio: clear the residual ``otio_violation``
         # so downstream stage gates do not abort on a violation that
-        # recovery has already chosen to absorb.
-        state.pop("otio_violation", None)
+        # recovery has already chosen to absorb.  ADK State does not
+        # implement ``.pop`` — use assignment (see intent_gate.py:335).
+        state["otio_violation"] = None
         return
     if action == "abort":
         raise RuntimeError(f"scene {scene_num} assembly violation (abort): {err}")

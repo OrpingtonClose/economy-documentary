@@ -240,8 +240,24 @@ HARD RULES:
 3. required_topics SHOULD include every proper noun or technical term
    the brief names as something the documentary must cover.  Do not
    invent topics not present in the brief.
-4. Confidence < 0.5 means the field was defaulted rather than inferred.
-5. No prose, no markdown fences, no trailing commentary."""
+4. Each element of required_topics and forbidden_topics MUST be a
+   SINGLE atomic concept — one noun phrase, never a full sentence
+   and never two topics glued together.  Break at sentence
+   boundaries ('.', '!', '?').  Strip leading negation verbs
+   ("do not discuss", "don't mention", "avoid", "never show") —
+   keep only the subject-matter noun phrase.
+   Examples:
+     brief: "Must cover opioid chemistry and fight-flight-freeze
+             circuitry. Do not discuss recreational drug use."
+     required_topics: ["opioid chemistry", "fight-flight-freeze
+                       circuitry"]
+     forbidden_topics: ["recreational drug use"]
+   NEVER emit: ["fight-flight-freeze circuitry. Do not discuss
+                 recreational drug use"]  (two topics in one string)
+   NEVER emit: ["do not discuss recreational drug use"]  (keeps the
+                 negation verb)
+5. Confidence < 0.5 means the field was defaulted rather than inferred.
+6. No prose, no markdown fences, no trailing commentary."""
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +599,85 @@ class IntentExtractionError(RuntimeError):
     """Raised when the extractor can produce no usable BriefIntent."""
 
 
+# Negation prefixes that an LLM might leak into a forbidden topic string.
+# We strip them so the forbidden-topic value is just the subject-matter
+# noun phrase (e.g. "recreational drug use"), matching what strict
+# verbatim matching expects the scenario text to either contain or avoid.
+_NEGATION_PREFIX = re.compile(
+    r"^\s*(?:please\s+)?"
+    r"(?:do\s+not|don'?t|never|avoid(?:\s+any)?|exclude|skip|do\s+not\s+discuss|"
+    r"do\s+not\s+mention|don'?t\s+discuss|don'?t\s+mention)\s+"
+    r"(?:discuss(?:ing)?\s+|mention(?:ing)?\s+|show(?:ing)?\s+|"
+    r"reference\s+|refer(?:ring)?\s+to\s+|talk(?:ing)?\s+about\s+)?",
+    re.I,
+)
+
+
+def _split_llm_topic(raw: str, *, is_forbidden: bool = False) -> list[str]:
+    """Defensively split and clean a single LLM-emitted topic string.
+
+    Even with an explicit prompt instruction, an LLM may still emit a
+    glued sentence pair like
+    ``"fight-flight-freeze circuitry. Do not discuss recreational drug use"``
+    as a single required topic.  This helper:
+
+    1. Splits on sentence boundaries (``_SENTENCE_BREAK``) so each
+       sentence becomes its own candidate topic.
+    2. For forbidden topics, strips leading negation verbs
+       ("do not discuss", "avoid", ...) so the remaining phrase is just
+       the subject-matter noun phrase that strict matching will compare
+       against.
+    3. For required topics, discards any sentence whose body starts
+       with a negation verb (it does not belong under ``required`` at
+       all — it is a forbidden clause that leaked in).
+    4. Strips trailing punctuation and discards empties / overlong
+       results (>80 chars).
+    """
+    cleaned_out: list[str] = []
+    if not raw:
+        return cleaned_out
+    parts: list[str] = [p for p in _SENTENCE_BREAK.split(raw) if p and p.strip()]
+    if not parts:
+        parts = [raw]
+    for part in parts:
+        candidate = part.strip().strip(".!?;,:").strip()
+        if not candidate:
+            continue
+        stripped = _NEGATION_PREFIX.sub("", candidate).strip().strip(".!?;,:").strip()
+        if is_forbidden:
+            # Forbidden path: keep the stripped phrase.
+            final = stripped or candidate
+        else:
+            # Required path: if the ORIGINAL candidate started with a
+            # negation verb, this sentence is a forbidden clause leak
+            # — drop it entirely rather than strip the verb.
+            if stripped != candidate:
+                continue
+            final = candidate
+        if len(final) > 80 or not final:
+            continue
+        cleaned_out.append(final)
+    return cleaned_out
+
+
+def _flatten_llm_topics(
+    topics: list[str], *, is_forbidden: bool = False
+) -> list[str]:
+    """Apply :func:`_split_llm_topic` to every element + dedupe."""
+    flat: list[str] = []
+    seen: set[str] = set()
+    for raw in topics or []:
+        if not isinstance(raw, str):
+            continue
+        for t in _split_llm_topic(raw, is_forbidden=is_forbidden):
+            key = t.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            flat.append(t)
+    return flat
+
+
 def _parse_llm_intent(text: str) -> BriefIntent:
     stripped = (text or "").strip()
     if not stripped:
@@ -615,13 +710,45 @@ def _parse_llm_intent(text: str) -> BriefIntent:
     # The LLM (e.g. gemini-2.5-flash) has been observed to classify
     # "ADHD-friendly" as both audience AND required_topic; we scrub
     # required_topics / forbidden_topics defensively.
+    #
+    # INTENT-EXTR-C (observed in PAG run v20): the LLM emitted a single
+    # required_topic string ``"fight-flight-freeze circuitry. Do not
+    # discuss recreational drug use"`` — two topics glued across a
+    # sentence boundary.  ``_flatten_llm_topics`` splits each topic on
+    # sentence-break punctuation, strips leading negation verbs
+    # ("do not discuss", "avoid", ...) from forbidden topics, and drops
+    # any required-topic sentence that looks like a forbidden clause.
+    required_clean = _flatten_llm_topics(
+        list(intent.required_topics), is_forbidden=False
+    )
+    # If the LLM glued a forbidden clause onto a required topic, the
+    # clause is now dropped from required_topics; we also surface the
+    # stripped subject-matter into forbidden_topics so fail-closed
+    # enforcement still applies.
+    required_leak_forbidden: list[str] = []
+    for raw in intent.required_topics:
+        if not isinstance(raw, str):
+            continue
+        for part in _SENTENCE_BREAK.split(raw):
+            candidate = part.strip().strip(".!?;,:").strip()
+            if not candidate:
+                continue
+            stripped = _NEGATION_PREFIX.sub(
+                "", candidate
+            ).strip().strip(".!?;,:").strip()
+            if stripped and stripped != candidate:
+                required_leak_forbidden.append(stripped)
+    forbidden_clean = _flatten_llm_topics(
+        list(intent.forbidden_topics) + required_leak_forbidden,
+        is_forbidden=True,
+    )
     intent = intent.model_copy(
         update={
             "required_topics": _filter_required_topics(
-                intent.required_topics, intent.audience
+                required_clean, intent.audience
             ),
             "forbidden_topics": _filter_required_topics(
-                intent.forbidden_topics, intent.audience, is_forbidden=True
+                forbidden_clean, intent.audience, is_forbidden=True
             ),
         }
     )
