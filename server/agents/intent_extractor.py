@@ -856,7 +856,16 @@ def run_intent_extractor(
     # the user's target.  Without this, target remains 0 and the
     # evaluator approves short drafts that the R0 constraint gate
     # then has to reject.
+    #
+    # We re-derive ``target_tolerance_sec`` and ``min_scene_count`` from
+    # the LLM-corrected intent too — ``run_pipeline.py`` only seeds
+    # heuristic-derived values (use_llm=False) and the LLM path can
+    # recover a duration the heuristic missed (e.g. "seven minutes"
+    # spelled out).  Keep the three in lockstep.
+    import math as _math
     state["target_duration_sec"] = float(intent.duration_sec)
+    state["target_tolerance_sec"] = float(intent.tolerance_sec)
+    state["min_scene_count"] = int(_math.ceil(float(intent.duration_sec) / 45.0))
     _write_intent_backup(intent)
     logger.info(
         "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "

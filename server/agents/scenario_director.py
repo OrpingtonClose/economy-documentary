@@ -87,18 +87,24 @@ decisions; they will enforce them.
 
 CRITICAL — TOTAL DURATION TARGET:
 The user's brief demands a documentary of EXACTLY {target_duration_sec}
-seconds (tolerance: {target_tolerance_sec} seconds).  You MUST generate
-at least {min_scene_count} scenes so that the SUM of all duration_sec
-values lands inside that window.  A structural check runs BEFORE the
-LLM evaluator; it caps the verdict at POOR if:
+seconds (tolerance: {target_tolerance_sec} seconds).
+
+TARGET the sum of duration_sec values at ~{target_duration_sec} seconds
+MINUS approximately (N-1)*3 seconds of inter-scene silence (the assembler
+inserts a short gap between scenes).  Aim for around {min_scene_count}
+scenes at roughly 40 seconds each — do NOT stack extra scenes, that
+overshoots the target.  A structural check runs BEFORE the LLM
+evaluator; it caps the verdict at POOR if:
   * sum(duration_sec) < 95% of target, OR
   * number_of_scenes < ceil(target_seconds / 45), OR
   * sum of narration words < target_seconds / 60 * 150 (wpm).
-Plan for {min_scene_count} scenes. Each scene 30-45s.  Do NOT
-undershoot the target — the evaluator is no longer lenient on duration.
+
+Plan for {min_scene_count}±1 scenes. Each scene 30-45s.  The SUM of
+duration_sec across all scenes should land within 10s of
+(target_duration_sec - (min_scene_count - 1) * 3).
 Rule of thumb: at the 150 wpm natural pace, each scene's three voice
-blocks together must carry at least ceil(scene_duration * 150 / 60)
-words of narration.
+blocks together must carry ceil(scene_duration * 150 / 60) words of
+narration — do not write more or fewer words per scene.
 
 Each scene MUST have:
 - scene_num: integer (1-based)

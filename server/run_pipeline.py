@@ -262,10 +262,11 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     import math as _math
     initial_state["target_duration_sec"] = _target
     initial_state["target_tolerance_sec"] = _tol
-    # A scene is 30-45s; ceil(target/35) gives a round count that lands
-    # inside the duration window at natural pace.  Use ceil(target/35)+1
-    # as a safety margin against LLM truncation.
-    initial_state["min_scene_count"] = int(_math.ceil(_target / 35.0)) + 1
+    # A scene is 30-45s; ceil(target/45) is the MINIMUM scene count that
+    # can cover the target if every scene is at the 45s ceiling.  Using
+    # this as the floor (instead of the old ceil(target/35)+1) prevents
+    # the LLM from stacking too many ~35s scenes and overshooting.
+    initial_state["min_scene_count"] = int(_math.ceil(_target / 45.0))
 
     # ARCH-A3 (#133): stage the original user brief so the Preference
     # Ledger R0 seed can parse it into baseline records before the
