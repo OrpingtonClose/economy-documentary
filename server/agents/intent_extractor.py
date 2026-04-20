@@ -850,6 +850,13 @@ def run_intent_extractor(
 
     intent = extract_intent(source, use_llm=use_llm)
     state[BRIEF_INTENT_KEY] = intent.to_json()
+    # Mirror the extracted duration as ``target_duration_sec`` so the
+    # scenario evaluator's structural checks (which cap the verdict at
+    # POOR when sum(scene.duration_sec) < 95% of target) can enforce
+    # the user's target.  Without this, target remains 0 and the
+    # evaluator approves short drafts that the R0 constraint gate
+    # then has to reject.
+    state["target_duration_sec"] = float(intent.duration_sec)
     _write_intent_backup(intent)
     logger.info(
         "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "

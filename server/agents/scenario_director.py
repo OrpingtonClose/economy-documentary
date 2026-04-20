@@ -86,15 +86,19 @@ decisions; they will enforce them.
 3. A SCENARIO document as a JSON array of scenes in state["scenes"].
 
 CRITICAL — TOTAL DURATION TARGET:
-The user's message specifies how long the documentary should be (e.g. "7
-minute documentary").  You MUST generate enough scenes so that the SUM of
-all duration_sec values equals the requested total.  A structural check
-runs BEFORE the LLM evaluator; it caps the verdict at POOR if:
+The user's brief demands a documentary of EXACTLY {target_duration_sec}
+seconds (tolerance: {target_tolerance_sec} seconds).  You MUST generate
+at least {min_scene_count} scenes so that the SUM of all duration_sec
+values lands inside that window.  A structural check runs BEFORE the
+LLM evaluator; it caps the verdict at POOR if:
   * sum(duration_sec) < 95% of target, OR
   * number_of_scenes < ceil(target_seconds / 45), OR
   * sum of narration words < target_seconds / 60 * 150 (wpm).
-Plan for ceil(target_seconds / 35) scenes. Each scene 30-45s. Do NOT
+Plan for {min_scene_count} scenes. Each scene 30-45s.  Do NOT
 undershoot the target — the evaluator is no longer lenient on duration.
+Rule of thumb: at the 150 wpm natural pace, each scene's three voice
+blocks together must carry at least ceil(scene_duration * 150 / 60)
+words of narration.
 
 Each scene MUST have:
 - scene_num: integer (1-based)

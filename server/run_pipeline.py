@@ -249,6 +249,23 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     # on the FIRST scenario_director attempt doesn't fail.  The gate
     # overwrites this with a real critique when it rejects a draft.
     initial_state["_intent_gate_critique"] = ""
+    # Parse the target duration from the brief up-front so the scenario
+    # generator's instruction template can inject an explicit number of
+    # scenes instead of relying on the LLM to eyeball "7 minutes".
+    try:
+        from agents.intent_extractor import extract_intent as _pre_extract
+        _pre_intent = _pre_extract(topic, use_llm=False)
+        _target = float(_pre_intent.duration_sec)
+        _tol = float(_pre_intent.tolerance_sec)
+    except Exception:
+        _target, _tol = 420.0, 30.0
+    import math as _math
+    initial_state["target_duration_sec"] = _target
+    initial_state["target_tolerance_sec"] = _tol
+    # A scene is 30-45s; ceil(target/35) gives a round count that lands
+    # inside the duration window at natural pace.  Use ceil(target/35)+1
+    # as a safety margin against LLM truncation.
+    initial_state["min_scene_count"] = int(_math.ceil(_target / 35.0)) + 1
 
     # ARCH-A3 (#133): stage the original user brief so the Preference
     # Ledger R0 seed can parse it into baseline records before the
