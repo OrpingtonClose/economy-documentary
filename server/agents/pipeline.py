@@ -707,13 +707,30 @@ class _ScenarioWithGate(BaseAgent):
 
             # Reset the inner LoopAgent's state so the next attempt starts
             # fresh (otherwise ADK's LoopAgent resume logic would pick up
-            # where it left off and skip the generator).
+            # where it left off and skip the generator).  Log any reset
+            # failure so we can diagnose a resume-mid-loop skip symptom
+            # instead of silently papering over it.
             try:
                 ctx.reset_sub_agent_states(self.director.name)
-            except Exception:
-                pass
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "scenario_with_gate: failed to reset inner state for "
+                    "%s before attempt %d — the next iteration may "
+                    "resume mid-loop instead of starting fresh: %s",
+                    self.director.name, attempt + 1, exc,
+                )
 
-            # Run the constraint gate.
+            # Run the constraint gate.  Also reset its sub-agent state
+            # between iterations so any per-invocation tracking inside
+            # the gate agent starts fresh each redraft.
+            try:
+                ctx.reset_sub_agent_states(self.gate.name)
+            except Exception as exc:  # pragma: no cover — defensive
+                logger.warning(
+                    "scenario_with_gate: failed to reset gate state for "
+                    "%s on attempt %d: %s",
+                    self.gate.name, attempt, exc,
+                )
             async with Aclosing(self.gate.run_async(ctx)) as agen:
                 async for event in agen:
                     gate_escalated = bool(

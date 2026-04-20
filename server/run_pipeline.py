@@ -324,7 +324,27 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
             restored["run_id"], stages_complete, restored["restored_files"],
         )
         # Merge restored state into initial state (restored takes precedence)
+        # EXCEPT for intent-derived keys, which were just freshly computed
+        # above from the current brief.  Restoring them would re-introduce
+        # stale values from a previous (potentially buggy) run — e.g. a
+        # non-empty ``_intent_gate_critique`` from the prior halt would
+        # leak into the first scenario_director attempt's template and
+        # poison the draft with a critique the LLM was never asked to
+        # address.  ``_init_pipeline_state`` later re-derives the four
+        # duration / topic keys via ``run_intent_extractor`` →
+        # ``_mirror_intent_into_state``, but until that call runs, the
+        # pre-computed fresh values must win.
+        _INTENT_RESTORE_BLOCKLIST: frozenset[str] = frozenset({
+            "_intent_gate_critique",
+            "_intent_gate_attempt",
+            "target_duration_sec",
+            "target_tolerance_sec",
+            "min_scene_count",
+            "required_topics_block",
+        })
         for k, v in restored.get("state", {}).items():
+            if k in _INTENT_RESTORE_BLOCKLIST:
+                continue
             if v and str(v).strip() not in ("", "[]", "{}", "(not yet analyzed)",
                                               "(not yet generated)", "(not yet evaluated)"):
                 initial_state[k] = v

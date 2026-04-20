@@ -167,19 +167,26 @@ def _topic_tokens(topic: str) -> list[str]:
 def _token_in_blob(tok: str, blob: str) -> bool:
     """Return True iff ``tok`` is semantically present in ``blob``.
 
-    For tokens ≥ 5 chars we match on the first-5-char stem, anchored at
-    a word boundary, so ``"circuitry"`` matches ``"circuit"``,
-    ``"analgesia"`` matches ``"analgesic"``, ``"chemistry"`` matches
-    ``"chemical"`` — but stems do NOT collide inside unrelated words
-    (e.g. ``"chemi"`` must not match ``"alchemist"`` or ``"chemise"``;
-    ``"freez"`` must not match ``"antifreeze"``).  Short tokens
-    (≤ 4 chars) require exact substring match to avoid false-positives
-    on acronyms and common short words.
+    For tokens ≥ 5 chars we first try an exact word-boundary match
+    (``\\b{tok}\\b``) — so ``"freeze"`` does NOT match inside
+    ``"antifreeze"`` — then fall back to a first-5-char stem anchored
+    at the left word boundary (``\\b{stem}``) so ``"circuitry"``
+    matches ``"circuit"``, ``"analgesia"`` matches ``"analgesic"``,
+    ``"chemistry"`` matches ``"chemical"``.  Short tokens (≤ 4 chars,
+    typically acronyms like ``"PAG"``, ``"DBS"``, ``"fMRI"``,
+    ``"MDMA"``) also require word-boundary anchoring — otherwise
+    ``"pag"`` would match inside ``"propaganda"`` or ``"pageant"``,
+    wrongly marking the required topic as covered.
     """
     import re as _re
 
     if len(tok) <= 4:
-        return tok in blob
+        # Short tokens (PAG, DBS, fMRI, MDMA, …) must also be anchored
+        # at both word boundaries — otherwise "pag" would match inside
+        # "propaganda" / "pageant" / "unpaged", wrongly marking the
+        # required topic as "covered".  No stem fallback for short
+        # tokens; they must appear as a complete word.
+        return _re.search(rf"\b{_re.escape(tok)}\b", blob) is not None
     # Fast path: whole-word match (anchored at both word boundaries) so
     # e.g. ``"freeze"`` does NOT match inside ``"antifreeze"``.
     if _re.search(rf"\b{_re.escape(tok)}\b", blob) is not None:
