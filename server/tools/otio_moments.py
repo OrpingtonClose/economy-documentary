@@ -122,7 +122,14 @@ def validate_audio_duration_vs_scene_target(
     per_voice_budget = scene_target / num_voices
 
     drift = actual_duration_sec - per_voice_budget
-    if abs(drift) <= tolerance_sec:
+    # Only flag OVERSHOOTS: if the audio clip is longer than the
+    # per-voice budget by more than ``tolerance_sec`` we have a real
+    # invariant problem (can't fit in its video slot, may breach LTX
+    # cap, etc.).  Undershoots are normal — voices naturally have
+    # uneven word counts so the equal-split budget is an upper bound,
+    # not a target.  The scene-total (hard) boundary in
+    # ``callbacks.timeline_guardian`` handles aggregate under-run.
+    if drift <= tolerance_sec:
         return None
 
     return (
