@@ -214,7 +214,28 @@ def _topic_covers(blob: str, topic: str, *, strict: bool = False) -> bool:
     if not tokens:
         return bool(topic) and topic.lower() in blob
     if strict:
-        return bool(topic) and topic.strip().lower() in blob
+        # Require the topic's content tokens to appear *in order and
+        # close together* in the blob — tolerant of punctuation
+        # (hyphens / commas / slashes) and short filler connectors
+        # ("and", "or", "the", …), but NOT tolerant of paragraph-
+        # separated coincidental co-occurrence.
+        #
+        # So a forbidden topic "fight-flight-freeze" matches prose
+        # spelled "fight, flight, and freeze" or "fight/flight/freeze",
+        # but does NOT match a scenario that mentions "fight" in scene
+        # 2 and "freeze" in scene 9.
+        import re as _re
+        _connector = (
+            r"(?:[\s,.;:/\-—_()\[\]]|"
+            r"\band\b|\bor\b|\bthe\b|\ba\b|\ban\b|\bof\b|"
+            r"\bin\b|\bon\b|\bat\b|\bto\b|\bfor\b|\bwith\b|"
+            r"\bby\b|\bfrom\b"
+            r")+"
+        )
+        pattern = _connector.join(
+            _re.escape(tok) for tok in tokens
+        )
+        return _re.search(pattern, blob) is not None
     return all(_token_in_blob(tok, blob) for tok in tokens)
 
 
