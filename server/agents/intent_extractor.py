@@ -825,10 +825,19 @@ def run_intent_extractor(
     if existing:
         try:
             if isinstance(existing, BriefIntent):
-                return existing
-            if isinstance(existing, Mapping):
-                return BriefIntent.model_validate(dict(existing))
-            return BriefIntent.from_json(str(existing))
+                cached = existing
+            elif isinstance(existing, Mapping):
+                cached = BriefIntent.model_validate(dict(existing))
+            else:
+                cached = BriefIntent.from_json(str(existing))
+            # Re-derive template state keys on the early-return path
+            # too — otherwise a B2-restore into a pre-#285 checkpoint
+            # leaves ``target_duration_sec`` / ``target_tolerance_sec``
+            # / ``min_scene_count`` / ``required_topics_block`` unset,
+            # and the scenario generator's instruction template crashes
+            # on unresolved ``{…}`` placeholders.
+            _mirror_intent_into_state(cached, state)
+            return cached
         except Exception as exc:
             logger.warning(
                 "intent_extractor: existing state[%s] is invalid, "
@@ -850,31 +859,7 @@ def run_intent_extractor(
 
     intent = extract_intent(source, use_llm=use_llm)
     state[BRIEF_INTENT_KEY] = intent.to_json()
-    # Mirror the extracted duration as ``target_duration_sec`` so the
-    # scenario evaluator's structural checks (which cap the verdict at
-    # POOR when sum(scene.duration_sec) < 95% of target) can enforce
-    # the user's target.  Without this, target remains 0 and the
-    # evaluator approves short drafts that the R0 constraint gate
-    # then has to reject.
-    #
-    # We re-derive ``target_tolerance_sec`` and ``min_scene_count`` from
-    # the LLM-corrected intent too — ``run_pipeline.py`` only seeds
-    # heuristic-derived values (use_llm=False) and the LLM path can
-    # recover a duration the heuristic missed (e.g. "seven minutes"
-    # spelled out).  Keep the three in lockstep.
-    import math as _math
-    state["target_duration_sec"] = float(intent.duration_sec)
-    state["target_tolerance_sec"] = float(intent.tolerance_sec)
-    state["min_scene_count"] = int(_math.ceil(float(intent.duration_sec) / 45.0))
-    # Format required topics as a bullet list so the scenario generator's
-    # instruction template can inject an up-front list — the LLM
-    # otherwise drops tokens like "circuitry" from hyphenated phrases.
-    if intent.required_topics:
-        state["required_topics_block"] = "\n".join(
-            f"  - {t}" for t in intent.required_topics
-        )
-    else:
-        state["required_topics_block"] = "  (none — free topic choice)"
+    _mirror_intent_into_state(intent, state)
     _write_intent_backup(intent)
     logger.info(
         "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "
@@ -897,6 +882,38 @@ BRIEF_INTENT_BACKUP_FILENAME: str = "_brief_intent_backup.json"
 def _brief_intent_backup_path() -> Path:
     base = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
     return Path(base) / "timelines" / BRIEF_INTENT_BACKUP_FILENAME
+
+
+def _mirror_intent_into_state(
+    intent: "BriefIntent", state: MutableMapping[str, Any]
+) -> None:
+    """Mirror a :class:`BriefIntent` into the template state keys.
+
+    The scenario generator's instruction template references
+    ``{target_duration_sec}``, ``{target_tolerance_sec}``,
+    ``{min_scene_count}``, and ``{required_topics_block}``.  All four
+    must be populated on every code path that produces a usable
+    ``BriefIntent`` (fresh extraction AND the early-return path when a
+    cached intent was restored from B2) — otherwise ADK template
+    resolution either leaves them as literal ``{…}`` placeholders or
+    raises, producing a garbled / broken instruction.
+    """
+    import math as _math
+    state["target_duration_sec"] = float(intent.duration_sec)
+    state["target_tolerance_sec"] = float(intent.tolerance_sec)
+    state["min_scene_count"] = int(
+        _math.ceil(float(intent.duration_sec) / 45.0)
+    )
+    # Format required topics as a bullet list so the scenario
+    # generator's instruction template can inject an up-front list —
+    # the LLM otherwise drops tokens like "circuitry" from hyphenated
+    # phrases.
+    if intent.required_topics:
+        state["required_topics_block"] = "\n".join(
+            f"  - {t}" for t in intent.required_topics
+        )
+    else:
+        state["required_topics_block"] = "  (none — free topic choice)"
 
 
 def _write_intent_backup(intent: "BriefIntent") -> None:

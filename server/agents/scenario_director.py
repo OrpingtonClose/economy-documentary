@@ -112,7 +112,8 @@ sum ≈ {target_duration_sec} - 52 seconds.
 Plan for {min_scene_count}±1 scenes. Each scene 32-40s (NOT 40-45s —
 that overshoots).  A structural check runs BEFORE the LLM evaluator;
 it caps the verdict at POOR if:
-  * sum(duration_sec) < 95% of target, OR
+  * delivered movie runtime (sum(scene duration_sec) + silence gaps)
+    drifts more than {target_tolerance_sec}s from {target_duration_sec}s, OR
   * number_of_scenes < ceil(target_seconds / 45), OR
   * sum of narration words < target_seconds / 60 * 150 (wpm).
 Rule of thumb: at the 150 wpm natural pace, each scene's three voice
