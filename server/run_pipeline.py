@@ -245,6 +245,10 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     initial_state["topic"] = topic
     initial_state["corpus_path"] = corpus_path
     initial_state["language"] = language
+    # Default the R0 gate critique to empty so ADK template resolution
+    # on the FIRST scenario_director attempt doesn't fail.  The gate
+    # overwrites this with a real critique when it rejects a draft.
+    initial_state["_intent_gate_critique"] = ""
 
     # ARCH-A3 (#133): stage the original user brief so the Preference
     # Ledger R0 seed can parse it into baseline records before the

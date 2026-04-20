@@ -146,6 +146,12 @@ LANGUAGE MODE: "{language}"
 - If "dual_ru_en": write EACH voice block with BOTH languages using this format:
     "text": "[RU] <Russian narration>\n[EN] <English translation>"
   The Russian text is the PRIMARY narration; the English is a faithful translation.
+
+PRIOR-ATTEMPT CRITIQUE (empty on the first attempt; populated by the R0
+constraint gate on every subsequent retry — YOU MUST address every
+bullet before emitting the new scenes JSON):
+{_intent_gate_critique}
+
 {quick_test_rules}
 RULES:
 1. Each scene MUST be <= {max_scene_duration} seconds when spoken at natural pace (~150 words/min)

@@ -332,7 +332,10 @@ def _clear_critique(state: MutableMapping[str, Any]) -> None:
     # overwrite to ``None`` so downstream checks using ``state.get(KEY)``
     # still see a falsy value.  Tests that read the plain-dict fixture
     # via ``in state`` assert on ``state.get(KEY)`` instead.
-    state[GATE_CRITIQUE_KEY] = None
+    # We use "" rather than None so ADK's instruction template resolver
+    # (which substitutes {_intent_gate_critique} into the scenario
+    # director prompt) does not render the literal string "None".
+    state[GATE_CRITIQUE_KEY] = ""
 
 
 def _emit_halt(verdict: GateVerdict, *, max_attempts: int) -> None:
