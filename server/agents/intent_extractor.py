@@ -321,10 +321,19 @@ def _split_sentence_concat(topic: str) -> list[str]:
     return [p for p in parts if p and len(p) >= 3]
 
 
+_FORBIDDEN_PREFIX = re.compile(
+    r"^(do not|don'?t|avoid|exclude|no)\s+(discuss\s+|show\s+|mention\s+|include\s+|cover\s+)?",
+    re.I,
+)
+
+
 def _filter_required_topics(
-    required: list[str], audience: str
+    required: list[str],
+    audience: str,
+    *,
+    is_forbidden: bool = False,
 ) -> list[str]:
-    """Drop audience-descriptor tokens from ``required``.
+    """Drop audience-descriptor tokens from a topic list.
 
     A required topic must be subject matter the documentary covers
     (e.g. "PAG", "opioid analgesia"), not an audience attribute
@@ -336,15 +345,29 @@ def _filter_required_topics(
     sentence topics emitted by the LLM (e.g. "X circuitry. Do not
     discuss Y") get decomposed before the stopword filter — see
     :func:`_split_sentence_concat`.
+
+    ``is_forbidden`` toggles two path-specific behaviours:
+
+    * ``False`` (required-topics path): reject items beginning with
+      "do not" / "don't" / "avoid" / "exclude" / "no " — those clauses
+      belong in :attr:`BriefIntent.forbidden_topics`, not here.  The
+      PAG run-#4 failure mode that motivated this filter was the LLM
+      merging "X. Do not discuss Y" into a single required-topic item;
+      after sentence-splitting we drop the residual "Do not discuss Y".
+    * ``True`` (forbidden-topics path): **preserve** such items,
+      stripping only the negation prefix so "do not discuss violence"
+      becomes "violence".  Forbidden topics are a fail-closed safety
+      constraint; silently dropping them would weaken the verifier.
     """
     audience_norm = (audience or "").strip().lower()
     cleaned: list[str] = []
     seen: set[str] = set()
     for raw in required:
         for topic in _split_sentence_concat(raw):
-            key = topic.strip().lower()
-            if not key:
+            stripped = topic.strip()
+            if not stripped:
                 continue
+            key = stripped.lower()
             if key in _AUDIENCE_STOPWORDS:
                 continue
             if audience_norm and key == audience_norm:
@@ -353,16 +376,23 @@ def _filter_required_topics(
             # LLM sometimes emits as a topic.
             if audience_norm and key.startswith(audience_norm + "-"):
                 continue
-            # Reject obvious forbidden-topic fragments that survive the
-            # sentence-split: a required topic cannot start with "do not",
-            # "don't", "avoid", "exclude", "no ".  The forbidden_topics
-            # list is the right destination for those clauses.
-            if re.match(r"^(do not|don'?t|avoid\b|exclude\b|no\s)", key):
-                continue
+            prefix_match = _FORBIDDEN_PREFIX.match(stripped)
+            if prefix_match:
+                if is_forbidden:
+                    # Strip the negation prefix so the forbidden topic
+                    # is the subject matter itself, not the command.
+                    stripped = stripped[prefix_match.end():].strip()
+                    if not stripped:
+                        continue
+                    key = stripped.lower()
+                else:
+                    # Required-topics path: drop the forbidden-clause
+                    # fragment entirely.
+                    continue
             if key in seen:
                 continue
             seen.add(key)
-            cleaned.append(topic)
+            cleaned.append(stripped)
     return cleaned
 
 
@@ -485,8 +515,11 @@ def _heuristic_intent(brief: str) -> BriefIntent:
     tone, conf_tone = _heuristic_tone(brief)
     required, forbidden, conf_topics = _heuristic_topics(brief)
     # INTENT-EXTR-A: audience descriptors must never become required_topics.
+    # INTENT-EXTR-B: forbidden path preserves negation clauses (strips the
+    # prefix so the remaining subject-matter is retained as a real
+    # fail-closed constraint).
     required = _filter_required_topics(required, audience)
-    forbidden = _filter_required_topics(forbidden, audience)
+    forbidden = _filter_required_topics(forbidden, audience, is_forbidden=True)
     return BriefIntent(
         duration_sec=duration_sec,
         tolerance_sec=DEFAULT_TOLERANCE_SEC,
@@ -555,7 +588,7 @@ def _parse_llm_intent(text: str) -> BriefIntent:
                 intent.required_topics, intent.audience
             ),
             "forbidden_topics": _filter_required_topics(
-                intent.forbidden_topics, intent.audience
+                intent.forbidden_topics, intent.audience, is_forbidden=True
             ),
         }
     )
