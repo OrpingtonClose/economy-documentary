@@ -289,14 +289,15 @@ _AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-# Sentence break: ``.!?`` preceded by at least 4 word-characters AND
+# Sentence break: ``.!?`` preceded by at least 3 word-characters AND
 # followed by whitespace + an uppercase letter (or end-of-string
-# trailing punctuation).  The 4-char lookbehind on the preceding token
-# prevents splitting on abbreviations like "Dr. Smith", "St. Louis",
-# "Mr. Brown", "Jr. Smith", "U.S. policy" (both "U" and "S" are
-# single-char tokens so neither matches).  The uppercase-letter
-# lookahead ensures we only split at true sentence starts.
-_SENTENCE_BREAK = re.compile(r"(?<=\w{4})[.!?]\s+(?=[A-Z])|[.!?]$")
+# trailing punctuation).  The 3-char lookbehind catches 3-letter
+# acronyms common in documentary briefs (PAG, RNA, DNA, GDP) while
+# still protecting 2-char abbreviations like "Dr. Smith", "St. Louis",
+# "Mr. Brown", "Jr. Smith".  "U.S. policy" is also safe because each
+# single-char token ("U", "S") fails the ≥3 check.  The uppercase-
+# letter lookahead ensures we only split at true sentence starts.
+_SENTENCE_BREAK = re.compile(r"(?<=\w{3})[.!?]\s+(?=[A-Z])|[.!?]$")
 
 
 def _split_sentence_concat(topic: str) -> list[str]:
@@ -478,7 +479,7 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
     # truncate ``tail`` at the first sentence-ending punctuation.
     for match in _REQUIRED_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 240]
-        sentence_end = re.search(r"[.!?](?:\s|$)", tail)
+        sentence_end = _SENTENCE_BREAK.search(tail)
         if sentence_end:
             tail = tail[: sentence_end.start()]
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
@@ -489,8 +490,8 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
                 continue
             # Defensive: if an item still contains sentence-break
             # punctuation after splitting, keep only the first clause.
-            if re.search(r"[.!?]\s+[A-Z]", cleaned):
-                cleaned = re.split(r"[.!?]\s+", cleaned, maxsplit=1)[0].strip()
+            if _SENTENCE_BREAK.search(cleaned):
+                cleaned = _SENTENCE_BREAK.split(cleaned, maxsplit=1)[0].strip()
                 if not cleaned:
                     continue
             key = cleaned.lower()
@@ -503,7 +504,7 @@ def _heuristic_topics(brief: str) -> tuple[list[str], list[str], float]:
     # It must cover Y" must not leak "X. It must cover Y" as forbidden.
     for match in _FORBIDDEN_TOPIC_SPLIT.finditer(brief):
         tail = brief[match.end() : match.end() + 120]
-        sentence_end = re.search(r"[.!?](?:\s|$)", tail)
+        sentence_end = _SENTENCE_BREAK.search(tail)
         if sentence_end:
             tail = tail[: sentence_end.start()]
         for item in re.split(r",|;|\band\b", tail, flags=re.I):
