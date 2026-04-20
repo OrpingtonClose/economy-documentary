@@ -324,6 +324,26 @@ def test_contract_compliance_artifact_glob_matches(tmp_path: Path) -> None:
     assert artifact_checks[0].test_pass is True
 
 
+def test_contract_compliance_empty_artifact_fails(tmp_path: Path) -> None:
+    (tmp_path / "audio").mkdir()
+    (tmp_path / "audio" / "scene_001.wav").write_bytes(b"")
+
+    evaluator = ContractComplianceEvaluator(AUDIO_CONTRACT)
+    case = EvaluationData[dict[str, Any], dict[str, Any]](
+        input={},
+        actual_output={
+            "scenes": [{"scene_num": 1}],
+            "whisperx_alignment": {"segments": []},
+        },
+        metadata={"artifact_root": str(tmp_path)},
+    )
+    outputs = evaluator.evaluate(case)
+    artifact_checks = [o for o in outputs if o.label.startswith("produced_artifacts.")]
+    assert len(artifact_checks) == 1
+    assert artifact_checks[0].test_pass is False
+    assert "empty" in artifact_checks[0].reason.lower()
+
+
 def test_contract_compliance_empty_contract_passes() -> None:
     empty = StageContract(name="empty")
     evaluator = ContractComplianceEvaluator(empty)

@@ -121,17 +121,29 @@ def _state_check(state: dict[str, Any], key: str, *, clause: str) -> EvaluationO
 
 
 def _artifact_check(root: str, pattern: str) -> EvaluationOutput:
+    label = f"produced_artifacts.{pattern}"
     full = os.path.join(root, pattern)
     matches = glob.glob(full)
-    passed = bool(matches)
-    reason = (
-        f"{len(matches)} artifact(s) matched"
-        if passed
-        else f"no artifacts matched {full}"
-    )
+    if not matches:
+        return EvaluationOutput(
+            score=0.0,
+            test_pass=False,
+            reason=f"FAIL {label}: no artifacts matched {full}",
+            label=label,
+        )
+    # Mirror contracts.validate_postconditions: 0-byte artifacts are
+    # treated as a failure (truncated writes, crashed workers).
+    empty = [m for m in matches if os.path.getsize(m) == 0]
+    if empty:
+        return EvaluationOutput(
+            score=0.0,
+            test_pass=False,
+            reason=f"FAIL {label}: {len(empty)} empty file(s): {empty[:3]}",
+            label=label,
+        )
     return EvaluationOutput(
-        score=1.0 if passed else 0.0,
-        test_pass=passed,
-        reason=f"{'PASS' if passed else 'FAIL'} produced_artifacts.{pattern}: {reason}",
-        label=f"produced_artifacts.{pattern}",
+        score=1.0,
+        test_pass=True,
+        reason=f"PASS {label}: {len(matches)} artifact(s) matched",
+        label=label,
     )
