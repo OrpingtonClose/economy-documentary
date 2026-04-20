@@ -164,8 +164,26 @@ def _topic_tokens(topic: str) -> list[str]:
     return [p for p in parts if p not in _TOPIC_STOPWORDS and len(p) >= 2]
 
 
+def _token_in_blob(tok: str, blob: str) -> bool:
+    """Return True iff ``tok`` is semantically present in ``blob``.
+
+    For tokens ≥ 5 chars we match on the first-5-char stem so
+    ``"circuitry"`` matches ``"circuit"``, ``"analgesia"`` matches
+    ``"analgesic"``, ``"chemistry"`` matches ``"chemical"``.  Short
+    tokens (≤ 4 chars) require exact substring match to avoid
+    false-positives on acronyms and common short words.
+    """
+    if len(tok) <= 4:
+        return tok in blob
+    if tok in blob:
+        return True
+    stem = tok[:5]
+    return stem in blob
+
+
 def _topic_covers(blob: str, topic: str) -> bool:
-    """Return True iff all content tokens of ``topic`` appear in ``blob``.
+    """Return True iff all content tokens of ``topic`` semantically
+    appear in ``blob`` (via :func:`_token_in_blob`).
 
     Falls back to substring match when the topic has no content tokens
     (e.g. it was pure punctuation after filtering) to preserve legacy
@@ -174,7 +192,7 @@ def _topic_covers(blob: str, topic: str) -> bool:
     tokens = _topic_tokens(topic)
     if not tokens:
         return bool(topic) and topic.lower() in blob
-    return all(tok in blob for tok in tokens)
+    return all(_token_in_blob(tok, blob) for tok in tokens)
 
 
 def _scene_text_blob(scenes: list[dict]) -> str:
