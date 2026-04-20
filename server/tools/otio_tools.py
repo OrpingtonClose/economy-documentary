@@ -636,99 +636,38 @@ def add_video_gap(
     gap_index: int = 0,
     tool_context=None,
 ) -> str:
-    """Add an intentional visual Gap to the V1_Video track.
+    """REMOVED: V1_Video may not contain Gaps.
 
-    These gaps correspond to planned pauses on the narration track.
-    During assembly they are rendered as black frames. Freeze-frames
-    (holding the last frame of the preceding clip) are forbidden by the
-    Media Immutability Invariant.
+    The V1_Video track has NO intentional gaps by architectural
+    invariant (ARCH-F3 / strict_assembler.ensure_item_is_not_gap).
+    Production sizes each video clip to cover the narration PLUS
+    the following silence gap on A1_Narration — see
+    :func:`get_video_slot_durations`.  Any Gap on V1_Video at render
+    time raises :class:`UnpluggedGapError`; no freeze-frame, silent-fill
+    or black-frame fabrication is permitted.
 
-    The gap is inserted in sorted position by scene_num (matching the
-    narration track order) rather than blindly appended, because
-    add_video_clip inserts clips in sorted order too — appending gaps
-    would cluster them at the end after production adds clips.
+    Inter-voice / inter-scene silence belongs on A1_Narration and is
+    added by :func:`add_narration_gap`; the assembler renders those
+    narration Gaps as real silent WAV, which is faithful to the OTIO
+    contract (the declared content IS silence).
 
-    Args:
-        scene_num: Scene number this gap belongs to (for metadata).
-        duration: Duration of the gap in seconds.
-        gap_type: One of "inter_voice" or "inter_scene".
-        gap_index: Unique index for this gap within the scene (for
-                   idempotency — prevents duplicates on pipeline restart).
+    This function previously inserted Gaps onto V1_Video as a planned
+    "black frame" pause.  That was always a latent violation of the
+    no-Gap invariant on V1_Video and of the Media Immutability
+    Invariant (fabricating filler media at render time).  It is now
+    a hard error so callers fail loud rather than silently producing
+    an unassemblable timeline.
 
-    Returns:
-        JSON string with gap details.
+    Raises:
+        NotImplementedError: always.
     """
-    state = tool_context.state if tool_context else {}
-    timeline_path = state.get("_timeline_path", "")
-    if not timeline_path or not os.path.exists(timeline_path):
-        return json.dumps({"error": "Timeline not found. Create one first."})
-
-    with _otio_lock:
-        timeline = otio.adapters.read_from_file(timeline_path)
-        video_track = None
-        for track in timeline.tracks:
-            if track.name == TRACK_V1:
-                video_track = track
-                break
-
-        if video_track is None:
-            return json.dumps({"error": "V1_Video track not found"})
-
-        gap_name = f"scene_{scene_num:03d}_{gap_type}_{gap_index:03d}"
-
-        # Idempotency check: don't add duplicates on pipeline restart
-        for item in video_track:
-            if isinstance(item, otio.schema.Gap) and item.name == gap_name:
-                return json.dumps({
-                    "status": "already_exists",
-                    "gap_name": gap_name,
-                    "message": "Gap already exists, skipping duplicate",
-                })
-
-        gap = otio.schema.Gap(
-            name=gap_name,
-            source_range=otio.opentime.TimeRange(
-                start_time=otio.opentime.RationalTime(0, 24),
-                duration=otio.opentime.RationalTime(duration * 24, 24),
-            ),
-        )
-        # Assign a sort_order to gaps so they interleave correctly
-        # with clips during add_video_clip's sorted insertion.
-        # Inter-voice gaps use gap_index as their phrase position,
-        # inter-scene gaps use a large value to sort after all phrases.
-        if gap_type == "inter_scene":
-            gap_sort_phrase = 9999  # after all phrases in this scene
-        else:
-            # inter_voice gap after voice N → sort after phrase N
-            gap_sort_phrase = gap_index
-
-        gap.metadata["documentary"] = {
-            "scene_num": scene_num,
-            "gap_type": gap_type,
-            "type": "black",
-            "phrase_idx": gap_sort_phrase,
-        }
-        # Insert in sorted position by (scene_num, phrase_idx) so gaps
-        # stay interleaved with clips (add_video_clip also uses this
-        # sort order).
-        insert_pos = len(video_track)  # default: append at end
-        for i, item in enumerate(video_track):
-            meta = item.metadata.get("documentary", {})
-            item_scene = meta.get("scene_num", 0)
-            item_phrase = meta.get("phrase_idx", 0)
-            if (item_scene, item_phrase) > (scene_num, gap_sort_phrase):
-                insert_pos = i
-                break
-        video_track.insert(insert_pos, gap)
-        otio.adapters.write_to_file(timeline, timeline_path)
-
-    logger.info("Added video gap: %s (%.2fs, type=%s)", gap_name, duration, gap_type)
-    return json.dumps({
-        "status": "added",
-        "gap_name": gap_name,
-        "duration": duration,
-        "gap_type": gap_type,
-    })
+    raise NotImplementedError(
+        "add_video_gap is forbidden. V1_Video must not contain Gaps "
+        "(ARCH-F3 / strict_assembler.ensure_item_is_not_gap). Video clips "
+        "must be sized to cover narration + following silence via "
+        "get_video_slot_durations; inter-voice / inter-scene silence lives "
+        "on A1_Narration via add_narration_gap."
+    )
 
 
 def get_narration_durations_by_scene(tool_context=None) -> dict:

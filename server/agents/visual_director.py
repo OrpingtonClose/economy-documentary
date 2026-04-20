@@ -285,20 +285,44 @@ async def _visual_concepter_before_model(callback_context, llm_request):
 
             parsed = _json.loads(text)
             if isinstance(parsed, list):
-                accumulated.extend(parsed)
+                chunk_concepts = parsed
             elif isinstance(parsed, dict) and "concepts" in parsed:
-                accumulated.extend(parsed["concepts"])
+                chunk_concepts = parsed["concepts"]
+            else:
+                # Parsed JSON but not in either expected shape.  Treat
+                # as a hard failure so the recovery ladder REPLACEs the
+                # call rather than silently producing fewer concepts
+                # than the downstream normalizer expects.
+                raise RuntimeError(
+                    f"Visual concepter chunk {chunk_idx + 1}/{total_chunks} "
+                    f"returned unexpected JSON shape: {type(parsed).__name__}"
+                )
 
+            if not chunk_concepts:
+                raise RuntimeError(
+                    f"Visual concepter chunk {chunk_idx + 1}/{total_chunks} "
+                    f"returned zero concepts for scenes "
+                    f"{scenes_data[start:end]}"
+                )
+
+            accumulated.extend(chunk_concepts)
             logger.info(
                 "Visual concepter: chunk %d/%d yielded %d concepts",
-                chunk_idx + 1, total_chunks,
-                len(parsed) if isinstance(parsed, list) else len(parsed.get("concepts", [])),
+                chunk_idx + 1, total_chunks, len(chunk_concepts),
             )
         except Exception as exc:
-            logger.warning(
-                "Visual concepter: chunk %d/%d LLM call failed: %s",
+            # Fail loud.  Silently dropping a chunk produced the
+            # "13 gaps for 10 scenes" mismatch that crashed prior
+            # pipeline runs — the downstream normalizer trusts the
+            # concept count to match narration phrase count.  The
+            # recovery ladder (server/recovery.py) handles REPLACE
+            # via creative amendment; silent partial success does not.
+            logger.error(
+                "Visual concepter: chunk %d/%d failed, halting "
+                "(recovery ladder will REPLACE): %s",
                 chunk_idx + 1, total_chunks, exc,
             )
+            raise
 
     # Store accumulated concepts from earlier chunks
     state["_vc_pre_accumulated"] = _json.dumps(accumulated, ensure_ascii=False)
