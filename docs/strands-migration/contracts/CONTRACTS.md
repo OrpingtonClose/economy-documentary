@@ -108,28 +108,29 @@ one file.
 
 ---
 
-## 4. Contract in `GraphBuilder`
+## 4. Contract at the orchestrator layer
 
-A graph may also enforce a contract at node boundaries (for example,
-"production_supervisor may not run unless `whisperx_alignment` is real").
-Strands supports this via hooks on the graph itself:
+The top-level orchestrator is a deepagents `create_deep_agent` (see
+[component 14](../components/14-pipeline-graph.md)), not a Strands
+`Graph`. Contract enforcement across stages therefore lives in **three**
+places, in order of precedence:
 
-```python
-graph = (
-    GraphBuilder()
-    .add_node(scenario_agent, node_id="scenario")
-    .add_node(production_supervisor, node_id="production")
-    .set_hook_providers([
-        ContractEnforcer(PRODUCTION_CONTRACT),  # validates around the whole graph run
-    ])
-    .build()
-)
-```
+1. **AGENTS.md invariants** (loaded by `MemoryMiddleware`) — e.g.
+   "Never call `launch_assembly` before `evaluate_timing` has returned
+   `timing_passed=True`". These shape the DeepAgent's planning.
+2. **Per-leaf `@tool` preconditions** — each Strands tool validates its
+   own inputs and raises on contract violation. The DeepAgent sees the
+   error and re-plans (or escalates via component 13).
+3. **Post-run verifier** — after the orchestrator returns, a pure
+   function walks the run directory and asserts every
+   `StageContract.produced_artifacts` matched at least one file and
+   every `required_state` key is populated with a non-placeholder value.
+   Failure fails the run.
 
-For per-node contract enforcement, register a hook that listens to
-`BeforeNodeCallEvent` / `AfterNodeCallEvent` and dispatches on `node_id`.
-The canonical implementation is in
-[`STRANDS_SDK_PATTERNS.md`](../reference/STRANDS_SDK_PATTERNS.md).
+If a SubAgent internally uses a `GraphBuilder` (rare — only when a
+cohesive deterministic DAG is genuinely clearer than LLM planning),
+attach `ContractEnforcer` to the SubAgent's `HookProvider` list, not to
+the orchestrator.
 
 ---
 

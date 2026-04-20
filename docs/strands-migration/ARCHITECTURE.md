@@ -1,12 +1,15 @@
-# ARCHITECTURE — current ADK vs. target Strands
+# ARCHITECTURE — current ADK vs. target DeepAgent + Strands
 
 This document maps every construct in the current ADK pipeline to its
-Strands equivalent. It exists so implementers never have to guess whether a
-given ADK feature has a Strands analogue.
+equivalent in the target architecture: a **DeepAgent orchestrator** driving
+a roster of **Strands-agent leaves**. It exists so implementers never have
+to guess whether a given ADK feature has an analogue.
 
 Line references point at the current `HEAD` of
-[`OrpingtonClose/economy-documentary`](https://github.com/OrpingtonClose/economy-documentary)
-and [`OrpingtonClose/sdk-python`](https://github.com/OrpingtonClose/sdk-python).
+[`OrpingtonClose/economy-documentary`](https://github.com/OrpingtonClose/economy-documentary),
+[`OrpingtonClose/deepagents`](https://github.com/OrpingtonClose/deepagents),
+[`OrpingtonClose/sdk-python`](https://github.com/OrpingtonClose/sdk-python),
+and [`OrpingtonClose/MiroThinker`](https://github.com/OrpingtonClose/MiroThinker).
 
 ---
 
@@ -53,58 +56,154 @@ SequentialAgent("documentary_pipeline")
 - **Loops are external** — `scenario_generator` → `scenario_evaluator` is a
   `LoopAgent` of two agents exchanging state, rather than a single agent
   reasoning over when to re-generate.
+- **No cross-run memory.** Nothing learns. Every run re-discovers the same
+  failure modes.
 
 ---
 
-## 2. Target Strands architecture
+## 2. Target architecture: DeepAgent orchestrator + Strands leaves
+
+The pipeline is **one DeepAgent** with a flat roster of tools and
+subagents. There is no top-level graph; the DeepAgent plans its own
+trajectory using its model + `TodoListMiddleware` + `MemoryMiddleware`.
 
 ```
-Graph(id="documentary_pipeline")
-├── node "scenario_agent"           # strands.Agent with 4 tools, loops internally
-├── edge (scenario_agent → timing_loop) with condition state.results["scenario"].approved
-├── subgraph "timing_loop"          # Graph: audio → timing → refiner (cycle)
-│   ├── node "audio_tool"           # deterministic @tool, not an Agent
-│   ├── node "timing_tool"          # deterministic @tool, not an Agent
-│   ├── node "scenario_refiner"     # strands.Agent
-│   └── cycle edge (refiner → audio) condition=lambda s: not s.results["timing"]["timing_passed"]
-├── subgraph "visual_loop"          # Graph: content_analyst → visual_concepter → coherence_evaluator (cycle)
-├── node "production_supervisor"    # strands.Agent with GPU-dispatch tools + SlidingWindowConversationManager
-├── node "assembly_tool"            # deterministic @tool
-├── nodes "recovery_*"              # strands.Agents used by production's on-failure cycle edge
-└── node "escalation_supervisor"    # strands.Agent with SlidingWindowConversationManager
+create_deep_agent(
+    model="openai/gpt-4o",                                          # or claude-sonnet-4-6
+    memory=["docs/strands-migration/AGENTS.md",
+            ".deepagents/AGENTS.md"],                               # MemoryMiddleware
+    system_prompt=DOCUMENTARY_ORCHESTRATOR_PROMPT,                  # short; the invariants live in AGENTS.md
+    backend=FilesystemBackend(root_dir="/tmp/documentary-pipeline"),
+    tools=[
+        # Strands leaves invoked directly (no subagent boundary)
+        generate_scenario,            # component 01 (Strands agent → @tool wrapper)
+        evaluate_scenario_structural, # component 01
+        evaluate_timing,              # component 02 (deterministic @tool)
+        refine_scenario,              # component 03 (Strands agent → @tool wrapper)
+        validate_otio_timeline,       # assembly helper
+        checkpoint_to_b2,             # persistence helper
+
+        # AsyncTaskPool launch tools (MiroThinker pattern)
+        launch_audio_render,          # component 04 — TTS + WhisperX per scene
+        launch_visual_production,     # component 10 — LTX GPU job per scene
+        launch_assembly,              # component 11 — OTIO → ffmpeg
+        check_tasks,                  # poll status
+        await_tasks,                  # block until done
+
+        # Post-artifact QA
+        evaluate_audio_invariants,    # component 04 (deterministic @tool)
+        evaluate_visual_coherence,    # component 08 (calls vision model)
+
+        # Worker pool health
+        check_worker_health,
+    ],
+    subagents=[
+        scenario_subagent,            # component 01 as SubAgent for isolated context
+        visual_subagent,              # components 06+07+08 (content_analyst + visual_concepter + coherence_evaluator in one context)
+        production_subagent,          # component 10 — GPU dispatch specialist
+        escalation_subagent,          # component 13 — escalation decisions
+    ],
+    interrupt_on={                    # HumanInTheLoopMiddleware
+        "launch_visual_production": {"allow_accept": True, "allow_edit": True, "allow_respond": True},
+        "launch_assembly":          {"allow_accept": True, "allow_edit": False, "allow_respond": True},
+        "request_human_approval":    True,
+    },
+)
 ```
 
-All 22 current callback files become **`HookProvider` classes**
-(one provider, one file, in `server/strands_agents/hooks/`). Approval gates
-become `Interrupt`s (`strands/interrupt.py`). The blackboard becomes a
-combination of `agent.state` (per-agent) and `invocation_state` (shared
-across a graph invocation).
+### Leaf layer (Strands)
+
+Every box in the `tools=[...]` and `subagents=[...]` lists is implemented
+using the Strands Agents SDK:
+
+- **`@tool` wrappers** around a small `strands.Agent` for LLM-backed leaves
+  (scenario generator, refiner, concepter).
+- **`@tool` wrappers** around plain Python for deterministic leaves
+  (timing evaluator, audio invariant QA, OTIO validator, B2 checkpoint).
+- **`HookProvider`** classes replace all 22 ADK callback files. Each
+  Strands leaf carries the hooks it needs (contract enforcement, revision
+  tagging, OTel spans).
+- **`SlidingWindowConversationManager`** on the few Strands leaves that
+  need turn memory (scenario refiner, production supervisor Strands
+  agent). Most leaves are stateless.
+
+### AsyncTaskPool layer (MiroThinker pattern)
+
+TTS and LTX video renders are long-running (seconds to minutes). Calling
+them synchronously from the DeepAgent blocks the planner. Instead:
+
+- `launch_audio_render(scene_id, voice, script)` → returns immediately
+  with a `task_id`, queues the job on the pool.
+- `launch_visual_production(scene_id, concept_id, ...)` → same, for GPU
+  jobs.
+- `check_tasks()` → snapshot of all running/completed tasks.
+- `await_tasks(task_ids=[...], timeout=600)` → block on specific tasks.
+
+This mirrors [`MiroThinker apps/strands-agent/task_tools.py`](https://github.com/OrpingtonClose/MiroThinker/blob/main/apps/strands-agent/task_tools.py)
+lines 56–162 and lets the orchestrator launch every scene's audio render
+in parallel, then work on other planning (e.g. spinning up the visual
+subagent) while they run.
+
+### Middleware stack (automatic from `create_deep_agent`)
+
+Per [`deepagents/graph.py:284-604`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/graph.py#L284):
+
+```
+TodoListMiddleware                  # todo list tool, agent-managed
+FilesystemMiddleware                # ls, read_file, write_file, edit_file
+SubAgentMiddleware                  # task() tool to delegate to subagents
+SummarizationMiddleware             # context compaction
+PatchToolCallsMiddleware
+AsyncSubAgentMiddleware             # launch_* async subagents (if configured)
+AnthropicPromptCachingMiddleware
+MemoryMiddleware                    # loads + injects AGENTS.md, instructs edit_file
+HumanInTheLoopMiddleware            # interrupt_on gates
+_PermissionMiddleware               # tool-level permissions (always last)
+```
+
+The orchestrator gets planning + filesystem + subagents + memory + HITL
+**for free**. The only thing the migration has to build is:
+
+1. the leaf Strands agents (15 components),
+2. the `launch_*` task tools (component 04/10/11 + infra),
+3. the seeded `AGENTS.md`,
+4. the system prompt for the DeepAgent.
 
 ---
 
-## 3. ADK → Strands construct mapping
+## 3. ADK → DeepAgent+Strands construct mapping
 
-| ADK | Strands | Notes |
-|-----|---------|-------|
-| `google.adk.agents.Agent` | `strands.Agent` | 1:1. Strands `Agent` is in [`sdk-python/src/strands/agent/agent.py`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/agent/agent.py). |
-| `LoopAgent(max_iterations=N, sub_agents=[a, b, c])` | `GraphBuilder` with a conditional cycle edge + `set_max_node_executions(N)` | The `condition: Callable[[GraphState], bool]` on `add_edge` ([graph.py:272](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L272)) replaces `exit_loop`. `set_max_node_executions` ([graph.py:319](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L319)) replaces `max_iterations`. |
-| `SequentialAgent(sub_agents=[a, b])` | `GraphBuilder` with linear edges: `add_edge("a", "b")` | No special construct. |
-| `exit_loop` tool (`google.adk.tools.exit_loop_tool.exit_loop`) | Conditional edge returns `False` | The agent doesn't need a tool to break the loop; the graph does. |
-| `before_agent_callback` | `BeforeInvocationEvent` hook | [sdk-python/src/strands/hooks/events.py:38](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L38). Can mutate `messages`. |
-| `after_agent_callback` | `AfterInvocationEvent` hook | [hooks/events.py:66](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L66). Can set `resume` to autonomously re-invoke. |
-| `before_model_callback` | `BeforeModelCallEvent` | [hooks/events.py:225](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L225). |
-| `after_model_callback` | `AfterModelCallEvent` | [hooks/events.py:244](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L244). |
-| `before_tool_callback` | `BeforeToolCallEvent` (set `cancel_tool`) | [hooks/events.py:134](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L134). `cancel_tool: bool \| str` short-circuits without calling the tool. |
-| `after_tool_callback` | `AfterToolCallEvent` (set `retry=True` to retry) | [hooks/events.py:173](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/hooks/events.py#L173). |
-| `google.adk.tools.FunctionTool(fn)` | `@tool` decorator | `from strands import tool`. |
-| `callback_context.state` (blackboard) | `agent.state` + `invocation_state` | Agent-local state persists across turns; invocation_state is shared across a graph run. |
-| `output_key="scenes"` (auto state write) | Manual state write in `AfterInvocationEvent` hook OR a `@tool` that writes to `agent.state` | No equivalent magic; be explicit. |
-| `actions.escalate=True` | Conditional edge that returns `False`, or `cancel_node` via `BeforeNodeCallEvent` hook | Escalation is a graph-level decision in Strands. |
-| Returning `Content` to skip agent LLM call | `cancel_node` on `BeforeNodeCallEvent` hook | Also useful for the "refiner skips when `timing_passed`" pattern. |
-| `.approval_state.json` file polling (`server/callbacks/approval_gate.py`) | `Interrupt` + `InterruptException` | [sdk-python/src/strands/interrupt.py:32](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/interrupt.py#L32). Agent raises `InterruptException(Interrupt(...))`; caller resumes with a list of `interruptResponse` content blocks. |
-| `StageContract` (preconditions/postconditions) | `ContractEnforcer(HookProvider)` on `BeforeInvocationEvent` / `AfterInvocationEvent` | See [`contracts/CONTRACTS.md`](./contracts/CONTRACTS.md). |
-| OpenTelemetry instrumentation (manual in `server/callbacks/*.py`) | Built-in via `strands.telemetry` | Zero config; `get_tracer()` already wired into `Experiment` and `Agent`. |
-| Tool-calling with `parallel_tool_calls=True` (`server/agents/model_config.py:115`) | `tool_executors.concurrent.ConcurrentToolExecutor` | Pass to `Agent(tool_executor=...)`. Same semantics. |
+| ADK | New home | Notes |
+|-----|----------|-------|
+| `google.adk.agents.Agent` (LLM-backed) | `strands.Agent` wrapped in `@tool`, OR a `SubAgent` TypedDict passed to `create_deep_agent(subagents=[...])` | If the agent has isolated context and a cohesive domain (scenario, visual, production, escalation), use `SubAgent`. Otherwise wrap as `@tool`. See [`deepagents/middleware/subagents.py:25`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/middleware/subagents.py#L25). |
+| `google.adk.agents.Agent` (deterministic) | Plain function with `@tool` decorator | No LLM. E.g. `evaluate_timing`, `validate_otio_timeline`, `checkpoint_to_b2`. |
+| `LoopAgent(max_iterations=N, sub_agents=[a, b, c])` | DeepAgent planning loop | The orchestrator's model + `TodoListMiddleware` chooses when to call which tool. Termination is the orchestrator's decision (typically: "I've got an accepted scenario" or "timing_passed"). Safety cap via max turns in the graph config. |
+| `SequentialAgent(sub_agents=[a, b])` | DeepAgent planning | Same — the orchestrator sequences by default because the AGENTS.md invariants forbid parallelism across stages. |
+| `exit_loop` tool | Not needed | Loop exit is the orchestrator deciding the next tool call is no longer a retry. |
+| `before_agent_callback` | DeepAgent `AgentMiddleware.before_agent` OR Strands `BeforeInvocationEvent` on the leaf | Which side owns the concern dictates which layer. Orchestrator-wide concerns (OTel root span, session init) → DeepAgent middleware. Leaf-local concerns (contract precondition) → Strands hook on the leaf. |
+| `after_agent_callback` | DeepAgent `AgentMiddleware.after_agent` OR Strands `AfterInvocationEvent` | Same rule. Post-condition checks live on the Strands leaf that produces the artifact. |
+| `before_model_callback` | Strands `BeforeModelCallEvent` on the leaf | Per-leaf concern. |
+| `after_model_callback` | Strands `AfterModelCallEvent` on the leaf | Per-leaf concern. |
+| `before_tool_callback` | Strands `BeforeToolCallEvent` (set `cancel_tool`) on the leaf | Per-leaf concern. Orchestrator-level tool gating is `interrupt_on`. |
+| `after_tool_callback` | Strands `AfterToolCallEvent` (set `retry=True`) on the leaf | Transient worker errors are retried here, then escalated to the orchestrator if they persist. |
+| `google.adk.tools.FunctionTool(fn)` | `@tool` decorator on the DeepAgent's `tools=[...]` list OR on a Strands leaf | Tools exposed to the orchestrator are the ones it plans with. Tools private to a Strands leaf stay on that leaf. |
+| `callback_context.state` (blackboard) | **Two layers**: DeepAgent filesystem-backed state (via `FilesystemBackend(root_dir=...)`) for artifacts (scenes JSON, OTIO, audio paths), plus Strands `agent.state` / `invocation_state` for intra-leaf bookkeeping | The DeepAgent's `write_file` / `read_file` tools are how the orchestrator and subagents exchange large artifacts. See [`deepagents/middleware/filesystem.py`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/middleware/filesystem.py). |
+| `output_key="scenes"` | Orchestrator calls `write_file("scenes.json", ...)` after the leaf returns | No magic. Explicit. |
+| `actions.escalate=True` | DeepAgent calls `escalation` SubAgent via the `task` tool | See component 13. |
+| Returning `Content` to skip the agent | Strands `cancel_node` via `BeforeInvocationEvent` hook on the leaf | Still useful for "refiner skips when `timing_passed`" — but the orchestrator also just … doesn't call the refiner when timing passed. |
+| `.approval_state.json` file polling | `interrupt_on={tool_name: InterruptOnConfig}` on `create_deep_agent` | LangGraph's `interrupt()` primitive. Graph pauses; caller resumes with `accept`/`edit`/`respond`/`reject`. See [`deepagents/graph.py:363`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/graph.py#L363). Component 15. |
+| `StageContract` (preconditions/postconditions) | Still `StageContract`, enforced by a Strands `ContractEnforcer(HookProvider)` on the producing leaf | Orchestrator reads the produced artifacts via `read_file`. Pre-condition failures on a leaf bubble up as tool errors and the orchestrator decides how to handle them. |
+| OpenTelemetry instrumentation (manual in `server/callbacks/*.py`) | Built-in: LangGraph traces the DeepAgent; Strands traces each leaf | Zero config, two OTel trees that are stitched by a root span the orchestrator sets at run start. |
+| Tool-calling with `parallel_tool_calls=True` | Two places: `launch_*` tools use AsyncTaskPool for *real* parallelism; within a Strands leaf, `tool_executors.concurrent.ConcurrentToolExecutor` for intra-turn parallelism | The orchestrator's own tool calls are serial inside a single LangGraph tick, but it can launch many `launch_*` tasks that run concurrently on the pool. |
+| ADK no-op "worker VM manager" logic | Orchestrator's `check_worker_health` tool + AGENTS.md invariant #2 | The orchestrator asks before dispatching. No implicit degradation. |
+
+### Recovery & escalation
+
+- Component 12 (recovery agents: fix, retry, skip) are Strands `@tool`s
+  the `production` SubAgent calls directly. They're tactical, in-context.
+- Component 13 (escalation supervisor) is a `SubAgent` the orchestrator
+  delegates to when tactical recovery fails or AGENTS.md rules say the
+  situation is beyond the production SubAgent's authority.
 
 ---
 
@@ -130,77 +229,45 @@ Four roles, four env vars:
 Vendor-specific params (e.g. Venice `venice_parameters`) come through
 `extra_body`.
 
-### Target (Strands)
+### Target
 
-Strands accepts:
+Five roles: the four leaf roles above, plus **orchestrator**.
 
-1. **A model string** like `"openai/gpt-4o"` — LiteLLM-style routing is the
-   default. `strands.Agent(model="openai/gpt-4o")`.
-2. **A `strands.models.openai.OpenAIModel` instance** (or `BedrockModel`,
-   `AnthropicModel`, …) for explicit configuration:
+| Role | New env var | Fallback to | Binding |
+|------|-------------|-------------|---------|
+| Orchestrator | `DEEPAGENT_MODEL` (default `openai/gpt-4o` or `claude-sonnet-4-6`) | — | `create_deep_agent(model=...)` — either a `str` LiteLLM alias or a `BaseChatModel` instance. See [`graph.py:230`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/graph.py#L230). |
+| Primary | `STRANDS_MODEL` | `DEEPAGENT_MODEL` | `strands.Agent(model=...)` on tool-capable leaves. |
+| Synthesis | `STRANDS_SYNTHESIS_MODEL` | `STRANDS_MODEL` | Structural evaluators, refiners. |
+| Thinker | `STRANDS_THINKER_MODEL` | `STRANDS_MODEL` | Content analyst. |
+| Vision | `STRANDS_VISION_MODEL` | `STRANDS_MODEL` | Coherence evaluator. |
 
-    ```python
-    from strands.models.openai import OpenAIModel
+Strands leaves accept either a model string (`"openai/gpt-4o"` — LiteLLM
+routing, the default) or a `strands.models.*` instance:
 
-    primary = OpenAIModel(
-        model_id=os.environ["STRANDS_MODEL"],        # e.g. "openai/gpt-4o"
-        base_url=os.environ.get("OPENAI_API_BASE"),  # venice.ai, etc.
-        api_key=os.environ["OPENAI_API_KEY"],
-        params={"parallel_tool_calls": True, "extra_body": {"venice_parameters": {...}}},
-    )
-    ```
+```python
+from strands.models.openai import OpenAIModel
 
-Keep the four roles, rename the env vars to the `STRANDS_*` prefix, and keep
-`STRANDS_MODEL_FALLBACK` for role-level fallback. A single
-`server/strands_agents/models.py` module exports `primary()`, `synthesis()`,
-`thinker()`, `vision()` factory functions mirroring the shape of
-`build_model()`.
+primary = OpenAIModel(
+    model_id=os.environ["STRANDS_MODEL"],
+    base_url=os.environ.get("OPENAI_API_BASE"),   # venice.ai, etc.
+    api_key=os.environ["OPENAI_API_KEY"],
+    params={"parallel_tool_calls": True, "extra_body": {"venice_parameters": {...}}},
+)
+```
 
-| Role | New env var | Fallback to |
-|------|-------------|-------------|
-| Primary | `STRANDS_MODEL` | — |
-| Synthesis | `STRANDS_SYNTHESIS_MODEL` | `STRANDS_MODEL` |
-| Thinker | `STRANDS_THINKER_MODEL` | `STRANDS_SYNTHESIS_MODEL` |
-| Vision | `STRANDS_VISION_MODEL` | `STRANDS_MODEL` |
-
-This is a 1:1 port; keep the same vendor/proxy configuration. The only
-behavioural change is we stop silently dropping `extra_body` when the role
-has its own `*_API_BASE` (`model_config.py:130–138`) and always forward it.
+The orchestrator uses the LangChain `ChatOpenAI` / `ChatAnthropic` instance
+(or a string alias for LiteLLM). Keep a single
+`server/strands_agents/models.py` module that exports
+`orchestrator()`, `primary()`, `synthesis()`, `thinker()`, `vision()`
+factory functions mirroring the shape of the current `build_model()`.
 
 ---
 
-## 5. Invocation shape
+## 5. Where the spec lives
 
-Current (ADK):
-
-```python
-runner = InMemoryRunner(app=app, agent=pipeline)
-events = runner.run(user_id="u", session_id="s", new_message=content)
-```
-
-Target (Strands):
-
-```python
-from strands.multiagent import GraphBuilder
-
-graph = (
-    GraphBuilder()
-    .add_node(scenario_agent, node_id="scenario")
-    .add_node(timing_loop, node_id="timing_loop")
-    ...
-    .set_entry_point("scenario")
-    .set_session_manager(FileSessionManager(base_path="/tmp/documentary-pipeline/sessions"))
-    .set_hook_providers([ContractEnforcer(), RevisionTagger(), DashboardEmitter()])
-    .build()
-)
-result = await graph.invoke_async(topic, invocation_state={"corpus_path": ..., "target_duration_sec": 420})
-```
-
-Key behavioural differences:
-
-- `invocation_state` is passed explicitly at invoke time, not seeded via a
-  `run_start_seed` callback (`server/callbacks/run_start_seed.py`).
-- `FileSessionManager` handles persistence instead of ad-hoc JSON in
-  `/tmp/documentary-pipeline/`.
-- Hooks are a first-class `list[HookProvider]` passed to the graph, not
-  monkey-patched after construction.
+- [`AGENTS.md`](./AGENTS.md) — the seeded memory loaded by MemoryMiddleware. Hard invariants + planning heuristics.
+- [`components/14-pipeline-graph.md`](./components/14-pipeline-graph.md) — the full `create_deep_agent(...)` call for the top-level orchestrator.
+- [`components/15-approval-gates.md`](./components/15-approval-gates.md) — `interrupt_on` configuration, caller-side resume protocol.
+- [`reference/DEEPAGENT_PATTERNS.md`](./reference/DEEPAGENT_PATTERNS.md) — copy-paste snippets for `create_deep_agent`, `SubAgent`, `AsyncSubAgent`, middleware.
+- [`reference/STRANDS_SDK_PATTERNS.md`](./reference/STRANDS_SDK_PATTERNS.md) — copy-paste snippets for the Strands leaves.
+- [`contracts/STATE_SCHEMA.md`](./contracts/STATE_SCHEMA.md) — what lives in the DeepAgent filesystem backend vs. per-leaf `agent.state`.

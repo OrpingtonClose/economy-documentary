@@ -4,6 +4,12 @@ Copy-paste reference for every SDK construct this migration uses. All
 examples are correct against the current `HEAD` of
 [`OrpingtonClose/sdk-python`](https://github.com/OrpingtonClose/sdk-python).
 
+> **Orchestration boundary.** This file covers Strands constructs used at
+> the **leaf** level — `@tool`, `Agent`, `HookProvider`, optional
+> `GraphBuilder` *inside* a SubAgent. The **top-level orchestrator** is a
+> deepagents `create_deep_agent(...)`, not a Strands `Graph`. See
+> [`DEEPAGENT_PATTERNS.md`](./DEEPAGENT_PATTERNS.md) for that layer.
+
 ---
 
 ## 1. Minimal `Agent`
@@ -105,34 +111,64 @@ class RetryTransientWorkerErrors(HookProvider):
 
 ---
 
-## 5. `GraphBuilder` with cycle edge and conditional edge
+## 5. `GraphBuilder` (reserved for intra-SubAgent composition only)
+
+> **Not used at the top level.** The orchestrator is a deepagents
+> `create_deep_agent`. A `GraphBuilder` graph is only appropriate when a
+> Strands SubAgent has a cohesive deterministic DAG inside it (rare for
+> this project).
+
+If you do build one, the result-access pattern below is correct —
+`graph.py` returns a `GraphResult(MultiAgentResult)` with
+`results: dict[str, NodeResult]`. `NodeResult.result` is an `AgentResult`
+(single-agent node), a nested `MultiAgentResult`, or an `Exception`.
 
 ```python
 from strands.multiagent import GraphBuilder
+from strands.multiagent.base import Status
 
 graph = (
     GraphBuilder()
-    .add_node(audio_tool, node_id="audio")
-    .add_node(timing_tool, node_id="timing")
-    .add_node(scenario_refiner, node_id="refiner")
-    # linear: audio → timing
-    .add_edge("audio", "timing")
-    # conditional cycle: refiner → audio iff timing failed
-    .add_edge(
-        "timing",
-        "refiner",
-        condition=lambda s: not s.results["timing"]["output"].get("timing_passed", False),
-    )
-    .add_edge("refiner", "audio")
-    .set_entry_point("audio")
-    .set_max_node_executions(30)     # 3x expected loop count as safety net
+    .add_node(stage_a_agent, node_id="a")
+    .add_node(stage_b_agent, node_id="b")
+    .add_edge("a", "b")
+    .set_entry_point("a")
+    .set_max_node_executions(30)
     .build()
 )
-result = await graph.invoke_async(topic, invocation_state={"scenes": scenes, "target_duration_sec": 420})
+
+graph_result = await graph.invoke_async(
+    initial_input,
+    invocation_state={"scenes": scenes, "target_duration_sec": 420},
+)
+
+# Correct access pattern:
+node_result = graph_result.results["a"]          # NodeResult
+assert node_result.status is Status.COMPLETED
+agent_result = node_result.result                # AgentResult | MultiAgentResult | Exception
+final_text   = str(agent_result.message)         # last AssistantMessage
+# Published state reads should go through invocation_state, NOT through
+# graph_result — e.g. `agent_result.state.get("timing_passed")` or the
+# invocation_state dict the task published via @tool(context=True).
 ```
 
-`add_edge(condition=...)` is at [`graph.py:272`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L272).
-`set_max_node_executions` is at [`graph.py:319`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L319).
+Common mistakes (do **not** do this):
+
+- `graph_result.results["a"]["output"]` — `NodeResult` is a dataclass,
+  not a dict. There is no `"output"` key.
+- `graph_result.results["a"].output` — no `output` attribute either.
+- Treating `NodeResult.result` as always an `AgentResult` — it may be a
+  nested `MultiAgentResult` or an `Exception`. Use `isinstance` or
+  `NodeResult.get_agent_results()`.
+- Reading data fields off `AgentResult` directly — published state lives
+  in `AgentResult.state` (a `dict`), not in top-level attributes.
+
+References:
+- [`base.py:43-70`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/base.py#L43) — `NodeResult` / `get_agent_results`.
+- [`base.py:128-137`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/base.py#L128) — `MultiAgentResult.results: dict[str, NodeResult]`.
+- [`graph.py:130`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L130) — `GraphResult(MultiAgentResult)`.
+- [`graph.py:272`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L272) — `add_edge(..., condition=...)`.
+- [`graph.py:319`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L319) — `set_max_node_executions`.
 
 ---
 

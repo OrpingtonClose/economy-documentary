@@ -1,107 +1,90 @@
-# 05 — timing-loop
+# 05 — timing-loop (orchestration plan)
 
-First `GraphBuilder` composition. Combines the audio tool (04), the
-timing tool (02), and the scenario refiner (03) into a cycle: if timing
-fails, refiner runs, audio re-runs, timing re-checks.
+**Not a composition.** The timing loop is a trajectory the orchestrator
+follows, using the leaves in components 02–04. No new code ships in this
+PR; what ships is the **spec** (this document), the
+`TimingLoopTrajectoryEvaluator`, and the `Experiment` that pins the
+trajectory.
 
 ---
 
 ## Intent
 
-Given `scenes`, `target_duration_sec`, and any upstream state, loop:
+Given `scenes`, `target_duration_sec`, and any upstream state, the
+orchestrator must:
 
-1. Render audio (`audio_tool.render_audio`).
-2. Evaluate timing (`timing_tool.evaluate_timing`).
-3. If `timing_passed = False`: refine scenes (`scenario_refiner`) and go
-   back to step 1.
-4. If `timing_passed = True`: exit with final `scenes`,
-   `whisperx_alignment`, `timing_report`.
+1. Launch per-scene audio tasks in parallel via `launch_audio_render`.
+2. `await_tasks` on the batch.
+3. Call `evaluate_timing` on the combined WhisperX alignment.
+4. If `timing_passed=False`:
+   1. Call `refine_scenario` with the `timing_report`.
+   2. `write_file("scenes.json", refined)`.
+   3. Go back to step 1.
+5. If `timing_passed=True`: stop the loop, return control to the main
+   orchestrator plan (next stage is visual production, component 09).
 
-Bounded at 10 iterations (the current `TIMING_LOOP_MAX_ITERATIONS`).
+Bounded at **10 iterations** (matches the current
+`TIMING_LOOP_MAX_ITERATIONS`). The bound is enforced by a planning
+heuristic in [`AGENTS.md`](../AGENTS.md), not by a graph construct.
 
 ---
 
 ## Current implementation
 
-`server/agents/pipeline.py` lines ~139-171 assemble a
+`server/agents/pipeline.py` lines ~139–171 assemble a
 `LoopAgent("timing_loop", max_iterations=10, sub_agents=[audio_agent, timing_evaluator, scenario_refiner])`.
 Loop exits when `scenario_refiner` sees `state["timing_passed"] is True`
 and returns a cancelling content block via `_skip_if_timing_passed`.
 
 ---
 
-## Strands implementation
+## Target implementation
 
-Single module: `server/strands_agents/timing_loop.py`.
+There is no `timing_loop.py` module. The loop is encoded as:
 
-```python
-from strands import Agent
-from strands.multiagent import Graph, GraphBuilder
-from .audio_tool import render_audio
-from .timing_tool import evaluate_timing
-from .scenario_refiner import build_scenario_refiner
+1. The orchestrator's system prompt — short paragraph explaining the
+   timing stage.
+2. [`AGENTS.md`](../AGENTS.md) heuristics:
+   - "Launch every scene's `launch_audio_render` in one turn, then
+     `await_tasks` on the batch."
+   - "After `evaluate_timing` returns `timing_passed=False`, call
+     `refine_scenario` at most once before re-launching audio."
+   - "Hard-stop the loop at 10 iterations; if still failing, delegate
+     to the `escalation` SubAgent."
+3. Evals that pin the above trajectory (see below).
 
-def build_timing_loop() -> Graph:
-    # Thin agent-shell around the audio tool so the graph can invoke it as a node.
-    audio_agent = Agent(
-        model=None,                             # no LLM required
-        tools=[render_audio],
-        system_prompt="Call render_audio with the scenes in invocation_state.",
-        deterministic=True,
-    )
-    timing_agent = Agent(
-        model=None,
-        tools=[evaluate_timing],
-        system_prompt="Call evaluate_timing with scenes + whisperx_alignment + target_duration_sec.",
-        deterministic=True,
-    )
-    refiner = build_scenario_refiner()
+### Expected tool-call trajectory (happy path, 3 scenes, 2 iterations)
 
-    return (
-        GraphBuilder()
-        .set_graph_id("timing_loop")
-        .add_node(audio_agent, node_id="audio")
-        .add_node(timing_agent, node_id="timing")
-        .add_node(refiner, node_id="refiner")
-        .add_edge("audio", "timing")
-        # Conditional cycle: if timing failed, refiner runs
-        .add_edge(
-            "timing", "refiner",
-            condition=lambda s: not s.results["timing"].result.output.get("timing_passed", False),
-        )
-        .add_edge("refiner", "audio")
-        .set_entry_point("audio")
-        .set_max_node_executions(30)   # 10 loops * 3 nodes, safety margin
-        .set_hook_providers([ContractEnforcer(AUDIO_CONTRACT)])
-        .build()
-    )
+```
+launch_audio_render(scene_id="s1", ...)     # iteration 1
+launch_audio_render(scene_id="s2", ...)
+launch_audio_render(scene_id="s3", ...)
+await_tasks(task_ids=[t1, t2, t3])
+evaluate_timing(scenes=..., whisperx_alignment=..., intent_target_sec=...)
+# → timing_passed=False, scene s2 over by 4s
+
+refine_scenario(scenes=..., timing_report=...)
+write_file("scenes.json", refined_scenes_json)
+
+launch_audio_render(scene_id="s1", ...)     # iteration 2
+launch_audio_render(scene_id="s2", ...)
+launch_audio_render(scene_id="s3", ...)
+await_tasks(task_ids=[t4, t5, t6])
+evaluate_timing(...)
+# → timing_passed=True, exit loop
 ```
 
-### Why two deterministic "agents" (audio + timing)
+### Anti-patterns the evals catch
 
-`GraphBuilder` currently expects `AgentBase | MultiAgentBase` nodes
-([`graph.py:257`](https://github.com/OrpingtonClose/sdk-python/blob/main/src/strands/multiagent/graph.py#L257)).
-Wrapping a pure tool in `Agent(model=None, tools=[fn], deterministic=True)`
-is the cheapest way to satisfy that interface without introducing an LLM
-call. If the SDK grows a `@graph_node` decorator for bare tools, switch
-to that — but the contract above doesn't change.
-
-### Cycle-edge condition
-
-```python
-lambda s: not s.results["timing"].result.output.get("timing_passed", False)
-```
-
-Reads the most recent `timing` node's result. When the node hasn't run
-yet, `"timing"` won't be in `s.results` — but that path isn't reachable
-because the edge source is the timing node itself.
-
-### Termination
-
-- `set_max_node_executions(30)` is a safety net; the cycle condition
-  should be the real terminator.
-- Every iteration writes `timing_passed` via `@tool(context=True)` so the
-  condition always reads the fresh value.
+- Serial audio launches (`await_tasks` after each individual
+  `launch_audio_render`) — wastes time.
+- Calling `refine_scenario` without a `timing_report` input — loses the
+  per-scene diagnostic that tells the refiner what to adjust.
+- Calling `evaluate_timing` before `await_tasks` on the launched batch —
+  runs on stale alignment.
+- Calling `refine_scenario` twice back-to-back without a fresh
+  `evaluate_timing` in between.
+- Exceeding 10 iterations without delegating to `escalation`.
 
 ---
 
@@ -111,48 +94,65 @@ because the edge source is the timing node itself.
 
 ```python
 evaluators = [
-    ContractComplianceEvaluator(AUDIO_CONTRACT),
-    TrajectoryEvaluator(),                     # validates the node execution order
-    Equals("timing_passed", True),             # final state must be True for success cases
+    TimingLoopTrajectoryEvaluator(),        # orchestration trajectory (see below)
+    ToolSelectionAccuracyEvaluator(),       # expected tools called
+    ParallelLaunchEvaluator(tool="launch_audio_render"),
+    ContractComplianceEvaluator(TIMING_CONTRACT),
+    Equals("timing_passed", True),          # end state
 ]
 ```
 
+`TimingLoopTrajectoryEvaluator` (custom — specified in
+[`eval-framework/CUSTOM_EVALUATORS.md`](../eval-framework/CUSTOM_EVALUATORS.md))
+checks the tool-call sequence matches the expected pattern:
+
+1. All `launch_audio_render` calls in each iteration must happen before
+   the matching `await_tasks`.
+2. At most one `refine_scenario` call per iteration.
+3. `evaluate_timing` called exactly once per iteration, after
+   `await_tasks`.
+4. Iteration count ≤ 10.
+
+`ParallelLaunchEvaluator` checks that `launch_audio_render` calls within
+each iteration are emitted in the same turn (i.e. the orchestrator used
+one `tool_calls` batch, not N sequential turns).
+
 ### Test cases (minimum 5)
 
-| Case name | Initial scenes | Expected node sequence | Expected final `timing_passed` |
-|-----------|----------------|------------------------|-------------------------------|
-| `one_shot_pass` | scenes already within tolerance | `audio → timing` | True |
-| `one_refinement_pass` | scenes total 10% long | `audio → timing → refiner → audio → timing` | True |
-| `two_refinements_pass` | one scene wildly off | `audio → timing → refiner → audio → timing → refiner → audio → timing` | True |
-| `never_converges` | synthetic case that can't pass | graph hits `max_node_executions`, exits with `timing_passed=False` | False |
-| `refiner_hook_skip` | scenes already within tolerance after first pass | `refiner` never invoked | True |
+| Case | Scenes | Seeded alignment behaviour | Expected trajectory |
+|------|--------|----------------------------|---------------------|
+| `one_shot_pass` | 3 | First render is within ±2 s | 1 iteration, no refiner |
+| `one_refine_pass` | 5 | First render off by +6 s, refined render within ±2 s | 2 iterations, 1 refine |
+| `per_scene_spike` | 5 | Total ok, 1 scene over by 20 % | 2 iterations, refiner adjusts that scene only |
+| `refiner_no_op` | 3 | Refiner returns identical scenes (edge bug) | Iteration cap triggers escalation delegation |
+| `max_iterations` | 5 | Every iteration still off | Stops at 10, delegates to `escalation` |
 
 ### Simulators
 
-`TTS_WORKER_SIMULATOR` for audio. No LLM simulator needed; scenario
-refiner talks to the real primary model during evals.
+- `TTSToolSimulator` (component 04) drives `launch_audio_render` and
+  `await_tasks` to return seeded WhisperX alignments.
+- No refiner simulator — the real refiner Strands agent runs (component
+  03).
 
 ### Thresholds
 
-- `ContractComplianceEvaluator` = 1.00 (hard)
-- `TrajectoryEvaluator` ≥ 0.80 (hard)
-- `Equals("timing_passed", expected)` = 1.00 (hard per case)
-
----
-
-## File layout
-
-```
-server/strands_agents/
-└── timing_loop.py                             # ~150 LOC
-```
+| Evaluator | Min score | Hard gate |
+|-----------|-----------|-----------|
+| `TimingLoopTrajectoryEvaluator` | 0.90 | Yes |
+| `ToolSelectionAccuracyEvaluator` | 0.85 | Yes |
+| `ParallelLaunchEvaluator` | 0.80 | No |
+| `ContractComplianceEvaluator` | 1.00 | Yes |
+| `Equals("timing_passed", True)` (where applicable) | 1.00 | Yes |
 
 ---
 
 ## Acceptance criteria
 
-- [ ] `build_timing_loop()` returns a `Graph` that passes `graph.validate_acyclic()` check disabled (cyclic is intentional).
-- [ ] Test `never_converges` exits cleanly without wedging.
-- [ ] OTel trace shows the exact cycle order for `one_refinement_pass`.
-- [ ] Refiner `SkipIfTimingPassed` hook fires on `refiner_hook_skip` — visible in trace as cancelled tool call.
-- [ ] Component 14 can compose this graph as a sub-graph node.
+- [ ] No new module. The loop exists as a planning trajectory.
+- [ ] `AGENTS.md` contains the heuristics above under the **Timing stage**
+      section.
+- [ ] `TimingLoopTrajectoryEvaluator` implemented and used by the
+      experiment.
+- [ ] All 5 cases pass thresholds.
+- [ ] Max-iterations case correctly delegates to the `escalation`
+      SubAgent (component 13) with a structured diagnostic payload.

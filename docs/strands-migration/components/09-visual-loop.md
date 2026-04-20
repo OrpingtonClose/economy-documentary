@@ -1,68 +1,129 @@
-# 09 — visual-loop
+# 09 — visual-loop (DeepAgent `SubAgent`)
 
-Second `GraphBuilder` composition. Combines 06 → 07 → 08 with a cycle
-edge from 08 → 07 when coherence fails.
+The visual loop is a **cohesive domain with its own isolated context**:
+content analysis, visual concept generation, and coherence evaluation
+iterate against each other before anything is launched for GPU
+production. The right deepagents primitive is a
+[`SubAgent`](https://github.com/OrpingtonClose/deepagents/blob/main/libs/deepagents/deepagents/middleware/subagents.py#L25).
+
+The orchestrator delegates to `visual` via the built-in `task` tool,
+receives a summary + handoff artifacts, and carries on to production.
 
 ---
 
 ## Intent
 
-```
-content_analyst → visual_concepter → coherence_evaluator
-                                       │
-                                       └── if not visual_coherence_passed ──► visual_concepter
-```
+Given the accepted scenes + style_lock + audio + timing report, produce:
 
-Bounded at 5 iterations (matches current `LoopAgent(max_iterations=5)`).
+- Per-scene **content analysis** (component 06): phrase classification,
+  camera language hints, visual beats.
+- Per-scene **visual concepts** (component 07): up to N candidate
+  prompts per scene, style-locked.
+- A **coherence verdict** (component 08): do the concepts cohere across
+  scenes? If not, which scenes need revision?
+
+Internal loop (inside the SubAgent's own planning):
+
+1. `analyze_content_phrases(scenes=...)` (one-shot per scene set).
+2. For each scene, `generate_visual_concepts(scene=..., analysis=..., style_lock=...)`.
+3. `evaluate_visual_coherence(concepts_by_scene=...)` → verdict.
+4. If not `GOOD`+, revisit worst-scoring scenes via
+   `generate_visual_concepts` with the coherence feedback; then re-run
+   step 3.
+5. Bounded at 5 iterations — hard stop returns the best-scoring set.
+
+Returns to the orchestrator: `concepts_by_scene` (dict), `coherence_verdict`
+(`EXCELLENT` / `GOOD` / `FAIR` / `POOR`), `per_scene_report`.
 
 ---
 
 ## Current implementation
 
-`server/agents/visual_director.py` — the outer `LoopAgent` that contains
-content_analyst + visual_concepter + coherence_evaluator.
+`server/agents/visual_director.py` — 830 lines. A `LoopAgent` with three
+sub-agents (content_analyst, visual_concepter, coherence_evaluator) plus
+three approval-gate callbacks. The composition is not readable in any
+single file.
 
 ---
 
-## Strands implementation
+## Target implementation
 
-Single module: `server/strands_agents/visual_loop.py`.
+### SubAgent declaration
 
 ```python
-from strands.multiagent import Graph, GraphBuilder
-from .content_analyst import build_content_analyst
-from .visual_concepter import build_visual_concepter
-from .coherence_evaluator import build_coherence_evaluator
+# server/strands_agents/subagents/visual.py
+from deepagents.types import SubAgent
 
-def build_visual_loop() -> Graph:
-    return (
-        GraphBuilder()
-        .set_graph_id("visual_loop")
-        .add_node(build_content_analyst(), node_id="content_analyst")
-        .add_node(build_visual_concepter(), node_id="visual_concepter")
-        .add_node(build_coherence_evaluator(), node_id="coherence_evaluator")
-        .add_edge("content_analyst", "visual_concepter")
-        .add_edge("visual_concepter", "coherence_evaluator")
-        .add_edge(
-            "coherence_evaluator", "visual_concepter",
-            condition=lambda s: not s.results["coherence_evaluator"].result.output.get(
-                "visual_coherence_passed", False,
-            ),
-        )
-        .set_entry_point("content_analyst")
-        .set_max_node_executions(15)    # 5 iterations * 3 nodes
-        .set_hook_providers([ContractEnforcer(VISUAL_DIRECTION_CONTRACT)])
-        .build()
-    )
+VISUAL_SUBAGENT_PROMPT = """\
+You are the visual production planner for a documentary pipeline.
+
+Given the accepted scenes (scenes.json) + style_lock + audio alignment,
+produce per-scene visual concepts that cohere across the whole piece.
+
+Process:
+1. Call analyze_content_phrases once with the full scenes list.
+2. For each scene, call generate_visual_concepts with scene, analysis,
+   and style_lock.
+3. Call evaluate_visual_coherence across all scenes.
+4. If the verdict is FAIR or POOR, identify the lowest-scoring scenes
+   and regenerate concepts for those scenes only with the coherence
+   feedback included. Re-evaluate.
+5. Stop when verdict is GOOD or EXCELLENT, or after 5 iterations.
+
+You MUST NOT call any launch_* tool. Production dispatch is handled by
+the parent orchestrator.
+"""
+
+visual_subagent: SubAgent = {
+    "name": "visual",
+    "description": (
+        "Visual production planner. Invoke with the accepted scenes + "
+        "style_lock + timing_report. Returns concepts_by_scene + "
+        "coherence_verdict."
+    ),
+    "system_prompt": VISUAL_SUBAGENT_PROMPT,
+    "tools": [
+        analyze_content_phrases,         # component 06 leaf (as @tool)
+        generate_visual_concepts,        # component 07 leaf (as @tool)
+        evaluate_visual_coherence,       # component 08 leaf (as @tool)
+        read_file,                       # inherited filesystem
+        write_file,
+    ],
+    "model": os.environ.get("STRANDS_THINKER_MODEL", "openai/gpt-4o"),
+    "middleware": [
+        SummarizationMiddleware(max_tokens_before_summary=10_000),
+    ],
+}
 ```
 
-### Why no content_analyst in the cycle
+### Orchestrator invocation
 
-The content analyst's output is anchored to the audio timing — it does
-not need to re-run when the visual concepter has to tweak concepts. The
-cycle is narrowly around concepter ↔ evaluator. This matches the current
-`LoopAgent` behaviour (content_analyst only runs once per loop entry)
-but is now explicit in the graph shape.
+```python
+# in the main DeepAgent's planning
+task(
+    subagent_type="visual",
+    description=(
+        "Generate visual concepts for the 5 accepted scenes. Style_lock "
+        "and scenes.json are already on disk."
+    ),
+)
+```
+
+The main orchestrator reads back `concepts_by_scene.json` from the
+shared filesystem after the `task` tool returns the SubAgent's summary.
+
+### Why a SubAgent instead of flat tools on the main orchestrator?
+
+1. **Context isolation.** The visual loop easily generates thousands of
+   tokens per iteration. Keeping it in the main orchestrator's context
+   displaces the planning state we need for production dispatch.
+2. **Cohesive domain.** The three leaves (analyst, concepter,
+   coherence) only make sense together.
+3. **Model choice.** The visual loop benefits from `STRANDS_THINKER_MODEL`
+   (often a different / larger model than the orchestrator uses for
+   cheap tool orchestration).
+4. **Observability.** Langfuse gets a clean nested trace for the whole
+   visual stage.
 
 ---
 
@@ -72,42 +133,58 @@ but is now explicit in the graph shape.
 
 ```python
 evaluators = [
-    ContractComplianceEvaluator(VISUAL_DIRECTION_CONTRACT),
-    TrajectoryEvaluator(),
-    Equals("visual_coherence_passed", True),    # for success cases
-    VisualCoherenceEvaluator(),
+    VisualCoherenceEvaluator(),               # custom — LLM-as-judge
+    ToolSelectionAccuracyEvaluator(),         # analyst → concepter → coherence sequence
+    VisualLoopTrajectoryEvaluator(),          # bounded iteration, regeneration only for weak scenes
+    ContractComplianceEvaluator(VISUAL_CONTRACT),
 ]
 ```
 
 ### Test cases (minimum 5)
 
-| Case name | Initial state | Expected node sequence | Expected final `visual_coherence_passed` |
-|-----------|---------------|------------------------|------------------------------------------|
-| `one_shot_pass` | clean content_analysis, coherence clears first try | `ca → vc → ce` | True |
-| `one_refinement_pass` | concepter overshoots style_lock on first try | `ca → vc → ce → vc → ce` | True |
-| `two_refinements_pass` | repeated style drift | 7-node trace | True |
-| `never_converges` | synthetic unsolvable case | hits `max_node_executions` | False |
-| `coherence_hard_fail` | style_lock violation rating POOR | cycle fires until fixed or bound hit | True or False (depending on case) |
+| Case | Scenes | Seeded behaviour | Expected outcome |
+|------|--------|------------------|------------------|
+| `one_shot_good` | 3 | Concepter returns cohesive concepts | 1 iteration, verdict GOOD |
+| `one_revise` | 5 | Scene 3 concept off-style | 2 iterations, scene 3 revised |
+| `persistent_fair` | 5 | Revision doesn't fix | Stops at 5 iterations, returns best |
+| `analyst_fails` | 3 | `analyze_content_phrases` raises | SubAgent reports error to parent, no concepts written |
+| `style_lock_drift` | 4 | Concepter introduces off-style elements | Coherence catches drift, revision fixes |
+
+### Simulators
+
+None at the SubAgent level (real leaves run). Fixture `style_lock` and
+fixture scenes JSON drive behaviour.
 
 ### Thresholds
 
-- `ContractComplianceEvaluator` = 1.00 (hard)
-- `TrajectoryEvaluator` ≥ 0.75 (soft)
-- `VisualCoherenceEvaluator` ≥ 0.70 (soft)
+| Evaluator | Min score | Hard gate |
+|-----------|-----------|-----------|
+| `VisualCoherenceEvaluator` | 0.70 | No |
+| `ToolSelectionAccuracyEvaluator` | 0.70 | No |
+| `VisualLoopTrajectoryEvaluator` | 0.80 | Yes |
+| `ContractComplianceEvaluator` | 1.00 | Yes |
 
 ---
 
 ## File layout
 
 ```
-server/strands_agents/visual_loop.py            # ~120 LOC
+server/strands_agents/
+├── subagents/
+│   └── visual.py                 # SubAgent declaration (< 100 LOC)
+└── evals/
+    └── experiments/
+        └── visual_experiment.json
 ```
 
 ---
 
 ## Acceptance criteria
 
-- [ ] Cycle termination proven via `never_converges` — graph exits cleanly.
-- [ ] Content analyst runs exactly once per graph invocation (not per cycle).
-- [ ] OTel trace visualisable in Phoenix with correct cycle edges.
-- [ ] Component 14 can compose this graph as a sub-graph node.
+- [ ] `visual` SubAgent shipped as a `SubAgent` TypedDict consumed by
+      `create_deep_agent(subagents=[...])`.
+- [ ] Leaves 06, 07, 08 imported as `@tool`s on the SubAgent.
+- [ ] System prompt forbids `launch_*` calls from within the SubAgent.
+- [ ] All 5 cases pass thresholds.
+- [ ] Langfuse trace shows the nested `task` span containing the
+      SubAgent's tool calls.

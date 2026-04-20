@@ -142,3 +142,97 @@ server/strands_agents/
 
 All `Experiment` JSONs are loaded at test time via `Experiment.from_file`
 so that humans can review + PR case-level changes without touching Python.
+
+---
+
+## 7. Evaluating the DeepAgent orchestration layer
+
+Per-leaf evaluators (sections 2–3) cover the Strands tools. A second,
+distinct evaluation surface covers the DeepAgent orchestrator itself —
+where planning, SubAgent delegation, parallel launches, and
+memory-derived behaviour live. These evals consume the LangGraph run
+transcript (messages + tool calls + interrupt resumes), not the Strands
+agent's internal trace.
+
+### 7.1 Orchestration-focused custom evaluators
+
+All documented in [`CUSTOM_EVALUATORS.md`](./CUSTOM_EVALUATORS.md):
+
+| Evaluator | What it checks | Components |
+|-----------|----------------|------------|
+| `PipelineTrajectoryEvaluator` | Stage order: scenario → audio/timing → visual (SubAgent) → production (SubAgent) → assembly. SubAgent delegations use the `task` tool with correct `subagent_type`. | 14 |
+| `TimingLoopTrajectoryEvaluator` | Per-iteration pattern: `launch_audio_render`×N → `await_tasks` → `evaluate_timing` → optional `refine_scenario`. Iteration cap ≤ 10. | 05 |
+| `VisualLoopTrajectoryEvaluator` | SubAgent internal plan: analyst once, concepter per scene, coherence once; revision targets only weak scenes; cap ≤ 5. | 09 |
+| `ProductionSupervisorTrajectoryEvaluator` | `check_worker_health` before first dispatch, rolling batches when workers < scenes, retry budget ≤ 2, escalation only after tactical exhaustion. | 10 |
+| `ParallelLaunchEvaluator(tool=...)` | The given `launch_*` tool was emitted in a single tool-call batch per iteration (not serialized across turns). | 05, 10, 14 |
+| `MemoryHonoringEvaluator` | Injects a test invariant into AGENTS.md for the case, checks the orchestrator actually honours it. | 14 |
+| `ApprovalGateTrajectoryEvaluator` | `interrupt_on` tools raise interrupts, `Command(resume=...)` payloads reach the tool, reject path triggers escalation. | 14, 15 |
+| `EscalationDecisionEvaluator` | Decision (`fix` / `retry` / `skip` / `escalate_to_human` / `abort`) is appropriate for the payload. | 13 |
+
+### 7.2 Transcript contract
+
+Orchestration evaluators read the LangGraph `AgentState` transcript
+after each `ainvoke` round-trip. Minimum fields required:
+
+```python
+{
+    "messages": [...],             # langchain_core.messages, with tool_calls
+    "tool_calls": [
+        {
+            "name": str,
+            "args": dict,
+            "id": str,
+            "at_turn": int,
+            "subagent": str | None,   # set when nested inside a task() span
+        },
+        ...
+    ],
+    "interrupts": [
+        {"id": str, "tool": str, "payload": dict, "resume": dict}, ...
+    ],
+    "files_written": [
+        {"path": str, "size": int, "sha256": str}, ...
+    ],
+}
+```
+
+The task-function wrapper is responsible for extracting this from
+LangGraph state + the `FilesystemBackend` snapshot and handing it to
+`Experiment.run_evaluations`.
+
+### 7.3 Seeding memory for memory evals
+
+`MemoryHonoringEvaluator` works by:
+
+1. Per case, writing a synthetic AGENTS.md containing a known test
+   invariant (e.g. "Never call `launch_assembly` before `launch_b2_sync`
+   has at least once completed for this run").
+2. Running the orchestrator.
+3. Asserting the transcript does not violate the invariant.
+
+This validates the MemoryMiddleware loading path end-to-end, not just
+that the file exists.
+
+### 7.4 Where orchestration evals run
+
+```
+server/strands_agents/evals/
+├── evaluators/
+│   ├── pipeline_trajectory_evaluator.py
+│   ├── timing_loop_trajectory_evaluator.py
+│   ├── visual_loop_trajectory_evaluator.py
+│   ├── production_supervisor_trajectory_evaluator.py
+│   ├── parallel_launch_evaluator.py
+│   ├── memory_honoring_evaluator.py
+│   └── approval_gate_trajectory_evaluator.py
+└── experiments/
+    ├── pipeline_experiment.json          # component 14
+    ├── timing_experiment.json            # component 05
+    ├── visual_experiment.json            # component 09
+    ├── production_experiment.json        # component 10
+    ├── escalation_experiment.json        # component 13
+    └── approval_experiment.json          # component 15
+```
+
+Per-leaf experiments (01, 02, 03, 04, 06, 07, 08, 11, 12) stay scoped
+to their own Strands agent/tool.

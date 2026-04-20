@@ -1,106 +1,161 @@
-# 10 — production-supervisor
+# 10 — production-supervisor (DeepAgent `SubAgent`)
 
-The most complex single agent. Dispatches GPU video jobs, monitors them,
-triages failures along the escalation ladder, and writes
-`clip_artifacts`.
+The production supervisor is the **GPU-dispatch specialist**. It decides
+when to launch `launch_visual_production` for each scene, monitors the
+jobs, runs per-artifact QA, and drives tactical recovery (component 12).
+It is a `SubAgent` — not a flat tool set on the main orchestrator —
+because GPU dispatch has enough local state (per-scene retry count, per-
+worker health, per-scene concept selection) to warrant its own context.
+
+When tactical recovery fails or a situation exceeds its authority, the
+production SubAgent emits a structured escalation payload and returns to
+the parent orchestrator, which then delegates to the `escalation`
+SubAgent (component 13).
 
 ---
 
 ## Intent
 
-Given `visual_concepts`, `whisperx_alignment`, and a healthy GPU worker
-pool, produce `clip_artifacts: list[dict]` — one `.mp4` per visual
-concept, uploaded to B2, QA-gated.
+Given accepted scenes + `concepts_by_scene` + style_lock + audio
+artifacts, produce per-scene video artifacts:
 
-When a job fails:
-
-1. Transient failures: retry (up to 3x).
-2. Fixable failures: invoke the diagnostic classifier (12); if the
-   classifier says fixable, ask the remanifestation agent (12) for a
-   concept tweak; re-dispatch.
-3. Persistent failures: escalate to supervisor (13).
-4. Catastrophic failures: abort run.
+1. For each scene: pick the highest-scoring concept, call
+   `launch_visual_production(scene_id, concept, style_lock, ...)`.
+2. `await_tasks` on the launched batch (parallelism up to pool cap).
+3. For each returned artifact: run `evaluate_visual_coherence` and/or
+   `evaluate_visual_artifact_quality` (deterministic checks: frame count,
+   duration, codec, black-frame fraction).
+4. For failures:
+   - Transient worker errors → `retry_scene` tool (component 12).
+   - Prompt-level issues → `fix_scene` tool (regenerates prompt,
+     re-launches).
+   - Content-level issues unfixable tactically → `skip_scene` tool
+     (marks the scene as degraded) OR request escalation.
+5. Return per-scene artifacts + a production report. AGENTS.md invariant
+   #6 forbids returning with any scene still marked `pending`.
 
 ---
 
 ## Current implementation
 
-[`server/agents/production_supervisor.py`](https://github.com/OrpingtonClose/economy-documentary/blob/main/server/agents/production_supervisor.py)
-(~260 lines) + the escalation ladder implemented in-line with several
-callbacks. GPU worker client at
-[`server/tools/video_tools.py`](https://github.com/OrpingtonClose/economy-documentary/blob/main/server/tools/video_tools.py).
+`server/agents/production_supervisor.py` — approximately 700 LOC. A
+single `Agent` with tools for GPU dispatch, health checks, per-artifact
+QA, and escalation hooks. Uses `SlidingWindowConversationManager` to
+carry diagnostic context across scenes within a single run.
 
 ---
 
-## Strands implementation
+## Target implementation
 
-Single file: `server/strands_agents/production_supervisor.py`.
-
-### System prompt
-
-~1 200 tokens. Covers:
-
-- Role ("you are the Production Supervisor").
-- Dispatch loop: `check_worker_health` → for each concept call
-  `dispatch_video_job` → poll `check_job_status` with backoff → on
-  success call `run_qa` → on failure call `classify_failure` and route.
-- Hard constraints: never skip QA; never silently drop a concept; never
-  issue placeholder artifacts; all clips uploaded to B2 before done.
-- Escalation ladder: transient (retry up to 3), fixable (remanifest +
-  re-dispatch up to 2), persistent (hand to 13), catastrophic (abort).
-
-### Tools (6)
+### SubAgent declaration
 
 ```python
-@tool
-def check_worker_health() -> dict: ...
+# server/strands_agents/subagents/production.py
+from deepagents.types import SubAgent
 
-@tool
-def dispatch_video_job(concept: dict, style_lock: dict) -> dict: ...
+PRODUCTION_SUPERVISOR_PROMPT = """\
+You are the visual production supervisor. You dispatch GPU video jobs for
+each scene, monitor their completion, run QA on each artifact, and apply
+tactical recovery when needed.
 
-@tool
-def check_job_status(job_id: str) -> dict: ...
+Hard rules (AGENTS.md invariants):
+- Never dispatch a scene whose audio artifact is missing.
+- Never mark the stage complete with any scene still pending.
+- Retry budget is 2 attempts per scene. After that, either call
+  fix_scene (prompt-level) or escalate.
+- Check worker health before dispatching. If fewer workers than scenes,
+  dispatch in rolling batches rather than all at once.
 
-@tool
-def run_qa(mp4_path: str, concept: dict) -> dict:
-    """Call qa_jury. Returns {"verdict": pass|warn|escalate|fail, "notes": str}."""
+Process:
+1. Read scenes.json and concepts_by_scene.json.
+2. Call check_worker_health.
+3. Dispatch every scene's highest-scoring concept in parallel (up to
+   worker count) via launch_visual_production.
+4. await_tasks on the batch.
+5. For each returned artifact, call evaluate_visual_artifact_quality.
+6. For failures: apply retry / fix / skip per the rules.
+7. Write production_report.json with per-scene status.
 
-@tool
-def classify_failure(job_id: str, error: str, context: dict) -> dict:
-    """Invoke the diagnostic classifier (12) inline; returns {"class": ..., "hint": ...}."""
+Only escalate via `request_escalation(payload)` after tactical recovery
+is exhausted.
+"""
 
-@tool(context=True)
-async def persist_clip_artifact(context, artifact: dict) -> dict: ...
+production_subagent: SubAgent = {
+    "name": "production",
+    "description": (
+        "GPU dispatch specialist. Invoke after visual concepts are "
+        "written. Returns per-scene video artifacts + production_report."
+    ),
+    "system_prompt": PRODUCTION_SUPERVISOR_PROMPT,
+    "tools": [
+        check_worker_health,
+        launch_visual_production,        # component 10's task-pool tool
+        check_tasks,
+        await_tasks,
+        evaluate_visual_artifact_quality,  # deterministic @tool
+        evaluate_visual_coherence,         # component 08 (optional re-check)
+        retry_scene,                       # component 12
+        fix_scene,                         # component 12
+        skip_scene,                        # component 12
+        request_escalation,                # payload builder; orchestrator handles delegation
+        read_file,
+        write_file,
+    ],
+    "model": os.environ.get("STRANDS_MODEL", "openai/gpt-4o"),
+    "middleware": [
+        SummarizationMiddleware(max_tokens_before_summary=12_000),
+    ],
+}
 ```
 
-### Hooks
+### `launch_visual_production` (AsyncTaskPool tool)
+
+Lives in `server/strands_agents/task_tools.py`. Identical shape to
+`launch_audio_render` (component 04) but dispatches to the GPU worker
+pool. Payload:
 
 ```python
-hooks = [
-    ContractEnforcer(PRODUCTION_CONTRACT),
-    ServiceHealthGate(service="gpu_worker"),        # BeforeInvocationEvent
-    TransientRetryPolicy(max_retries=3),            # AfterToolCallEvent on dispatch_video_job/check_job_status
-    QaGate(),                                       # AfterToolCallEvent on run_qa: cancel downstream if fail
-    EscalationRouter(escalation_supervisor_id=13),  # AfterToolCallEvent on classify_failure
-    RevisionTagger(artifact_type="clip"),
-]
+{
+    "scene_id": "s3",
+    "concept_id": "c12",
+    "prompt": "...",
+    "style_lock": {...},
+    "duration_sec": 5.2,
+    "seed": 42,
+}
 ```
 
-- `ServiceHealthGate` raises `ContractViolation` if `/health` reports
-  anything other than `ready` with `capability="video"`.
-- `TransientRetryPolicy` uses the same transient-error substrings as
-  [STRANDS_SDK_PATTERNS.md §4](../reference/STRANDS_SDK_PATTERNS.md#4-beforeafter-toolcall-hooks-cancel--retry).
-- `QaGate` translates `run_qa` verdict into next-tool policy:
-  pass → persist, warn → persist + emit warning, escalate → route to
-  13, fail → route to 12 for remanifest.
-- `EscalationRouter` sets `invocation_state["escalation_request"]`
-  visible to component 14's graph edges.
+Returns immediately with a `task_id`. Completion payload carries
+`{"artifact_path": "...", "frames": 126, "codec": "h264", "black_frame_fraction": 0.01}`.
 
-### Conversation manager
+### Interrupt wiring (component 15)
 
-`SlidingWindowConversationManager(window_size=60)`. Long-running stage;
-each concept takes multiple tool calls; we retain enough history to
-reason across concept failures.
+`launch_visual_production` is listed in the parent orchestrator's
+`interrupt_on={...}` so that the first dispatch of every run is
+human-approved. Subsequent dispatches within the same SubAgent run do
+not re-interrupt (deepagents tracks interrupt history per tool call).
+
+### Recovery surface (component 12)
+
+- `retry_scene(scene_id)` — increments retry counter, re-launches.
+  Orchestrator-invariant: max 2 retries per scene.
+- `fix_scene(scene_id, reason)` — calls `generate_visual_concepts`
+  with the failure reason, picks a different concept, re-launches.
+  Budget 1 per scene.
+- `skip_scene(scene_id)` — marks the scene as degraded, records the
+  reason. Flagged in `production_report.json`.
+
+### Why a SubAgent
+
+- **Isolated turn budget.** Per-scene dispatch + QA + tactical recovery
+  can easily take 40+ tool calls. Keeping that in the parent
+  orchestrator's context would starve the planner of room for the
+  finishing stages (assembly, approval).
+- **Expensive model choice.** The supervisor benefits from a larger
+  reasoning-capable model, independent of the orchestrator's choice.
+- **Escalation boundary.** The SubAgent completing and returning is the
+  natural handover point for the orchestrator to consult the
+  `escalation` SubAgent.
 
 ---
 
@@ -110,39 +165,42 @@ reason across concept failures.
 
 ```python
 evaluators = [
-    ContractComplianceEvaluator(PRODUCTION_CONTRACT),
-    TimelineComplianceEvaluator(),
     GoalSuccessRateEvaluator(),
-    ToolSelectionAccuracyEvaluator(),
-    EscalationDecisionEvaluator(),
-    CritiqueStoreEvaluator(artifact_type="clip"),
+    ProductionSupervisorTrajectoryEvaluator(),  # custom
+    TimelineComplianceEvaluator(),              # artifact-level
+    ToolParameterAccuracyEvaluator(),           # launch args correct
+    ParallelLaunchEvaluator(tool="launch_visual_production"),
+    ContractComplianceEvaluator(PRODUCTION_CONTRACT),
+    EscalationDecisionEvaluator(),              # when escalation was requested
 ]
 ```
 
 ### Test cases (minimum 6)
 
-| Case name | GPU simulator behaviour | Expected supervisor behaviour |
-|-----------|-------------------------|-------------------------------|
-| `clean_dispatch` | all jobs succeed first try | dispatch each concept, QA pass, persist |
-| `transient_cuda_oom` | 10% jobs fail transient | retry; all eventually succeed |
-| `persistent_checkpoint_error` | 1 job fails 3x on same error | escalate to 13; other concepts complete |
-| `fixable_mismatch` | 1 job returns wrong style | classify_failure → fixable; remanifest + re-dispatch; succeeds |
-| `catastrophic_worker_down` | all workers return 500 | abort; no partial artifacts persisted |
-| `qa_fails_one_clip` | 1 clip QA verdict = fail | trigger remanifest for that clip |
+| Case | Scenes | Seeded worker / artifact behaviour | Expected outcome |
+|------|--------|-----------------------------------|------------------|
+| `one_shot_success` | 5 | All 5 dispatches return valid artifacts | 1 dispatch batch, no recovery, no escalation |
+| `transient_worker_error` | 5 | Scene 3 returns worker-500 | 1 retry succeeds, no escalation |
+| `prompt_issue` | 5 | Scene 2 fails QA (style drift) | `fix_scene` applied, then succeeds |
+| `persistent_failure` | 5 | Scene 4 fails after 2 retries + 1 fix | `skip_scene` applied OR escalation requested |
+| `worker_starved` | 10 | Only 2 workers available | Rolling batches of 2, not a single mass dispatch |
+| `budget_exhausted` | 5 | All scenes fail persistently | Escalation requested; no scene marked complete falsely |
 
 ### Simulators
 
-`GPU_WORKER_SIMULATOR` and `ESCALATION_ACTOR_SIMULATOR` from
-[`SIMULATION.md`](../eval-framework/SIMULATION.md).
+- `GPUWorkerSimulator` (see [`eval-framework/SIMULATION.md`](../eval-framework/SIMULATION.md)): drives `launch_visual_production`, `check_tasks`, `await_tasks`, `check_worker_health` with seeded per-case behaviour.
 
 ### Thresholds
 
-- `ContractComplianceEvaluator` = 1.00 (hard)
-- `TimelineComplianceEvaluator` = 1.00 (hard)
-- `GoalSuccessRateEvaluator` ≥ 0.80 (hard)
-- `ToolSelectionAccuracyEvaluator` ≥ 0.75 (soft)
-- `EscalationDecisionEvaluator` ≥ 0.70 (soft)
-- `CritiqueStoreEvaluator` ≥ 0.75 (soft)
+| Evaluator | Min score | Hard gate |
+|-----------|-----------|-----------|
+| `GoalSuccessRateEvaluator` | 0.80 | Yes |
+| `ProductionSupervisorTrajectoryEvaluator` | 0.80 | Yes |
+| `TimelineComplianceEvaluator` | 1.00 | Yes |
+| `ToolParameterAccuracyEvaluator` | 0.90 | Yes |
+| `ParallelLaunchEvaluator` | 0.70 | No |
+| `ContractComplianceEvaluator` | 1.00 | Yes |
+| `EscalationDecisionEvaluator` (on escalation cases) | 0.70 | No |
 
 ---
 
@@ -150,20 +208,24 @@ evaluators = [
 
 ```
 server/strands_agents/
-├── production_supervisor.py                     # ~400 LOC
-└── hooks/
-    ├── service_health_gate.py
-    ├── transient_retry_policy.py
-    ├── qa_gate.py
-    └── escalation_router.py
+├── subagents/
+│   └── production.py              # SubAgent declaration
+├── task_tools.py                  # launch_visual_production (+ shared pool)
+├── artifact_qa.py                 # evaluate_visual_artifact_quality
+└── evals/
+    └── experiments/
+        └── production_experiment.json
 ```
 
 ---
 
 ## Acceptance criteria
 
-- [ ] Every case ends with either all artifacts persisted OR a clean abort (no partial state).
-- [ ] `EscalationRouter` emits `escalation_request` exactly once per `persistent_checkpoint_error` case.
-- [ ] OTel trace shows the correct tool ladder per case.
-- [ ] Each `clip_artifact` has a B2 URL (no local-only paths).
-- [ ] Experiment passes thresholds.
+- [ ] `production` SubAgent shipped as a `SubAgent` TypedDict.
+- [ ] `launch_visual_production`, `check_tasks`, `await_tasks`,
+      `check_worker_health` on the SubAgent's `tools`.
+- [ ] Retry budget and rolling batching enforced by the system prompt;
+      evals pin the trajectory.
+- [ ] Escalation payload shape documented (see component 13 contract).
+- [ ] All 6 cases pass thresholds.
+- [ ] OTel trace shows a nested `task` span with per-scene sub-spans.
