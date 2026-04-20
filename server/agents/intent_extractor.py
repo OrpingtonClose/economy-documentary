@@ -289,7 +289,10 @@ _AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-_SENTENCE_BREAK = re.compile(r"[.!?](?:\s+|$)")
+# Sentence break: .!? followed by whitespace and an uppercase letter
+# (or end of string).  The uppercase-letter lookahead avoids splitting
+# on abbreviations like "U.S. ", "St. Louis", "Dr. Smith".
+_SENTENCE_BREAK = re.compile(r"[.!?]\s+(?=[A-Z])|[.!?]$")
 
 
 def _split_sentence_concat(topic: str) -> list[str]:
@@ -302,9 +305,10 @@ def _split_sentence_concat(topic: str) -> list[str]:
     draft.  The heuristic path had the same bug when the "must cover"
     clause ran into a following sentence.
 
-    We split on ``.!?`` followed by whitespace (or end-of-string) and
-    keep only non-empty, non-trivial pieces.  If the item contains no
-    sentence break we return it unchanged.
+    A sentence break is ``.!?`` followed by whitespace + an uppercase
+    letter (new-sentence marker), or trailing punctuation at end of
+    string.  This preserves abbreviations like "U.S. economic policy"
+    and "Dr. Smith research" as single topics.
     """
     if not isinstance(topic, str):
         return []
@@ -313,16 +317,17 @@ def _split_sentence_concat(topic: str) -> list[str]:
         return []
     if not _SENTENCE_BREAK.search(stripped):
         return [stripped]
-    # Split, then drop empty / too-short pieces (pure punctuation or a
-    # trailing fragment like "use").  "Do not" clauses almost always
-    # also match ``_FORBIDDEN_TOPIC_SPLIT`` so they'll still be captured
-    # as forbidden topics on the heuristic path.
-    parts = [p.strip().rstrip(".!?") for p in _SENTENCE_BREAK.split(stripped) if p.strip()]
+    parts = [p.strip().rstrip(".!?") for p in _SENTENCE_BREAK.split(stripped) if p and p.strip()]
     return [p for p in parts if p and len(p) >= 3]
 
 
+# Forbidden-clause prefix.  "no" requires an explicit verb after it
+# (e.g. "no discuss", "no show") so legitimate proper nouns like "No
+# Child Left Behind Act" or "No Fly List" aren't silently dropped /
+# corrupted on either path.
 _FORBIDDEN_PREFIX = re.compile(
-    r"^(do not|don'?t|avoid|exclude|no)\s+(discuss\s+|show\s+|mention\s+|include\s+|cover\s+)?",
+    r"^((?:do not|don'?t|avoid|exclude)(?:\s+(?:discuss|show|mention|include|cover))?|"
+    r"no\s+(?:discuss|show|mention|include|cover))\s+",
     re.I,
 )
 
