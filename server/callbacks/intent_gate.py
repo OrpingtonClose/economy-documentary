@@ -229,9 +229,14 @@ def evaluate_gate(
         )
 
     blob = _scenes_text_blob(scenes)
+    # Use tolerant token-based matching (shared with intent_verifier) so
+    # the pre-flight gate and the post-stage verifier agree on topic
+    # coverage.  A topic covers the blob iff all its content tokens
+    # appear somewhere in the blob.
+    from callbacks.intent_verifier import _topic_covers
     missing_required: list[str] = []
     for topic in intent.required_topics:
-        if topic and topic.lower() not in blob:
+        if topic and not _topic_covers(blob, topic):
             missing_required.append(topic)
     if missing_required:
         failures.append(
@@ -241,7 +246,7 @@ def evaluate_gate(
 
     present_forbidden: list[str] = []
     for topic in intent.forbidden_topics:
-        if topic and topic.lower() in blob:
+        if topic and _topic_covers(blob, topic):
             present_forbidden.append(topic)
     if present_forbidden:
         failures.append(

@@ -135,6 +135,48 @@ def _compute_gap_overhead_sec(scenes: list[dict]) -> float:
     return total_voice_gaps + total_scene_gaps
 
 
+#: Stop-tokens removed when building the token set of a required /
+#: forbidden topic.  They add no semantic content and force over-strict
+#: matches (e.g. "opioid chemistry" vs. "the opioid analgesic chemistry
+#: of endogenous peptides" — both should match).
+_TOPIC_STOPWORDS: frozenset[str] = frozenset({
+    "and", "or", "the", "a", "an", "of", "in", "on", "at",
+    "to", "for", "with", "by", "from",
+})
+
+
+def _topic_tokens(topic: str) -> list[str]:
+    """Return content tokens for a topic, splitting on hyphens / commas.
+
+    A required topic like ``"fight-flight-freeze circuitry"`` must be
+    considered covered when a scene narrates "fight-or-flight response"
+    plus "freeze circuitry" — the literal hyphenated triple rarely
+    appears verbatim in natural prose.  We split on non-word chars,
+    drop stopwords and short fragments, lowercase, and treat each
+    remaining token as a content word.  A topic is "present" in a blob
+    when **every** content token appears somewhere in the blob.
+    """
+    import re as _re
+    lowered = (topic or "").strip().lower()
+    if not lowered:
+        return []
+    parts = [p for p in _re.split(r"[^a-z0-9]+", lowered) if p]
+    return [p for p in parts if p not in _TOPIC_STOPWORDS and len(p) >= 2]
+
+
+def _topic_covers(blob: str, topic: str) -> bool:
+    """Return True iff all content tokens of ``topic`` appear in ``blob``.
+
+    Falls back to substring match when the topic has no content tokens
+    (e.g. it was pure punctuation after filtering) to preserve legacy
+    behaviour.
+    """
+    tokens = _topic_tokens(topic)
+    if not tokens:
+        return bool(topic) and topic.lower() in blob
+    return all(tok in blob for tok in tokens)
+
+
 def _scene_text_blob(scenes: list[dict]) -> str:
     parts: list[str] = []
     for scene in scenes:
@@ -245,14 +287,14 @@ def _verify_scenario(intent, state: Mapping[str, Any]) -> VerificationRecord:
         )
 
     blob = _scene_text_blob(scenes)
-    missing = [t for t in intent.required_topics if t and t.lower() not in blob]
+    missing = [t for t in intent.required_topics if t and not _topic_covers(blob, t)]
     if missing:
         failures.append(
             "scenario missing required_topic(s): "
             + ", ".join(repr(t) for t in missing)
         )
     present_forbidden = [
-        t for t in intent.forbidden_topics if t and t.lower() in blob
+        t for t in intent.forbidden_topics if t and _topic_covers(blob, t)
     ]
     if present_forbidden:
         failures.append(
@@ -315,7 +357,7 @@ def _verify_audio(intent, state: Mapping[str, Any]) -> VerificationRecord:
 def _verify_visual(intent, state: Mapping[str, Any]) -> VerificationRecord:
     failures: list[str] = []
     blob = _visual_text_blob(state)
-    missing = [t for t in intent.required_topics if t and t.lower() not in blob]
+    missing = [t for t in intent.required_topics if t and not _topic_covers(blob, t)]
     if missing:
         failures.append(
             "visual direction never covers required_topic(s): "
