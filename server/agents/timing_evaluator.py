@@ -88,7 +88,7 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
         intent = get_brief_intent(state)
         if intent is not None:
             intent_target = float(intent.duration_sec)
-            intent_tolerance = float(intent.duration_tolerance_sec)
+            intent_tolerance = float(intent.tolerance_sec)
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("Timing evaluator: intent lookup failed: %s", exc)
 
