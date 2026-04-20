@@ -628,17 +628,130 @@ constraint_gate_agent = Agent(
 )
 
 
-scenario_with_gate = LoopAgent(
-    name="scenario_with_gate",
-    description=(
-        "Scenario director wrapped by the INTENT-02 R0 constraint gate. "
-        "Redrafts up to MAX_GATE_ATTEMPTS times when the gate detects "
-        "duration, required-topic, or forbidden-topic drift."
-    ),
-    max_iterations=MAX_GATE_ATTEMPTS,
-    sub_agents=[scenario_director, constraint_gate_agent],
-    after_agent_callback=_scenario_stage_after,
+# ---------------------------------------------------------------------------
+# scenario_with_gate — custom BaseAgent (NOT a LoopAgent)
+#
+# ADK's LoopAgent treats ANY event with ``actions.escalate=True`` from ANY
+# sub-agent (including deeply nested agents) as a signal to exit the loop.
+# ``scenario_director`` is itself a LoopAgent whose evaluator calls
+# ``exit_loop()`` to terminate the inner evaluate/refine cycle — that
+# ``escalate=True`` event bubbles up through the inner LoopAgent and
+# **also** kills the outer LoopAgent on its very first iteration, before
+# ``constraint_gate_agent`` ever runs.  The pre-flight R0 gate therefore
+# never fires, the outer loop's ``max_iterations`` is meaningless, and
+# the only thing that actually halts a bad scenario is the post-stage
+# verifier in ``_scenario_stage_after`` — which doesn't redraft.
+#
+# Fix: drive the loop ourselves so we can distinguish "inner loop done"
+# from "outer loop should exit".  We run ``scenario_director`` to
+# completion, yielding events but absorbing the escalate flag, then
+# evaluate the R0 gate.  If the gate passes (or halts on max attempts)
+# we exit.  Otherwise we reset the inner loop's state and iterate again
+# up to ``MAX_GATE_ATTEMPTS`` times.
+# ---------------------------------------------------------------------------
+from google.adk.agents.base_agent import BaseAgent  # noqa: E402
+
+
+class _ScenarioWithGate(BaseAgent):
+    """Scenario director wrapped by the R0 constraint gate.
+
+    Re-implements the ``LoopAgent`` contract manually so the inner
+    ``scenario_director`` LoopAgent's ``exit_loop()`` escalate event
+    terminates only the *inner* loop, not this outer one.  Matches the
+    original design intent of `INTENT-02`: run the director, check the
+    gate, redraft on failure, halt after ``MAX_GATE_ATTEMPTS``.
+    """
+
+    director: Any = None
+    gate: Any = None
+    after_callback: Any = None
+    max_attempts: int = MAX_GATE_ATTEMPTS
+
+    def __init__(self, director, gate, *, after_callback=None, max_attempts=MAX_GATE_ATTEMPTS):
+        super().__init__(
+            name="scenario_with_gate",
+            description=(
+                "Scenario director wrapped by the INTENT-02 R0 constraint "
+                "gate.  Redrafts up to MAX_GATE_ATTEMPTS times when the "
+                "gate detects duration, required-topic, or forbidden-topic "
+                "drift."
+            ),
+            sub_agents=[director, gate],
+        )
+        # Assign via object.__setattr__ because BaseAgent is a Pydantic
+        # BaseModel — direct assignment would trip validator errors.
+        object.__setattr__(self, "director", director)
+        object.__setattr__(self, "gate", gate)
+        object.__setattr__(self, "after_callback", after_callback)
+        object.__setattr__(self, "max_attempts", max_attempts)
+
+    async def _run_async_impl(self, ctx):
+        from google.adk.utils.context_utils import Aclosing
+
+        for attempt in range(1, self.max_attempts + 1):
+            logger.info(
+                "scenario_with_gate: attempt %d/%d — running scenario_director",
+                attempt, self.max_attempts,
+            )
+            # Run scenario_director, absorbing its escalate flag so the
+            # outer loop keeps going.  We still yield every event to the
+            # session log so the dashboard and checkpointer see them.
+            async with Aclosing(self.director.run_async(ctx)) as agen:
+                async for event in agen:
+                    # Strip escalate BEFORE yielding — otherwise the
+                    # outer orchestrator (pipeline_agent SequentialAgent)
+                    # might also bail out.
+                    if getattr(event, "actions", None) and event.actions.escalate:
+                        event.actions.escalate = False
+                    yield event
+
+            # Reset the inner LoopAgent's state so the next attempt starts
+            # fresh (otherwise ADK's LoopAgent resume logic would pick up
+            # where it left off and skip the generator).
+            try:
+                ctx.reset_sub_agent_states(self.director.name)
+            except Exception:
+                pass
+
+            # Run the constraint gate.
+            async with Aclosing(self.gate.run_async(ctx)) as agen:
+                async for event in agen:
+                    gate_escalated = bool(
+                        getattr(event, "actions", None)
+                        and event.actions.escalate
+                    )
+                    # The gate's before_agent_callback sets escalate=True
+                    # on pass or halt — both are terminal for this outer
+                    # loop, so we let them bubble up this time.
+                    yield event
+                    if gate_escalated:
+                        return
+
+            # Gate failed with retries remaining — loop again.
+            logger.info(
+                "scenario_with_gate: attempt %d failed, redrafting "
+                "(attempts left: %d)",
+                attempt, self.max_attempts - attempt,
+            )
+
+        logger.error(
+            "scenario_with_gate: exhausted %d attempts without gate pass",
+            self.max_attempts,
+        )
+
+
+async def _scenario_with_gate_after_shim(callback_context):
+    """Bridge the after_agent_callback onto the custom wrapper."""
+    return _scenario_stage_after(callback_context)
+
+
+scenario_with_gate = _ScenarioWithGate(
+    scenario_director,
+    constraint_gate_agent,
+    after_callback=_scenario_stage_after,
+    max_attempts=MAX_GATE_ATTEMPTS,
 )
+scenario_with_gate.after_agent_callback = _scenario_stage_after
 
 
 # ---------------------------------------------------------------------------

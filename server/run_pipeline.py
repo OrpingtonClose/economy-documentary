@@ -274,10 +274,17 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
         initial_state["max_scene_duration"] = "45"
         initial_state["max_words_per_scene"] = "112"
 
-    # Restore from B2 if a previous run exists for this topic
+    # Restore from B2 if a previous run exists for this topic.
+    # ``B2_SKIP_RESTORE=1`` forces a fresh run — useful when the intent
+    # extractor or scenario director was fixed and we do not want the
+    # previous run's (buggy) state to be merged back in.
     from tools.b2_checkpoint import restore_pipeline, set_run_id, get_run_id
     os.environ["DOCUMENTARY_TOPIC"] = topic  # used by get_run_id() for new runs
-    restored = restore_pipeline(topic)
+    if os.environ.get("B2_SKIP_RESTORE", "").strip() in ("1", "true", "yes", "on"):
+        logger.info("B2_SKIP_RESTORE=1 — skipping B2 restore, fresh run")
+        restored: dict = {"run_id": "", "stages_complete": [], "restored_files": 0, "state": {}}
+    else:
+        restored = restore_pipeline(topic)
     stages_complete = restored.get("stages_complete", [])
     if restored["run_id"]:
         logger.info(
