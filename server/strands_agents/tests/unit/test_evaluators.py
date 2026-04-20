@@ -847,6 +847,25 @@ def test_parallel_spread_across_turns_fails_batched() -> None:
     assert by_label["parallel.batched"].test_pass is False
 
 
+def test_parallel_missing_at_turn_on_some_launches_fails_batched() -> None:
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts"},  # missing at_turn
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"tool_name": "launch_tts", "expected_count": 3},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is True
+    assert by_label["parallel.batched"].test_pass is False
+    assert "at_turn" in (by_label["parallel.batched"].reason or "")
+
+
 def test_parallel_awaited_before_launch_fails() -> None:
     evaluator = ParallelLaunchEvaluator()
     trajectory = [
@@ -966,6 +985,39 @@ def test_memory_corrupted_after_fails_integrity() -> None:
         metadata={
             "agents_md_before": "seed",
             "agents_md_after": "   ",  # blank
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    integrity = next(o for o in outputs if o.label == "memory.integrity")
+    assert integrity.test_pass is False
+
+
+def test_memory_null_bytes_flagged_as_corrupted() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": "# AGENTS.md\n\x00\x00garbage\x00",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    integrity = next(o for o in outputs if o.label == "memory.integrity")
+    assert integrity.test_pass is False
+
+
+def test_memory_high_non_printable_flagged_as_corrupted() -> None:
+    evaluator = MemoryHonoringEvaluator()
+    # bytes 0-255 decoded via latin-1 is a classic "binary-via-str" smuggling
+    # vector; `.encode("utf-8")` alone does not catch it.
+    payload = bytes(range(256)).decode("latin-1")
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[],
+        metadata={
+            "agents_md_before": "seed",
+            "agents_md_after": payload,
         },
     )
     outputs = evaluator.evaluate(case)

@@ -105,20 +105,27 @@ class ParallelLaunchEvaluator(Evaluator[Any, Any]):
         )
 
         turns = {call.get("at_turn") for call in launches if call.get("at_turn") is not None}
-        batched_ok = count_ok and len(turns) == 1
+        missing_turn = sum(1 for call in launches if call.get("at_turn") is None)
+        batched_ok = count_ok and missing_turn == 0 and len(turns) == 1
+        if not count_ok:
+            batched_reason = (
+                "FAIL cannot verify batching when expected launch count is wrong"
+            )
+        elif missing_turn:
+            batched_reason = (
+                f"FAIL {missing_turn}/{len(launches)} launch calls missing 'at_turn' marker"
+            )
+        elif not turns:
+            batched_reason = "FAIL no 'at_turn' markers on launch calls"
+        elif len(turns) == 1:
+            batched_reason = f"PASS all {len(launches)} launches on turn {next(iter(turns))}"
+        else:
+            batched_reason = f"FAIL launches spread across turns {sorted(turns)}"
         outputs.append(
             EvaluationOutput(
                 score=1.0 if batched_ok else 0.0,
                 test_pass=batched_ok,
-                reason=(
-                    f"PASS all {len(launches)} launches on turn {next(iter(turns))}"
-                    if batched_ok
-                    else (
-                        f"FAIL launches spread across turns {sorted(t for t in turns if t is not None)}"
-                        if turns
-                        else "FAIL no 'at_turn' markers on launch calls"
-                    )
-                ),
+                reason=batched_reason,
                 label="parallel.batched",
             )
         )

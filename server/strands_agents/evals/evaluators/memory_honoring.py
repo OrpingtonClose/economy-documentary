@@ -192,9 +192,17 @@ def _check_ordering(
 def _looks_corrupted(text: str) -> bool:
     if not text.strip():
         return True
-    # Reject obviously-binary content; a valid AGENTS.md is markdown/yaml.
+    # ``str.encode("utf-8")`` succeeds for virtually every Python 3 string
+    # (lone surrogates are the only exception), so it cannot be trusted to
+    # spot binary data that was smuggled through ``bytes.decode(errors=...)``.
+    # Instead, check for explicit markers of non-text payloads.
     try:
         text.encode("utf-8")
     except UnicodeEncodeError:
         return True
-    return False
+    if "\x00" in text:
+        return True
+    non_printable = sum(
+        1 for c in text if not c.isprintable() and c not in "\n\r\t"
+    )
+    return non_printable / len(text) > 0.1
