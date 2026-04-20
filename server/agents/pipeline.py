@@ -738,6 +738,38 @@ class _ScenarioWithGate(BaseAgent):
             "scenario_with_gate: exhausted %d attempts without gate pass",
             self.max_attempts,
         )
+        # Yield an explicit HALT event so the pipeline does NOT silently
+        # continue with an unapproved scenario draft.  In the normal flow
+        # this path is unreachable because ``run_preflight_gate`` raises
+        # ``IntentGateHalt`` on the final attempt (caught by
+        # ``_preflight_gate_before`` and turned into an escalate event).
+        # But if ``GATE_ATTEMPT_KEY`` is reset between iterations (e.g. by
+        # a B2 restore merging stale state) or a future refactor returns
+        # a non-passing verdict without raising on the last attempt, this
+        # fallback guarantees the outer SequentialAgent sees the halt and
+        # stops before the audio/visual/production stages run.
+        from google.adk.events import Event as _Event
+        from google.adk.events.event_actions import EventActions as _EventActions
+        from google.genai import types as _genai_types
+
+        halt_content = _genai_types.Content(
+            role="model",
+            parts=[
+                _genai_types.Part(
+                    text=(
+                        f"HALT: scenario_with_gate exhausted "
+                        f"{self.max_attempts} attempts without the R0 "
+                        f"constraint gate passing.  Refusing to continue "
+                        f"with an unapproved scenario draft."
+                    )
+                )
+            ],
+        )
+        yield _Event(
+            author=self.name,
+            content=halt_content,
+            actions=_EventActions(escalate=True),
+        )
 
 
 async def _scenario_with_gate_after_shim(callback_context):

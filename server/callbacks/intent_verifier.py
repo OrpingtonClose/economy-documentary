@@ -167,18 +167,25 @@ def _topic_tokens(topic: str) -> list[str]:
 def _token_in_blob(tok: str, blob: str) -> bool:
     """Return True iff ``tok`` is semantically present in ``blob``.
 
-    For tokens ≥ 5 chars we match on the first-5-char stem so
-    ``"circuitry"`` matches ``"circuit"``, ``"analgesia"`` matches
-    ``"analgesic"``, ``"chemistry"`` matches ``"chemical"``.  Short
-    tokens (≤ 4 chars) require exact substring match to avoid
-    false-positives on acronyms and common short words.
+    For tokens ≥ 5 chars we match on the first-5-char stem, anchored at
+    a word boundary, so ``"circuitry"`` matches ``"circuit"``,
+    ``"analgesia"`` matches ``"analgesic"``, ``"chemistry"`` matches
+    ``"chemical"`` — but stems do NOT collide inside unrelated words
+    (e.g. ``"chemi"`` must not match ``"alchemist"`` or ``"chemise"``;
+    ``"freez"`` must not match ``"antifreeze"``).  Short tokens
+    (≤ 4 chars) require exact substring match to avoid false-positives
+    on acronyms and common short words.
     """
+    import re as _re
+
     if len(tok) <= 4:
         return tok in blob
     if tok in blob:
         return True
     stem = tok[:5]
-    return stem in blob
+    # Anchor the stem at a word boundary so it only matches at the start
+    # of a word (a morphological variant), not mid-word.
+    return _re.search(rf"\b{_re.escape(stem)}", blob) is not None
 
 
 def _topic_covers(blob: str, topic: str, *, strict: bool = False) -> bool:
