@@ -298,6 +298,13 @@ AUDIO_CONTRACT = StageContract(
     produced_artifacts=["audio/*.wav"],
 )
 
+TIMING_CONTRACT = StageContract(
+    name="timing",
+    required_services=[],  # pure arithmetic over prior stage outputs
+    required_state=["scenes", "whisperx_alignment"],
+    produced_state=["timing_passed", "timing_report"],
+)
+
 VISUAL_DIRECTION_CONTRACT = StageContract(
     name="visual_direction",
     required_services=[],  # LLM only
