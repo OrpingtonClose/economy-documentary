@@ -1005,8 +1005,16 @@ def deterministic_audio_callback(
                         if not wav_path or duration <= 0:
                             break  # TTS failed — fall through to error handling
 
-                        # Check against budget (10% tolerance)
-                        if voice_budget > 0 and duration > voice_budget * 1.10:
+                        # Check against budget.  Previously 10%: too aggressive —
+                        # TTS naturally jitters ±15-25% and trimming at +10%
+                        # caused a divergent feedback loop (each trim cut so
+                        # much text the voice undershot the budget by 40%+,
+                        # the LLM refiner would then add more text, TTS would
+                        # overshoot again, trim would cut harder...).  30%
+                        # lets natural TTS jitter land without triggering
+                        # rewrites, so the timing loop converges instead of
+                        # oscillating.
+                        if voice_budget > 0 and duration > voice_budget * 1.30:
                             if _trim_attempt < _MAX_TRIM_RETRIES:
                                 logger.warning(
                                     "Scene %d %s: narration %.1fs > budget %.1fs "

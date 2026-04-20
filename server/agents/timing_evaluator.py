@@ -81,12 +81,14 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
     # the user actually asked for.
     target_duration: float
     intent_target: Optional[float] = None
+    intent_tolerance: Optional[float] = None
     try:
         from agents.intent_extractor import get_brief_intent
 
         intent = get_brief_intent(state)
         if intent is not None:
             intent_target = float(intent.duration_sec)
+            intent_tolerance = float(intent.duration_tolerance_sec)
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("Timing evaluator: intent lookup failed: %s", exc)
 
@@ -161,7 +163,19 @@ def _evaluate_timing(callback_context: CallbackContext) -> Optional[genai_types.
     # Otherwise fall back to narration-vs-scene-budget for legacy runs.
     if intent_target is not None and intent_target > 0:
         deviation_sec = movie_duration - target_duration
-        tolerance_sec = _TIMING_TOLERANCE_SEC
+        # Use the typed intent's duration_tolerance_sec (same value the
+        # R0 intent gate uses — 30s for "7 minutes, milliseconds not
+        # important") instead of a hard-coded 5s.  The 5s tolerance was
+        # tighter than what the brief actually required and caused the
+        # timing loop to diverge: TTS jitter landed in the 10–20s band
+        # naturally, LLM refiner rewrote text to compensate, text length
+        # swung the other way, and so on.  Matching the intent gate's
+        # tolerance lets the loop exit on the first pass whose movie
+        # runtime is within the user's stated tolerance window.
+        if intent_tolerance is not None and intent_tolerance > 0:
+            tolerance_sec = intent_tolerance
+        else:
+            tolerance_sec = _TIMING_TOLERANCE_SEC
     else:
         deviation_sec = actual_duration - target_duration
         tolerance_sec = max(
