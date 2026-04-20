@@ -12,8 +12,9 @@ Input shape
   dicts, each matching :class:`NarrationBlock` fields
   (``block_id``, ``wav_path``, ``scene_num``, ``voice_role``,
   ``language``, ``voice_id``).
-* ``metadata`` (optional): ``target_lufs`` (float, default -16.0),
-  ``lufs_tolerance_lu`` (float, default 1.0).
+* ``metadata`` (optional): ``target_lufs`` (float, defaults to
+  ``LUFS_TARGET`` from ``critique/audio_invariants.py``),
+  ``lufs_tolerance_lu`` (float, defaults to ``LUFS_TOLERANCE_LU``).
 
 Output
 ------
