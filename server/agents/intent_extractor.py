@@ -289,10 +289,14 @@ _AUDIENCE_STOPWORDS: frozenset[str] = frozenset(
 )
 
 
-# Sentence break: .!? followed by whitespace and an uppercase letter
-# (or end of string).  The uppercase-letter lookahead avoids splitting
-# on abbreviations like "U.S. ", "St. Louis", "Dr. Smith".
-_SENTENCE_BREAK = re.compile(r"[.!?]\s+(?=[A-Z])|[.!?]$")
+# Sentence break: ``.!?`` preceded by at least 4 word-characters AND
+# followed by whitespace + an uppercase letter (or end-of-string
+# trailing punctuation).  The 4-char lookbehind on the preceding token
+# prevents splitting on abbreviations like "Dr. Smith", "St. Louis",
+# "Mr. Brown", "Jr. Smith", "U.S. policy" (both "U" and "S" are
+# single-char tokens so neither matches).  The uppercase-letter
+# lookahead ensures we only split at true sentence starts.
+_SENTENCE_BREAK = re.compile(r"(?<=\w{4})[.!?]\s+(?=[A-Z])|[.!?]$")
 
 
 def _split_sentence_concat(topic: str) -> list[str]:
@@ -390,6 +394,15 @@ def _filter_required_topics(
                     if not stripped:
                         continue
                     key = stripped.lower()
+                    # Re-check audience stopwords on the stripped
+                    # subject so "do not discuss ADHD" and bare "ADHD"
+                    # get the same treatment on the forbidden path.
+                    if key in _AUDIENCE_STOPWORDS:
+                        continue
+                    if audience_norm and key == audience_norm:
+                        continue
+                    if audience_norm and key.startswith(audience_norm + "-"):
+                        continue
                 else:
                     # Required-topics path: drop the forbidden-clause
                     # fragment entirely.
