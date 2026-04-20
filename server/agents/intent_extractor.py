@@ -866,6 +866,15 @@ def run_intent_extractor(
     state["target_duration_sec"] = float(intent.duration_sec)
     state["target_tolerance_sec"] = float(intent.tolerance_sec)
     state["min_scene_count"] = int(_math.ceil(float(intent.duration_sec) / 45.0))
+    # Format required topics as a bullet list so the scenario generator's
+    # instruction template can inject an up-front list — the LLM
+    # otherwise drops tokens like "circuitry" from hyphenated phrases.
+    if intent.required_topics:
+        state["required_topics_block"] = "\n".join(
+            f"  - {t}" for t in intent.required_topics
+        )
+    else:
+        state["required_topics_block"] = "  (none — free topic choice)"
     _write_intent_backup(intent)
     logger.info(
         "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "

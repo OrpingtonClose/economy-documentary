@@ -297,6 +297,22 @@ def build_critique(verdict: GateVerdict) -> str:
     ]
     for failure in verdict.failures:
         lines.append(f"- {failure}")
+    # Be very explicit when the failure is a missing required topic —
+    # the LLM tends to paraphrase ("fight-or-flight response") and drop
+    # a concrete token from the literal phrase (e.g. "circuitry").  We
+    # now list each missing topic with instructions to include every
+    # content word VERBATIM somewhere in the narration.
+    if verdict.missing_required_topics:
+        lines.append("")
+        lines.append(
+            "MANDATORY FIX for missing required topic(s): each "
+            "topic phrase below must have EVERY content word appear "
+            "verbatim (lowercase) in a narration line or title, not "
+            "paraphrased.  If the topic contains hyphens, write the "
+            "full hyphenated phrase at least once."
+        )
+        for topic in verdict.missing_required_topics:
+            lines.append(f"  * '{topic}' — include all of its words verbatim")
     return "\n".join(lines)
 
 

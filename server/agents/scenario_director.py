@@ -85,6 +85,15 @@ decisions; they will enforce them.
 
 3. A SCENARIO document as a JSON array of scenes in state["scenes"].
 
+CRITICAL — REQUIRED TOPICS (must be covered VERBATIM):
+The R0 constraint gate will reject any scenario draft that omits any
+of these required-topic phrases.  Write each topic's words (lowercase)
+somewhere in a narration voice block or scene title — paraphrasing
+("fight-or-flight response") does NOT count when the topic is spelled
+"fight-flight-freeze circuitry" because the token "circuitry" is
+missing.  Required topics for this brief:
+{required_topics_block}
+
 CRITICAL — TOTAL DURATION TARGET:
 The user's brief demands a documentary of EXACTLY {target_duration_sec}
 seconds (tolerance: {target_tolerance_sec} seconds).

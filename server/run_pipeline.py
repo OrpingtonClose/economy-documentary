@@ -267,6 +267,16 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     # this as the floor (instead of the old ceil(target/35)+1) prevents
     # the LLM from stacking too many ~35s scenes and overshooting.
     initial_state["min_scene_count"] = int(_math.ceil(_target / 45.0))
+    try:
+        _topics = list(_pre_intent.required_topics)
+    except Exception:
+        _topics = []
+    if _topics:
+        initial_state["required_topics_block"] = "\n".join(
+            f"  - {t}" for t in _topics
+        )
+    else:
+        initial_state["required_topics_block"] = "  (none — free topic choice)"
 
     # ARCH-A3 (#133): stage the original user brief so the Preference
     # Ledger R0 seed can parse it into baseline records before the
