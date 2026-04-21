@@ -185,10 +185,15 @@ class PendingInterruptQueue:
             ``created_at`` ascending).
         """
 
-        items = (
-            v for k, v in self._pending.items()
-            if run_id is None or k[0] == run_id
-        )
+        # Materialize the snapshot in one shot — iterating the live
+        # dict would race with add()/resolve()/cancel() running in the
+        # event loop thread (RuntimeError: dictionary changed size
+        # during iteration). asyncio.Lock is cooperative-only, so we
+        # rely on CPython dict atomicity for the single list() call.
+        snapshot = list(self._pending.items())
+        items = [
+            v for k, v in snapshot if run_id is None or k[0] == run_id
+        ]
         return sorted(items, key=lambda item: item.created_at)
 
 

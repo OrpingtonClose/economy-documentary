@@ -75,7 +75,9 @@ class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
                     test_pass=False,
                     reason=(
                         "metadata requires 'gated_tool' and "
-                        "'expected_decision' in {approve, reject}"
+                        "'expected_decision' in "
+                        "{accept, edit, reject, respond} "
+                        "(legacy 'approve' alias also accepted)"
                     ),
                     label="approval.missing_config",
                 )

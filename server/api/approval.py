@@ -57,7 +57,7 @@ def build_router(queue: PendingInterruptQueue) -> APIRouter:
     router = APIRouter(prefix="/approval", tags=["approval"])
 
     @router.get("/pending")
-    def list_pending(run_id: str | None = None) -> dict[str, Any]:
+    async def list_pending(run_id: str | None = None) -> dict[str, Any]:
         """List pending interrupts.
 
         Args:
