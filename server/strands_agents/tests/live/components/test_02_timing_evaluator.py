@@ -54,8 +54,7 @@ def test_clean_alignment_passes() -> None:
     alignment = {
         "total_duration_sec": 135.0,
         "per_scene": [
-            {"scene_id": f"scene_{i + 1}", "duration_sec": 45.0}
-            for i in range(3)
+            {"scene_id": f"scene_{i + 1}", "duration_sec": 45.0} for i in range(3)
         ],
     }
     out = compute_timing_report(

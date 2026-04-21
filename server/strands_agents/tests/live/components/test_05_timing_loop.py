@@ -53,18 +53,14 @@ def _iter(
             argument at all — the exact shape the hard-invariant gate
             forbids.
     """
-    calls = [
-        _call("launch_audio_render", scene_id=i + 1) for i in range(scene_count)
-    ]
+    calls = [_call("launch_audio_render", scene_id=i + 1) for i in range(scene_count)]
     calls.append(_call("await_tasks"))
     calls.append(_call("evaluate_timing"))
     if refine:
         if timing_report is None:
             calls.append({"name": "refine_scenario", "args": {}})
         else:
-            calls.append(
-                _call("refine_scenario", timing_report=timing_report)
-            )
+            calls.append(_call("refine_scenario", timing_report=timing_report))
     return calls
 
 
@@ -72,7 +68,9 @@ def _outputs_to_map(outputs: list[Any]) -> dict[str, Any]:
     return {o.label: o for o in outputs}
 
 
-def _case(trajectory: list[dict[str, Any]], **metadata: Any) -> EvaluationData[Any, Any]:
+def _case(
+    trajectory: list[dict[str, Any]], **metadata: Any
+) -> EvaluationData[Any, Any]:
     return EvaluationData[Any, Any](
         input=None,
         actual_trajectory=trajectory,
@@ -93,9 +91,7 @@ def test_single_iteration_happy_path_passes_all_gates() -> None:
         "timing_loop.delegation",
     ):
         assert label in results, f"missing evaluator output {label}"
-        assert results[label].test_pass, (
-            f"{label} failed: {results[label].reason}"
-        )
+        assert results[label].test_pass, f"{label} failed: {results[label].reason}"
 
 
 def test_two_iterations_with_refine_pass_only_when_report_supplied() -> None:
@@ -103,24 +99,19 @@ def test_two_iterations_with_refine_pass_only_when_report_supplied() -> None:
         scene_count=3, refine=True, timing_report={"violations": ["scene_1"]}
     ) + _iter(scene_count=3, refine=False)
     good_case = _case(good_trajectory, expected_iterations=2, expects_pass=True)
-    good_results = _outputs_to_map(
-        TimingLoopTrajectoryEvaluator().evaluate(good_case)
-    )
+    good_results = _outputs_to_map(TimingLoopTrajectoryEvaluator().evaluate(good_case))
     assert good_results["timing_loop.refine_inputs"].test_pass, (
         f"refine with a valid timing_report rejected: "
         f"{good_results['timing_loop.refine_inputs'].reason}"
     )
 
-    bad_trajectory = _iter(
-        scene_count=3, refine=True, timing_report=None
-    ) + _iter(scene_count=3, refine=False)
-    bad_case = _case(bad_trajectory, expected_iterations=2, expects_pass=True)
-    bad_results = _outputs_to_map(
-        TimingLoopTrajectoryEvaluator().evaluate(bad_case)
+    bad_trajectory = _iter(scene_count=3, refine=True, timing_report=None) + _iter(
+        scene_count=3, refine=False
     )
+    bad_case = _case(bad_trajectory, expected_iterations=2, expects_pass=True)
+    bad_results = _outputs_to_map(TimingLoopTrajectoryEvaluator().evaluate(bad_case))
     assert not bad_results["timing_loop.refine_inputs"].test_pass, (
-        "refine_scenario without a timing_report was accepted — hard "
-        "invariant broken"
+        "refine_scenario without a timing_report was accepted — hard invariant broken"
     )
 
 
@@ -163,9 +154,7 @@ def test_ten_iterations_with_escalation_delegation_passes() -> None:
                 timing_report={"violations": ["scene_1"]},
             )
         )
-    trajectory.append(
-        _call("task", subagent_type="escalation", prompt="loop stuck")
-    )
+    trajectory.append(_call("task", subagent_type="escalation", prompt="loop stuck"))
     case = _case(
         trajectory,
         expected_iterations=10,
@@ -180,6 +169,4 @@ def test_ten_iterations_with_escalation_delegation_passes() -> None:
         "timing_loop.refine_inputs",
         "timing_loop.delegation",
     ):
-        assert results[label].test_pass, (
-            f"{label} should pass: {results[label].reason}"
-        )
+        assert results[label].test_pass, f"{label} should pass: {results[label].reason}"

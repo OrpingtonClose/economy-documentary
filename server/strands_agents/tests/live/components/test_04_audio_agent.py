@@ -130,9 +130,7 @@ def test_render_audio_composes_helpers_in_contract_order() -> None:
         clear_audio_helpers()
 
     # Expected call order per (scene, voice): tts, loudness, whisperx, upload.
-    kinds_per_block = [
-        ("tts", "loudness", "whisperx", "upload") for _ in range(3)
-    ]
+    kinds_per_block = [("tts", "loudness", "whisperx", "upload") for _ in range(3)]
     expected_kinds = [kind for block in kinds_per_block for kind in block]
     assert [c[0] for c in calls] == expected_kinds, (
         f"helpers called in wrong order: {[c[0] for c in calls]}"
@@ -194,9 +192,7 @@ def test_synthesized_english_narration_is_on_topic(
             "Answer with a single word: yes or no."
         )
         verdict = judge_audio_yes(prompt, wav_path)
-        assert not verdict.disabled, (
-            f"Gemini audio judge disabled: {verdict.error}"
-        )
+        assert not verdict.disabled, f"Gemini audio judge disabled: {verdict.error}"
         assert verdict.is_yes, (
             f"Gemini judged TTS'd English hyperinflation narration as "
             f"off-target; answer={verdict.answer!r}"
@@ -227,9 +223,7 @@ def test_synthesized_gibberish_is_not_judged_on_topic(
             "Answer with a single word: yes or no."
         )
         verdict = judge_audio_yes(prompt, wav_path)
-        assert not verdict.disabled, (
-            f"Gemini audio judge disabled: {verdict.error}"
-        )
+        assert not verdict.disabled, f"Gemini audio judge disabled: {verdict.error}"
         assert verdict.is_yes is False, (
             f"Gemini judged gibberish audio as on-topic hyperinflation "
             f"narration; answer={verdict.answer!r}"

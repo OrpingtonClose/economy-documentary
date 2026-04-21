@@ -52,9 +52,7 @@ _SYSTEM = (
 )
 
 
-def _generator_prompt(
-    topic: str, num_scenes: int, style: str, language: str
-) -> str:
+def _generator_prompt(topic: str, num_scenes: int, style: str, language: str) -> str:
     per_scene = 45.0
     return (
         f"Topic: {topic}\n"
@@ -65,23 +63,23 @@ def _generator_prompt(
         "\n"
         "Return JSON in the exact shape:\n"
         "{\n"
-        "  \"scenes\": [\n"
+        '  "scenes": [\n'
         "    {\n"
-        "      \"scene_num\": int,\n"
-        "      \"title\": str,\n"
-        "      \"voices\": [{\"text\": str}],\n"
-        "      \"duration_sec\": float,\n"
-        "      \"visual_notes\": str,\n"
-        "      \"hook_spec\": {...}  // only on scene 1\n"
-        "      \"outro_spec\": {...}  // only on the last scene\n"
+        '      "scene_num": int,\n'
+        '      "title": str,\n'
+        '      "voices": [{"text": str}],\n'
+        '      "duration_sec": float,\n'
+        '      "visual_notes": str,\n'
+        '      "hook_spec": {...}  // only on scene 1\n'
+        '      "outro_spec": {...}  // only on the last scene\n'
         "    }, ...\n"
         "  ],\n"
-        "  \"visual_style\": {\"dominant_style\": str},\n"
-        "  \"style_lock\": {\n"
-        "    \"dominant_style\": str,\n"
-        "    \"forbidden_styles\": [str, ...],\n"
-        "    \"positive_fragment\": str,\n"
-        "    \"negative_fragment\": str\n"
+        '  "visual_style": {"dominant_style": str},\n'
+        '  "style_lock": {\n'
+        '    "dominant_style": str,\n'
+        '    "forbidden_styles": [str, ...],\n'
+        '    "positive_fragment": str,\n'
+        '    "negative_fragment": str\n'
         "  }\n"
         "}\n"
         "\n"
@@ -186,8 +184,7 @@ def test_claude_generates_on_topic_scenario_that_evaluator_accepts(
     )
     hard_fails = [i for i in verdict["issues"] if i.get("verdict_cap") == "POOR"]
     assert hard_fails == [], (
-        f"Claude-generated scenario hard-failed structural checks: "
-        f"{hard_fails}"
+        f"Claude-generated scenario hard-failed structural checks: {hard_fails}"
     )
     assert verdict["rating"] in {"EXCELLENT", "GOOD", "FAIR"}, (
         f"unexpected rating: {verdict['rating']} issues={verdict['issues']}"
@@ -195,9 +192,7 @@ def test_claude_generates_on_topic_scenario_that_evaluator_accepts(
 
     # Concatenate all narration for the semantic judge.
     narration = " ".join(
-        voice.get("text", "")
-        for scene in scenes
-        for voice in scene.get("voices", [])
+        voice.get("text", "") for scene in scenes for voice in scene.get("voices", [])
     )
     assert narration, "no narration text produced by Claude"
 

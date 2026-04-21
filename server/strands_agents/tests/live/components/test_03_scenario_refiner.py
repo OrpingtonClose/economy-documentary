@@ -15,7 +15,7 @@ Clear-cut contracts proved here:
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Literal
 
 import pytest
 
@@ -77,9 +77,7 @@ def test_adjust_scene_durations_preserves_structure() -> None:
     # All non-target fields must be untouched.
     assert s1["voices"][0]["text"] == _ORIGINAL_LINE
     assert s1["voices"][0]["voice_id"] == "narrator_a"
-    assert s1["pronunciation_hints"] == [
-        {"token": "Weimar", "phoneme": "VY-mar"}
-    ]
+    assert s1["pronunciation_hints"] == [{"token": "Weimar", "phoneme": "VY-mar"}]
     assert s1["hook_spec"]["topic_specific_motif"] == "wheelbarrow of marks"
     # Other scenes untouched.
     assert result["scenes"][1]["target_duration_sec"] == 45.0
