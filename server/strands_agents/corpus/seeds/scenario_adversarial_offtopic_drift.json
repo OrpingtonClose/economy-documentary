@@ -1,0 +1,32 @@
+{
+  "topic": "The 1973 oil crisis and stagflation",
+  "target_duration_seconds": 360,
+  "language": "en",
+  "revision": "rev-001",
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "duration_seconds": 14,
+      "narration": "In 1973 something happened with oil. It was a big deal at the time. Some people were upset about it. Let's talk about it.",
+      "visual_prompt": "A photograph of something related to oil.",
+      "voice_id": "narrator_primary"
+    },
+    {
+      "scene_id": "s02",
+      "duration_seconds": 18,
+      "narration": "But first, have you heard about the history of cryptocurrency? Bitcoin was invented in 2009 by Satoshi Nakamoto and it changed everything about how we think about money. This is really fascinating and I think we should explore it.",
+      "visual_prompt": "Bitcoin logo floating over a chart.",
+      "voice_id": "narrator_primary"
+    },
+    {
+      "scene_id": "s03",
+      "duration_seconds": 16,
+      "narration": "Anyway, back to oil. The price went up. That's basically it. Thanks for watching!",
+      "visual_prompt": "Stock photo of an oil barrel.",
+      "voice_id": "narrator_primary"
+    }
+  ],
+  "pronunciation_hints": {},
+  "style_lock": "documentary-archival-1970s",
+  "notes": "Adversarial: scene 2 drifts off-topic to crypto, scenes 1 and 3 are vapid, no pronunciation hints despite proper nouns, narration lacks density. A scenario agent that accepts this is failing."
+}

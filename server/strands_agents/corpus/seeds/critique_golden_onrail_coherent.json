@@ -1,0 +1,14 @@
+{
+  "scene_id": "s02",
+  "revision": "rev-003",
+  "rating": "good",
+  "dimensions": {
+    "style_adherence": "strong",
+    "narration_visual_alignment": "strong",
+    "pacing": "acceptable",
+    "emotional_register": "strong"
+  },
+  "rationale": "The archival Federal Reserve footage matches the 1970s documentary style lock. The narration about the Phillips curve breaking aligns with the visual of concerned economists reviewing papers, which literalises the intellectual tension. Pacing is slightly dense at 54 words over 18s (~3.0 words/sec) but acceptable for educational content. Voice register matches documentary convention.",
+  "suggested_edits": [],
+  "notes": "Golden critique: grounded in the artifact, cites specific visual and narration elements, uses calibrated ratings rather than hedged prose, no suggested_edits because nothing needed changing."
+}

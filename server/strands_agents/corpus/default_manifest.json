@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "artifacts": [
+    {
+      "key": "scenario.golden.economics_intro",
+      "component": "01-scenario-agent",
+      "role": "golden",
+      "content_type": "scenario_json",
+      "storage": "seed",
+      "seed_path": "scenario_golden_economics_intro.json",
+      "sha256": "000bae95829d9aa5f0e4633cd0d262c2c87f0248fb5216e5b7eb612bea590e69",
+      "size_bytes": 2122,
+      "expected_verdict": "accept",
+      "notes": "On-topic, dense narration, calibrated pronunciation hints, documentary style. Scenario agent MUST accept.",
+      "license": "CC-BY-4.0",
+      "source": "hand-authored for strands corpus v1"
+    },
+    {
+      "key": "scenario.adversarial.offtopic_drift",
+      "component": "01-scenario-agent",
+      "role": "adversarial",
+      "content_type": "scenario_json",
+      "storage": "seed",
+      "seed_path": "scenario_adversarial_offtopic_drift.json",
+      "sha256": "8df0ccd91cfb15fa2998407753fa837ca4d88ed995dc0a3f6297c7cc43528e78",
+      "size_bytes": 1433,
+      "expected_verdict": "reject",
+      "notes": "Mid-scenario drift to an unrelated topic (crypto), vapid framing scenes, no pronunciation hints. Scenario agent MUST reject or trigger a refine loop.",
+      "license": "CC-BY-4.0",
+      "source": "hand-authored for strands corpus v1"
+    },
+    {
+      "key": "timing.ambiguous.borderline_overflow",
+      "component": "02-timing-evaluator",
+      "role": "ambiguous",
+      "content_type": "timing_report_json",
+      "storage": "seed",
+      "seed_path": "timing_report_ambiguous_borderline_overflow.json",
+      "sha256": "603c13fa1c34cef9d1f47bd871dc450170603898ddcfd138f02718d038579a62",
+      "size_bytes": 902,
+      "expected_verdict": "refine",
+      "notes": "Aggregate overflow marginally exceeds tolerance while per-scene drifts are within limits. Timing evaluator should flag for refine with a reasoned rationale, not silently accept or hard-reject.",
+      "license": "CC-BY-4.0",
+      "source": "hand-authored for strands corpus v1"
+    },
+    {
+      "key": "critique.golden.onrail_coherent",
+      "component": "08-coherence-evaluator",
+      "role": "golden",
+      "content_type": "critique_json",
+      "storage": "seed",
+      "seed_path": "critique_golden_onrail_coherent.json",
+      "sha256": "ef4d28ed722fdd41d5bbbf249408d000bc6e6162ea76737a9c4bf1080e902c7d",
+      "size_bytes": 866,
+      "expected_verdict": "accept",
+      "notes": "Grounded critique citing specific visual+narration elements, calibrated ratings, empty suggested_edits because scene is good. Coherence evaluator MUST accept.",
+      "license": "CC-BY-4.0",
+      "source": "hand-authored for strands corpus v1"
+    },
+    {
+      "key": "escalation.adversarial.premature",
+      "component": "13-escalation-supervisor",
+      "role": "adversarial",
+      "content_type": "escalation_decision_json",
+      "storage": "seed",
+      "seed_path": "escalation_adversarial_premature.json",
+      "sha256": "e92e93232df1ad39fb66a7dad13edb38565b1abf7672f7e391a13ba6d934c9a4",
+      "size_bytes": 725,
+      "expected_verdict": "reject",
+      "notes": "Proposed escalation after a single transient failure with full budget remaining. Supervisor MUST reject and redirect to retry or fix.",
+      "license": "CC-BY-4.0",
+      "source": "hand-authored for strands corpus v1"
+    }
+  ]
+}

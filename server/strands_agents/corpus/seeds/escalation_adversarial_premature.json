@@ -1,0 +1,21 @@
+{
+  "scene_id": "s01",
+  "revision": "rev-001",
+  "failure_history": [
+    {
+      "attempt": 1,
+      "stage": "audio",
+      "error_class": "tts_transient_rate_limit",
+      "retry_delay_seconds": 30
+    }
+  ],
+  "budget_remaining": {
+    "retries": 4,
+    "fixes": 3,
+    "time_seconds": 1800
+  },
+  "proposed_action": "escalate_to_human",
+  "rationale": "Tried once, it failed with a rate limit. Escalating.",
+  "neighbor_systems_contacted": [],
+  "notes": "Adversarial: premature escalation after a single transient failure with plenty of budget remaining and a recovery ladder (retry → fix → escalate) not yet attempted. An escalation supervisor that accepts this proposed_action is failing the discipline test."
+}

@@ -1,0 +1,36 @@
+{
+  "topic": "The 1973 oil crisis and stagflation",
+  "target_duration_seconds": 360,
+  "language": "en",
+  "revision": "rev-001",
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "duration_seconds": 14,
+      "narration": "October 1973. OPEC's oil embargo slams into the American economy like a sledgehammer. Gas lines stretch around the block. And economists watch something impossible unfold: prices soaring while jobs disappear. The word 'stagflation' is about to enter the dictionary.",
+      "visual_prompt": "Black and white news footage of long gas station lines in 1973 America, cars stretching around the block, anxious drivers, sepia tone.",
+      "voice_id": "narrator_primary"
+    },
+    {
+      "scene_id": "s02",
+      "duration_seconds": 18,
+      "narration": "For thirty years, Keynesian economics had promised a tradeoff: you could have inflation or unemployment, but not both. The Phillips curve was gospel. Then in 1973 the curve broke. And the entire profession had to admit a humbling truth: the models were wrong.",
+      "visual_prompt": "Archival footage of economists at a Federal Reserve meeting, grainy, concerned expressions, papers shuffling, 1970s aesthetic.",
+      "voice_id": "narrator_primary"
+    },
+    {
+      "scene_id": "s03",
+      "duration_seconds": 16,
+      "narration": "Milton Friedman had warned this was coming. His 1967 address predicted that any attempt to exploit the Phillips curve long-term would cause exactly what America was now experiencing: accelerating inflation with no lasting employment gains. Six years later, reality proved him right.",
+      "visual_prompt": "Milton Friedman at a University of Chicago lectern, wire-rimmed glasses, 1967 black-and-white photography, academic intensity.",
+      "voice_id": "narrator_primary"
+    }
+  ],
+  "pronunciation_hints": {
+    "OPEC": "oh-peck",
+    "Keynesian": "kayn-zee-uhn",
+    "Milton Friedman": "mil-tuhn freed-muhn"
+  },
+  "style_lock": "documentary-archival-1970s",
+  "notes": "Golden scenario: on-topic, correct pronunciation hints, historically accurate, documentary voice, within duration budget."
+}

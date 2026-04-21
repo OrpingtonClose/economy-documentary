@@ -1,0 +1,30 @@
+{
+  "revision": "rev-002",
+  "target_duration_seconds": 360,
+  "measured_total_seconds": 362.4,
+  "per_scene": [
+    {
+      "scene_id": "s01",
+      "target_seconds": 14.0,
+      "measured_seconds": 14.8,
+      "gap_before_seconds": 0.4,
+      "words": 42
+    },
+    {
+      "scene_id": "s02",
+      "target_seconds": 18.0,
+      "measured_seconds": 18.2,
+      "gap_before_seconds": 0.5,
+      "words": 54
+    },
+    {
+      "scene_id": "s03",
+      "target_seconds": 16.0,
+      "measured_seconds": 16.5,
+      "gap_before_seconds": 0.5,
+      "words": 48
+    }
+  ],
+  "tolerance_seconds": 2.0,
+  "notes": "Ambiguous: total overflow is 2.4s (marginal against 2.0s tolerance). Per-scene drift individually within limits. A timing evaluator should flag this but whether to trigger a refine loop vs. accept is a judgment call — we expect a reasoned verdict with rationale, not a binary pass/fail."
+}
