@@ -61,6 +61,37 @@ jobs:
         # Per-component experiments land as subsequent matrix jobs.
         run: poetry run pytest strands_agents/tests/unit/ -v --tb=short
 
+      - name: Run Tier-2 atomic-robustness suite (hermetic)
+        id: tier2
+        # Tier-2 has its own conftest that registers --tier2-report, so
+        # it must be invoked on the tier2/ subpath explicitly.  The
+        # reporter JSON feeds the per-component gate below.
+        run: |
+          set +e
+          poetry run pytest strands_agents/tests/unit/tier2/ \
+            --tier2-report=/tmp/tier2-report.json \
+            -v --tb=short --maxfail=50
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "pytest_failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pytest_failed=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$rc"
+
+      - name: Tier-2 per-component regression gate
+        # Parses the reporter JSON and fails with per-component granularity
+        # so the CI status page shows which components broke.  Hermetic-only
+        # mode — live_fail counts only gate the nightly run.  Runs only when
+        # the tier2 pytest step actually produced a report (skip if the job
+        # failed earlier e.g. during poetry install).
+        if: always() && steps.tier2.outputs.pytest_failed != ''
+        run: |
+          poetry run python -m strands_agents.tier2._gate \
+            --report /tmp/tier2-report.json \
+            --mode hermetic
+
       - name: Upload test artefacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -69,3 +100,4 @@ jobs:
           if-no-files-found: ignore
           path: |
             server/strands_agents/evals/experiments/*.json
+            /tmp/tier2-report.json

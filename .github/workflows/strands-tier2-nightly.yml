@@ -178,57 +178,28 @@ jobs:
           path: |
             server/strands_agents/evals/experiments/*.json
 
-      - name: Surface red components
-        # Adds a one-line "red components" header to the step summary
-        # when any component failed — easier to grep than the full
-        # table emitted by the reporter plugin.
-        if: always()
+      - name: Tier-2 live regression report
+        # Live-mode gate runs first (non-blocking): counts hermetic_fail,
+        # errors AND live_fail, appends a red-component table to the step
+        # summary, and surfaces ``::error::`` annotations for each red
+        # component.  Intentionally not blocking — live judges can flake
+        # and we want to see the report even when the fleet is degraded.
+        if: always() && steps.pytest.outputs.pytest_failed != ''
+        continue-on-error: true
         run: |
-          if [ -f /tmp/tier2-report.json ]; then
-            python - <<'PY'
-          import json, os, pathlib
-
-          data = json.loads(pathlib.Path("/tmp/tier2-report.json").read_text())
-          red = []
-          for c in data.get("components", []):
-              failed = c.get("hermetic_fail", 0) + c.get("live_fail", 0) + c.get("errors", 0)
-              if failed:
-                  red.append(f"{c['component']}: {failed} failure(s)")
-
-          gh = os.environ.get("GITHUB_STEP_SUMMARY")
-          if gh:
-              with open(gh, "a", encoding="utf-8") as fh:
-                  fh.write("\n## Red components (pre-table)\n\n")
-                  if red:
-                      for line in red:
-                          fh.write(f"- {line}\n")
-                  else:
-                      fh.write("- (none)\n")
-          PY
-          fi
+          poetry run python -m strands_agents.tier2._gate \
+            --report /tmp/tier2-report.json \
+            --mode live
 
       - name: Fail the job if hermetic tests regressed
         # Hermetic tests have no dependency on the fleet — if they
-        # regress, the corpus or harness is broken and the run should
-        # be red even when the live half is flaky.  Live failures
-        # are informational only at this stage (PR-F adds gating).
-        if: always()
+        # regress, the corpus or harness is broken and the run must be
+        # red even when the live half is flaky.  This gate matches the
+        # per-PR ``strands-evals.yml`` gate so PR-gated and nightly
+        # runs share one source of truth for "what counts as a
+        # regression".
+        if: always() && steps.pytest.outputs.pytest_failed != ''
         run: |
-          if [ ! -f /tmp/tier2-report.json ]; then
-            echo "::warning::no tier2 report written (pytest likely crashed)"
-            exit 0
-          fi
-          python - <<'PY'
-          import json, pathlib, sys
-
-          data = json.loads(pathlib.Path("/tmp/tier2-report.json").read_text())
-          bad = [
-              c["component"]
-              for c in data.get("components", [])
-              if c.get("hermetic_fail", 0) or c.get("errors", 0)
-          ]
-          if bad:
-              print(f"::error::Tier-2 hermetic regressions in: {', '.join(bad)}")
-              sys.exit(1)
-          print("Tier-2 hermetic gate: all 15 components green")
-          PY
+          poetry run python -m strands_agents.tier2._gate \
+            --report /tmp/tier2-report.json \
+            --mode hermetic
