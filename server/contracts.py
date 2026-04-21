@@ -298,6 +298,13 @@ AUDIO_CONTRACT = StageContract(
     produced_artifacts=["audio/*.wav"],
 )
 
+TIMING_CONTRACT = StageContract(
+    name="timing",
+    required_services=[],  # deterministic — OTIO + WhisperX alignment only
+    required_state=["scenes", "whisperx_alignment"],
+    produced_state=["timing_passed", "timing_report"],
+)
+
 VISUAL_DIRECTION_CONTRACT = StageContract(
     name="visual_direction",
     required_services=[],  # LLM only
@@ -323,6 +330,46 @@ ASSEMBLY_CONTRACT = StageContract(
     name="assembly",
     required_services=[],  # ffmpeg only — local
     required_state=["scenes", "whisperx_alignment", "visual_concepts"],
+    produced_artifacts=["output/*.mp4"],
+)
+
+RECOVERY_CLASSIFIER_CONTRACT = StageContract(
+    name="recovery_classifier",
+    required_services=[],  # LLM + heuristics only
+    required_state=["recovery_event"],
+    produced_state=["classification"],
+)
+
+RECOVERY_REMANIFESTER_CONTRACT = StageContract(
+    name="recovery_remanifester",
+    required_services=[],  # LLM + rules only
+    required_state=["classification", "original_concept"],
+    produced_state=["revised_concept"],
+)
+
+ESCALATION_CONTRACT = StageContract(
+    name="escalation",
+    required_services=[],  # decision-only — no workers
+    required_state=["diagnostic"],
+    produced_state=["decision"],
+)
+
+
+PIPELINE_CONTRACT = StageContract(
+    name="pipeline",
+    required_services=[],  # aggregated — individual stages declare theirs
+    # The orchestrator only runs once the user has handed us a brief and a
+    # target_duration_sec.  Everything else is produced by the pipeline
+    # itself — we intentionally do not list ``scenes`` / ``whisperx_alignment``
+    # / ``visual_concepts`` as required because the orchestrator's job is
+    # to produce them.
+    required_state=["brief", "target_duration_sec"],
+    produced_state=[
+        "scenes",
+        "whisperx_alignment",
+        "visual_concepts",
+        "final_timeline",
+    ],
     produced_artifacts=["output/*.mp4"],
 )
 

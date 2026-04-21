@@ -1,0 +1,9 @@
+{
+  "error_class": "budget_exhausted_whole_stage",
+  "error_message": "4 of 5 scenes still failing after stage budget exhausted",
+  "budget_over": true,
+  "total_scenes": 5,
+  "failed_scenes": 4,
+  "target": {"scope": "stage", "id": "production"},
+  "history": []
+}

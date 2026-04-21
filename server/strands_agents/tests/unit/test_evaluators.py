@@ -841,11 +841,15 @@ def test_parallel_wrong_count_fails() -> None:
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
     assert by_label["parallel.count"].test_pass is False
-    # When count is wrong, batched can't be true either.
-    assert by_label["parallel.batched"].test_pass is False
+    # Batched cares only about at_turn markers, not per-batch size, so it
+    # still passes here — the count check is the one that surfaces the
+    # under-dispatched batch.
+    assert by_label["parallel.batched"].test_pass is True
 
 
-def test_parallel_spread_across_turns_fails_batched() -> None:
+def test_parallel_spread_across_turns_fails_count() -> None:
+    # Serialising 3 launches across 3 turns forms 3 batches of 1 launch
+    # each — every batch fails the per-batch expected_count check.
     evaluator = ParallelLaunchEvaluator()
     trajectory = [
         {"name": "launch_tts", "at_turn": 1},
@@ -859,8 +863,93 @@ def test_parallel_spread_across_turns_fails_batched() -> None:
     )
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is False
+    # Batched passes — each launch carries an at_turn marker; the
+    # problem is per-batch size, not missing markers.
+    assert by_label["parallel.batched"].test_pass is True
+
+
+def test_parallel_multi_batch_iterations_pass() -> None:
+    # Two iterations of a 3-scene loop: 2 batches × 3 launches each.
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks", "at_turn": 2},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "await_tasks", "at_turn": 4},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 3,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
     assert by_label["parallel.count"].test_pass is True
-    assert by_label["parallel.batched"].test_pass is False
+    assert by_label["parallel.batched"].test_pass is True
+    assert by_label["parallel.awaited"].test_pass is True
+
+
+def test_parallel_multi_batch_one_short_batch_fails_count() -> None:
+    # Second iteration only dispatched 2 of 3 — every batch is inspected.
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks", "at_turn": 2},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "await_tasks", "at_turn": 4},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 3,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is False
+    # Both iterations were awaited, so await ordering is still OK.
+    assert by_label["parallel.awaited"].test_pass is True
+
+
+def test_parallel_multi_batch_missing_completion_for_second_iteration() -> None:
+    # Second batch launched at turn 3 but no completion_tool call appears
+    # at a strictly greater turn.
+    evaluator = ParallelLaunchEvaluator()
+    trajectory = [
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "launch_tts", "at_turn": 1},
+        {"name": "await_tasks", "at_turn": 2},
+        {"name": "launch_tts", "at_turn": 3},
+        {"name": "launch_tts", "at_turn": 3},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={
+            "tool_name": "launch_tts",
+            "expected_count": 2,
+            "completion_tool": "await_tasks",
+        },
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["parallel.count"].test_pass is True
+    assert by_label["parallel.awaited"].test_pass is False
 
 
 def test_parallel_missing_at_turn_on_some_launches_fails_batched() -> None:
@@ -877,7 +966,11 @@ def test_parallel_missing_at_turn_on_some_launches_fails_batched() -> None:
     )
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
-    assert by_label["parallel.count"].test_pass is True
+    # With per-batch semantics a missing at_turn can't be placed in a
+    # batch, so both count and batched fail and both reasons cite the
+    # missing marker.
+    assert by_label["parallel.count"].test_pass is False
+    assert "at_turn" in (by_label["parallel.count"].reason or "")
     assert by_label["parallel.batched"].test_pass is False
     assert "at_turn" in (by_label["parallel.batched"].reason or "")
 
