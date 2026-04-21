@@ -470,7 +470,7 @@ def validate_phrases(content_analysis: dict[str, Any]) -> dict[str, Any]:
     return {"valid": not issues, "issues": issues}
 
 
-@tool
+@tool(context=True)
 def persist_content_analysis(
     content_analysis: dict[str, Any],
     tool_context: ToolContext,

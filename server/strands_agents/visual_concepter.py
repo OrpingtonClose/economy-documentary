@@ -510,7 +510,7 @@ def check_style_lock(
     return {"ok": not violations, "violations": violations}
 
 
-@tool
+@tool(context=True)
 def persist_visual_concepts(
     visual_concepts: list[dict[str, Any]],
     tool_context: ToolContext,
