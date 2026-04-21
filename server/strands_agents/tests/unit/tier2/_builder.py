@@ -32,6 +32,7 @@ def _artifacts_for(component: CorpusComponent) -> tuple[CorpusArtifact, ...]:
     one-shot manifest load.
     """
     from strands_agents.corpus.fixtures import load_default_manifest
+
     return filter_artifacts(load_default_manifest(), component=component)
 
 
@@ -80,6 +81,7 @@ def build_component_tests(component: CorpusComponent) -> dict[str, Any]:
             )
 
     if artifacts:
+
         @pytest.mark.parametrize(
             "artifact",
             artifacts,
@@ -126,6 +128,7 @@ def build_component_tests(component: CorpusComponent) -> dict[str, Any]:
 
             harness.assert_live_verdict(artifact, verdict.verdict)
     else:
+
         def test_hermetic_artifact_loads() -> None:  # type: ignore[misc]
             """No corpus yet for this component — tracked by test_corpus_seeded."""
             pytest.skip(f"no corpus artifacts for component=<{component}>")

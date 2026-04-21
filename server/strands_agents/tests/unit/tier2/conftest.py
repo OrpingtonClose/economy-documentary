@@ -26,7 +26,14 @@ logger = logging.getLogger(__name__)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register ``--tier2-live`` so nightly runs can wire the judge fleet."""
+    """Register ``--tier2-live`` + ``--tier2-report`` options.
+
+    Both options are defined here rather than in the reporter plugin
+    module because pytest 9 forbids ``pytest_plugins`` outside the
+    rootdir conftest.  Option registration belongs to the nearest
+    conftest; the reporter plugin is instantiated + registered in
+    ``pytest_configure`` below.
+    """
     group = parser.getgroup("tier2", "Tier-2 atomic-robustness evals")
     group.addoption(
         "--tier2-live",
@@ -39,15 +46,43 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "default so hermetic CI stays free."
         ),
     )
+    group.addoption(
+        "--tier2-report",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write a per-component Tier-2 outcome report (JSON) to PATH.  "
+            "If GITHUB_STEP_SUMMARY is set, a markdown summary is also "
+            "appended to it.  Off by default."
+        ),
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register custom markers used by the Tier-2 suites."""
+    """Register custom markers + the Tier-2 reporter plugin.
+
+    The reporter is only instantiated when a sink is configured
+    (``--tier2-report`` or ``$GITHUB_STEP_SUMMARY``), so hermetic PR
+    runs pay no overhead.  Registration happens here rather than in
+    the plugin module because pytest 9 forbids ``pytest_plugins``
+    outside the rootdir conftest.
+    """
     config.addinivalue_line(
         "markers",
         "tier2_live: mark test as requiring the live judge fleet (skipped "
         "unless --tier2-live is passed)",
     )
+
+    from strands_agents.tier2._report import (
+        build_reporter_from_config,
+        reporter_stash_key,
+    )
+
+    reporter = build_reporter_from_config(config)
+    if reporter is not None:
+        config.pluginmanager.register(reporter, name="tier2-reporter")
+        config.stash[reporter_stash_key] = reporter
 
 
 def pytest_collection_modifyitems(

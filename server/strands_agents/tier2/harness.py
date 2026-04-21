@@ -120,9 +120,7 @@ def assert_hermetic(artifact: CorpusArtifact, fetcher: CorpusFetcher) -> None:
 
     payload = load_artifact_bytes(fetcher, artifact)
     if not payload:
-        raise AssertionError(
-            f"corpus key=<{artifact.key}> resolved to 0 bytes"
-        )
+        raise AssertionError(f"corpus key=<{artifact.key}> resolved to 0 bytes")
     if len(payload) != artifact.size_bytes:
         raise AssertionError(
             f"corpus key=<{artifact.key}> size mismatch: "
@@ -268,14 +266,13 @@ def assert_live_verdict(
     """
     expected_v = expected if expected is not None else (artifact.expected_verdict or "")
     if not expected_v:
-        raise AssertionError(
-            f"corpus key=<{artifact.key}> has no expected_verdict set"
-        )
+        raise AssertionError(f"corpus key=<{artifact.key}> has no expected_verdict set")
 
     if not actual_verdict or normalise_verdict(actual_verdict) == "abstain":
         logger.warning(
             "artifact=<%s>, expected=<%s> | judge abstained — recorded but not failed",
-            artifact.key, expected_v,
+            artifact.key,
+            expected_v,
         )
         return
 

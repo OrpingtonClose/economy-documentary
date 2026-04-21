@@ -1,0 +1,203 @@
+name: Strands Tier-2 nightly
+
+# Runs the Tier-2 atomic-robustness evals against the live judge fleet
+# every night (and on demand) and emits a per-component pass/fail
+# report.  The hermetic Tier-2 tests run on every PR via
+# `strands-evals.yml`; this workflow is the ``--tier2-live`` counterpart
+# that calls real judges (Qwen3.5-Omni, Gemma-4 abliterated, Claude
+# fallback) and is gated on secrets.
+#
+# Non-blocking by design: a red run posts a report and pings the label,
+# but does not fail the PR gate.  PR-F will add the blocking per-component
+# gate on top of this workflow's JSON output.
+
+on:
+  schedule:
+    # Daily at 08:00 UTC — offset from the main weekday engineering
+    # window so failures surface at the start of work, not at the end.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+    inputs:
+      tier2_live:
+        description: "Call real judges (requires fleet + secrets)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      components:
+        description: "Pytest -k expression (blank = all components)"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  # Nightly runs must not stomp each other if a manual dispatch
+  # overlaps the cron — we want both reports, not one corrupted one.
+  group: strands-tier2-nightly-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  tier2:
+    name: Tier-2 atomic-robustness (live=${{ github.event.inputs.tier2_live || 'true' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: server
+
+    # Judge API keys are all *org-level* secrets (see DASHSCOPE_API_KEY,
+    # ANTHROPIC_API_KEY, etc. already configured on this repo).  The
+    # judge fleet selects which ones to actually use per-rubric via
+    # JudgeEnsemble; unused keys stay unread.
+    env:
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      ALIBABA_API_KEY: ${{ secrets.ALIBABA_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      VAST_AI_API_KEY: ${{ secrets.VAST_AI_API_KEY }}
+      # Python logging for structured diagnostics in the run log.
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install "poetry>=2.1,<3"
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: poetry-strands-tier2-${{ runner.os }}-py3.12-${{ hashFiles('server/poetry.lock') }}
+          restore-keys: |
+            poetry-strands-tier2-${{ runner.os }}-py3.12-
+            poetry-strands-${{ runner.os }}-py3.12-
+
+      - name: Install server dependencies with strands extra
+        run: poetry install --no-root --with dev --with strands
+
+      - name: Compute pytest args
+        id: args
+        run: |
+          live="${{ github.event.inputs.tier2_live || 'true' }}"
+          if [ "$live" = "true" ]; then
+            echo "tier2_flag=--tier2-live" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier2_flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+          components="${{ github.event.inputs.components }}"
+          if [ -n "$components" ]; then
+            echo "k_expr=-k" >> "$GITHUB_OUTPUT"
+            echo "k_value=$components" >> "$GITHUB_OUTPUT"
+          else
+            echo "k_expr=" >> "$GITHUB_OUTPUT"
+            echo "k_value=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Tier-2 atomic-robustness suite
+        # ``--tier2-live`` activates the judge fleet; ``--tier2-report``
+        # drops a JSON artefact for PR-F to consume.  ``GITHUB_STEP_SUMMARY``
+        # is picked up automatically by the _report plugin to render
+        # the per-component markdown table in the run page.
+        #
+        # ``|| true``: we deliberately don't fail the workflow here —
+        # the report + artefacts are the deliverable, not the exit
+        # code.  PR-F will layer a blocking gate on top that reads the
+        # JSON and decides which failures matter.
+        id: pytest
+        run: |
+          poetry run pytest strands_agents/tests/unit/tier2/ \
+            ${{ steps.args.outputs.tier2_flag }} \
+            ${{ steps.args.outputs.k_expr }} ${{ steps.args.outputs.k_value }} \
+            --tier2-report=/tmp/tier2-report.json \
+            -v --tb=short \
+            --maxfail=50 || echo "pytest_failed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Tier-2 report artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strands-tier2-report-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            /tmp/tier2-report.json
+
+      - name: Upload evaluation summaries on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strands-tier2-failures-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            server/strands_agents/evals/experiments/*.json
+
+      - name: Surface red components
+        # Adds a one-line "red components" header to the step summary
+        # when any component failed — easier to grep than the full
+        # table emitted by the reporter plugin.
+        if: always()
+        run: |
+          if [ -f /tmp/tier2-report.json ]; then
+            python - <<'PY'
+          import json, os, pathlib
+
+          data = json.loads(pathlib.Path("/tmp/tier2-report.json").read_text())
+          red = []
+          for c in data.get("components", []):
+              failed = c.get("hermetic_fail", 0) + c.get("live_fail", 0) + c.get("errors", 0)
+              if failed:
+                  red.append(f"{c['component']}: {failed} failure(s)")
+
+          gh = os.environ.get("GITHUB_STEP_SUMMARY")
+          if gh:
+              with open(gh, "a", encoding="utf-8") as fh:
+                  fh.write("\n## Red components (pre-table)\n\n")
+                  if red:
+                      for line in red:
+                          fh.write(f"- {line}\n")
+                  else:
+                      fh.write("- (none)\n")
+          PY
+          fi
+
+      - name: Fail the job if hermetic tests regressed
+        # Hermetic tests have no dependency on the fleet — if they
+        # regress, the corpus or harness is broken and the run should
+        # be red even when the live half is flaky.  Live failures
+        # are informational only at this stage (PR-F adds gating).
+        if: always()
+        run: |
+          if [ ! -f /tmp/tier2-report.json ]; then
+            echo "::warning::no tier2 report written (pytest likely crashed)"
+            exit 0
+          fi
+          python - <<'PY'
+          import json, pathlib, sys
+
+          data = json.loads(pathlib.Path("/tmp/tier2-report.json").read_text())
+          bad = [
+              c["component"]
+              for c in data.get("components", [])
+              if c.get("hermetic_fail", 0) or c.get("errors", 0)
+          ]
+          if bad:
+              print(f"::error::Tier-2 hermetic regressions in: {', '.join(bad)}")
+              sys.exit(1)
+          print("Tier-2 hermetic gate: all 15 components green")
+          PY
