@@ -188,11 +188,17 @@ def _block_id(scene_num: int, voice_role: str) -> str:
 
 
 def _voice_role_of(voice: dict[str, Any]) -> str:
-    for key in ("voice_id", "voice_role", "role"):
+    # Prefer the abstract role (``voice_role`` / ``role``) over the concrete
+    # ``voice_id``. NarrationBlock and the voice_map contract in
+    # critique/audio_invariants.py distinguish the two: voice_role is the
+    # scenario-level handle ("V1"), voice_id is the TTS backend identifier
+    # ("qwen3-tts:male_01"). Returning a concrete id here would poison
+    # TTS dispatch, voice_map lookups, and block ids.
+    for key in ("voice_role", "role", "voice_id"):
         raw = voice.get(key)
         if raw is not None and str(raw) != "":
             return str(raw)
-    raise ValueError("voice entry missing voice_id / voice_role / role")
+    raise ValueError("voice entry missing voice_role / role / voice_id")
 
 
 def _voice_text_of(voice: dict[str, Any]) -> str:

@@ -26,6 +26,7 @@ import pytest
 from strands_agents.audio_tool import (
     AudioHelpersNotConfigured,
     TARGET_LUFS,
+    _voice_role_of,
     clear_audio_helpers,
     render_audio,
     set_audio_helpers,
@@ -357,7 +358,7 @@ def test_voice_with_empty_text_raises_value_error() -> None:
 def test_voice_missing_id_raises_value_error() -> None:
     _install_helpers()
     scenes = [{"id": 1, "voices": [{"text": "hello"}]}]
-    with pytest.raises(ValueError, match="missing voice_id"):
+    with pytest.raises(ValueError, match="voice_role / role / voice_id"):
         render_audio.__wrapped__(scenes=scenes, tool_context=None)
 
 
@@ -587,3 +588,33 @@ def test_success_cases_carry_expected_whisperx_alignment() -> None:
             assert "whisperx_alignment" in case.expected_output
             assert "narration_blocks" in case.expected_output
             assert case.expected_output["label"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# _voice_role_of key priority
+# ---------------------------------------------------------------------------
+
+
+def test_voice_role_of_prefers_voice_role_over_voice_id() -> None:
+    voice = {"voice_role": "V1", "voice_id": "qwen3-tts:male_01", "text": "hi"}
+    assert _voice_role_of(voice) == "V1"
+
+
+def test_voice_role_of_falls_back_to_role_before_voice_id() -> None:
+    voice = {"role": "V2", "voice_id": "qwen3-tts:female_03"}
+    assert _voice_role_of(voice) == "V2"
+
+
+def test_voice_role_of_returns_voice_id_only_when_no_abstract_role() -> None:
+    voice = {"voice_id": "qwen3-tts:male_01"}
+    assert _voice_role_of(voice) == "qwen3-tts:male_01"
+
+
+def test_voice_role_of_skips_blank_role_keys() -> None:
+    voice = {"voice_role": "", "role": None, "voice_id": "qwen3-tts:male_01"}
+    assert _voice_role_of(voice) == "qwen3-tts:male_01"
+
+
+def test_voice_role_of_raises_when_no_keys_present() -> None:
+    with pytest.raises(ValueError, match="voice_role / role / voice_id"):
+        _voice_role_of({"text": "hi"})
