@@ -155,11 +155,11 @@ def set_content_analyst_helpers(
             ``phrase_type``, ``narrative_weight``, ``visual_intent``,
             ``word_span``, ``time_span``. ``phrase_id`` is computed
             deterministically by :func:`extract_phrases` itself so the
-            helper does not need to produce one.
+            helper does not need to produce one. Pass ``None`` to clear
+            the registry.
     """
     global _EXTRACTOR
-    if phrase_extractor is not None:
-        _EXTRACTOR = phrase_extractor
+    _EXTRACTOR = phrase_extractor
 
 
 def clear_content_analyst_helpers() -> None:

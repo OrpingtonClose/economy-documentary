@@ -205,11 +205,11 @@ def set_visual_concepter_helpers(
             ``camera_movement``, ``prompt``, ``negative_prompt``,
             ``duration_sec``, and ``ltx_params``. ``phrase_id`` +
             ``scene_id`` are stamped deterministically by
-            :func:`propose_concept` from the phrase.
+            :func:`propose_concept` from the phrase. Pass ``None`` to
+            clear the registry.
     """
     global _PROPOSER
-    if concept_proposer is not None:
-        _PROPOSER = concept_proposer
+    _PROPOSER = concept_proposer
 
 
 def clear_visual_concepter_helpers() -> None:

@@ -105,11 +105,11 @@ def set_refiner_helpers(*, text_rewriter: _TextRewriter | None = None) -> None:
             ``(text, direction, delta_sec) -> rewritten_text`` where
             ``direction`` is ``"shorten"`` or ``"lengthen"`` and
             ``delta_sec`` is roughly how many seconds of speech to
-            add or remove (assume ~2.5 words / second).
+            add or remove (assume ~2.5 words / second). Pass ``None``
+            to clear the registry.
     """
     global _TEXT_REWRITER
-    if text_rewriter is not None:
-        _TEXT_REWRITER = text_rewriter
+    _TEXT_REWRITER = text_rewriter
 
 
 def clear_refiner_helpers() -> None:

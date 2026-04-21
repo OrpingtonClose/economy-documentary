@@ -99,13 +99,13 @@ def set_scenario_helpers(
     Args:
         generator: Callable implementing ``(topic, num_scenes, style, language)
             -> {"scenes": [...], "visual_style": {...}, "style_lock": {...}}``.
+            Pass ``None`` to clear the registry.
         refiner: Callable implementing ``(scenes, feedback) -> {"scenes": [...]}``.
+            Pass ``None`` to clear the registry.
     """
     global _GENERATOR, _REFINER
-    if generator is not None:
-        _GENERATOR = generator
-    if refiner is not None:
-        _REFINER = refiner
+    _GENERATOR = generator
+    _REFINER = refiner
 
 
 def clear_scenario_helpers() -> None:
