@@ -257,7 +257,15 @@ def tweak_voice_text(
     if not voices:
         raise ValueError(f"scene_id=<{scene_id}> | has no voices[] to rewrite")
 
-    per_voice_delta = delta_sec / len(voices)
+    # Split delta across voices that actually carry narration. Counting
+    # empty-text voices in the denominator would systematically under-
+    # correct by the empty-voice ratio and waste refinement iterations.
+    active_voices = [v for v in voices if _voice_text(v).strip()]
+    if not active_voices:
+        raise ValueError(
+            f"scene_id=<{scene_id}> | no voices carry narration text to rewrite"
+        )
+    per_voice_delta = delta_sec / len(active_voices)
     changed = 0
     for voice in voices:
         original = _voice_text(voice)

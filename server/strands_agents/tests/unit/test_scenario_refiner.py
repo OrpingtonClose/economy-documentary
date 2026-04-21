@@ -342,6 +342,55 @@ def test_tweak_voice_text_splits_delta_across_voices() -> None:
     assert [round(c[2], 3) for c in captured] == [2.0, 2.0, 2.0]
 
 
+def test_tweak_voice_text_splits_delta_across_active_voices_only() -> None:
+    """Empty-text voices must not inflate the per-voice denominator.
+
+    Counting empty voices in the split would systematically under-correct
+    by the empty-voice ratio (e.g. 6s / 3 voices = 2s/voice delivered to
+    the 2 active voices → 4s applied instead of 6s).
+    """
+    captured: list[tuple[str, str, float]] = []
+
+    def _capture(text: str, direction: str, delta_sec: float) -> str:
+        captured.append((text, direction, delta_sec))
+        return text + " trailing"
+
+    set_refiner_helpers(text_rewriter=_capture)
+    scenes = _baseline_scenes(3)
+    scenes[0]["voices"] = [
+        {"voice_id": "V1", "text": "one"},
+        {"voice_id": "V2", "text": ""},  # empty — should be skipped, and not counted
+        {"voice_id": "V3", "text": "three"},
+    ]
+    tweak_voice_text.__wrapped__(
+        scenes=scenes,
+        scene_id=1,
+        direction="lengthen",
+        delta_sec=6.0,
+    )
+    # delta split across 2 active voices, not 3 total voices
+    assert [round(c[2], 3) for c in captured] == [3.0, 3.0]
+    total_applied = sum(c[2] for c in captured)
+    assert round(total_applied, 3) == 6.0
+
+
+def test_tweak_voice_text_rejects_scene_where_all_voices_are_blank() -> None:
+    """If no voice carries narration the refine request is ill-formed."""
+    set_refiner_helpers(text_rewriter=_shorten_rewriter)
+    scenes = _baseline_scenes(3)
+    scenes[0]["voices"] = [
+        {"voice_id": "V1", "text": ""},
+        {"voice_id": "V2", "text": "   "},
+    ]
+    with pytest.raises(ValueError, match="no voices carry narration"):
+        tweak_voice_text.__wrapped__(
+            scenes=scenes,
+            scene_id=1,
+            direction="shorten",
+            delta_sec=2.0,
+        )
+
+
 # ---------------------------------------------------------------------------
 # validate_pronunciation_hints
 # ---------------------------------------------------------------------------
