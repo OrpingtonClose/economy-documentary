@@ -26,6 +26,7 @@ from critique.store import ArtifactCritiqueStore
 from strands_agents.evals.evaluators import (
     ApprovalGateTrajectoryEvaluator,
     AudioInvariantEvaluator,
+    AudioWorkerInvariantEvaluator,
     ContractComplianceEvaluator,
     CritiqueStoreEvaluator,
     EscalationDecisionEvaluator,
@@ -1258,3 +1259,176 @@ def test_approval_decision_mismatch_fails() -> None:
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
     assert by_label["approval.decision"].test_pass is False
+
+
+# ---------------------------------------------------------------------------
+# AudioWorkerInvariantEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_audio_worker_no_calls_fails_voice_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[{"name": "plan", "at_turn": 0, "args": {}}],
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is False
+
+
+def test_audio_worker_single_voice_batch_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s3", "voice_id": "V1"}},
+        {"name": "await_tasks", "at_turn": 2, "args": {}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is True
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+    assert "audio_worker.no_pool_rebind" not in by_label
+
+
+def test_audio_worker_cross_voice_in_one_batch_fails() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V2"}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+
+
+def test_audio_worker_cross_voice_expected_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V2"}},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_cross_voice_race": True},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_multi_voice_serialised_across_turns_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V1"}},
+        {"name": "await_tasks", "at_turn": 2, "args": {}},
+        {"name": "launch_audio_render", "at_turn": 3, "args": {"scene_id": "s3", "voice_id": "V2"}},
+        {"name": "launch_audio_render", "at_turn": 3, "args": {"scene_id": "s4", "voice_id": "V2"}},
+        {"name": "await_tasks", "at_turn": 4, "args": {}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_pool_rebind_fails() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1", "worker_pool": "pool-a"},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 3,
+            "args": {"scene_id": "s3", "voice_id": "V2", "worker_pool": "pool-a"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Single-voice per batch so the batch gate passes.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+    # But pool-a gets rebound from V1 → V2 across turns — that's the race.
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is False
+
+
+def test_audio_worker_distinct_pools_per_voice_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1", "worker_pool": "pool-a"},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s2", "voice_id": "V2", "worker_pool": "pool-b"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # A cross-voice parallel batch still fails the batch gate even with
+    # distinct worker_pool values — because the parallel-launch
+    # evaluator cannot prove the LangGraph tool runner actually honoured
+    # the pool routing. Serialise across turns to be safe.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is True
+
+
+def test_audio_worker_voice_map_single_voice_extracted() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_map": {"narrator": "V1"}},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s2", "voice_map": {"narrator": "V1"}},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is True
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_mixed_voice_map_fails_batch_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_map": {"narrator": "V1", "expert": "V2"}},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # A scene that binds two voice_ids is itself a race — one VM cannot
+    # voice two characters.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+
+
+def test_audio_worker_missing_voice_id_fails_voice_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1"}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is False

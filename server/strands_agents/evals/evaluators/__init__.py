@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from .approval_gate_trajectory import ApprovalGateTrajectoryEvaluator
 from .audio_invariant import AudioInvariantEvaluator
+from .audio_worker_invariant import AudioWorkerInvariantEvaluator
 from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
 from .escalation_decision import EscalationDecisionEvaluator
@@ -31,6 +32,7 @@ from .visual_loop_trajectory import VisualLoopTrajectoryEvaluator
 __all__ = [
     "ApprovalGateTrajectoryEvaluator",
     "AudioInvariantEvaluator",
+    "AudioWorkerInvariantEvaluator",
     "ContractComplianceEvaluator",
     "CritiqueStoreEvaluator",
     "EscalationDecisionEvaluator",
