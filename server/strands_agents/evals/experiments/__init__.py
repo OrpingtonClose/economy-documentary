@@ -10,3 +10,15 @@ evaluators but do **not** execute any LLM / tool call themselves. The
 caller (CI runner, notebook, shadow job) supplies the ``task`` callable
 to :meth:`Experiment.run_evaluations`.
 """
+
+from strands_agents.evals.experiments.scenario import (
+    SCENARIO_EVALUATOR_THRESHOLDS,
+    build_scenario_experiment,
+    scenario_cases,
+)
+
+__all__ = [
+    "SCENARIO_EVALUATOR_THRESHOLDS",
+    "build_scenario_experiment",
+    "scenario_cases",
+]
