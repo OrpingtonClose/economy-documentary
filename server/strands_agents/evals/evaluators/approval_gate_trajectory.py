@@ -10,19 +10,21 @@ Input shape
 
 * ``actual_trajectory``: ``list[dict]`` of tool-call and interrupt
   records. Interrupt records are identified by ``"kind": "interrupt"``
-  and carry ``tool``, ``decision`` (``"approve"`` or ``"reject"``),
-  and optional ``args``.
+  and carry ``tool``, ``decision`` (one of ``accept`` / ``edit`` /
+  ``reject`` / ``respond`` — the legacy ``approve`` alias is still
+  accepted), and optional ``args``.
 * ``metadata[`gated_tool`]`` (required): the tool that should have
   been gated by an interrupt (e.g. ``"launch_b2_sync"``).
-* ``metadata[`expected_decision`]`` (required): one of ``"approve"``
-  or ``"reject"``. Encodes the scripted human response for the case.
+* ``metadata[`expected_decision`]`` (required): one of ``accept`` /
+  ``edit`` / ``reject`` / ``respond`` (``approve`` is accepted as an
+  alias for ``accept``). Encodes the scripted operator response.
 * ``metadata[`post_approval_tool`]`` (optional): when the scripted
-  decision is ``"approve"``, the orchestrator must subsequently call
-  this tool (typically the same as ``gated_tool`` — the approved
-  version). When scripted ``"reject"``, the evaluator also ensures
-  this tool was NOT called.
+  decision admits a follow-through (``accept`` / ``edit``), the
+  orchestrator must subsequently call this tool (typically the same
+  as ``gated_tool`` — the approved version). Ignored on ``reject``
+  or ``respond``, which never permit follow-through.
 * ``metadata[`forbidden_on_reject`]`` (optional): extra tools that
-  must never be called on reject (e.g. downstream publishers).
+  must never be called on reject/respond (e.g. downstream publishers).
 
 Output
 ------
@@ -37,7 +39,17 @@ from typing import Any
 from strands_evals.evaluators.evaluator import Evaluator
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 
-_VALID_DECISIONS = frozenset({"approve", "reject"})
+# Canonical decision vocabulary matches :data:`INTERRUPT_GATE_CONFIG`.
+# ``approve`` is accepted as a legacy alias for ``accept`` so cases
+# authored before component 15 still score.
+_VALID_DECISIONS = frozenset({"accept", "edit", "reject", "respond", "approve"})
+_FOLLOW_THROUGH_DECISIONS = frozenset({"accept", "edit", "approve"})
+
+
+def _normalize(decision: str) -> str:
+    """Collapse the legacy ``approve`` alias onto ``accept``."""
+
+    return "accept" if decision == "approve" else decision
 
 
 class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
@@ -103,8 +115,9 @@ class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
             )
         )
 
-        actual_decision = str(interrupt_record.get("decision", "")).lower()
-        decision_ok = actual_decision == expected_decision
+        actual_decision = _normalize(str(interrupt_record.get("decision", "")).lower())
+        normalized_expected = _normalize(expected_decision)
+        decision_ok = actual_decision == normalized_expected
         outputs.append(
             EvaluationOutput(
                 score=1.0 if decision_ok else 0.0,
@@ -112,7 +125,7 @@ class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
                 reason=(
                     f"PASS decision {actual_decision!r} matches expected"
                     if decision_ok
-                    else f"FAIL decision {actual_decision!r}, expected {expected_decision!r}"
+                    else f"FAIL decision {actual_decision!r}, expected {normalized_expected!r}"
                 ),
                 label="approval.decision",
             )
@@ -125,7 +138,7 @@ class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
             and call.get("kind", "tool_call") == "tool_call"
         }
 
-        if expected_decision == "approve":
+        if normalized_expected in _FOLLOW_THROUGH_DECISIONS:
             expected_follow = post_approval_tool or gated_tool
             follow_ok = expected_follow in called_tools
             outputs.append(
@@ -141,6 +154,7 @@ class ApprovalGateTrajectoryEvaluator(Evaluator[Any, Any]):
                 )
             )
         else:
+            # reject + respond both short-circuit the gated tool.
             forbidden = {gated_tool, *forbidden_on_reject}
             if post_approval_tool:
                 forbidden.add(post_approval_tool)

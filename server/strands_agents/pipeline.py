@@ -31,7 +31,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from . import _placeholders
-from .approval import request_human_approval
+from .approval import INTERRUPT_GATE_CONFIG, request_human_approval
 
 logger = logging.getLogger(__name__)
 
@@ -180,17 +180,24 @@ def _build_interrupt_on(
 ) -> dict[str, bool | dict[str, Any]]:
     """Turn the orchestrator's sensitive-tool list into ``interrupt_on``.
 
-    ``InterruptOnConfig`` expects ``allowed_decisions`` — the set of
-    operator responses the UI is allowed to render. We enable all
-    three (``approve`` / ``edit`` / ``reject``); the approval gate
-    component (15) can tighten per-tool later.
+    For tools registered in :data:`server.strands_agents.approval.INTERRUPT_GATE_CONFIG`
+    we reuse the per-gate ``allowed_decisions`` from component 15
+    (e.g. ``launch_assembly`` drops ``edit``). Unknown tool names
+    fall back to the superset (``accept`` / ``edit`` / ``reject`` /
+    ``respond``) so callers can extend the gate set without touching
+    the canonical table.
     """
 
+    default_allowed = ["accept", "edit", "reject", "respond"]
     config: dict[str, bool | dict[str, Any]] = {}
     for name in tool_names:
-        config[name] = {
-            "allowed_decisions": ["approve", "edit", "reject"],
-        }
+        known = INTERRUPT_GATE_CONFIG.get(name)
+        allowed = (
+            list(known.get("allowed_decisions", default_allowed))
+            if known is not None
+            else default_allowed
+        )
+        config[name] = {"allowed_decisions": allowed}
     return config
 
 

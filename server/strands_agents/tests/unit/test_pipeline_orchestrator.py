@@ -25,6 +25,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.tools import tool
+from langgraph.types import Command
 
 from strands_agents import _placeholders
 from strands_agents.approval import request_human_approval
@@ -80,15 +81,16 @@ class TestBuildInterruptOn:
         cfg = _build_interrupt_on(["a", "b"])
         assert set(cfg.keys()) == {"a", "b"}
 
-    def test_each_config_allows_three_decisions(self) -> None:
+    def test_each_config_allows_four_decisions(self) -> None:
+        # Component 15 vocabulary: accept/edit/reject/respond.
+        # launch_assembly drops ``edit``; request_human_approval keeps
+        # only accept/respond.
         cfg = _build_interrupt_on(INTERRUPT_TOOL_NAMES)
         for name, entry in cfg.items():
             assert isinstance(entry, dict), name
-            assert entry.get("allowed_decisions") == [
-                "approve",
-                "edit",
-                "reject",
-            ]
+            allowed = entry.get("allowed_decisions")
+            assert allowed, name
+            assert set(allowed) <= {"accept", "edit", "reject", "respond"}, name
 
     def test_empty_list_returns_empty_dict(self) -> None:
         assert _build_interrupt_on([]) == {}
@@ -222,8 +224,14 @@ class _StubGraph:
 
 class TestRunDocumentary:
     def test_auto_reject_decision_default(self) -> None:
-        out = asyncio.run(_auto_reject_interrupt({"__interrupt__": ["x"]}))
-        assert out == {"decision": "reject"}
+        command = asyncio.run(_auto_reject_interrupt({"__interrupt__": ["x"]}))
+        # _auto_reject_interrupt now returns a Command whose resume payload
+        # carries the canonical reject shape.
+        assert isinstance(command, Command)
+        assert command.resume == {
+            "type": "reject",
+            "reason": "no operator attached",
+        }
 
     def test_interrupt_loop_resumes_with_decision(
         self,
@@ -236,9 +244,9 @@ class TestRunDocumentary:
             lambda run_dir, *, model=None: stub,  # type: ignore[misc]  # noqa: ARG005
         )
 
-        async def decider(state: dict[str, Any]) -> dict[str, Any]:
+        async def decider(state: dict[str, Any]) -> Command:
             _ = state  # unused — returning a constant is fine for this test.
-            return {"decision": "approve"}
+            return Command(resume={"type": "accept"})
 
         result = asyncio.run(
             run_documentary(
@@ -248,15 +256,12 @@ class TestRunDocumentary:
             ),
         )
         assert result == {"final": True}
-        # First call is the original brief; subsequent calls are Command
-        # objects carrying the operator decision.
         assert len(stub.calls) == 3
         first = stub.calls[0]
         assert first == {"messages": [("user", "hello")]}
-        # Remaining calls must be Command(resume=...) — we don't inspect
-        # the private attr; just assert they differ from the first call.
         for call in stub.calls[1:]:
-            assert call != first
+            assert isinstance(call, Command)
+            assert call.resume == {"type": "accept"}
 
     def test_interrupt_loop_cap_enforced(
         self,
@@ -272,9 +277,9 @@ class TestRunDocumentary:
             lambda run_dir, *, model=None: _InfiniteInterruptGraph(),  # type: ignore[misc]  # noqa: ARG005
         )
 
-        async def decider(state: dict[str, Any]) -> dict[str, Any]:
+        async def decider(state: dict[str, Any]) -> Command:
             _ = state
-            return {"decision": "approve"}
+            return Command(resume={"type": "accept"})
 
         with pytest.raises(RuntimeError, match="interrupt loop exceeded"):
             asyncio.run(
@@ -372,17 +377,21 @@ class TestRequestHumanApproval:
     def test_returns_pending_envelope(self) -> None:
         result = request_human_approval.invoke(
             {
+                "reason": "escalation:approve_assembly",
                 "summary": "approve assembly",
-                "payload": {"scene": "s0"},
+                "options": ["approve", "abort"],
             },
         )
         assert result["status"] == "pending"
         assert result["summary"] == "approve assembly"
-        assert result["payload"] == {"scene": "s0"}
+        assert result["options"] == ["approve", "abort"]
 
-    def test_payload_defaults_to_empty_dict(self) -> None:
-        result = request_human_approval.invoke({"summary": "ok"})
-        assert result["payload"] == {}
+    def test_defaults_empty_collections(self) -> None:
+        result = request_human_approval.invoke(
+            {"reason": "x", "summary": "ok"},
+        )
+        assert result["options"] == []
+        assert result["context_paths"] == []
 
 
 # ---------------------------------------------------------------------------
