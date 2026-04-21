@@ -11,6 +11,8 @@ caller (CI runner, notebook, shadow job) supplies the ``task`` callable
 to :meth:`Experiment.run_evaluations`.
 """
 
+from __future__ import annotations
+
 from strands_agents.evals.experiments.assembly import (
     ASSEMBLY_EXPERIMENT_NAME,
     assembly_task,
@@ -36,6 +38,13 @@ from strands_agents.evals.experiments.production import (
     PRODUCTION_EVALUATOR_THRESHOLDS,
     build_production_experiment,
     production_cases,
+)
+from strands_agents.evals.experiments.recovery import (
+    RECOVERY_EXPERIMENT_NAME,
+    build_recovery_classifier_contract_experiment,
+    build_recovery_experiment,
+    build_recovery_remanifester_contract_experiment,
+    recovery_task,
 )
 from strands_agents.evals.experiments.scenario import (
     SCENARIO_EVALUATOR_THRESHOLDS,
@@ -77,6 +86,7 @@ __all__ = [
     "COHERENCE_EVALUATOR_THRESHOLDS",
     "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
     "PRODUCTION_EVALUATOR_THRESHOLDS",
+    "RECOVERY_EXPERIMENT_NAME",
     "SCENARIO_EVALUATOR_THRESHOLDS",
     "SCENARIO_REFINER_EVALUATOR_THRESHOLDS",
     "TIMING_EVALUATOR_THRESHOLDS",
@@ -90,6 +100,9 @@ __all__ = [
     "build_coherence_evaluator_experiment",
     "build_content_analyst_experiment",
     "build_production_experiment",
+    "build_recovery_classifier_contract_experiment",
+    "build_recovery_experiment",
+    "build_recovery_remanifester_contract_experiment",
     "build_refiner_experiment",
     "build_scenario_experiment",
     "build_smoke_experiment",
@@ -101,6 +114,7 @@ __all__ = [
     "coherence_evaluator_cases",
     "content_analyst_cases",
     "production_cases",
+    "recovery_task",
     "refiner_cases",
     "scenario_cases",
     "smoke_task",
