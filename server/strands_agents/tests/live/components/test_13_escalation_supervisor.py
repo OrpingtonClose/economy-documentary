@@ -24,7 +24,7 @@ from typing import Any
 from strands_agents.subagents.escalation import decide_escalation_action
 
 from .._judges import judge_text_yes
-from ..conftest import requires_anthropic_api
+from ..conftest import requires_google_api
 
 
 def _target(scope: str = "scene", ident: str = "s-1") -> dict[str, Any]:
@@ -224,7 +224,7 @@ def test_every_human_escalation_carries_human_summary() -> None:
 # ---------------------------------------------------------------------------
 
 
-@requires_anthropic_api
+@requires_google_api
 def test_live_claude_confirms_rationale_matches_escalation() -> None:
     decision = decide_escalation_action.__wrapped__(
         diagnostic_payload={

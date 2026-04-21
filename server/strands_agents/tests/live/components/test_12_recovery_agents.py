@@ -30,7 +30,7 @@ from strands_agents.subagents.recovery_agents import (
 )
 
 from .._judges import judge_text_yes
-from ..conftest import requires_anthropic_api
+from ..conftest import requires_google_api
 
 
 # ---------------------------------------------------------------------------
@@ -170,7 +170,7 @@ def test_remanifestation_emits_meaningful_change() -> None:
 # ---------------------------------------------------------------------------
 
 
-@requires_anthropic_api
+@requires_google_api
 def test_live_claude_confirms_style_drift_fix_addresses_hint() -> None:
     hint = "style drift - documentary should feel cinematic, film-grain, 35mm"
     revised = propose_revised_concept.__wrapped__(
