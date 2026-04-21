@@ -165,10 +165,13 @@ def _split_iterations(calls: list[dict[str, Any]]) -> tuple[list[_Iteration], bo
             else:
                 current.evaluate_calls += 1
                 current.order_ok = False
-                if state == "launching":
-                    # evaluate without any await — still close the
-                    # iteration so we don't lose track.
-                    state = "evaluated"
+                # Advance to "evaluated" regardless of prior state so
+                # the next launch_audio_render correctly closes this
+                # iteration via _close_iteration(). Otherwise a
+                # trajectory like launch → await → await → evaluate →
+                # launch → ... would merge two iterations into one and
+                # under-report the iteration count.
+                state = "evaluated"
             continue
 
         if name == "refine_scenario":

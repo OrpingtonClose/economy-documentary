@@ -215,6 +215,33 @@ def test_second_await_in_iteration_fails_shape() -> None:
     assert _get(outputs, "timing_loop.shape").test_pass is False
 
 
+def test_double_await_then_next_iteration_counts_as_two_iterations() -> None:
+    """Double-await in iteration 1 must not collapse two iterations into one.
+
+    Regression guard: the ``evaluate_timing`` branch in
+    :func:`_split_iterations` must advance the state to ``"evaluated"``
+    regardless of prior state so the next ``launch_audio_render``
+    correctly closes the iteration. Otherwise the iteration counter
+    under-reports by 1 and hides the shape violation.
+    """
+    trajectory = [
+        _launch("s1", 1),
+        _await(["t1"], 2),
+        _await(["t1"], 2),  # duplicate await in iteration 1
+        _evaluate(3),
+        _launch("s1", 4),
+        _await(["t2"], 5),
+        _evaluate(6),
+    ]
+    outputs = TimingLoopTrajectoryEvaluator().evaluate(
+        _case(trajectory, expected_iterations=2, expected_refines=0, expects_pass=True)
+    )
+    # Both iterations counted, and the first-iteration shape violation
+    # still surfaces.
+    assert _get(outputs, "timing_loop.iteration_count").test_pass is True
+    assert _get(outputs, "timing_loop.shape").test_pass is False
+
+
 def test_unfinished_trailing_iteration_fails_shape() -> None:
     trajectory = [
         _launch("s1", 1),

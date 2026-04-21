@@ -252,6 +252,7 @@ def _per_scene_spike() -> Case:
         _await_tasks_call(["t1", "t2", "t3", "t4", "t5"], turn=2),
         _evaluate_timing_call(turn=3, intent_sec=90.0),
         _refine_scenario_call(turn=4, timing_report=timing_report),
+        _write_file_call(turn=4, path="scenes.json"),
         _launch_audio_call("s1", turn=5, revision=2),
         _launch_audio_call("s2", turn=5, revision=2),
         _launch_audio_call("s3", turn=5, revision=2),
@@ -305,10 +306,12 @@ def _refiner_no_op() -> Case:
         turn += 1
         trajectory.append(_evaluate_timing_call(turn=turn, intent_sec=54.0))
         turn += 1
-        # Loop never passes — refine every iteration.
+        # Loop never passes — refine every iteration, and persist the
+        # updated scenes back to the workspace per the AGENTS.md rule.
         trajectory.append(
             _refine_scenario_call(turn=turn, timing_report=timing_report)
         )
+        trajectory.append(_write_file_call(turn=turn, path="scenes.json"))
         turn += 1
     trajectory.append(
         _delegate_escalation_call(
@@ -365,9 +368,11 @@ def _max_iterations() -> Case:
         turn += 1
         trajectory.append(_evaluate_timing_call(turn=turn, intent_sec=90.0))
         turn += 1
+        # Persist the refined scenes after every refine per AGENTS.md.
         trajectory.append(
             _refine_scenario_call(turn=turn, timing_report=timing_report)
         )
+        trajectory.append(_write_file_call(turn=turn, path="scenes.json"))
         turn += 1
     trajectory.append(
         _delegate_escalation_call(
