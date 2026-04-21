@@ -1432,3 +1432,45 @@ def test_audio_worker_missing_voice_id_fails_voice_gate() -> None:
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
     assert by_label["audio_worker.voice_id_present"].test_pass is False
+
+
+def test_audio_worker_expect_pool_rebind_without_pools_fails_gate() -> None:
+    # Negative test dual: if a test declares expect_pool_rebind=True but the
+    # trajectory has no worker_pool args, the gate must still be emitted and
+    # fail loudly — otherwise the expectation is silently dropped.
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1"},
+        },
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_pool_rebind": True},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "audio_worker.no_pool_rebind" in by_label
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is False
+
+
+def test_audio_worker_expect_pool_rebind_not_expected_without_pools_omits_gate() -> None:
+    # Converse of the above: when no pools are declared and no rebind is
+    # expected, the gate is silent (not emitted). This keeps the happy path
+    # quiet while only raising the gate when the test actually scripts an
+    # expectation about pool scheduling.
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "audio_worker.no_pool_rebind" not in by_label

@@ -229,31 +229,41 @@ class AudioWorkerInvariantEvaluator(Evaluator[Any, Any]):
             if voice is not None and voice != "*mixed*":
                 pool_voices[pool].add(voice)
 
-        if any_pool_declared:
-            rebinds = {
-                pool: sorted(voices)
-                for pool, voices in pool_voices.items()
-                if len(voices) > 1
-            }
-            rebind_detected = bool(rebinds)
-            pool_ok = rebind_detected == expect_pool_rebind
-            if expect_pool_rebind and rebind_detected:
-                offenders = ", ".join(
-                    f"{pool}={voices}" for pool, voices in sorted(rebinds.items())
-                )
-                pool_reason = f"PASS worker-pool rebind detected as expected — {offenders}"
-            elif expect_pool_rebind:
-                pool_reason = "FAIL pool rebind expected but every pool was single-voice"
-            elif rebind_detected:
-                offenders = ", ".join(
-                    f"{pool}={voices}" for pool, voices in sorted(rebinds.items())
-                )
-                pool_reason = f"FAIL worker-pool rebind — {offenders}"
-            else:
+        if any_pool_declared or expect_pool_rebind:
+            if not any_pool_declared:
+                pool_ok = False
                 pool_reason = (
-                    f"PASS every worker_pool bound to a single voice "
-                    f"across {len(pool_voices)} pool(s)"
+                    "FAIL pool rebind expected but no worker_pool was ever declared"
                 )
+            else:
+                rebinds = {
+                    pool: sorted(voices)
+                    for pool, voices in pool_voices.items()
+                    if len(voices) > 1
+                }
+                rebind_detected = bool(rebinds)
+                pool_ok = rebind_detected == expect_pool_rebind
+                if expect_pool_rebind and rebind_detected:
+                    offenders = ", ".join(
+                        f"{pool}={voices}" for pool, voices in sorted(rebinds.items())
+                    )
+                    pool_reason = (
+                        f"PASS worker-pool rebind detected as expected — {offenders}"
+                    )
+                elif expect_pool_rebind:
+                    pool_reason = (
+                        "FAIL pool rebind expected but every pool was single-voice"
+                    )
+                elif rebind_detected:
+                    offenders = ", ".join(
+                        f"{pool}={voices}" for pool, voices in sorted(rebinds.items())
+                    )
+                    pool_reason = f"FAIL worker-pool rebind — {offenders}"
+                else:
+                    pool_reason = (
+                        f"PASS every worker_pool bound to a single voice "
+                        f"across {len(pool_voices)} pool(s)"
+                    )
             outputs.append(
                 EvaluationOutput(
                     score=1.0 if pool_ok else 0.0,
