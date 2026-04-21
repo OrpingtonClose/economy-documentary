@@ -16,6 +16,11 @@ from strands_agents.evals.experiments.audio import (
     audio_cases,
     build_audio_experiment,
 )
+from strands_agents.evals.experiments.coherence_evaluator import (
+    COHERENCE_EVALUATOR_THRESHOLDS,
+    build_coherence_evaluator_experiment,
+    coherence_evaluator_cases,
+)
 from strands_agents.evals.experiments.content_analyst import (
     CONTENT_ANALYST_EVALUATOR_THRESHOLDS,
     build_content_analyst_experiment,
@@ -51,6 +56,7 @@ from strands_agents.evals.experiments.visual_concepter import (
 
 __all__ = [
     "AUDIO_EVALUATOR_THRESHOLDS",
+    "COHERENCE_EVALUATOR_THRESHOLDS",
     "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
     "SCENARIO_EVALUATOR_THRESHOLDS",
     "SCENARIO_REFINER_EVALUATOR_THRESHOLDS",
@@ -59,12 +65,14 @@ __all__ = [
     "VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
     "audio_cases",
     "build_audio_experiment",
+    "build_coherence_evaluator_experiment",
     "build_content_analyst_experiment",
     "build_refiner_experiment",
     "build_scenario_experiment",
     "build_timing_experiment",
     "build_timing_loop_experiment",
     "build_visual_concepter_experiment",
+    "coherence_evaluator_cases",
     "content_analyst_cases",
     "refiner_cases",
     "scenario_cases",
