@@ -504,37 +504,24 @@ def test_every_experiment_case_passes_trajectory_evaluator() -> None:
             )
 
 
-def test_parallel_launch_evaluator_passes_pass_cases() -> None:
+def test_parallel_launch_evaluator_passes_every_case() -> None:
     from strands_agents.evals.evaluators import ParallelLaunchEvaluator
 
     evaluator = ParallelLaunchEvaluator()
-    # Only the three "pass" cases have a single expected_count matching
-    # one-iteration-worth of launches; cap-hit cases emit 30 / 50 which
-    # would require per-iteration batching evaluation (out of scope for
-    # the stock evaluator). We verify the three happy-path cases here.
-    happy_case_names = {"one_shot_pass", "one_refine_pass", "per_scene_spike"}
+    # With per-batch evaluator semantics, every case (including the two
+    # cap-hit cases that emit 10 batches of parallel launches) passes
+    # using the stock expected_count metadata. The evaluator groups
+    # launches by ``at_turn`` and asserts every batch matches the
+    # per-iteration expected_count.
     for case in timing_loop_cases():
-        if case.name not in happy_case_names:
-            continue
         assert case.expected_trajectory is not None
-        # Happy paths launch `expected_count` once per iteration, so
-        # the top-level ParallelLaunchEvaluator's count check is
-        # satisfied only when expected_count matches total launches.
-        # ``one_refine_pass`` launches 5 × 2 = 10, so we set the
-        # per-case metadata accordingly.
-        meta = dict(case.metadata or {})
-        meta["expected_count"] = sum(
-            1
-            for call in case.expected_trajectory
-            if call.get("name") == "launch_audio_render"
-        )
         data = EvaluationData[Any, Any](
             input=case.input,
             actual_trajectory=case.expected_trajectory,
-            metadata=meta,
+            metadata=case.metadata,
         )
         outputs = evaluator.evaluate(data)
-        count_output = next(o for o in outputs if o.label == "parallel.count")
-        assert count_output.test_pass is True, (
-            f"case={case.name} count check failed: {count_output.reason}"
-        )
+        for output in outputs:
+            assert output.test_pass is True, (
+                f"case={case.name} failed {output.label}: {output.reason}"
+            )

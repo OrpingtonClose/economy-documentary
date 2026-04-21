@@ -333,10 +333,10 @@ def _refiner_no_op() -> Case:
             "expected_refines": 10,
             "expects_pass": False,
             "expects_delegation": True,
-            # ParallelLaunch — last iteration still must be batched.
+            # ParallelLaunch — every iteration must dispatch 3 scenes in
+            # one batch. Evaluator semantics are per-batch.
             "tool_name": "launch_audio_render",
-            # 3 scenes × 10 iterations = 30 launches total.
-            "expected_count": 30,
+            "expected_count": 3,
             "completion_tool": "await_tasks",
             "contract_name": "timing",
         },
@@ -395,7 +395,8 @@ def _max_iterations() -> Case:
             "expects_pass": False,
             "expects_delegation": True,
             "tool_name": "launch_audio_render",
-            "expected_count": 50,
+            # Per-batch — every iteration dispatches 5 scenes at once.
+            "expected_count": 5,
             "completion_tool": "await_tasks",
             "contract_name": "timing",
         },
