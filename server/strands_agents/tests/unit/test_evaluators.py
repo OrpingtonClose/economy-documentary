@@ -31,6 +31,7 @@ from strands_agents.evals.evaluators import (
     ContractComplianceEvaluator,
     CritiqueStoreEvaluator,
     EscalationDecisionEvaluator,
+    EscalationTaxonomyEvaluator,
     MemoryHonoringEvaluator,
     ParallelLaunchEvaluator,
     PipelineTrajectoryEvaluator,
@@ -1761,3 +1762,308 @@ def test_assembly_ordering_metadata_scenes_enforces_coverage() -> None:
     gate = by_label["assembly.no_pending_at_assembly"]
     assert gate.test_pass is False
     assert "s2" in gate.reason
+
+
+# ---------------------------------------------------------------------------
+# EscalationTaxonomyEvaluator
+# ---------------------------------------------------------------------------
+
+
+def _fail(scene_id: str, tool: str = "launch_visual_production") -> dict[str, Any]:
+    return {
+        "name": "record_scene_failure",
+        "args": {"scene_id": scene_id, "tool": tool},
+    }
+
+
+def _noop() -> dict[str, Any]:
+    return {"name": "record_refiner_noop", "args": {}}
+
+
+def _reject(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": "record_approval_reject",
+        "args": {"tool": tool, "args": args},
+    }
+
+
+def _refine() -> dict[str, Any]:
+    return {"name": "refine_scenario", "args": {}}
+
+
+def _audio_launch(scene_id: str) -> dict[str, Any]:
+    return {
+        "name": "launch_audio_render",
+        "args": {"scene_id": scene_id, "voice_id": "v1"},
+    }
+
+
+def _task_escalation(scene_id: str | None = None) -> dict[str, Any]:
+    args: dict[str, Any] = {"subagent_type": "escalation"}
+    if scene_id is not None:
+        args["scene_id"] = scene_id
+    return {"name": "task", "args": args}
+
+
+def test_escalation_taxonomy_missing_trajectory_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=None)
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"escalation.missing_trajectory"}
+    assert outputs[0].test_pass is False
+
+
+def test_escalation_taxonomy_empty_trajectory_emits_no_events() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=[])
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"escalation.no_events"}
+    assert outputs[0].test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_then_escalate_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _escalate("s1"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_third_retry_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),  # violation: retry without escalating
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is False
+    assert "'s1'" in gate.reason
+    assert "launch_visual_production" in gate.reason
+
+
+def test_escalation_taxonomy_two_failures_escalate_via_task_subagent() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # ``task(subagent_type="escalation")`` counts as escalation even
+    # without an explicit scene_id — it covers every pending failure.
+    trajectory = [
+        _audio_launch("s1"),
+        _fail("s1", tool="launch_audio_render"),
+        _audio_launch("s1"),
+        _fail("s1", tool="launch_audio_render"),
+        _task_escalation(),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_never_escalated_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        # trajectory ends without an escalation — orchestrator silently dropped it
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is False
+    assert "never escalated" in gate.reason
+
+
+def test_escalation_taxonomy_single_failure_then_success_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # One failure, one success.  No escalation needed.
+    trajectory = [_launch("s1"), _fail("s1"), _launch("s1")]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Gate emits a present-but-passing result because one failure was seen.
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_refiner_noop_then_escalate_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop(), _task_escalation()]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_refiner_noop_then_more_refine_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop(), _refine()]  # violation
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is False
+    assert "refine_scenario" in gate.reason
+
+
+def test_escalation_taxonomy_refiner_noop_without_escalation_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop()]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is False
+    assert "never followed by an escalation" in gate.reason
+
+
+def test_escalation_taxonomy_approval_reject_retry_different_args_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 99},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_approval_reject_retry_same_args_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 42},  # identical retry
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is False
+    assert "identical args" in gate.reason
+
+
+def test_escalation_taxonomy_approval_reject_escalation_closes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # Escalation after reject counts as re-planning — a subsequent
+    # identical-args call is allowed because the escalation SubAgent
+    # chose to re-run it deliberately.
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        _task_escalation(),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 42},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_approval_reject_no_retry_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42})
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_key_order_is_irrelevant_for_args_equality() -> None:
+    # The args-equality check uses sort_keys=True so dict ordering
+    # doesn't make two semantically-identical payloads compare unequal.
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"seed": 42, "scene_id": "s1"},  # same kv, different order
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is False
+
+
+def test_escalation_taxonomy_all_three_gates_fire_together() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # One trajectory that exercises all three gates simultaneously and
+    # escalates correctly for each.
+    trajectory = [
+        # Two failures on s1 → escalate before any further retry.
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _escalate("s1"),
+        # Refiner noop → escalate before any further refine_scenario.
+        _noop(),
+        _task_escalation(),
+        # Approval reject → retry with different seed.
+        _reject("launch_visual_production", {"scene_id": "s2", "seed": 7}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s2", "seed": 13},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["escalation.two_failures_trigger"].test_pass is True
+    assert by_label["escalation.refiner_noop_trigger"].test_pass is True
+    assert (
+        by_label[
+            "escalation.approval_reject_retry_with_different_args"
+        ].test_pass
+        is True
+    )
+
+
+def test_escalation_taxonomy_skips_malformed_entries() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory: list[Any] = [
+        "not-a-dict",
+        {"args": {"x": 1}},  # missing 'name'
+        _noop(),
+        _task_escalation(),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "escalation.missing_trajectory" not in by_label
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is True

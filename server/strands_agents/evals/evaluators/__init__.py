@@ -20,6 +20,7 @@ from .audio_worker_invariant import AudioWorkerInvariantEvaluator
 from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
 from .escalation_decision import EscalationDecisionEvaluator
+from .escalation_taxonomy import EscalationTaxonomyEvaluator
 from .memory_honoring import MemoryHonoringEvaluator
 from .parallel_launch import ParallelLaunchEvaluator
 from .pipeline_trajectory import PipelineTrajectoryEvaluator
@@ -38,6 +39,7 @@ __all__ = [
     "ContractComplianceEvaluator",
     "CritiqueStoreEvaluator",
     "EscalationDecisionEvaluator",
+    "EscalationTaxonomyEvaluator",
     "MemoryHonoringEvaluator",
     "ParallelLaunchEvaluator",
     "PipelineTrajectoryEvaluator",
