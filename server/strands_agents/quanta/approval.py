@@ -33,13 +33,17 @@ def allowed_decisions_for(tool_name: str) -> set[str]:
             ``"launch_assembly"``, ``"request_human_approval"``).
 
     Returns:
-        Set such as ``{"accept", "edit", "reject", "respond"}``.
-        Returns an empty set for tools not registered in the approval
-        policy.
+        Set such as ``{"accept", "edit", "reject", "respond"}``. For
+        tools not registered in ``INTERRUPT_GATE_CONFIG`` the full
+        superset is returned — this matches the permissive fallback in
+        :func:`validate_decision` (see
+        ``strands_agents.approval._allowed_decisions``), so a caller
+        using this helper as a guard never rejects a decision the
+        validator would accept.
     """
     entry = INTERRUPT_GATE_CONFIG.get(tool_name)
     if entry is None:
-        return set()
+        return {"accept", "edit", "reject", "respond"}
     return set(entry.get("allowed_decisions", ()))
 
 

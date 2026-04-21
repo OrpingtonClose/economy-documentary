@@ -31,8 +31,29 @@ class TestAllowedDecisionsFor:
         assert "edit" not in allowed
         assert "accept" in allowed
 
-    def test_unknown_tool_returns_empty_set(self) -> None:
-        assert allowed_decisions_for("not_a_gate") == set()
+    def test_unknown_tool_returns_full_superset(self) -> None:
+        # Matches the permissive fallback in validate_decision so the
+        # two helpers never disagree: the guard must not reject
+        # anything the validator would accept.
+        assert allowed_decisions_for("not_a_gate") == {
+            "accept",
+            "edit",
+            "reject",
+            "respond",
+        }
+
+    def test_unknown_tool_guard_agrees_with_validate_decision(self) -> None:
+        # Every decision type allowed_decisions_for advertises must
+        # also pass validate_decision for the same tool.
+        decisions: list[dict[str, object]] = [
+            {"type": "accept"},
+            {"type": "edit", "args": {}},
+            {"type": "reject", "reason": "nope"},
+            {"type": "respond", "content": "hello"},
+        ]
+        for d in decisions:
+            assert d["type"] in allowed_decisions_for("not_a_gate")
+            validate_decision("not_a_gate", d)  # type: ignore[arg-type]
 
 
 class TestValidateDecision:
