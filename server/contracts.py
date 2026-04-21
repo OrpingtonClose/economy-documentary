@@ -326,6 +326,20 @@ ASSEMBLY_CONTRACT = StageContract(
     produced_artifacts=["output/*.mp4"],
 )
 
+RECOVERY_CLASSIFIER_CONTRACT = StageContract(
+    name="recovery_classifier",
+    required_services=[],  # LLM + heuristics only
+    required_state=["recovery_event"],
+    produced_state=["classification"],
+)
+
+RECOVERY_REMANIFESTER_CONTRACT = StageContract(
+    name="recovery_remanifester",
+    required_services=[],  # LLM + rules only
+    required_state=["classification", "original_concept"],
+    produced_state=["revised_concept"],
+)
+
 
 # Placeholder values that indicate upstream stage didn't actually produce
 # real output.  If any required_state key holds one of these, the stage
