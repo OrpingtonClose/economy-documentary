@@ -21,9 +21,12 @@ from .escalation_decision import EscalationDecisionEvaluator
 from .memory_honoring import MemoryHonoringEvaluator
 from .parallel_launch import ParallelLaunchEvaluator
 from .pipeline_trajectory import PipelineTrajectoryEvaluator
+from .production_supervisor_trajectory import ProductionSupervisorTrajectoryEvaluator
 from .scenario_quality import ScenarioQualityEvaluator
 from .timeline_compliance import TimelineComplianceEvaluator
+from .timing_loop_trajectory import TimingLoopTrajectoryEvaluator
 from .visual_coherence import VisualCoherenceEvaluator
+from .visual_loop_trajectory import VisualLoopTrajectoryEvaluator
 
 __all__ = [
     "ApprovalGateTrajectoryEvaluator",
@@ -34,7 +37,10 @@ __all__ = [
     "MemoryHonoringEvaluator",
     "ParallelLaunchEvaluator",
     "PipelineTrajectoryEvaluator",
+    "ProductionSupervisorTrajectoryEvaluator",
     "ScenarioQualityEvaluator",
     "TimelineComplianceEvaluator",
+    "TimingLoopTrajectoryEvaluator",
     "VisualCoherenceEvaluator",
+    "VisualLoopTrajectoryEvaluator",
 ]

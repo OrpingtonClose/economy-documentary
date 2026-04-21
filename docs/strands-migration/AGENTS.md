@@ -111,6 +111,48 @@ assembly before all productions pass QA).
   worker. The GPU pool's queue is your only parallelism lever — respect
   `check_worker_health` counts.
 
+### Timing stage (component 05)
+
+The timing stage is a **planning trajectory**, not a module. Each
+iteration must be shaped exactly as:
+
+```
+launch_audio_render × N  (one per scene, batched in a single tool-call turn)
+  ↓
+await_tasks              (single call awaiting every launched task)
+  ↓
+evaluate_timing          (single call against the resulting whisperx alignment)
+  ↓ if timing_passed == False
+refine_scenario          (at most one call, must carry the full timing_report)
+  ↓
+(next iteration)
+```
+
+Rules:
+
+- **Batch launches**. All `launch_audio_render` calls for one iteration
+  emit on the same tool-call turn. Serialising them across turns
+  stalls the TTS worker pool and fails
+  `ParallelLaunchEvaluator`.
+- **One `await_tasks` per iteration, no more**. Two awaits inside one
+  iteration fails the shape check.
+- **Refine input is non-negotiable**. Every `refine_scenario` call
+  must carry the full `timing_report` from the preceding
+  `evaluate_timing` — never call the refiner without reading the
+  report first.
+- **10-iteration cap, hard**. Counting iterations by
+  `evaluate_timing` calls, the loop tops out at 10. On the 10th
+  failed iteration, delegate to the `escalation` SubAgent via
+  `task(subagent_type="escalation", ...)`. Do not open an 11th
+  iteration.
+- **Escalate on refiner no-op**. If two consecutive
+  `refine_scenario` outputs are byte-identical to the previous
+  revision, stop iterating and delegate to `escalation`. A refiner
+  that cannot change the scenes cannot converge the loop.
+- **Persist scenes after every refine**. Pair each
+  `refine_scenario` with a `write_file` of the updated scene JSON so
+  the next audio launch keys off a fresh revision tag.
+
 ### Retry policy
 
 - Transient errors (network, rate limit, worker busy): retry once, then
