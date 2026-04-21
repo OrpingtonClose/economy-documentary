@@ -1,0 +1,66 @@
+"""Trajectory extraction from a :class:`SimulationResult`.
+
+The simulator captures two independent streams of information while
+running a scenario:
+
+1. :class:`~strands_agents.sim.recorder.CallRecord` entries — every
+   time a fake *channel* is poked (TTS, renderer, B2, clock, operator).
+   Substrate-level, not tool-level.
+
+2. ``final_state["messages"]`` from the LangGraph run — every
+   ``AIMessage`` carries the ``tool_calls`` the LLM emitted on that
+   turn.  Tool-level, in chronological order, one entry per distinct
+   tool invocation.
+
+Trajectory evaluators like
+:class:`~strands_agents.evals.evaluators.timing_loop_trajectory.TimingLoopTrajectoryEvaluator`
+work against the second stream in the shape ``{"name": str, "args":
+dict}``.  :func:`tool_call_trajectory` walks the messages list and
+produces exactly that shape so simulator scenarios can be graded with
+the same evaluator production trajectories are graded with.
+
+Parallel tool calls (emitted by one ``AIMessage`` carrying multiple
+entries in its ``tool_calls`` attribute) are flattened in the order
+they appear on the message — this matches the order a human reads the
+trajectory in and is how the evaluator counts them.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from strands_agents.sim.orchestrator_simulator import SimulationResult
+
+
+def tool_call_trajectory(result: SimulationResult) -> list[dict[str, Any]]:
+    """Extract the ordered list of tool calls from a simulator run.
+
+    Args:
+        result: The :class:`SimulationResult` returned by
+            :meth:`OrchestratorSimulator.run`.
+
+    Returns:
+        A list of ``{"name": str, "args": dict}`` entries, one per tool
+        call the orchestrator emitted, in chronological order.  Returns
+        an empty list if the run never produced tool calls.
+    """
+    messages = result.final_state.get("messages", [])
+    trajectory: list[dict[str, Any]] = []
+    for message in messages:
+        tool_calls = getattr(message, "tool_calls", None)
+        if not tool_calls:
+            continue
+        for call in tool_calls:
+            # LangChain ``tool_calls`` entries are ``{"name", "args",
+            # "id"}`` dicts.  We strip ``id`` because the evaluator
+            # only cares about the semantic ``(name, args)`` pair.
+            trajectory.append(
+                {
+                    "name": call.get("name", ""),
+                    "args": dict(call.get("args") or {}),
+                }
+            )
+    return trajectory
+
+
+__all__ = ["tool_call_trajectory"]

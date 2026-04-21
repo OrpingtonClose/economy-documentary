@@ -54,6 +54,7 @@ from strands_agents.sim.orchestrator_simulator import (
 from strands_agents.sim.recorder import CallRecord, Recorder
 from strands_agents.sim.renderer import FakeRenderer, RenderOutcome
 from strands_agents.sim.substrate import Substrate
+from strands_agents.sim.trajectory import tool_call_trajectory
 from strands_agents.sim.tts import FakeTTS
 
 __all__ = [
@@ -75,4 +76,5 @@ __all__ = [
     "scripted_final",
     "scripted_parallel_tool_calls",
     "scripted_tool_call",
+    "tool_call_trajectory",
 ]
