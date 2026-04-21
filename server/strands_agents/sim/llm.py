@@ -31,6 +31,7 @@ that common case use :meth:`LLMScript.always` and :meth:`LLMScript.next_of`.
 
 from __future__ import annotations
 
+import copy
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -298,7 +299,12 @@ class FakeLLM:
                     msg = f"match() for op={op} rule raised {exc!r}"
                     raise NoScriptedResponse(msg) from exc
                 rule.used += 1
-                response = rule.response
+                # Deep-copy the scripted response so callers that mutate
+                # the returned dict/list never poison future matches on
+                # the same rule. Matters for ``reusable=True`` rules, but
+                # also protects non-reusable rules from a caller that
+                # accidentally stashes a reference back into the script.
+                response = copy.deepcopy(rule.response)
                 if self._recorder is not None:
                     self._recorder.record(
                         CallRecord(

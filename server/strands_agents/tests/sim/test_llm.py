@@ -16,7 +16,10 @@ class TestFakeLLMDispatch:
         out = llm.generate_scenario(
             topic="inflation", num_scenes=1, style="economic", language="en"
         )
-        assert out is canned
+        # Value equality — the fake deep-copies scripted responses so
+        # caller-side mutations never poison future calls.
+        assert out == canned
+        assert out is not canned
 
     def test_no_script_raises(self) -> None:
         llm = FakeLLM()
@@ -40,6 +43,21 @@ class TestFakeLLMDispatch:
         for _ in range(5):
             out = llm.refine_scenario(scenes=[], feedback={})
             assert out == {"scenes": [{"id": "s1"}]}
+
+    def test_reusable_rule_returns_isolated_copies(self) -> None:
+        # Mutating one response must not poison subsequent calls — the
+        # pipeline routinely annotates LLM outputs with revision tags,
+        # and we must not let those annotations leak across calls.
+        script = LLMScript().when_refine_scenario(
+            response={"scenes": [{"id": "s1"}]}, reusable=True
+        )
+        llm = FakeLLM(script)
+        first = llm.refine_scenario(scenes=[], feedback={})
+        first["metadata"] = {"mutated": True}
+        first["scenes"].append({"id": "extra"})
+        second = llm.refine_scenario(scenes=[], feedback={})
+        assert second == {"scenes": [{"id": "s1"}]}
+        assert "metadata" not in second
 
     def test_rules_picked_in_declaration_order(self) -> None:
         script = (
