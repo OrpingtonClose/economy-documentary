@@ -523,16 +523,21 @@ def main():
                         help="Which pipeline implementation to run. 'adk' (default) "
                              "runs the current Google-ADK pipeline under server/agents/. "
                              "'strands' routes to the Strands + DeepAgent pipeline "
-                             "under server/strands_agents/ — not yet wired end-to-end "
-                             "(lands with component 14); raises NotImplementedError until then.")
+                             "under server/strands_agents/ — smoke-level wiring only "
+                             "(full parity lands with the cutover PR). See "
+                             "docs/strands-migration/SEQUENCE.md.")
     args = parser.parse_args()
 
     if args.pipeline == "strands":
-        raise NotImplementedError(
-            "--pipeline=strands is reserved for the Strands + DeepAgent migration. "
-            "Component 14 (pipeline-graph) wires it up; until then, use --pipeline=adk "
-            "(the default) or drop the flag. See docs/strands-migration/SEQUENCE.md."
-        )
+        # Delegate to the Strands + DeepAgent entry. Kept in a separate
+        # module so `run_pipeline.py` does not import langgraph / deepagents
+        # on the ADK codepath — this preserves the strangler-fig boundary
+        # and keeps legacy runs fast to start.
+        from strands_agents.cli import run_from_cli_args
+
+        # Ensure output dirs exist even on the strands path.
+        os.makedirs(args.output_dir, exist_ok=True)
+        sys.exit(run_from_cli_args(args))
 
     # Ensure output dirs exist
     os.makedirs(args.output_dir, exist_ok=True)
