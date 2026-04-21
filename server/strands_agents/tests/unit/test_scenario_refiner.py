@@ -284,6 +284,26 @@ def test_tweak_voice_text_rejects_unknown_scene_id() -> None:
         )
 
 
+def test_tweak_voice_text_falls_through_none_keys_to_find_scene() -> None:
+    # Scene carries id=None but a valid scene_num; lookup must fall
+    # through the None id rather than raise TypeError from int(None).
+    # Mirrors the None-guarding in audio_tool._scene_num and
+    # content_analyst._scene_num.
+    set_refiner_helpers(text_rewriter=_shorten_rewriter)
+    scenes = _baseline_scenes(3)
+    original_text = scenes[1]["voices"][0]["text"]
+    scenes[1]["id"] = None  # scene_num=2 still resolves the scene
+    out = tweak_voice_text.__wrapped__(
+        scenes=scenes,
+        scene_id=2,
+        direction="shorten",
+        delta_sec=1.0,
+    )
+    assert out["scene_id"] == 2
+    assert out["changed_voice_count"] >= 1
+    assert out["scenes"][1]["voices"][0]["text"] != original_text
+
+
 def test_tweak_voice_text_rejects_invalid_direction() -> None:
     set_refiner_helpers(text_rewriter=_shorten_rewriter)
     with pytest.raises(ValueError, match="shorten"):

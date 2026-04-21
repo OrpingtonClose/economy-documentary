@@ -128,9 +128,19 @@ class ScenarioRefinerHelperNotConfigured(RuntimeError):
 
 
 def _find_scene_index(scenes: list[dict[str, Any]], scene_id: int) -> int:
+    target = int(scene_id)
     for index, scene in enumerate(scenes):
         for key in ("id", "scene_num", "scene_id"):
-            if key in scene and int(scene[key]) == int(scene_id):
+            # Guard against keys present but set to None so we fall through
+            # to the next candidate instead of raising TypeError from int(None).
+            # Mirrors _scene_num in audio_tool.py / content_analyst.py.
+            if key not in scene or scene[key] is None:
+                continue
+            try:
+                candidate = int(scene[key])
+            except (TypeError, ValueError):
+                continue
+            if candidate == target:
                 return index
     raise ValueError(f"scene_id=<{scene_id}> not found in scenes")
 
