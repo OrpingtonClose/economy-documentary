@@ -592,6 +592,61 @@ class TestRecoveryLedger:
         set_recovery_ledger(custom)
         assert get_recovery_ledger() is custom
 
+    def test_try_increment_retry_respects_budget_under_contention(self) -> None:
+        # Hammer try_increment_retry from many threads and assert the
+        # final counter never exceeds the budget, no matter how many
+        # threads raced through the check-and-increment.
+        ledger = _RecoveryLedger()
+        set_recovery_ledger(ledger)
+        budget = RETRY_BUDGET
+        exhausted_count = 0
+        exhausted_lock = threading.Lock()
+
+        def worker() -> None:
+            nonlocal exhausted_count
+            for _ in range(25):
+                try:
+                    ledger.try_increment_retry("s1", budget)
+                except RecoveryBudgetExhausted:
+                    with exhausted_lock:
+                        exhausted_count += 1
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        snapshot = ledger.snapshot()
+        assert snapshot["retries"]["s1"] == budget
+        # 8 × 25 = 200 total calls; exactly ``budget`` succeed, the rest
+        # must have raised RecoveryBudgetExhausted.
+        assert exhausted_count == 200 - budget
+
+    def test_try_increment_fix_respects_budget_under_contention(self) -> None:
+        ledger = _RecoveryLedger()
+        set_recovery_ledger(ledger)
+        budget = FIX_BUDGET
+        exhausted_count = 0
+        exhausted_lock = threading.Lock()
+
+        def worker() -> None:
+            nonlocal exhausted_count
+            for _ in range(25):
+                try:
+                    ledger.try_increment_fix("s1", budget)
+                except RecoveryBudgetExhausted:
+                    with exhausted_lock:
+                        exhausted_count += 1
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        snapshot = ledger.snapshot()
+        assert snapshot["fixes"]["s1"] == budget
+        assert exhausted_count == 200 - budget
+
 
 # ---------------------------------------------------------------------------
 # Trajectory evaluator — synthetic trajectories per hard gate

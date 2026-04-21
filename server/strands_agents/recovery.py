@@ -86,6 +86,69 @@ class _RecoveryLedger:
             self._fixes[scene_id] = current
             return current
 
+    def try_increment_retry(
+        self, scene_id: str, budget: int
+    ) -> tuple[int, int]:
+        """Atomically enforce ``budget`` and increment the retry counter.
+
+        Args:
+            scene_id: Scene whose retry counter to increment.
+            budget: Maximum retries permitted per scene.
+
+        Returns:
+            ``(retry_count, fix_count)`` post-increment; ``fix_count``
+            is read under the same lock so callers computing
+            ``next_revision = retry_count + fix_count + offset`` see a
+            consistent snapshot.
+
+        Raises:
+            RecoveryBudgetExhausted: If the pre-increment count is
+                already at or above ``budget``.
+        """
+        with self._lock:
+            already = self._retries.get(scene_id, 0)
+            if already >= budget:
+                raise RecoveryBudgetExhausted(
+                    f"retry_scene called for {scene_id} after {already} "
+                    f"retries (budget {budget}); SubAgent must escalate"
+                )
+            retry_count = already + 1
+            self._retries[scene_id] = retry_count
+            fix_count = self._fixes.get(scene_id, 0)
+            return retry_count, fix_count
+
+    def try_increment_fix(
+        self, scene_id: str, budget: int
+    ) -> tuple[int, int]:
+        """Atomically enforce ``budget`` and increment the fix counter.
+
+        Args:
+            scene_id: Scene whose fix counter to increment.
+            budget: Maximum fixes permitted per scene.
+
+        Returns:
+            ``(fix_count, retry_count)`` post-increment; ``retry_count``
+            is read under the same lock so callers computing
+            ``next_revision = retry_count + fix_count + offset`` see a
+            consistent snapshot.
+
+        Raises:
+            RecoveryBudgetExhausted: If the pre-increment count is
+                already at or above ``budget``.
+        """
+        with self._lock:
+            already = self._fixes.get(scene_id, 0)
+            if already >= budget:
+                raise RecoveryBudgetExhausted(
+                    f"fix_scene called for {scene_id} after {already} "
+                    f"fixes (budget {budget}); SubAgent must skip or "
+                    f"escalate"
+                )
+            fix_count = already + 1
+            self._fixes[scene_id] = fix_count
+            retry_count = self._retries.get(scene_id, 0)
+            return fix_count, retry_count
+
     def mark_skipped(self, scene_id: str, reason: str) -> dict[str, Any]:
         with self._lock:
             entry = {"scene_id": scene_id, "reason": reason, "marked_at": time.time()}
@@ -169,15 +232,7 @@ def retry_scene(scene_id: str, reason: str) -> dict[str, Any]:
         raise ValueError("retry_scene requires a non-empty reason")
 
     ledger = get_recovery_ledger()
-    current_snapshot = ledger.snapshot()
-    already = current_snapshot["retries"].get(scene_id, 0)
-    if already >= RETRY_BUDGET:
-        raise RecoveryBudgetExhausted(
-            f"retry_scene called for {scene_id} after {already} retries "
-            f"(budget {RETRY_BUDGET}); SubAgent must escalate"
-        )
-
-    retry_count = ledger.increment_retry(scene_id)
+    retry_count, _ = ledger.try_increment_retry(scene_id, RETRY_BUDGET)
     next_revision = retry_count + 1
     logger.debug(
         "scene_id=<%s>, reason=<%s>, retry_count=<%d> | retry recorded",
@@ -225,16 +280,7 @@ def fix_scene(scene_id: str, reason: str) -> dict[str, Any]:
         raise ValueError("fix_scene requires a non-empty reason")
 
     ledger = get_recovery_ledger()
-    snapshot = ledger.snapshot()
-    already = snapshot["fixes"].get(scene_id, 0)
-    if already >= FIX_BUDGET:
-        raise RecoveryBudgetExhausted(
-            f"fix_scene called for {scene_id} after {already} fixes "
-            f"(budget {FIX_BUDGET}); SubAgent must skip or escalate"
-        )
-
-    fix_count = ledger.increment_fix(scene_id)
-    retry_count = snapshot["retries"].get(scene_id, 0)
+    fix_count, retry_count = ledger.try_increment_fix(scene_id, FIX_BUDGET)
     next_revision = retry_count + fix_count + 1
     logger.debug(
         "scene_id=<%s>, reason=<%s>, fix_count=<%d> | fix recorded",
