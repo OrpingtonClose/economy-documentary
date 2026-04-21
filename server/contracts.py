@@ -326,6 +326,13 @@ ASSEMBLY_CONTRACT = StageContract(
     produced_artifacts=["output/*.mp4"],
 )
 
+ESCALATION_CONTRACT = StageContract(
+    name="escalation",
+    required_services=[],  # decision-only — no workers
+    required_state=["diagnostic"],
+    produced_state=["decision"],
+)
+
 
 # Placeholder values that indicate upstream stage didn't actually produce
 # real output.  If any required_state key holds one of these, the stage

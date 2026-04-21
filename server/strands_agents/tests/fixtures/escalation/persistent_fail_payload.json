@@ -1,0 +1,15 @@
+{
+  "error_class": "persistent_fail",
+  "error_message": "concept regeneration failed 3 times after 1 fix attempt",
+  "retries": 3,
+  "retries_max": 3,
+  "fixable": false,
+  "style_lock_permits_skip": true,
+  "target": {"scope": "scene", "id": "s4"},
+  "history": [
+    {"attempt": 1, "status": "fix_applied"},
+    {"attempt": 2, "status": "error"},
+    {"attempt": 3, "status": "error"},
+    {"attempt": 4, "status": "error"}
+  ]
+}
