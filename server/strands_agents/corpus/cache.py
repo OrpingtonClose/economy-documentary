@@ -125,12 +125,17 @@ def store(
     target = path_for(root, sha256)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    if target.exists():
+    if target.exists() and verify_bytes(target, sha256):
         logger.debug(
             "sha256=<%s> | cache hit during store, skipping",
             sha256,
         )
         return target
+
+    # Target is missing OR corrupted; fall through to rewrite it.  A
+    # stale corrupted entry would otherwise permanently poison the cache
+    # (resolve()'s re-fetch would land here, short-circuit, and the
+    # verify at the end of resolve() would fail again — no self-healing).
 
     with tempfile.NamedTemporaryFile(
         dir=target.parent, delete=False, prefix=".corpus.", suffix=".tmp",

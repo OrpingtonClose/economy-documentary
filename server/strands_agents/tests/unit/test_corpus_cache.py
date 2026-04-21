@@ -122,3 +122,28 @@ class TestStore:
         second = cache.store(root, sha, source2)
         assert second == first
         assert second.stat().st_mtime_ns == first_mtime
+
+    def test_corrupted_target_is_rewritten(self, tmp_path: Path) -> None:
+        # Regression: a previously-cached entry that went corrupt (disk
+        # error, external tampering) must be re-written by store() so the
+        # resolve() → re-fetch → store() path can self-heal.  Earlier
+        # short-circuited on target.exists() alone, permanently poisoning
+        # the cache entry.
+        root = tmp_path / "cache"
+        root.mkdir()
+        good = b"good-bytes"
+        sha = hashlib.sha256(good).hexdigest()
+        source = tmp_path / "src.bin"
+        source.write_bytes(good)
+
+        first = cache.store(root, sha, source)
+        first.write_bytes(b"corrupted!")  # Simulate on-disk corruption.
+        assert not cache.verify_bytes(first, sha)
+
+        # Fresh source, correct hash — store must overwrite the bad entry.
+        source2 = tmp_path / "src2.bin"
+        source2.write_bytes(good)
+        second = cache.store(root, sha, source2)
+        assert second == first
+        assert second.read_bytes() == good
+        assert cache.verify_bytes(second, sha)
