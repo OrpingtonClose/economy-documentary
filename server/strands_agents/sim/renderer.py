@@ -118,6 +118,11 @@ class FakeRenderer:
     ) -> None:
         """Override the next :meth:`health_check` response.
 
+        Every parameter is "patch" semantics — only fields the caller
+        explicitly passes are mutated, the rest keep their current
+        value. :meth:`health_check` auto-clears ``error`` once it has
+        been consumed, so callers never need to reset it manually.
+
         Setting ``error`` to a non-empty string makes the next call
         raise :class:`RuntimeError` with that message, exercising the
         production SubAgent's "worker unhealthy, escalate" branch.
@@ -129,7 +134,13 @@ class FakeRenderer:
                 self._workers_available = workers_available
             if queue_depth is not None:
                 self._queue_depth = queue_depth
-            self._health_error = error
+            # Patch-semantics: only touch ``_health_error`` when the
+            # caller actually passed a value. Otherwise an unrelated
+            # ``set_health(queue_depth=5)`` would silently cancel a
+            # previously scripted error before ``health_check`` could
+            # consume it.
+            if error is not None:
+                self._health_error = error
 
     # ------------------------------------------------------------------
     # Helper surfaces

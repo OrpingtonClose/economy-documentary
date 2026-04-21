@@ -135,6 +135,18 @@ class TestFakeRendererHealth:
         snap = r.health_check()
         assert snap["workers_total"] == 2
 
+    def test_set_health_does_not_clear_error_when_patching_other_fields(
+        self,
+    ) -> None:
+        # A realistic script: first stage the fleet failure, then on a
+        # later tick patch an unrelated field (queue depth). The
+        # scripted error MUST still fire on the next health check.
+        r = FakeRenderer(workers_total=2)
+        r.set_health(error="fleet offline")
+        r.set_health(queue_depth=5)
+        with pytest.raises(RuntimeError, match="fleet offline"):
+            r.health_check()
+
 
 class TestFakeRendererRecording:
     def test_records_dispatch_and_health(self, tmp_path) -> None:
