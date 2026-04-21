@@ -177,13 +177,26 @@ def _extract_json_blob(text: str) -> Optional[str]:
 
     Prefers ``text`` itself if it parses as JSON; otherwise returns the
     first ``{...}`` block matched by :data:`_JSON_BLOCK_RE`.  Nested
-    objects aren't extracted — judges that wrap their verdict in
-    another dict need to flatten before the call reaches here.
+    objects aren't extracted by the regex — judges that wrap their
+    verdict in another dict need to flatten before the call reaches
+    here.
+
+    The structural ``startswith``/``endswith`` check isn't sufficient
+    on its own: a judge response like
+    ``{"score": 0.8}\\nsome notes about {the analysis}`` satisfies
+    both but isn't a single parseable object.  We verify parseability
+    before returning the full text; a parse failure falls through to
+    the regex so the first non-nested JSON block still wins.
     """
 
     stripped = text.strip()
     if stripped.startswith("{") and stripped.endswith("}"):
-        return stripped
+        try:
+            json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            return stripped
     match = _JSON_BLOCK_RE.search(stripped)
     if match is None:
         return None

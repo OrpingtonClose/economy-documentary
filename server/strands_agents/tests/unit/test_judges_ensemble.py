@@ -136,6 +136,19 @@ class TestParseJudgeText:
         assert score == pytest.approx(0.7)
         assert verdict == "pass"
 
+    def test_pseudo_json_falls_through_to_regex(self) -> None:
+        # Regression test: text starts with `{` and ends with `}` but
+        # isn't a single parseable object.  The extractor must not
+        # short-circuit — it has to fall through to the regex, which
+        # finds the first valid block.
+        text = (
+            '{"score": 0.8, "verdict": "pass"}\n'
+            'some notes about {the analysis}'
+        )
+        score, verdict, _ = _parse_judge_text(text)
+        assert score == pytest.approx(0.8)
+        assert verdict == "pass"
+
 
 # ---------------------------------------------------------------------------
 # Voting helpers
