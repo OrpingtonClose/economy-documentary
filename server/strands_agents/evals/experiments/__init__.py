@@ -53,6 +53,11 @@ from strands_agents.evals.experiments.visual_concepter import (
     build_visual_concepter_experiment,
     visual_concepter_cases,
 )
+from strands_agents.evals.experiments.visual_loop import (
+    VISUAL_LOOP_EVALUATOR_THRESHOLDS,
+    build_visual_loop_experiment,
+    visual_loop_cases,
+)
 
 __all__ = [
     "AUDIO_EVALUATOR_THRESHOLDS",
@@ -63,6 +68,7 @@ __all__ = [
     "TIMING_EVALUATOR_THRESHOLDS",
     "TIMING_LOOP_EVALUATOR_THRESHOLDS",
     "VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
+    "VISUAL_LOOP_EVALUATOR_THRESHOLDS",
     "audio_cases",
     "build_audio_experiment",
     "build_coherence_evaluator_experiment",
@@ -72,6 +78,7 @@ __all__ = [
     "build_timing_experiment",
     "build_timing_loop_experiment",
     "build_visual_concepter_experiment",
+    "build_visual_loop_experiment",
     "coherence_evaluator_cases",
     "content_analyst_cases",
     "refiner_cases",
@@ -79,4 +86,5 @@ __all__ = [
     "timing_cases",
     "timing_loop_cases",
     "visual_concepter_cases",
+    "visual_loop_cases",
 ]

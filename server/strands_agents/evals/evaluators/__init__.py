@@ -25,6 +25,7 @@ from .scenario_quality import ScenarioQualityEvaluator
 from .timeline_compliance import TimelineComplianceEvaluator
 from .timing_loop_trajectory import TimingLoopTrajectoryEvaluator
 from .visual_coherence import VisualCoherenceEvaluator
+from .visual_loop_trajectory import VisualLoopTrajectoryEvaluator
 
 __all__ = [
     "ApprovalGateTrajectoryEvaluator",
@@ -39,4 +40,5 @@ __all__ = [
     "TimelineComplianceEvaluator",
     "TimingLoopTrajectoryEvaluator",
     "VisualCoherenceEvaluator",
+    "VisualLoopTrajectoryEvaluator",
 ]
