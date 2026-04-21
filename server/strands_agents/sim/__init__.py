@@ -43,7 +43,14 @@ from __future__ import annotations
 from strands_agents.sim.b2 import FakeB2
 from strands_agents.sim.clock import FakeClock
 from strands_agents.sim.interrupt import FakeInterrupt, NoScriptedDecision
-from strands_agents.sim.llm import FakeLLM, NoScriptedResponse
+from strands_agents.sim.llm import FakeLLM, LLMScript, NoScriptedResponse
+from strands_agents.sim.orchestrator_simulator import (
+    OrchestratorSimulator,
+    SimulationResult,
+    scripted_final,
+    scripted_parallel_tool_calls,
+    scripted_tool_call,
+)
 from strands_agents.sim.recorder import CallRecord, Recorder
 from strands_agents.sim.renderer import FakeRenderer, RenderOutcome
 from strands_agents.sim.substrate import Substrate
@@ -57,9 +64,15 @@ __all__ = [
     "FakeLLM",
     "FakeRenderer",
     "FakeTTS",
+    "LLMScript",
     "NoScriptedDecision",
     "NoScriptedResponse",
+    "OrchestratorSimulator",
     "Recorder",
     "RenderOutcome",
+    "SimulationResult",
     "Substrate",
+    "scripted_final",
+    "scripted_parallel_tool_calls",
+    "scripted_tool_call",
 ]
