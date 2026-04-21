@@ -188,10 +188,11 @@ def _block_id(scene_num: int, voice_role: str) -> str:
 
 
 def _voice_role_of(voice: dict[str, Any]) -> str:
-    raw = voice.get("voice_id") or voice.get("voice_role") or voice.get("role")
-    if not raw:
-        raise ValueError("voice entry missing voice_id / voice_role / role")
-    return str(raw)
+    for key in ("voice_id", "voice_role", "role"):
+        raw = voice.get(key)
+        if raw is not None and str(raw) != "":
+            return str(raw)
+    raise ValueError("voice entry missing voice_id / voice_role / role")
 
 
 def _voice_text_of(voice: dict[str, Any]) -> str:
@@ -362,7 +363,11 @@ def render_audio(
 
 
 def _scene_num(scene: dict[str, Any]) -> int:
-    raw = scene.get("id") or scene.get("scene_num") or scene.get("scene_id")
+    raw: Any = None
+    for key in ("id", "scene_num", "scene_id"):
+        if key in scene and scene[key] is not None:
+            raw = scene[key]
+            break
     if raw is None:
         raise ValueError("scene entry missing id / scene_num / scene_id")
     try:

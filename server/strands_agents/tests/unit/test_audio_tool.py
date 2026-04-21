@@ -368,6 +368,14 @@ def test_scene_missing_id_raises_value_error() -> None:
         render_audio.__wrapped__(scenes=scenes, tool_context=None)
 
 
+def test_scene_id_zero_is_accepted() -> None:
+    _install_helpers()
+    scenes = [{"id": 0, "voices": [{"voice_id": "V1", "text": "hello"}]}]
+    result = render_audio.__wrapped__(scenes=scenes, tool_context=None)
+    assert result["narration_blocks"][0]["scene_num"] == 0
+    assert result["narration_blocks"][0]["block_id"] == "scene_000_V1"
+
+
 def test_scene_id_non_convertible_raises_value_error() -> None:
     _install_helpers()
     scenes = [
