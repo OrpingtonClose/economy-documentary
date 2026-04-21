@@ -45,7 +45,11 @@ def _ffmpeg_available() -> bool:
 
 
 def _espeak_available() -> bool:
-    return shutil.which("espeak-ng") is not None or shutil.which("espeak") is not None
+    # The audio generator hard-requires ``espeak-ng`` (see
+    # ``generators/audio.py``). Matching ``espeak`` here would pass the
+    # skipif and then crash the generator, which defeats the purpose
+    # of the skip.
+    return shutil.which("espeak-ng") is not None
 
 
 @pytest.mark.parametrize(
