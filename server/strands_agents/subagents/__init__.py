@@ -5,6 +5,19 @@ See components 09, 10, 13 for the domain partition.
 
 from __future__ import annotations
 
+from strands_agents.subagents.production import (
+    PRODUCTION_BOOTSTRAP_TOOLS,
+    PRODUCTION_DISPATCH_TOOLS,
+    PRODUCTION_FIX_BUDGET,
+    PRODUCTION_RECOVERY_TOOLS,
+    PRODUCTION_RETRY_BUDGET,
+    PRODUCTION_SUBAGENT_DEFAULT_MODEL,
+    PRODUCTION_SUBAGENT_MODEL_ENV,
+    PRODUCTION_SUBAGENT_PROMPT,
+    PRODUCTION_SUBAGENT_TOOL_NAMES,
+    PRODUCTION_SUBAGENT_TOOLS,
+    build_production_subagent,
+)
 from strands_agents.subagents.visual import (
     VISUAL_LOOP_BOOTSTRAP_TOOLS,
     VISUAL_LOOP_ITERATION_TOOLS,
@@ -19,6 +32,16 @@ from strands_agents.subagents.visual import (
 )
 
 __all__ = [
+    "PRODUCTION_BOOTSTRAP_TOOLS",
+    "PRODUCTION_DISPATCH_TOOLS",
+    "PRODUCTION_FIX_BUDGET",
+    "PRODUCTION_RECOVERY_TOOLS",
+    "PRODUCTION_RETRY_BUDGET",
+    "PRODUCTION_SUBAGENT_DEFAULT_MODEL",
+    "PRODUCTION_SUBAGENT_MODEL_ENV",
+    "PRODUCTION_SUBAGENT_PROMPT",
+    "PRODUCTION_SUBAGENT_TOOLS",
+    "PRODUCTION_SUBAGENT_TOOL_NAMES",
     "VISUAL_LOOP_BOOTSTRAP_TOOLS",
     "VISUAL_LOOP_ITERATION_TOOLS",
     "VISUAL_LOOP_MAX_ITERATIONS",
@@ -28,5 +51,6 @@ __all__ = [
     "VISUAL_SUBAGENT_PROMPT",
     "VISUAL_SUBAGENT_TOOLS",
     "VISUAL_SUBAGENT_TOOL_NAMES",
+    "build_production_subagent",
     "build_visual_subagent",
 ]
