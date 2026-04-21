@@ -248,9 +248,9 @@ class FakeRenderer:
                     channel="renderer",
                     op="health_check",
                     result_summary=(
-                        f"total={self._workers_total} "
-                        f"avail={self._workers_available} "
-                        f"queue={self._queue_depth}"
+                        f"total={snapshot['workers_total']} "
+                        f"avail={snapshot['workers_available']} "
+                        f"queue={snapshot['queue_depth']}"
                     ),
                 )
             )

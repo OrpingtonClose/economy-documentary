@@ -31,6 +31,7 @@ that common case use :meth:`LLMScript.always` and :meth:`LLMScript.next_of`.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -195,6 +196,13 @@ class FakeLLM:
         """
         self._script = script or LLMScript()
         self._recorder = recorder
+        # Parallelism in the pipeline (e.g. ``content_analyst`` extracting
+        # phrases for multiple scenes concurrently) means ``_dispatch``
+        # can be entered from many threads at once. Without a lock, two
+        # threads could both see ``rule.used == 0`` and double-fire a
+        # one-shot rule. Every other fake in this package uses the same
+        # pattern — keep it uniform.
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public helper surfaces — each matches a ``set_*_helpers`` slot.
@@ -277,28 +285,30 @@ class FakeLLM:
     # ------------------------------------------------------------------
 
     def _dispatch(self, *, op: str, payload: dict[str, Any]) -> Any:
-        for rule in self._script.rules:
-            if rule.op != op:
-                continue
-            if not rule.reusable and rule.used > 0:
-                continue
-            try:
-                if not rule.match(payload):
+        with self._lock:
+            for rule in self._script.rules:
+                if rule.op != op:
                     continue
-            except Exception as exc:  # noqa: BLE001 — script author bug
-                msg = f"match() for op={op} rule raised {exc!r}"
-                raise NoScriptedResponse(msg) from exc
-            rule.used += 1
-            if self._recorder is not None:
-                self._recorder.record(
-                    CallRecord(
-                        channel="llm",
-                        op=op,
-                        kwargs=payload,
-                        result_summary=_summarise(rule.response),
+                if not rule.reusable and rule.used > 0:
+                    continue
+                try:
+                    if not rule.match(payload):
+                        continue
+                except Exception as exc:  # noqa: BLE001 — script author bug
+                    msg = f"match() for op={op} rule raised {exc!r}"
+                    raise NoScriptedResponse(msg) from exc
+                rule.used += 1
+                response = rule.response
+                if self._recorder is not None:
+                    self._recorder.record(
+                        CallRecord(
+                            channel="llm",
+                            op=op,
+                            kwargs=payload,
+                            result_summary=_summarise(response),
+                        )
                     )
-                )
-            return rule.response
+                return response
         msg = (
             f"no scripted response for FakeLLM op={op!r}; "
             f"payload keys={sorted(payload)}; "
