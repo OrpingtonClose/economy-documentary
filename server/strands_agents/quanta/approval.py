@@ -17,8 +17,8 @@ the graph runtime to a human operator.
 from __future__ import annotations
 
 from strands_agents.approval import (
-    INTERRUPT_GATE_CONFIG,
     ApprovalDecision,
+    _allowed_decisions,
     resume_command_from_decision,
     validate_decision,
 )
@@ -27,24 +27,24 @@ from strands_agents.approval import (
 def allowed_decisions_for(tool_name: str) -> set[str]:
     """Return the set of allowed ``decision.type`` strings for a tool.
 
+    Delegates to the same internal helper
+    :func:`strands_agents.approval._allowed_decisions` that
+    :func:`validate_decision` uses. This guarantees the two never
+    disagree: any ``decision.type`` that this helper advertises will
+    also pass the validator for the same tool, including when an
+    ``INTERRUPT_GATE_CONFIG`` entry omits the ``allowed_decisions`` key
+    or when the tool is not registered at all (both fall back to the
+    permissive ``{accept, edit, reject, respond}`` superset).
+
     Args:
         tool_name: The interrupt-wrapped tool whose approval rules to
             look up (e.g. ``"launch_visual_production"``,
             ``"launch_assembly"``, ``"request_human_approval"``).
 
     Returns:
-        Set such as ``{"accept", "edit", "reject", "respond"}``. For
-        tools not registered in ``INTERRUPT_GATE_CONFIG`` the full
-        superset is returned — this matches the permissive fallback in
-        :func:`validate_decision` (see
-        ``strands_agents.approval._allowed_decisions``), so a caller
-        using this helper as a guard never rejects a decision the
-        validator would accept.
+        Set of decision-type strings allowed for the tool.
     """
-    entry = INTERRUPT_GATE_CONFIG.get(tool_name)
-    if entry is None:
-        return {"accept", "edit", "reject", "respond"}
-    return set(entry.get("allowed_decisions", ()))
+    return set(_allowed_decisions(tool_name))
 
 
 __all__ = [
