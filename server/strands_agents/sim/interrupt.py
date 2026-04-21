@@ -20,6 +20,7 @@ stays a pure data structure.
 
 from __future__ import annotations
 
+import copy
 import threading
 from collections import deque
 from typing import Any
@@ -59,8 +60,12 @@ class FakeInterrupt:
         if "type" not in decision:
             msg = f"decision for {tool_name!r} missing 'type': {decision!r}"
             raise ValueError(msg)
+        # Deep-copy so callers can’t poison the queued decision by
+        # mutating a shared nested object after ``script()`` returns.
+        # Matches the same guarantee :meth:`FakeLLM.add_rule` makes for
+        # scripted chat responses.
         with self._lock:
-            self._queues.setdefault(tool_name, deque()).append(dict(decision))
+            self._queues.setdefault(tool_name, deque()).append(copy.deepcopy(decision))
         return self
 
     def next_decision(self, tool_name: str) -> dict[str, Any]:

@@ -77,6 +77,16 @@ class TestFakeInterruptQueue:
         )
         assert fi.next_decision("t") == {"type": "edit", "args": {"seed": 1}}
 
+    def test_caller_cannot_poison_queue_via_nested_mutation(self) -> None:
+        # A shallow copy at script() would leave the nested ``args``
+        # dict shared with the caller's reference. Mutating it after
+        # scripting would silently corrupt the queued decision.
+        fi = FakeInterrupt()
+        payload = {"type": "edit", "args": {"seed": 1}}
+        fi.script(tool_name="t", decision=payload)
+        payload["args"]["seed"] = 999
+        assert fi.next_decision("t") == {"type": "edit", "args": {"seed": 1}}
+
 
 class TestFakeInterruptRecording:
     def test_records_each_decision(self) -> None:
