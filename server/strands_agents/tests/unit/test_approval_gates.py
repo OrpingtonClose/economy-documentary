@@ -154,11 +154,12 @@ class TestValidateDecision:
         with pytest.raises(ValueError, match="unknown decision type"):
             validate_decision("launch_visual_production", {"type": "postpone"})
 
-    def test_unknown_tool_defaults_to_permissive_allowlist(self) -> None:
-        # Unknown tools fall back to accept/reject/respond (no edit).
+    def test_unknown_tool_defaults_to_full_superset(self) -> None:
+        # Unknown tools default to accept/edit/reject/respond so the
+        # queue-side validator matches the graph's interrupt_on config
+        # (pipeline._build_interrupt_on advertises the same superset).
         validate_decision("custom_tool", {"type": "accept"})
-        with pytest.raises(ValueError, match="not allowed"):
-            validate_decision("custom_tool", {"type": "edit", "args": {"x": 1}})
+        validate_decision("custom_tool", {"type": "edit", "args": {"x": 1}})
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +621,23 @@ class TestAutoRejectInterrupt:
             "type": "reject",
             "reason": "no operator attached",
         }
+
+    def test_request_human_approval_gets_respond_not_reject(self) -> None:
+        # request_human_approval only allows accept/respond.
+        # Sending reject would bypass validate_decision and hit the
+        # middleware with an invalid payload.
+        state = _interrupt_state("request_human_approval")
+        command = asyncio.run(_auto_reject_interrupt(state))
+        assert isinstance(command, Command)
+        assert command.resume == {
+            "type": "respond",
+            "content": "no operator attached",
+        }
+
+    def test_launch_visual_production_gets_reject(self) -> None:
+        state = _interrupt_state("launch_visual_production")
+        command = asyncio.run(_auto_reject_interrupt(state))
+        assert command.resume["type"] == "reject"
 
 
 class TestQueueOperatorDecision:

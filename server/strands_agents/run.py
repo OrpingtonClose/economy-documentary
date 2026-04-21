@@ -32,6 +32,7 @@ from langgraph.types import Command
 from .approval import (
     ApprovalDecision,
     ApprovalRecord,
+    _allowed_decisions,
     new_interrupt_id,
     resume_command_from_decision,
     write_approval_record,
@@ -53,15 +54,35 @@ _DEFAULT_OPERATOR = "ci-auto"
 
 
 async def _auto_reject_interrupt(state: dict[str, Any]) -> Command:
-    """Safe default: reject every interrupt so CI smoke runs terminate."""
+    """Safe default: decline every interrupt so CI smoke runs terminate.
+
+    Picks the most decline-like decision the gate permits —
+    ``reject`` where allowed, otherwise ``respond`` (since
+    ``request_human_approval`` only accepts ``accept`` / ``respond``).
+    This keeps the payload valid under
+    :func:`validate_decision` for every gate in
+    :data:`INTERRUPT_GATE_CONFIG`.
+    """
 
     interrupts = state.get("__interrupt__", [])
+    try:
+        _, tool_name, _ = _extract_interrupt_metadata(state)
+    except RuntimeError:
+        tool_name = "unknown"
+
+    allowed = _allowed_decisions(tool_name)
     logger.warning(
-        "interrupt_count=<%d> | auto-rejecting (no operator attached)",
+        "interrupt_count=<%d>, tool=<%s> | auto-declining (no operator attached)",
         len(interrupts),
+        tool_name,
     )
+
+    if "reject" in allowed:
+        return Command(
+            resume={"type": "reject", "reason": "no operator attached"},
+        )
     return Command(
-        resume={"type": "reject", "reason": "no operator attached"},
+        resume={"type": "respond", "content": "no operator attached"},
     )
 
 

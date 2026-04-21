@@ -120,7 +120,10 @@ class ApprovalRecord:
 
 def _allowed_decisions(tool_name: str) -> set[DecisionType]:
     entry = INTERRUPT_GATE_CONFIG.get(tool_name, {})
-    return set(entry.get("allowed_decisions", ["accept", "reject", "respond"]))
+    # Unknown tools get the full superset so validate_decision agrees
+    # with _build_interrupt_on (pipeline.py); the operator console
+    # never advertises an action the queue will 400 on.
+    return set(entry.get("allowed_decisions", ["accept", "edit", "reject", "respond"]))
 
 
 def validate_decision(
@@ -257,8 +260,7 @@ def write_approval_record(run_dir: Path, record: ApprovalRecord) -> Path:
     if pending.exists():
         pending.unlink()
     logger.info(
-        "interrupt_id=<%s>, tool_name=<%s>, decision_type=<%s> | wrote resume "
-        "record",
+        "interrupt_id=<%s>, tool_name=<%s>, decision_type=<%s> | wrote resume record",
         record.interrupt_id,
         record.tool_name,
         record.decision.get("type"),
