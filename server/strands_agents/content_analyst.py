@@ -190,8 +190,12 @@ def _phrase_id(scene_num: int, phrase_idx: int, text: str) -> str:
 
 
 def _scene_num(scene: dict[str, Any]) -> int:
+    # Key order matches audio_tool._scene_num and
+    # scenario_refiner._find_scene_index so the same scene dict always
+    # resolves to the same identifier across components (audio blocks,
+    # phrases, and refinement index must share a key).
     raw: Any = None
-    for key in ("scene_num", "id", "scene_id"):
+    for key in ("id", "scene_num", "scene_id"):
         if key in scene and scene[key] is not None:
             raw = scene[key]
             break
