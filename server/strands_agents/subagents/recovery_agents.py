@@ -369,13 +369,17 @@ def propose_revised_concept(
     lock_camera = (style_lock or {}).get("camera_movement")
     if lock_camera and not revised.get("camera_movement"):
         revised["camera_movement"] = lock_camera
-    revised["style_lock_applied"] = True
-
     # Ensure preserved fields are intact (defensive — ``deepcopy``
     # already carries them; this catches callers that mutate in place).
+    # ``style_lock_applied`` is always True on a remanifested concept,
+    # so it is not restored from the original even though it is part of
+    # the cross-stage preservation contract.
     for key in _PRESERVED_FIELDS:
+        if key == "style_lock_applied":
+            continue
         if key in original_concept:
             revised[key] = original_concept[key]
+    revised["style_lock_applied"] = True
     return revised
 
 

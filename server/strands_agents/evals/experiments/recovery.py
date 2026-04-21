@@ -520,17 +520,16 @@ def build_recovery_experiment(
     Returns:
         :class:`Experiment` wired to :func:`recovery_task`.
     """
+    # Contract compliance lives in the sibling scoped experiments
+    # (``build_recovery_classifier_contract_experiment`` /
+    # ``build_recovery_remanifester_contract_experiment``) because they
+    # reshape ``recovery_task`` output to project the per-agent state
+    # dict that :class:`ContractComplianceEvaluator` expects at
+    # ``actual_output`` top-level. Bundling the contract evaluators
+    # here would feed them the full envelope and misreport ``required``
+    # keys that are nested under ``classifier_state`` /
+    # ``remanifester_state``.
     evaluators: list[Evaluator[Any, Any]] = [
-        # ContractCompliance on the classifier: the evaluator needs to
-        # see ``recovery_event`` + ``classification`` in actual_output.
-        # We rely on the outer ``build_recovery_experiment`` caller
-        # driving ``recovery_task`` — but the ContractComplianceEvaluator
-        # itself reads ``actual_output`` directly. In the CI run we
-        # therefore provide a sibling experiment factory below that
-        # reshapes the output; here we layer the two contracts on the
-        # ``classifier_state`` / ``remanifester_state`` projections.
-        ContractComplianceEvaluator(RECOVERY_CLASSIFIER_CONTRACT),
-        ContractComplianceEvaluator(RECOVERY_REMANIFESTER_CONTRACT),
         ClassificationVocabularyEvaluator(),
         RemanifestInvariantEvaluator(),
     ]
