@@ -91,21 +91,29 @@ jobs:
 
       - name: Compute pytest args
         id: args
+        # Dispatch inputs flow through env vars rather than raw ``${{ ... }}``
+        # interpolation.  GitHub Actions substitutes ``${{ }}`` *before* the
+        # shell parses the script, so a crafted string in ``components`` (a
+        # freeform ``type: string`` input) could break out of quotes and
+        # execute arbitrary commands.  Env vars keep the shell's quoting
+        # semantics intact and make this step injection-safe.
+        env:
+          INPUT_TIER2_LIVE: ${{ github.event.inputs.tier2_live || 'true' }}
+          INPUT_COMPONENTS: ${{ github.event.inputs.components }}
         run: |
-          live="${{ github.event.inputs.tier2_live || 'true' }}"
-          if [ "$live" = "true" ]; then
+          if [ "$INPUT_TIER2_LIVE" = "true" ]; then
             echo "tier2_flag=--tier2-live" >> "$GITHUB_OUTPUT"
           else
             echo "tier2_flag=" >> "$GITHUB_OUTPUT"
           fi
 
-          components="${{ github.event.inputs.components }}"
-          if [ -n "$components" ]; then
-            echo "k_expr=-k" >> "$GITHUB_OUTPUT"
-            echo "k_value=$components" >> "$GITHUB_OUTPUT"
+          # ``use_k`` is a boolean flag the next step consumes; the actual
+          # ``-k`` expression rides on the env var, never on a step output,
+          # so there is no injection path into the pytest invocation.
+          if [ -n "$INPUT_COMPONENTS" ]; then
+            echo "use_k=true" >> "$GITHUB_OUTPUT"
           else
-            echo "k_expr=" >> "$GITHUB_OUTPUT"
-            echo "k_value=" >> "$GITHUB_OUTPUT"
+            echo "use_k=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Tier-2 atomic-robustness suite
@@ -114,18 +122,37 @@ jobs:
         # is picked up automatically by the _report plugin to render
         # the per-component markdown table in the run page.
         #
-        # ``|| true``: we deliberately don't fail the workflow here —
-        # the report + artefacts are the deliverable, not the exit
-        # code.  PR-F will layer a blocking gate on top that reads the
-        # JSON and decides which failures matter.
+        # Pytest exit code is captured into ``pytest_failed`` rather than
+        # allowed to fail the step.  The deliverable is the report + artefacts,
+        # not the exit code — PR-F will layer a blocking gate on top that
+        # reads the JSON and decides which failures matter.  Later steps
+        # check ``steps.pytest.outputs.pytest_failed`` to decide whether to
+        # upload supplementary diagnostics.
+        #
+        # The ``components`` dispatch input flows through ``INPUT_COMPONENTS``
+        # so the pytest argv stays quote-safe even for hostile input.
         id: pytest
+        env:
+          INPUT_COMPONENTS: ${{ github.event.inputs.components }}
         run: |
-          poetry run pytest strands_agents/tests/unit/tier2/ \
-            ${{ steps.args.outputs.tier2_flag }} \
-            ${{ steps.args.outputs.k_expr }} ${{ steps.args.outputs.k_value }} \
-            --tier2-report=/tmp/tier2-report.json \
-            -v --tb=short \
-            --maxfail=50 || echo "pytest_failed=true" >> "$GITHUB_OUTPUT"
+          args=(strands_agents/tests/unit/tier2/)
+          if [ -n "${{ steps.args.outputs.tier2_flag }}" ]; then
+            args+=("${{ steps.args.outputs.tier2_flag }}")
+          fi
+          if [ "${{ steps.args.outputs.use_k }}" = "true" ]; then
+            args+=(-k "$INPUT_COMPONENTS")
+          fi
+          args+=(--tier2-report=/tmp/tier2-report.json -v --tb=short --maxfail=50)
+
+          set +e
+          poetry run pytest "${args[@]}"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "pytest_failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pytest_failed=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload Tier-2 report artefact
         if: always()
@@ -138,7 +165,11 @@ jobs:
             /tmp/tier2-report.json
 
       - name: Upload evaluation summaries on failure
-        if: failure()
+        # The pytest step captures its exit code into ``pytest_failed`` so
+        # that subsequent steps can still run (we always want the JSON
+        # report and step summary); ``if: failure()`` would therefore never
+        # fire on a pytest failure.  Gate off the captured output instead.
+        if: always() && steps.pytest.outputs.pytest_failed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: strands-tier2-failures-${{ github.run_id }}
