@@ -112,14 +112,18 @@ def test_phrase_id_varies_with_scene_phrase_and_text() -> None:
     assert _phrase_id(1, 0, "different text") != base
 
 
-def test_scene_num_prefers_scene_num_key() -> None:
-    assert _scene_num({"scene_num": 3, "id": 99}) == 3
+def test_scene_num_prefers_id_key() -> None:
+    # Key order matches audio_tool._scene_num and
+    # scenario_refiner._find_scene_index so scene identity is stable
+    # across the three components.
+    assert _scene_num({"scene_num": 3, "id": 99}) == 99
 
 
-def test_scene_num_falls_back_to_id_when_scene_num_is_none() -> None:
+def test_scene_num_falls_back_to_scene_num_when_id_is_none() -> None:
     # Regression: `if key in scene` without a None-guard previously called
-    # int(None) and raised TypeError instead of falling through to `id`.
-    assert _scene_num({"scene_num": None, "id": 5}) == 5
+    # int(None) and raised TypeError instead of falling through to the
+    # next candidate key.
+    assert _scene_num({"id": None, "scene_num": 5}) == 5
 
 
 def test_scene_num_falls_back_to_scene_id_when_others_missing() -> None:
