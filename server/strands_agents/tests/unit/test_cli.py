@@ -222,6 +222,104 @@ class TestRunStrandsPipelineHermetic:
         assert state.get("messages")
 
 
+class TestLiveModeToolResolution:
+    """Live runs must use the full default tool surface, not placeholders.
+
+    Regression guard for the contract that live-mode runs (real model,
+    credentials present, ``--test-mode`` off) pick up the real GPU /
+    TTS / LTX / approval tools from ``build_default_tools`` — not the
+    hermetic placeholder list. Silently driving a live run with
+    placeholders would violate ``run_pipeline.py``'s no-silent-degrade
+    invariant.
+    """
+
+    def test_live_mode_uses_default_tools_and_subagents(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        class _StubAgent:
+            async def ainvoke(self, _: Any) -> dict[str, Any]:
+                return {"messages": [AIMessage(content="done")]}
+
+        def _capture(run_dir: Any, **kw: Any) -> _StubAgent:  # noqa: ARG001
+            captured["tools"] = list(kw["tools"])
+            captured["subagents"] = list(kw["subagents"])
+            return _StubAgent()
+
+        monkeypatch.setattr(
+            "strands_agents.cli.build_orchestrator",
+            _capture,
+        )
+        sentinel_tools = [object(), object(), object()]
+        sentinel_subagents = [{"name": "alpha"}, {"name": "beta"}]
+        monkeypatch.setattr(
+            "strands_agents.cli.build_default_tools",
+            lambda: list(sentinel_tools),
+        )
+        monkeypatch.setattr(
+            "strands_agents.cli.build_default_subagents",
+            lambda: list(sentinel_subagents),
+        )
+        live_model = strands_cli._BindingFakeChatModel(
+            responses=[AIMessage(content="live")],
+        )
+
+        asyncio.run(
+            strands_cli.run_strands_pipeline(
+                _args(tmp_path, test_mode=False),
+                model=live_model,
+            ),
+        )
+
+        assert captured["tools"] == sentinel_tools
+        assert captured["subagents"] == sentinel_subagents
+
+    def test_test_mode_uses_placeholders(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, Any] = {}
+
+        class _StubAgent:
+            async def ainvoke(self, _: Any) -> dict[str, Any]:
+                return {"messages": [AIMessage(content="done")]}
+
+        def _capture(run_dir: Any, **kw: Any) -> _StubAgent:  # noqa: ARG001
+            captured["tools"] = list(kw["tools"])
+            captured["subagents"] = list(kw["subagents"])
+            return _StubAgent()
+
+        monkeypatch.setattr(
+            "strands_agents.cli.build_orchestrator",
+            _capture,
+        )
+
+        def _unexpected_default_tools() -> list[Any]:
+            raise AssertionError(
+                "build_default_tools must not be called in test mode",
+            )
+
+        monkeypatch.setattr(
+            "strands_agents.cli.build_default_tools",
+            _unexpected_default_tools,
+        )
+        monkeypatch.setattr(
+            "strands_agents.cli.build_default_subagents",
+            _unexpected_default_tools,
+        )
+
+        asyncio.run(strands_cli.run_strands_pipeline(_args(tmp_path)))
+
+        tool_names = {getattr(t, "name", "") for t in captured["tools"]}
+        assert "generate_scenario" in tool_names
+        assert "request_human_approval" in tool_names
+        assert captured["subagents"] == []
+
+
 class TestInterruptCap:
     def test_caps_at_32_rounds(
         self,

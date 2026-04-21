@@ -50,7 +50,7 @@ from langchain_core.runnables import Runnable
 
 from . import _placeholders
 from .approval import request_human_approval
-from .pipeline import build_orchestrator
+from .pipeline import build_default_subagents, build_default_tools, build_orchestrator
 from .run import _auto_reject_interrupt
 
 logger = logging.getLogger(__name__)
@@ -238,8 +238,26 @@ async def run_strands_pipeline(
     else:
         resolved_model = _resolve_live_model()
 
-    resolved_tools = list(tools) if tools is not None else _placeholder_tools()
-    resolved_subagents = list(subagents) if subagents is not None else []
+    if tools is not None:
+        resolved_tools = list(tools)
+    elif test_mode:
+        resolved_tools = _placeholder_tools()
+    else:
+        # Live mode: full default tool surface wired to real GPU workers,
+        # real approval queue, real B2 sync. Anything less would silently
+        # degrade production runs to canned placeholder responses, which
+        # the top-level ``run_pipeline.py`` pre-flight explicitly
+        # forbids ("Never silently degrade to synthetic/placeholder media").
+        resolved_tools = build_default_tools()
+
+    if subagents is not None:
+        resolved_subagents = list(subagents)
+    elif test_mode:
+        resolved_subagents = []
+    else:
+        # Same rationale as tools — the SubAgent surface (visual loop,
+        # production supervisor, escalation) is required for real runs.
+        resolved_subagents = build_default_subagents()
 
     logger.info(
         "run_id=<%s>, test_mode=<%s>, tool_count=<%d> | starting strands pipeline",
