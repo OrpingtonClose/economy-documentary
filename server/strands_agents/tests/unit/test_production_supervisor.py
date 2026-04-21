@@ -493,6 +493,18 @@ class TestRetryScene:
         assert snapshot["retries"]["s1"] == 1
         assert snapshot["retries"]["s2"] == 1
 
+    def test_next_revision_includes_fix_count(self) -> None:
+        # Interleaved fix then retry must not collide on revision number.
+        # (scene_id, revision) is the task pool's idempotency key — a
+        # collision would short-circuit to the old failed task instead
+        # of launching a fresh dispatch.
+        fix_result = fix_scene.__wrapped__(scene_id="s1", reason="style_drift")
+        retry_result = retry_scene.__wrapped__(scene_id="s1", reason="worker_500")
+        # fix: retry_count=0 + fix_count=1 + 1 = 2
+        # retry: retry_count=1 + fix_count=1 + 1 = 3 (not 2)
+        assert fix_result["next_revision"] == 2
+        assert retry_result["next_revision"] == 3
+
 
 class TestFixScene:
     def test_first_fix_succeeds(self) -> None:

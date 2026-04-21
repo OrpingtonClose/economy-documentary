@@ -219,7 +219,10 @@ def retry_scene(scene_id: str, reason: str) -> dict[str, Any]:
 
     Returns:
         Dict with ``action="retry"``, ``scene_id``, ``reason``,
-        ``retry_count`` (post-increment), and ``next_revision``.
+        ``retry_count`` (post-increment), and ``next_revision``
+        (``retry_count + fix_count + 1`` — ensures revisions are unique
+        across interleaved retries and fixes so the task pool's
+        ``(scene_id, revision)`` idempotency key cannot collide).
 
     Raises:
         ValueError: On empty ``scene_id`` / ``reason``.
@@ -232,8 +235,8 @@ def retry_scene(scene_id: str, reason: str) -> dict[str, Any]:
         raise ValueError("retry_scene requires a non-empty reason")
 
     ledger = get_recovery_ledger()
-    retry_count, _ = ledger.try_increment_retry(scene_id, RETRY_BUDGET)
-    next_revision = retry_count + 1
+    retry_count, fix_count = ledger.try_increment_retry(scene_id, RETRY_BUDGET)
+    next_revision = retry_count + fix_count + 1
     logger.debug(
         "scene_id=<%s>, reason=<%s>, retry_count=<%d> | retry recorded",
         scene_id,
