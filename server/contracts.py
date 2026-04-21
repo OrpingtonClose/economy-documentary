@@ -355,6 +355,25 @@ ESCALATION_CONTRACT = StageContract(
 )
 
 
+PIPELINE_CONTRACT = StageContract(
+    name="pipeline",
+    required_services=[],  # aggregated — individual stages declare theirs
+    # The orchestrator only runs once the user has handed us a brief and a
+    # target_duration_sec.  Everything else is produced by the pipeline
+    # itself — we intentionally do not list ``scenes`` / ``whisperx_alignment``
+    # / ``visual_concepts`` as required because the orchestrator's job is
+    # to produce them.
+    required_state=["brief", "target_duration_sec"],
+    produced_state=[
+        "scenes",
+        "whisperx_alignment",
+        "visual_concepts",
+        "final_timeline",
+    ],
+    produced_artifacts=["output/*.mp4"],
+)
+
+
 # Placeholder values that indicate upstream stage didn't actually produce
 # real output.  If any required_state key holds one of these, the stage
 # contract fails.

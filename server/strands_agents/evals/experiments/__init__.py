@@ -13,6 +13,10 @@ to :meth:`Experiment.run_evaluations`.
 
 from __future__ import annotations
 
+from strands_agents.evals.experiments.approval import (
+    approval_task,
+    build_approval_experiment,
+)
 from strands_agents.evals.experiments.assembly import (
     ASSEMBLY_EXPERIMENT_NAME,
     assembly_task,
@@ -43,6 +47,10 @@ from strands_agents.evals.experiments.escalation import (
     escalation_contract_task,
     escalation_judge_task,
     escalation_task,
+)
+from strands_agents.evals.experiments.pipeline import (
+    build_pipeline_experiment,
+    pipeline_task,
 )
 from strands_agents.evals.experiments.production import (
     PRODUCTION_EVALUATOR_THRESHOLDS,
@@ -105,8 +113,10 @@ __all__ = [
     "VISUAL_LOOP_EVALUATOR_THRESHOLDS",
     "ActionEqualsEvaluator",
     "HumanSummaryRequiredEvaluator",
+    "approval_task",
     "assembly_task",
     "audio_cases",
+    "build_approval_experiment",
     "build_assembly_experiment",
     "build_audio_experiment",
     "build_coherence_evaluator_experiment",
@@ -114,6 +124,7 @@ __all__ = [
     "build_escalation_contract_experiment",
     "build_escalation_experiment",
     "build_escalation_judge_experiment",
+    "build_pipeline_experiment",
     "build_production_experiment",
     "build_recovery_classifier_contract_experiment",
     "build_recovery_experiment",
@@ -131,6 +142,7 @@ __all__ = [
     "escalation_contract_task",
     "escalation_judge_task",
     "escalation_task",
+    "pipeline_task",
     "production_cases",
     "recovery_task",
     "refiner_cases",
