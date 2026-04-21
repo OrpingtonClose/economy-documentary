@@ -1,31 +1,90 @@
-"""Glue the judge catalog into the pipeline's Vast.ai provisioner.
+"""Plan Vast.ai VMs that host the judge fleet.
 
-The judge models run on the same Vast.ai fleet as TTS/LTX — different
-VMs, same provisioning plumbing.  Instead of forking
-:mod:`server.worker_provisioner`, we translate each
-:class:`JudgeModelSpec` into a :class:`WorkerSpec` and hand it back;
-callers feed that spec into the existing parallel-provisioning flow.
+Judges run on the same Vast.ai provider as TTS/LTX but on different VMs
+with a different worker script (``scripts/judge_worker.py``, shipped in a
+follow-up PR) and different validation rules.  The ADK provisioner
+(``server/worker_provisioner.py``) hard-wires ``scripts/gpu_worker.py``
+and validates ``worker_mode`` against ``("tts", "ltx", "both")``; judge
+modes would trip its checks if we tried to share the code path.
 
-The translation is the only thing that lives here because the rest of
-the provisioning behaviour (offer search, bootstrap script, health
-polling, direct-connection resolution) is generic — whatever works for
-a TTS worker works for a judge worker.
+Rather than mutate the live ADK provisioner (strangler-fig: leave the
+ADK path untouched until cutover), this module returns a dedicated
+:class:`JudgeWorkerSpec` — the input to the judge-specific
+``provision_judge_vm`` function that lands alongside the judge worker
+script in PR-C.  For now, :class:`JudgeWorkerSpec` is a planning
+artifact: runbooks print it, cost estimators read it, unit tests
+assert on its fields.
 
 Kept free of heavy imports so the module can be unit-tested without
-needing the real ``vastai`` CLI, a running B2 session, or a worker
-runtime.  :class:`WorkerSpec` is lazily imported inside
-:func:`build_judge_worker_spec` for the same reason.
+needing the ``vastai`` CLI, a running B2 session, or a worker runtime.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from strands_agents.judges.models import JudgeModelSpec
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class JudgeWorkerSpec:
+    """Vast.ai provisioning plan for a single judge VM.
+
+    Deliberately **not** ``server.worker_provisioner.WorkerSpec``.  The
+    ADK ``WorkerSpec`` + ``provision_vm`` path is purpose-built for
+    ``gpu_worker.py`` (TTS / LTX).  Judges run ``judge_worker.py`` and
+    load different models; shoving them through ``provision_vm`` would
+    either require loosening ``normalize_worker_mode`` on the ADK path
+    (which the strangler-fig rules forbid) or silently pick a TTS/LTX
+    image that can't serve the judge.
+
+    The fields mirror the subset of ``WorkerSpec`` that the judge
+    provisioner actually needs — role, ports, GPU/VRAM/disk floors,
+    price ceiling.  ``judge_mode`` replaces ``worker_mode`` so the
+    naming can't be confused with gpu_worker's ``--mode`` flag.
+
+    Attributes:
+        role: Stable role label used for logging and for the tunnel
+            manager to index workers.  Always ``judge_<key>``.
+        env_var: Environment variable the driver exports with the
+            localhost tunnel URL once provisioning succeeds.  Always
+            ``JUDGE_<KEY>_URL``.
+        local_port: Localhost tunnel port — unique per role so the
+            driver can run multiple judges without collision.
+        remote_port: Port ``judge_worker.py`` binds on the VM.
+        capability: Capability tag (``judge_safety`` /
+            ``judge_av_primary`` / ``judge_av_tiebreaker``) that the
+            fleet coordinator reads when routing :class:`JudgeRequest`s.
+        gpu_type: Vast.ai GPU family filter.
+        min_vram_gb: VRAM floor for offer search.
+        max_price: Per-hour price ceiling.
+        min_disk_gb: Disk floor for offer search.
+        disk_gb: ``--disk`` argument for ``vast create instance``.
+        judge_mode: Identifier the judge worker script uses to pick
+            which model to load (``gemma4_abliterated`` / ``qwen35_omni``
+            / ``video_salmonn_2_72b``).
+        model_key: The catalog key this spec was built from.  Lets
+            callers look up the full :class:`JudgeModelSpec` without
+            threading it through separately.
+    """
+
+    role: str
+    env_var: str
+    local_port: int
+    remote_port: int
+    capability: str
+    gpu_type: str
+    min_vram_gb: int
+    max_price: float
+    min_disk_gb: int
+    disk_gb: int
+    judge_mode: str
+    model_key: str
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 def build_judge_worker_spec(
@@ -37,8 +96,8 @@ def build_judge_worker_spec(
     min_vram_gb: int | None = None,
     min_disk_gb: int | None = None,
     gpu_type: str = "H100_SXM5",
-) -> Any:
-    """Translate a :class:`JudgeModelSpec` into a ``WorkerSpec``.
+) -> JudgeWorkerSpec:
+    """Translate a :class:`JudgeModelSpec` into a :class:`JudgeWorkerSpec`.
 
     Args:
         spec: Which judge model the VM should serve.
@@ -64,17 +123,12 @@ def build_judge_worker_spec(
             for smaller quantised builds.
 
     Returns:
-        A ``server.worker_provisioner.WorkerSpec`` ready to feed into
-        the existing parallel-provisioning flow.  Imported lazily so
-        this module stays unit-testable without the full provisioner
-        stack.
+        A :class:`JudgeWorkerSpec` ready to be consumed by the judge
+        provisioning flow (shipped with ``scripts/judge_worker.py`` in
+        a follow-up PR).  Deliberately **not** a ``WorkerSpec``: the
+        ADK path can't serve judges, and we want that barrier explicit
+        rather than discovered at runtime.
     """
-
-    # Lazy import — only materialised at runtime.  Keeping it out of
-    # module scope means ``from strands_agents.judges import
-    # build_judge_worker_spec`` doesn't require ``b2sdk`` / ``vastai``
-    # at import time.
-    from worker_provisioner import WorkerSpec  # type: ignore[import-not-found]
 
     vram_floor = min_vram_gb if min_vram_gb is not None else spec.runtime_vram_gb
     disk_floor = min_disk_gb if min_disk_gb is not None else spec.disk_gb
@@ -91,18 +145,19 @@ def build_judge_worker_spec(
         gpu_type,
     )
 
-    return WorkerSpec(
+    return JudgeWorkerSpec(
         role=f"judge_{spec.key}",
         env_var=env_var,
         local_port=local_port,
         remote_port=remote_port,
         capability=f"judge_{spec.role}",
         gpu_type=gpu_type,
-        min_vram_gb=vram_floor,
+        min_vram_gb=int(vram_floor),
         max_price=max_price,
-        min_disk_gb=disk_floor,
-        disk_gb=spec.disk_gb,
-        worker_mode=f"judge_{spec.key}",
+        min_disk_gb=int(disk_floor),
+        disk_gb=int(spec.disk_gb),
+        judge_mode=spec.key,
+        model_key=spec.key,
     )
 
 

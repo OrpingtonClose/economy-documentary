@@ -465,7 +465,7 @@ def build_judge_client(
     """
 
     if mock_responses is not None or not base_url:
-        return MockJudgeClient(mock_responses, role=role)
+        return MockJudgeClient(mock_responses, role=role, model=model or "mock-judge")
     return HttpJudgeClient(
         base_url=base_url,
         api_key=api_key,

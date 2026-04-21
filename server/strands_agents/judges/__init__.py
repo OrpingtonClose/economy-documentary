@@ -24,7 +24,8 @@ Public surface (kept deliberately small — every symbol is tested):
 - :class:`JudgeRequest` / :class:`JudgeResponse` — wire contract
 - :class:`JudgeModelSpec` + :data:`JUDGE_CATALOG` — hardware requirements
 - :func:`fetch_model_from_b2` — pull abliterated weights from the B2 bucket
-- :func:`build_judge_worker_spec` — glue into ``server/worker_provisioner.py``
+- :func:`build_judge_worker_spec` + :class:`JudgeWorkerSpec` — Vast.ai
+  provisioning plan for the judge-specific worker path
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from strands_agents.judges.models import (
     VIDEO_SALMONN_2_72B,
     JudgeModelSpec,
 )
-from strands_agents.judges.provisioner import build_judge_worker_spec
+from strands_agents.judges.provisioner import JudgeWorkerSpec, build_judge_worker_spec
 
 __all__ = [
     "GEMMA4_ABLITERATED",
@@ -55,6 +56,7 @@ __all__ = [
     "JudgeModelSpec",
     "JudgeRequest",
     "JudgeResponse",
+    "JudgeWorkerSpec",
     "MockJudgeClient",
     "QWEN35_OMNI",
     "VIDEO_SALMONN_2_72B",

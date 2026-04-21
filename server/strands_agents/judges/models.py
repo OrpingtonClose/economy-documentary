@@ -40,8 +40,8 @@ class JudgeModelSpec:
 
     Attributes:
         key: Short stable identifier used as the dict key in
-            :data:`JUDGE_CATALOG` and as the ``worker_mode`` passed to
-            the Vast.ai provisioner.
+            :data:`JUDGE_CATALOG` and as the ``judge_mode`` on
+            :class:`strands_agents.judges.provisioner.JudgeWorkerSpec`.
         display_name: Human-readable label for logs / dashboards.
         role: Which ensemble seat this model fills (:data:`JudgeRole`).
         hf_source: HuggingFace repo ID. Empty string for models that are

@@ -281,6 +281,20 @@ class TestBuildJudgeClient:
         client = build_judge_client(base_url="", model="m")
         assert isinstance(client, MockJudgeClient)
 
+    def test_mock_client_forwards_model_identifier(self) -> None:
+        # Regression: the factory used to drop the `model` param on the
+        # mock path, so every response carried model="mock-judge" even
+        # when a specific judge was requested.  Callers that inspect
+        # JudgeResponse.model to route / log need it preserved.
+        client = build_judge_client(mock_responses={}, model="gemma4_abliterated")
+        response = client.complete(JudgeRequest(prompt="anything"))
+        assert response.model == "gemma4_abliterated"
+
+    def test_mock_client_model_defaults_when_unspecified(self) -> None:
+        client = build_judge_client(mock_responses={})
+        response = client.complete(JudgeRequest(prompt="anything"))
+        assert response.model == "mock-judge"
+
     def test_returns_http_when_live_config_provided(self) -> None:
         client = build_judge_client(base_url="http://judge.local", api_key="k", model="m", role="safety")
         assert isinstance(client, HttpJudgeClient)

@@ -26,7 +26,8 @@ class TestBuildJudgeWorkerSpec:
         assert spec.min_vram_gb == GEMMA4_ABLITERATED.runtime_vram_gb
         assert spec.disk_gb == GEMMA4_ABLITERATED.disk_gb
         assert spec.max_price == 6.0
-        assert spec.worker_mode == "judge_gemma4_abliterated"
+        assert spec.judge_mode == "gemma4_abliterated"
+        assert spec.model_key == "gemma4_abliterated"
 
     def test_vram_floor_override_is_respected(self) -> None:
         spec = build_judge_worker_spec(
