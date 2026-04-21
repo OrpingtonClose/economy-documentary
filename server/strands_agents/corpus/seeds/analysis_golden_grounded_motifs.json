@@ -1,0 +1,51 @@
+{
+  "scenario_revision": "rev-001",
+  "per_scene": [
+    {
+      "scene_id": "s01",
+      "narration_anchors": [
+        "OPEC's oil embargo",
+        "gas lines stretch around the block"
+      ],
+      "motifs": [
+        "1973 gas station queues",
+        "embargo-era newspaper headlines"
+      ],
+      "style_tags": [
+        "archival black-and-white",
+        "grainy film stock"
+      ]
+    },
+    {
+      "scene_id": "s02",
+      "narration_anchors": [
+        "Phillips curve was gospel",
+        "entire profession had to admit"
+      ],
+      "motifs": [
+        "economists at chalkboards",
+        "Federal Reserve boardroom 1970s"
+      ],
+      "style_tags": [
+        "archival color",
+        "handheld"
+      ]
+    },
+    {
+      "scene_id": "s03",
+      "narration_anchors": [
+        "Milton Friedman",
+        "1967 address"
+      ],
+      "motifs": [
+        "University of Chicago lecture hall",
+        "wire-rimmed glasses close-up"
+      ],
+      "style_tags": [
+        "archival academic",
+        "warm tungsten"
+      ]
+    }
+  ],
+  "notes": "Golden: motifs anchor to specific narration phrases."
+}

@@ -1,0 +1,27 @@
+{
+  "scene_id": "s02",
+  "context": {
+    "retry_count": 3,
+    "fix_count": 2,
+    "budget_remaining_usd": 0.9,
+    "total_budget_usd": 12.5,
+    "recent_failures": [
+      {
+        "kind": "deterministic",
+        "error_class": "SchemaValidationError"
+      },
+      {
+        "kind": "deterministic",
+        "error_class": "SchemaValidationError"
+      },
+      {
+        "kind": "deterministic",
+        "error_class": "SchemaValidationError"
+      }
+    ]
+  },
+  "decision": "escalate",
+  "target": "human_operator",
+  "rationale": "Recovery ladder exhausted with persistent deterministic error and 93% budget consumed.",
+  "severity": "high"
+}

@@ -1,0 +1,38 @@
+{
+  "revision": "rev-003",
+  "parent_revision": "rev-002",
+  "timing_report_ref": "timing.adversarial.severe_overflow",
+  "changes": [
+    {
+      "scene_id": "s02",
+      "kind": "trim_narration",
+      "before_words": 86,
+      "after_words": 54,
+      "rationale": "s02 measured 26.2s vs 18.0s target (overflow 8.2s); trimmed 32 words to align with target at 150 wpm."
+    }
+  ],
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "duration_seconds": 14,
+      "narration": "…",
+      "words": 42
+    },
+    {
+      "scene_id": "s02",
+      "duration_seconds": 18,
+      "narration": "…",
+      "words": 54,
+      "edited": true
+    },
+    {
+      "scene_id": "s03",
+      "duration_seconds": 16,
+      "narration": "…",
+      "words": 48
+    }
+  ],
+  "pronunciation_hints_preserved": true,
+  "style_lock_preserved": true,
+  "notes": "Golden refinement: cites report, targeted edit, preserves invariants."
+}

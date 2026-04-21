@@ -1,0 +1,25 @@
+{
+  "scene_id": "s01",
+  "voice_id": "narrator_primary",
+  "duration_seconds": 14.2,
+  "lufs": -23.1,
+  "peak_dbfs": -3.2,
+  "alignment_confidence": 0.94,
+  "gaps": [
+    {
+      "start": 3.2,
+      "duration": 0.3
+    },
+    {
+      "start": 9.4,
+      "duration": 0.4
+    }
+  ],
+  "clipping_events": 0,
+  "voice_count_detected": 1,
+  "pronunciation_hints_honored": [
+    "OPEC",
+    "Keynesian"
+  ],
+  "notes": "Golden: LUFS within 0.5LU of target, no clips, single voice."
+}

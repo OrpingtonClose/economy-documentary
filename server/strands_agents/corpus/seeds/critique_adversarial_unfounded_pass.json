@@ -1,0 +1,26 @@
+{
+  "revision": "rev-001",
+  "overall_verdict": "coherent",
+  "per_scene": [
+    {
+      "scene_id": "s01",
+      "rating": "pass",
+      "evidence": null,
+      "style_violation": null
+    },
+    {
+      "scene_id": "s02",
+      "rating": "pass",
+      "evidence": null,
+      "style_violation": null
+    },
+    {
+      "scene_id": "s03",
+      "rating": "pass",
+      "evidence": null,
+      "style_violation": null
+    }
+  ],
+  "suggested_edits": [],
+  "notes": "Adversarial: rubber-stamp critique. Ignores style drift on s02."
+}

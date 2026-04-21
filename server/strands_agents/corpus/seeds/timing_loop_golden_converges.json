@@ -1,0 +1,29 @@
+{
+  "iterations": [
+    {
+      "i": 1,
+      "measured_total": 402.0,
+      "refine_cited_report": true,
+      "scenes_edited": [
+        "s02",
+        "s04"
+      ]
+    },
+    {
+      "i": 2,
+      "measured_total": 371.0,
+      "refine_cited_report": true,
+      "scenes_edited": [
+        "s04"
+      ]
+    },
+    {
+      "i": 3,
+      "measured_total": 361.2,
+      "verdict": "accept"
+    }
+  ],
+  "final_verdict": "accept",
+  "escalation_triggered": false,
+  "notes": "Golden trajectory: monotonic convergence, grounded refinements."
+}

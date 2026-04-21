@@ -1,0 +1,24 @@
+{
+  "style_lock": "documentary-archival-1970s",
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "concept": "Static wide shot of a Sunoco gas station, cars queued along the shoulder, 1973 American flag visible, overcast sky.",
+      "camera": "static tripod, 35mm grain simulation, desaturated palette",
+      "palette": "#1f2a2e, #7a6a52, #d2b48c"
+    },
+    {
+      "scene_id": "s02",
+      "concept": "Slow push-in on a Federal Reserve boardroom, economists mid-debate, papers spread on polished walnut.",
+      "camera": "slow dolly-in, handheld simulation, warm tungsten",
+      "palette": "#3a2a1e, #a88455, #e7d4a3"
+    },
+    {
+      "scene_id": "s03",
+      "concept": "Medium shot of Milton Friedman at a University of Chicago lectern, 1967, addressing an audience out of frame.",
+      "camera": "locked-off medium, period-accurate lighting",
+      "palette": "#2e2018, #8a6542, #cfae88"
+    }
+  ],
+  "notes": "Golden: on-style, on-topic, era-appropriate cinematography."
+}

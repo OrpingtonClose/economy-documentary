@@ -1,0 +1,52 @@
+{
+  "stages": [
+    {
+      "stage": "scenario",
+      "verdict": "accept",
+      "revision": "rev-001"
+    },
+    {
+      "stage": "timing_loop",
+      "iterations": 3,
+      "verdict": "accept",
+      "revision": "rev-003"
+    },
+    {
+      "stage": "content_analysis",
+      "verdict": "accept"
+    },
+    {
+      "stage": "visual_concepter",
+      "verdict": "accept"
+    },
+    {
+      "stage": "visual_loop",
+      "iterations": 2,
+      "verdict": "accept"
+    },
+    {
+      "stage": "production",
+      "verdict": "accept"
+    },
+    {
+      "stage": "assembly",
+      "verdict": "accept"
+    }
+  ],
+  "approvals": [
+    {
+      "gate": "scenario_approval",
+      "decision": "approve"
+    },
+    {
+      "gate": "production_approval",
+      "decision": "approve"
+    },
+    {
+      "gate": "assembly_approval",
+      "decision": "approve"
+    }
+  ],
+  "stages_skipped": [],
+  "notes": "Golden: all stages in order, approvals honored."
+}

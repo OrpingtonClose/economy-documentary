@@ -1,0 +1,36 @@
+{
+  "total_budget_usd": 12.5,
+  "workers": [
+    {
+      "worker_id": "ltx-a",
+      "assigned_scenes": [
+        "s01",
+        "s02"
+      ],
+      "est_cost_usd": 6.5,
+      "status": "ready"
+    },
+    {
+      "worker_id": "ltx-b",
+      "assigned_scenes": [
+        "s02",
+        "s03"
+      ],
+      "est_cost_usd": 6.8,
+      "status": "unhealthy"
+    },
+    {
+      "worker_id": "tts-a",
+      "assigned_scenes": [
+        "s01",
+        "s02",
+        "s03"
+      ],
+      "est_cost_usd": 4.8,
+      "status": "ready"
+    }
+  ],
+  "total_est_cost_usd": 18.1,
+  "backoff_strategy": null,
+  "notes": "Adversarial: over budget, collision on s02, unhealthy worker dispatched."
+}

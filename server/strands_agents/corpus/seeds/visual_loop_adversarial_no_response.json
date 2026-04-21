@@ -1,0 +1,62 @@
+{
+  "iterations": [
+    {
+      "i": 1,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ],
+      "s02_concept_hash": "abc123"
+    },
+    {
+      "i": 2,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ],
+      "s02_concept_hash": "abc123"
+    },
+    {
+      "i": 3,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ],
+      "s02_concept_hash": "abc123"
+    },
+    {
+      "i": 4,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ],
+      "s02_concept_hash": "abc123"
+    },
+    {
+      "i": 5,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ],
+      "s02_concept_hash": "abc123"
+    }
+  ],
+  "final_verdict": "max_iterations_reached",
+  "escalation_triggered": false,
+  "notes": "Adversarial: refiner no-op on s02, no escalation."
+}

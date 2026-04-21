@@ -1,0 +1,44 @@
+{
+  "revision": "rev-002",
+  "target_duration_seconds": 360,
+  "measured_total_seconds": 436.5,
+  "per_scene": [
+    {
+      "scene_id": "s01",
+      "target_seconds": 14.0,
+      "measured_seconds": 19.8,
+      "gap_before_seconds": 0.5,
+      "words": 68
+    },
+    {
+      "scene_id": "s02",
+      "target_seconds": 18.0,
+      "measured_seconds": 26.2,
+      "gap_before_seconds": 0.8,
+      "words": 86
+    },
+    {
+      "scene_id": "s03",
+      "target_seconds": 16.0,
+      "measured_seconds": 22.5,
+      "gap_before_seconds": 0.5,
+      "words": 72
+    },
+    {
+      "scene_id": "s04",
+      "target_seconds": 20.0,
+      "measured_seconds": 28.0,
+      "gap_before_seconds": 0.5,
+      "words": 92
+    },
+    {
+      "scene_id": "s05",
+      "target_seconds": 15.0,
+      "measured_seconds": 21.0,
+      "gap_before_seconds": 0.5,
+      "words": 66
+    }
+  ],
+  "tolerance_seconds": 2.0,
+  "notes": "Adversarial: 21% aggregate overflow, per-scene drifts 40%+."
+}

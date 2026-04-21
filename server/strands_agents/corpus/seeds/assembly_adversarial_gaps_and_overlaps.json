@@ -1,0 +1,55 @@
+{
+  "timeline_duration_seconds": 364.2,
+  "tracks": [
+    {
+      "kind": "video",
+      "clip_count": 5,
+      "total_duration": 360.0,
+      "gaps": [
+        {
+          "start": 32.0,
+          "duration": 1.5
+        },
+        {
+          "start": 68.0,
+          "duration": 1.2
+        },
+        {
+          "start": 320.0,
+          "duration": 1.5
+        }
+      ]
+    },
+    {
+      "kind": "audio_narration",
+      "clip_count": 5,
+      "total_duration": 362.3,
+      "overlaps": [
+        {
+          "scene_a": "s02",
+          "scene_b": "s03",
+          "duration": 1.3
+        },
+        {
+          "scene_a": "s04",
+          "scene_b": "s05",
+          "duration": 1.0
+        }
+      ]
+    },
+    {
+      "kind": "audio_score",
+      "clip_count": 1,
+      "total_duration": 180.0,
+      "covers_scenes": [
+        "s01",
+        "s02",
+        "s05"
+      ]
+    }
+  ],
+  "markers": [],
+  "overlap_count": 2,
+  "gap_count": 3,
+  "notes": "Adversarial: gaps, overlaps, missing score coverage."
+}

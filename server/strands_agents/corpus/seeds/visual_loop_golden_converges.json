@@ -1,0 +1,23 @@
+{
+  "iterations": [
+    {
+      "i": 1,
+      "critique_verdict": "reject",
+      "flagged_scenes": [
+        "s02"
+      ],
+      "refine_targets": [
+        "s02"
+      ]
+    },
+    {
+      "i": 2,
+      "critique_verdict": "accept",
+      "flagged_scenes": [],
+      "refine_targets": []
+    }
+  ],
+  "final_verdict": "accept",
+  "escalation_triggered": false,
+  "notes": "Golden: targeted refinement, converges in 2 iters."
+}

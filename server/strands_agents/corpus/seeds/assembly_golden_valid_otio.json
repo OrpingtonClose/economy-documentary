@@ -1,0 +1,53 @@
+{
+  "timeline_duration_seconds": 360.0,
+  "tracks": [
+    {
+      "kind": "video",
+      "clip_count": 5,
+      "total_duration": 360.0,
+      "gaps": []
+    },
+    {
+      "kind": "audio_narration",
+      "clip_count": 5,
+      "total_duration": 360.0,
+      "gaps": []
+    },
+    {
+      "kind": "audio_score",
+      "clip_count": 1,
+      "total_duration": 360.0,
+      "gaps": []
+    }
+  ],
+  "markers": [
+    {
+      "scene_id": "s01",
+      "time": 0.0,
+      "kind": "scene_boundary"
+    },
+    {
+      "scene_id": "s02",
+      "time": 14.0,
+      "kind": "scene_boundary"
+    },
+    {
+      "scene_id": "s03",
+      "time": 32.0,
+      "kind": "scene_boundary"
+    },
+    {
+      "scene_id": "s04",
+      "time": 48.0,
+      "kind": "scene_boundary"
+    },
+    {
+      "scene_id": "s05",
+      "time": 68.0,
+      "kind": "scene_boundary"
+    }
+  ],
+  "overlap_count": 0,
+  "gap_count": 0,
+  "notes": "Golden: clean OTIO, zero gaps, zero overlaps."
+}

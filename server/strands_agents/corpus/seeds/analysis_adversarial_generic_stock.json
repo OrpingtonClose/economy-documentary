@@ -1,0 +1,35 @@
+{
+  "scenario_revision": "rev-001",
+  "per_scene": [
+    {
+      "scene_id": "s01",
+      "narration_anchors": [],
+      "motifs": [
+        "people in suits",
+        "stock market graph"
+      ],
+      "style_tags": [
+        "generic corporate"
+      ]
+    },
+    {
+      "scene_id": "s02",
+      "narration_anchors": [],
+      "motifs": [
+        "office building"
+      ],
+      "style_tags": [
+        "stock"
+      ]
+    },
+    {
+      "scene_id": "s03",
+      "narration_anchors": [],
+      "motifs": [
+        "man at podium"
+      ],
+      "style_tags": []
+    }
+  ],
+  "notes": "Adversarial: no narration grounding, style lock violated."
+}

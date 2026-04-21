@@ -1,0 +1,19 @@
+{
+  "failure": {
+    "kind": "deterministic",
+    "error_class": "SchemaValidationError",
+    "worker_id": "ltx-b",
+    "scene_id": "s04",
+    "error": "scene payload missing required field 'visual_prompt'"
+  },
+  "context": {
+    "retry_count": 2,
+    "fix_count": 0,
+    "budget_remaining_usd": 6.1,
+    "total_budget_usd": 12.5
+  },
+  "decision": "retry",
+  "backoff_seconds": 8.0,
+  "next_revision_suffix": 3,
+  "rationale": "Going to try again, maybe it works this time."
+}

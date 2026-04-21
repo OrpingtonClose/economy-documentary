@@ -1,0 +1,24 @@
+{
+  "style_lock": "documentary-archival-1970s",
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "concept": "Gas station queue, archival look.",
+      "camera": "tripod",
+      "palette": "#1f2a2e"
+    },
+    {
+      "scene_id": "s02",
+      "concept": "Cartoon sequence of dollar bills with wings flying away.",
+      "camera": "2D animated",
+      "palette": "#ff00ff"
+    },
+    {
+      "scene_id": "s03",
+      "concept": "iPhone vertical video of a man talking on stage.",
+      "camera": "smartphone handheld",
+      "palette": "#ffffff"
+    }
+  ],
+  "notes": "Adversarial: s02 breaks style (cartoon), s03 breaks era (smartphone)."
+}

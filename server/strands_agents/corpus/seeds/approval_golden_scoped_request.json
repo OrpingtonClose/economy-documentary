@@ -1,0 +1,27 @@
+{
+  "tool_name": "launch_visual_production",
+  "gate_id": "production_approval",
+  "payload": {
+    "scene_ids": [
+      "s01",
+      "s02",
+      "s03",
+      "s04",
+      "s05"
+    ],
+    "production_plan_ref": "production.golden.valid_plan",
+    "est_cost_usd": 10.4
+  },
+  "blast_radius": "high",
+  "allowed_decisions": [
+    "approve",
+    "reject",
+    "edit"
+  ],
+  "side_effects": [
+    "spawn 5 GPU jobs",
+    "burn ~$10.40 budget",
+    "write OTIO artifact"
+  ],
+  "notes": "Golden: scoped, blast-radius declared, side effects listed."
+}

@@ -1,0 +1,67 @@
+{
+  "iterations": [
+    {
+      "i": 1,
+      "measured_total": 380,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 2,
+      "measured_total": 420,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 3,
+      "measured_total": 380,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 4,
+      "measured_total": 420,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 5,
+      "measured_total": 380,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 6,
+      "measured_total": 420,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 7,
+      "measured_total": 380,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 8,
+      "measured_total": 420,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 9,
+      "measured_total": 380,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    },
+    {
+      "i": 10,
+      "measured_total": 420,
+      "refine_cited_report": false,
+      "scenes_edited": []
+    }
+  ],
+  "final_verdict": "max_iterations_reached",
+  "escalation_triggered": false,
+  "notes": "Adversarial: refiner no-op, orchestrator didn't escalate."
+}

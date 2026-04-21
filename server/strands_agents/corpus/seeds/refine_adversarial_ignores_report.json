@@ -1,0 +1,42 @@
+{
+  "revision": "rev-003",
+  "parent_revision": "rev-002",
+  "timing_report_ref": "timing.adversarial.severe_overflow",
+  "changes": [
+    {
+      "scene_id": "s06",
+      "kind": "add_scene",
+      "rationale": "I thought the documentary needed more historical context."
+    }
+  ],
+  "scenes": [
+    {
+      "scene_id": "s01",
+      "duration_seconds": 14,
+      "narration": "…",
+      "words": 42
+    },
+    {
+      "scene_id": "s02",
+      "duration_seconds": 18,
+      "narration": "…",
+      "words": 86
+    },
+    {
+      "scene_id": "s03",
+      "duration_seconds": 16,
+      "narration": "…",
+      "words": 48
+    },
+    {
+      "scene_id": "s06",
+      "duration_seconds": 30,
+      "narration": "World War II changed everything …",
+      "words": 95,
+      "added": true
+    }
+  ],
+  "pronunciation_hints_preserved": false,
+  "style_lock_preserved": false,
+  "notes": "Adversarial refinement: ignores report, drifts topic, drops invariants."
+}

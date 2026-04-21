@@ -1,0 +1,38 @@
+{
+  "total_budget_usd": 12.5,
+  "workers": [
+    {
+      "worker_id": "ltx-a",
+      "assigned_scenes": [
+        "s01",
+        "s03"
+      ],
+      "est_cost_usd": 4.2,
+      "status": "ready"
+    },
+    {
+      "worker_id": "ltx-b",
+      "assigned_scenes": [
+        "s02",
+        "s04"
+      ],
+      "est_cost_usd": 4.4,
+      "status": "ready"
+    },
+    {
+      "worker_id": "tts-a",
+      "assigned_scenes": [
+        "s01",
+        "s02",
+        "s03",
+        "s04",
+        "s05"
+      ],
+      "est_cost_usd": 1.8,
+      "status": "ready"
+    }
+  ],
+  "total_est_cost_usd": 10.4,
+  "backoff_strategy": "exponential, base=2s, max=60s, max_retries=3",
+  "notes": "Golden: workers ready, within budget, backoff documented."
+}

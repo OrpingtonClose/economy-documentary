@@ -1,0 +1,19 @@
+{
+  "failure": {
+    "kind": "transient",
+    "http_status": 503,
+    "worker_id": "ltx-a",
+    "scene_id": "s02",
+    "error": "upstream connection timeout"
+  },
+  "context": {
+    "retry_count": 0,
+    "fix_count": 0,
+    "budget_remaining_usd": 8.2,
+    "total_budget_usd": 12.5
+  },
+  "decision": "retry",
+  "backoff_seconds": 2.0,
+  "next_revision_suffix": 1,
+  "rationale": "Transient 503 with 0 retries and healthy budget; exponential backoff appropriate."
+}
