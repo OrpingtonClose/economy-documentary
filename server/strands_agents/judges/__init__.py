@@ -38,6 +38,11 @@ from strands_agents.judges.client import (
     MockJudgeClient,
     build_judge_client,
 )
+from strands_agents.judges.ensemble import (
+    EnsembleVerdict,
+    JudgeEnsemble,
+    JudgeVerdict,
+)
 from strands_agents.judges.fetcher import fetch_model_from_b2
 from strands_agents.judges.models import (
     GEMMA4_ABLITERATED,
@@ -50,12 +55,15 @@ from strands_agents.judges.provisioner import JudgeWorkerSpec, build_judge_worke
 
 __all__ = [
     "GEMMA4_ABLITERATED",
+    "EnsembleVerdict",
     "HttpJudgeClient",
     "JUDGE_CATALOG",
     "JudgeClient",
+    "JudgeEnsemble",
     "JudgeModelSpec",
     "JudgeRequest",
     "JudgeResponse",
+    "JudgeVerdict",
     "JudgeWorkerSpec",
     "MockJudgeClient",
     "QWEN35_OMNI",
