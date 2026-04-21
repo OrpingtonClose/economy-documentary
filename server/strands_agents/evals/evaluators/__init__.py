@@ -23,6 +23,7 @@ from .parallel_launch import ParallelLaunchEvaluator
 from .pipeline_trajectory import PipelineTrajectoryEvaluator
 from .scenario_quality import ScenarioQualityEvaluator
 from .timeline_compliance import TimelineComplianceEvaluator
+from .timing_loop_trajectory import TimingLoopTrajectoryEvaluator
 from .visual_coherence import VisualCoherenceEvaluator
 
 __all__ = [
@@ -36,5 +37,6 @@ __all__ = [
     "PipelineTrajectoryEvaluator",
     "ScenarioQualityEvaluator",
     "TimelineComplianceEvaluator",
+    "TimingLoopTrajectoryEvaluator",
     "VisualCoherenceEvaluator",
 ]
