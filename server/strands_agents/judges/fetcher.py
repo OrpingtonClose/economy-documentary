@@ -160,7 +160,9 @@ def _bucket_file_size(bucket: Any, key: str) -> Optional[int]:
     except Exception as exc:  # pragma: no cover — b2sdk raises different types
         logger.debug("file_info lookup failed for %s: %s", key, exc)
         return None
-    size = getattr(info, "size", None) or getattr(info, "content_length", None)
+    size = getattr(info, "size", None)
+    if size is None:
+        size = getattr(info, "content_length", None)
     if isinstance(size, int):
         return size
     return None

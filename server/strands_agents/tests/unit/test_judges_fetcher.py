@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from strands_agents.judges.fetcher import (
+    _bucket_file_size,
     cache_root_from_env,
     ensure_parent_dir,
     fetch_model_from_b2,
@@ -232,3 +233,48 @@ class TestUtilities:
     def test_cache_root_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("JUDGE_CACHE_ROOT", raising=False)
         assert str(cache_root_from_env()) == "/tmp/judge-cache"
+
+
+class TestBucketFileSize:
+    """Regression coverage for the size-probe helper."""
+
+    def test_zero_byte_size_preserved(self) -> None:
+        # Regression: `size or content_length` treated 0 as falsy and
+        # fell through to content_length (which is typically absent on
+        # b2sdk FileVersion objects), returning None. That made the
+        # fetcher skip the size-match check and re-download a file that
+        # was actually complete.
+        class ZeroSizeBucket:
+            def get_file_info_by_name(self, key: str) -> Any:
+                class Info:
+                    size = 0
+
+                return Info()
+
+        assert _bucket_file_size(ZeroSizeBucket(), "k") == 0
+
+    def test_size_attr_missing_falls_back_to_content_length(self) -> None:
+        class Bucket:
+            def get_file_info_by_name(self, key: str) -> Any:
+                class Info:
+                    content_length = 123
+
+                return Info()
+
+        assert _bucket_file_size(Bucket(), "k") == 123
+
+    def test_returns_none_when_bucket_lacks_method(self) -> None:
+        class Bucket:
+            pass
+
+        assert _bucket_file_size(Bucket(), "k") is None
+
+    def test_returns_none_when_info_has_no_size_fields(self) -> None:
+        class Bucket:
+            def get_file_info_by_name(self, key: str) -> Any:
+                class Info:
+                    pass
+
+                return Info()
+
+        assert _bucket_file_size(Bucket(), "k") is None
