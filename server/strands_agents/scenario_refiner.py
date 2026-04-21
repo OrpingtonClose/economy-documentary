@@ -370,7 +370,15 @@ def build_scenario_refiner_agent(
         hooks=[
             ContractEnforcer(SCENARIO_CONTRACT, check_preconditions=False),
             SkipIfTimingPassed(),
-            RevisionTagger("scenes", stage="scenario_refiner", retag_on_reproduce=True),
+            # ``skip_if_invocation_flag`` honours ``SkipIfTimingPassed``'s
+            # ``skip_refiner`` marker so we do not clear + re-tag scenes
+            # that the refiner was forbidden from touching.
+            RevisionTagger(
+                "scenes",
+                stage="scenario_refiner",
+                retag_on_reproduce=True,
+                skip_if_invocation_flag="skip_refiner",
+            ),
         ],
         conversation_manager=SlidingWindowConversationManager(window_size=window_size),
     )

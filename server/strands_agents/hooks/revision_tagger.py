@@ -44,6 +44,12 @@ class RevisionTagger(HookProvider):
         retag_on_reproduce: When True and an existing tag is present for
             this key, the old tag is cleared before re-tagging. Matches
             the ARCH-B3 re-manifestation idiom.
+        skip_if_invocation_flag: Optional ``invocation_state`` key; when
+            that key is truthy on the ``AfterInvocationEvent``, tagging
+            is skipped entirely. Used by the scenario-refiner stack so
+            ``SkipIfTimingPassed`` (which short-circuits every tool
+            call) does not cause the existing scenes tag to be cleared
+            and re-applied as if the refiner had produced fresh output.
     """
 
     def __init__(
@@ -53,6 +59,7 @@ class RevisionTagger(HookProvider):
         stage: str | None = None,
         require_artifact: bool = True,
         retag_on_reproduce: bool = False,
+        skip_if_invocation_flag: str | None = None,
     ) -> None:
         if not output_key:
             raise ValueError("output_key must be a non-empty string")
@@ -60,12 +67,22 @@ class RevisionTagger(HookProvider):
         self.stage = stage or output_key
         self.require_artifact = require_artifact
         self.retag_on_reproduce = retag_on_reproduce
+        self.skip_if_invocation_flag = skip_if_invocation_flag
 
     def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
         """Subscribe to ``AfterInvocationEvent``."""
         registry.add_callback(AfterInvocationEvent, self._on_after)
 
     def _on_after(self, event: AfterInvocationEvent) -> None:
+        if self.skip_if_invocation_flag is not None:
+            flag_value = event.invocation_state.get(self.skip_if_invocation_flag)
+            if flag_value:
+                logger.debug(
+                    "output_key=<%s>, flag=<%s> | invocation was a no-op; skipping tag",
+                    self.output_key,
+                    self.skip_if_invocation_flag,
+                )
+                return
         state_obj = event.agent.state
         state = state_obj.get() if hasattr(state_obj, "get") else state_obj
         if not isinstance(state, dict):

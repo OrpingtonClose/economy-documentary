@@ -681,6 +681,74 @@ def test_refiner_rubrics_are_non_empty_strings() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_revision_tagger_skips_when_skip_flag_set() -> None:
+    """RevisionTagger must not re-tag scenes when SkipIfTimingPassed fired.
+
+    When ``skip_refiner`` is truthy on ``invocation_state`` we expect
+    ``_on_after`` to short-circuit before touching the ledger — even
+    with ``retag_on_reproduce=True`` and a populated ``scenes`` artifact
+    the existing tag must stay intact.
+    """
+    from callbacks.artifact_revision_tag import ARTIFACT_REVISION_TAGS_KEY
+    import json as _json
+
+    existing_tags = {
+        "scenes": {
+            "ledger_revision": 7,
+            "stage": "scenario_generator",
+        }
+    }
+    agent_state = {
+        "scenes": _baseline_scenes(2),
+        ARTIFACT_REVISION_TAGS_KEY: _json.dumps(existing_tags),
+    }
+    before_snapshot = _json.dumps(agent_state, sort_keys=True)
+
+    tagger = RevisionTagger(
+        "scenes",
+        stage="scenario_refiner",
+        retag_on_reproduce=True,
+        skip_if_invocation_flag="skip_refiner",
+    )
+    event = AfterInvocationEvent(
+        agent=_mk_agent(agent_state),
+        invocation_state={"skip_refiner": True},
+        result=None,
+        resume=None,
+    )
+
+    tagger._on_after(event)
+
+    assert _json.dumps(agent_state, sort_keys=True) == before_snapshot
+
+
+def test_revision_tagger_runs_when_skip_flag_absent_or_falsy() -> None:
+    """Without the skip flag set the tagger must execute its normal path.
+
+    We assert by looking for the ``MissingLedgerStateError`` that
+    ``tag_artifact`` raises when no preference ledger has been seeded —
+    that error is only raised after the guard clause succeeds, proving
+    the hook did not bail out on the skip check.
+    """
+    from callbacks.artifact_revision_tag import MissingLedgerStateError
+
+    tagger = RevisionTagger(
+        "scenes",
+        stage="scenario_refiner",
+        retag_on_reproduce=True,
+        skip_if_invocation_flag="skip_refiner",
+    )
+    event = AfterInvocationEvent(
+        agent=_mk_agent({"scenes": _baseline_scenes(2)}),
+        invocation_state={"skip_refiner": False},
+        result=None,
+        resume=None,
+    )
+
+    with pytest.raises(MissingLedgerStateError):
+        tagger._on_after(event)
+
+
 def test_refiner_hook_stack_independent_instances() -> None:
     """Smoke: the three hooks can be registered together without errors."""
     reg = HookRegistry()
