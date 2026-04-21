@@ -25,6 +25,7 @@ from critique.record import ArtifactCritiqueRecord, QaVerdict
 from critique.store import ArtifactCritiqueStore
 from strands_agents.evals.evaluators import (
     ApprovalGateTrajectoryEvaluator,
+    AssemblyOrderingEvaluator,
     AudioInvariantEvaluator,
     AudioWorkerInvariantEvaluator,
     ContractComplianceEvaluator,
@@ -1474,3 +1475,216 @@ def test_audio_worker_expect_pool_rebind_not_expected_without_pools_omits_gate()
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
     assert "audio_worker.no_pool_rebind" not in by_label
+
+
+# ---------------------------------------------------------------------------
+# AssemblyOrderingEvaluator
+# ---------------------------------------------------------------------------
+
+
+def _launch(scene_id: str) -> dict[str, Any]:
+    return {"name": "launch_visual_production", "args": {"scene_id": scene_id}}
+
+
+def _qa(scene_id: str) -> dict[str, Any]:
+    return {
+        "name": "evaluate_visual_artifact_quality",
+        "args": {"scene_id": scene_id},
+    }
+
+
+def _skip(scene_id: str) -> dict[str, Any]:
+    return {"name": "skip_scene", "args": {"scene_id": scene_id}}
+
+
+def _escalate(scene_id: str) -> dict[str, Any]:
+    return {"name": "request_escalation", "args": {"scene_id": scene_id}}
+
+
+_HEALTH = {"name": "check_worker_health", "args": {}}
+_ASSEMBLY = {"name": "assemble_final_cut", "args": {}}
+
+
+def test_assembly_ordering_no_trajectory_emits_missing() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=None)
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"assembly.missing_trajectory"}
+    assert outputs[0].test_pass is False
+
+
+def test_assembly_ordering_happy_path_passes_every_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _qa("s2"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_missing_health_fails_first_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.health_check_first"]
+    assert gate.test_pass is False
+    assert "without any prior check_worker_health" in gate.reason
+
+
+def test_assembly_ordering_late_health_fails_first_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_launch("s1"), _HEALTH, _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.health_check_first"]
+    assert gate.test_pass is False
+    assert "fires after" in gate.reason
+
+
+def test_assembly_ordering_no_launches_health_gate_skips() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_assembly": False},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Health gate skips (no launches); QA gate also skips (no launches).
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert "SKIP" in by_label["assembly.health_check_first"].reason
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert "SKIP" in by_label["assembly.qa_after_each_launch"].reason
+
+
+def test_assembly_ordering_missing_qa_fails_second_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    # s2 is launched but never QA'd / skipped / escalated.
+    trajectory = [_HEALTH, _launch("s1"), _launch("s2"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.qa_after_each_launch"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason
+
+
+def test_assembly_ordering_qa_before_launch_does_not_satisfy_gate() -> None:
+    # A pre-launch QA for a scene must not be credited as covering a
+    # later launch for the same scene — otherwise a stale QA could mask
+    # a fresh render that never got graded.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _qa("s1"),  # pre-launch — should not count
+        _launch("s1"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is False
+
+
+def test_assembly_ordering_skip_satisfies_qa_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _launch("s2"), _qa("s1"), _skip("s2"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_escalation_satisfies_qa_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _escalate("s2"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_assembly_before_all_qa_fails_third_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    # s2's QA comes AFTER assembly — forbidden.
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _qa("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason
+
+
+def test_assembly_ordering_expected_assembly_missing_fails() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1")]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "no assemble_final_cut" in gate.reason
+
+
+def test_assembly_ordering_unexpected_assembly_fails() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_assembly": False},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "expect_assembly=False" in gate.reason
+
+
+def test_assembly_ordering_metadata_scenes_enforces_coverage() -> None:
+    # The trajectory only launches s1, but the test declares s1+s2 as
+    # expected. Since s2 was never launched, nothing terminates it — the
+    # assembly gate must fail.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"scenes": ["s1", "s2"]},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason

@@ -261,6 +261,7 @@ class OrchestratorSimulator:
         self._subagents: list[SubAgent] | None = None
         self._memory: list[str] | None = None
         self._model: BaseChatModel | None = None
+        self._interrupt_tool_names: Sequence[str] | None = None
 
     # ------------------------------------------------------------------
     # Builder-style setters
@@ -309,6 +310,18 @@ class OrchestratorSimulator:
         memory, resolved relative to ``run_dir``).
         """
         self._memory = list(memory)
+        return self
+
+    def with_interrupt_tool_names(
+        self, names: Sequence[str]
+    ) -> OrchestratorSimulator:
+        """Override which tools are wrapped in approval interrupts.
+
+        Defaults to :data:`strands_agents.pipeline.INTERRUPT_TOOL_NAMES`.
+        Trajectory tests that want to exercise an end-to-end run
+        without pausing on approval gates can pass an empty tuple here.
+        """
+        self._interrupt_tool_names = tuple(names)
         return self
 
     def with_model(self, model: BaseChatModel) -> OrchestratorSimulator:
@@ -372,6 +385,8 @@ class OrchestratorSimulator:
             }
             if self._memory is not None:
                 build_kwargs["memory"] = self._memory
+            if self._interrupt_tool_names is not None:
+                build_kwargs["interrupt_tool_names"] = self._interrupt_tool_names
 
             agent = build_orchestrator(run_dir, **build_kwargs)
             final_state: dict[str, Any] = await agent.ainvoke(
