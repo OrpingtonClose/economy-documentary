@@ -275,7 +275,9 @@ def render_audio(
                 )
             concrete_voice_id = (voice_map or {}).get(voice_role, voice_role)
 
-            wav_path = helpers.tts_generate(scene_num, voice_role, text, language)
+            wav_path = helpers.tts_generate(
+                scene_num, concrete_voice_id, text, language
+            )
             if not isinstance(wav_path, str) or not wav_path:
                 raise RuntimeError(
                     f"tts_generate returned invalid wav_path={wav_path!r} "

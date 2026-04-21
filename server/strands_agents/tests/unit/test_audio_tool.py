@@ -259,7 +259,7 @@ def test_multi_voice_scene_emits_one_block_per_voice_in_order() -> None:
 
 
 def test_voice_map_overrides_concrete_voice_id() -> None:
-    _install_helpers()
+    tts, *_ = _install_helpers()
     voice_map = {"V1": "qwen3-tts:male_01", "V2": "qwen3-tts:female_01"}
     scenes = [
         _scene(
@@ -272,10 +272,15 @@ def test_voice_map_overrides_concrete_voice_id() -> None:
     )
     voice_ids = {b["voice_role"]: b["voice_id"] for b in result["narration_blocks"]}
     assert voice_ids == {"V1": "qwen3-tts:male_01", "V2": "qwen3-tts:female_01"}
+    # The TTS helper must receive the concrete voice id, not the role, so the
+    # right voice actually drives synthesis (AGENTS.md hard invariant: one TTS
+    # voice per VM — the role is just a slot name).
+    tts_voice_ids = [call[1] for call in tts.calls]
+    assert tts_voice_ids == ["qwen3-tts:male_01", "qwen3-tts:female_01"]
 
 
 def test_voice_map_falls_back_to_role_when_unmapped() -> None:
-    _install_helpers()
+    tts, *_ = _install_helpers()
     scenes = [
         _scene(1, voices=[("V1", "A"), ("V2", "B")]),
     ]
@@ -284,6 +289,10 @@ def test_voice_map_falls_back_to_role_when_unmapped() -> None:
     )
     voice_ids = {b["voice_role"]: b["voice_id"] for b in result["narration_blocks"]}
     assert voice_ids == {"V1": "mapped_01", "V2": "V2"}
+    # Unmapped roles pass the role through to TTS; mapped roles pass the
+    # concrete id. Guards against regressing the voice_map override plumbing.
+    tts_voice_ids = [call[1] for call in tts.calls]
+    assert tts_voice_ids == ["mapped_01", "V2"]
 
 
 def test_language_is_forwarded_to_tts_and_whisperx() -> None:

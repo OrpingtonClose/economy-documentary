@@ -14,9 +14,10 @@ Cases:
    render within tolerance → 2 iterations, 1 refine.
 3. ``per_scene_spike`` — 5 scenes, total within tolerance but scene 3
    over by 20 % → 2 iterations, 1 refine targeted at scene 3.
-4. ``refiner_no_op`` — 3 scenes, refiner returns identical scenes, loop
-   cannot converge → hits the 10-iteration cap → delegation to the
-   escalation SubAgent.
+4. ``refiner_no_op`` — 3 scenes, refiner returns byte-identical scenes
+   across successive revisions. Per the AGENTS.md rule, two consecutive
+   no-op refines short-circuit the loop → delegation to the escalation
+   SubAgent on iteration 3, well under the 10-iteration cap.
 5. ``max_iterations`` — 5 scenes, every iteration still off-target →
    hits the cap → delegation to escalation.
 
@@ -284,6 +285,12 @@ def _per_scene_spike() -> Case:
 
 
 def _refiner_no_op() -> Case:
+    # AGENTS.md rule: if two consecutive ``refine_scenario`` outputs are
+    # byte-identical to the previous revision, short-circuit the loop and
+    # delegate to escalation. The minimum trajectory that exercises this
+    # is three iterations — iteration 1 produces the first refined
+    # revision, iterations 2 and 3 produce two consecutive byte-identical
+    # refines, and the orchestrator then delegates.
     scenes = _scenes(3)
     timing_report = {
         "status": "FAIL",
@@ -291,7 +298,7 @@ def _refiner_no_op() -> Case:
     }
     trajectory: list[dict[str, Any]] = []
     turn = 1
-    for iteration in range(10):
+    for iteration in range(3):
         for scene_id in ("s1", "s2", "s3"):
             trajectory.append(
                 _launch_audio_call(scene_id, turn=turn, revision=iteration + 1)
@@ -306,8 +313,9 @@ def _refiner_no_op() -> Case:
         turn += 1
         trajectory.append(_evaluate_timing_call(turn=turn, intent_sec=54.0))
         turn += 1
-        # Loop never passes — refine every iteration, and persist the
-        # updated scenes back to the workspace per the AGENTS.md rule.
+        # Refine every iteration and persist back to the workspace per
+        # the AGENTS.md rule. The refiner returns byte-identical scenes
+        # in iterations 2 and 3, which the orchestrator must detect.
         trajectory.append(
             _refine_scenario_call(turn=turn, timing_report=timing_report)
         )
@@ -316,7 +324,10 @@ def _refiner_no_op() -> Case:
     trajectory.append(
         _delegate_escalation_call(
             turn=turn,
-            reason="timing loop cap reached; refiner returned identical scenes",
+            reason=(
+                "two consecutive refine_scenario outputs are byte-identical "
+                "to the previous revision; refiner cannot converge the loop"
+            ),
         )
     )
     return Case(
@@ -327,10 +338,10 @@ def _refiner_no_op() -> Case:
         metadata={
             "case_name": "refiner_no_op",
             "final_state": _state_after_timing(
-                scenes=scenes, timing_passed=False, iterations=10
+                scenes=scenes, timing_passed=False, iterations=3
             ),
-            "expected_iterations": 10,
-            "expected_refines": 10,
+            "expected_iterations": 3,
+            "expected_refines": 3,
             "expects_pass": False,
             "expects_delegation": True,
             # ParallelLaunch — every iteration must dispatch 3 scenes in
