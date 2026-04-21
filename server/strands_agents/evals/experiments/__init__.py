@@ -21,12 +21,20 @@ from strands_agents.evals.experiments.scenario import (
     build_scenario_experiment,
     scenario_cases,
 )
+from strands_agents.evals.experiments.visual_concepter import (
+    VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS,
+    build_visual_concepter_experiment,
+    visual_concepter_cases,
+)
 
 __all__ = [
     "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
     "SCENARIO_EVALUATOR_THRESHOLDS",
+    "VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
     "build_content_analyst_experiment",
     "build_scenario_experiment",
+    "build_visual_concepter_experiment",
     "content_analyst_cases",
     "scenario_cases",
+    "visual_concepter_cases",
 ]
