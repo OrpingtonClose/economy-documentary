@@ -11,6 +11,11 @@ caller (CI runner, notebook, shadow job) supplies the ``task`` callable
 to :meth:`Experiment.run_evaluations`.
 """
 
+from strands_agents.evals.experiments.content_analyst import (
+    CONTENT_ANALYST_EVALUATOR_THRESHOLDS,
+    build_content_analyst_experiment,
+    content_analyst_cases,
+)
 from strands_agents.evals.experiments.scenario import (
     SCENARIO_EVALUATOR_THRESHOLDS,
     build_scenario_experiment,
@@ -18,7 +23,10 @@ from strands_agents.evals.experiments.scenario import (
 )
 
 __all__ = [
+    "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
     "SCENARIO_EVALUATOR_THRESHOLDS",
+    "build_content_analyst_experiment",
     "build_scenario_experiment",
+    "content_analyst_cases",
     "scenario_cases",
 ]
