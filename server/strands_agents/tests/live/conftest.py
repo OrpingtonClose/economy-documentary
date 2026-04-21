@@ -27,8 +27,8 @@ requires_google_api = pytest.mark.skipif(
     reason="GOOGLE_API_KEY not set; skipping live Gemini call.",
 )
 requires_dashscope_api = pytest.mark.skipif(
-    not _has("DASHSCOPE_API_KEY"),
-    reason="DASHSCOPE_API_KEY not set; skipping live Qwen call.",
+    not (_has("DASHSCOPE_API_KEY") or _has("DASHSCOPE_INTL_API_KEY")),
+    reason="DASHSCOPE_API_KEY / DASHSCOPE_INTL_API_KEY not set; skipping live Qwen call.",
 )
 requires_anthropic_api = pytest.mark.skipif(
     not _has("ANTHROPIC_API_KEY"),
