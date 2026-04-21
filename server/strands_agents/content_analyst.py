@@ -190,10 +190,19 @@ def _phrase_id(scene_num: int, phrase_idx: int, text: str) -> str:
 
 
 def _scene_num(scene: dict[str, Any]) -> int:
+    raw: Any = None
     for key in ("scene_num", "id", "scene_id"):
-        if key in scene:
-            return int(scene[key])
-    raise ValueError("scene missing scene_num / id / scene_id")
+        if key in scene and scene[key] is not None:
+            raw = scene[key]
+            break
+    if raw is None:
+        raise ValueError("scene missing scene_num / id / scene_id")
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"scene id must be int-convertible, got {raw!r}"
+        ) from exc
 
 
 def _segment_bounds(segment: dict[str, Any]) -> tuple[float, float]:
