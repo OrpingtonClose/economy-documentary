@@ -34,6 +34,7 @@ function: the DeepAgent orchestrator (component 14) will call it via
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -392,8 +393,10 @@ def _persist_state(
     state = getattr(agent, "state", None)
     if state is None or not hasattr(state, "set"):
         return
-    state.set("whisperx_alignment", whisperx_alignment)
-    state.set("narration_blocks", narration_blocks)
+    # Snapshot before handing off so downstream mutation of the return
+    # value (which shares these refs) cannot silently corrupt state.
+    state.set("whisperx_alignment", copy.deepcopy(whisperx_alignment))
+    state.set("narration_blocks", copy.deepcopy(narration_blocks))
     state.set("_audio_stage_complete", True)
     state.set("_audio_needs_regeneration", False)
 

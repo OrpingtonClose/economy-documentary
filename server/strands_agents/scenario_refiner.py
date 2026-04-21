@@ -326,15 +326,20 @@ def persist_refined_scenes(
     Returns:
         ``{"scenes": [...], "persisted": True, "scene_count": int}``.
     """
+    # Snapshot so the persisted list is independent of the caller's copy
+    # and of the returned value — mirrors persist_content_analysis /
+    # persist_coherence_report / persist_visual_concepts.
+    snapshot = copy.deepcopy(scenes)
     state = tool_context.agent.state
-    state.set("scenes", scenes)
-    state.set("scenes_json", json.dumps(scenes, ensure_ascii=False))
+    state.set("scenes", snapshot)
+    state.set("scenes_json", json.dumps(snapshot, ensure_ascii=False))
     state.set("timing_passed", False)
     state.set("_audio_needs_regeneration", True)
     logger.info(
-        "scene_count=<%d> | scenario-refiner: refined scenes persisted", len(scenes)
+        "scene_count=<%d> | scenario-refiner: refined scenes persisted",
+        len(snapshot),
     )
-    return {"scenes": scenes, "persisted": True, "scene_count": len(scenes)}
+    return {"scenes": snapshot, "persisted": True, "scene_count": len(snapshot)}
 
 
 # ---------------------------------------------------------------------------
