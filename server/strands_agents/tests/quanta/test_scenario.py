@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from strands_agents.quanta import (
     derive_scenario_topic,
     evaluate_scenario_structural,
@@ -69,6 +71,13 @@ class TestDeriveScenarioTopic:
 
     def test_falls_back_to_documentary(self) -> None:
         assert derive_scenario_topic([_scene(1, 4.0, title="")]) == "documentary"
+
+    def test_empty_list_raises_index_error(self) -> None:
+        # Pins the documented contract: empty list is a programmer
+        # error, not a silent fallback. Prevents the docstring from
+        # ever drifting back to "returns documentary on empty list".
+        with pytest.raises(IndexError):
+            derive_scenario_topic([])
 
 
 class TestEvaluateScenarioStructural:

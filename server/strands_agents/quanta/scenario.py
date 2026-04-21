@@ -73,13 +73,17 @@ def sum_scenario_duration(scenes: list[dict[str, Any]]) -> float:
 def derive_scenario_topic(scenes: list[dict[str, Any]]) -> str:
     """Derive a filename-safe topic string from the first scene's title.
 
-    Returns ``"documentary"`` when ``scenes`` is empty or no title is
-    present. Caps length at 60 characters to keep OTIO paths sane.
+    Returns ``"documentary"`` when the first scene has no ``title`` or
+    the title is blank. Caps length at 60 characters to keep OTIO
+    paths sane.
 
     Raises:
-        IndexError: If ``scenes`` is an empty list (callers should
-            guard; matches the upstream behaviour of
-            :func:`scenario_agent._derive_topic`).
+        IndexError: If ``scenes`` is an empty list. Matches the
+            upstream behaviour of
+            :func:`scenario_agent._derive_topic`; callers reach this
+            helper only after scenario generation has produced at
+            least one scene, so empty-list is treated as a programmer
+            error rather than a silent fallback.
     """
     return _derive_topic(scenes)
 
