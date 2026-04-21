@@ -1514,6 +1514,30 @@ def test_assembly_ordering_no_trajectory_emits_missing() -> None:
     assert outputs[0].test_pass is False
 
 
+def test_assembly_ordering_skips_malformed_entries() -> None:
+    # A production trajectory may interleave tool-call dicts with other
+    # event shapes (interrupt events, routing breadcrumbs, etc.). The
+    # evaluator must filter those out and grade the remaining tool
+    # calls, not hard-fail with ``missing_trajectory``.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory: list[Any] = [
+        {"kind": "interrupt", "at_turn": 0},
+        _HEALTH,
+        "not-a-dict",
+        _launch("s1"),
+        {"args": {"scene_id": "s1"}},  # missing 'name' key
+        _qa("s1"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "assembly.missing_trajectory" not in by_label
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
 def test_assembly_ordering_happy_path_passes_every_gate() -> None:
     evaluator = AssemblyOrderingEvaluator()
     trajectory = [

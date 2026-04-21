@@ -85,13 +85,19 @@ _ASSEMBLY_TOOL = "assemble_final_cut"
 def _extract_calls(trajectory: Any) -> list[dict[str, Any]] | None:
     if not isinstance(trajectory, list):
         return None
-    result: list[dict[str, Any]] = []
-    for call in trajectory:
-        if isinstance(call, dict) and isinstance(call.get("name"), str):
-            result.append(call)
-        else:
-            return None
-    return result
+    # Skip entries that are not tool-call dicts. A production trajectory
+    # may interleave tool-calls with other event shapes (interrupts,
+    # routing events, etc.) and the gates below only care about the
+    # named tool calls. Matches the documented contract ("records without
+    # the expected shape are skipped") and the sibling
+    # ``AudioWorkerInvariantEvaluator`` filtering behaviour. ``None`` is
+    # reserved for "the trajectory itself is not a list" so the caller
+    # can emit a ``missing_trajectory`` failure distinct from "empty".
+    return [
+        call
+        for call in trajectory
+        if isinstance(call, dict) and isinstance(call.get("name"), str)
+    ]
 
 
 def _arg(call: dict[str, Any], key: str) -> Any:
