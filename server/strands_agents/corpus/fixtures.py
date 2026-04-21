@@ -56,16 +56,15 @@ def load_artifact_json(
 ) -> object:
     """Resolve ``artifact`` and parse it as JSON.
 
+    Any ``content_type`` with the ``_json`` suffix is treated as JSON.
+    The suffix convention is enforced by the manifest — non-JSON
+    artifacts (audio, video, OTIO XML) use distinct suffixes
+    (``audio_wav``, ``video_mp4``, ``otio_xml`` …).
+
     Raises:
         ValueError: If the artifact's content type is not a JSON flavour.
     """
-    json_types = {
-        "scenario_json",
-        "timing_report_json",
-        "critique_json",
-        "escalation_decision_json",
-    }
-    if artifact.content_type not in json_types:
+    if not artifact.content_type.endswith("_json"):
         raise ValueError(
             f"artifact key=<{artifact.key}> content_type=<{artifact.content_type}> "
             f"is not JSON"
