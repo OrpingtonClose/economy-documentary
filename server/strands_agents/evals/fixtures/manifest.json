@@ -1,0 +1,280 @@
+{
+  "fixtures": [
+    {
+      "axis": "text_present_hello",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "red",
+          "font_size": 72,
+          "text": "HELLO"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_hello_red",
+      "media": "video",
+      "prompt": "Does this video show the English word HELLO on screen? Answer yes or no.",
+      "relative_path": "video/video_hello_red.mp4",
+      "sha256": "d0c3b28a0eb3e7ed01302a9177832f105f27d053032c7baf3150cc899077bb80"
+    },
+    {
+      "axis": "text_present_hello",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "green",
+          "font_size": 72,
+          "text": "GOODBYE"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_goodbye_green",
+      "media": "video",
+      "prompt": "Does this video show the English word HELLO on screen? Answer yes or no.",
+      "relative_path": "video/video_goodbye_green.mp4",
+      "sha256": "6d7c2a33ec22d78094665b64581360c30181099580334249e9af1e4b2e2370d5"
+    },
+    {
+      "axis": "color_red",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "red"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_red",
+      "media": "video",
+      "prompt": "Is this video predominantly red? Answer yes or no.",
+      "relative_path": "video/video_solid_red.mp4",
+      "sha256": "5f8cddc89e6b95685678790f7a5ba3a5beb736c2a31f75b202fb46a36997f3a3"
+    },
+    {
+      "axis": "color_red",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "green"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_green",
+      "media": "video",
+      "prompt": "Is this video predominantly red? Answer yes or no.",
+      "relative_path": "video/video_solid_green.mp4",
+      "sha256": "fceaa2cb0a97b05c74e9f25c8839aa59ee5853a6be24caabaea94f180296c807"
+    },
+    {
+      "axis": "motion_present",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue",
+          "font_size": 48,
+          "text": "MOVING"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "moving_text",
+        "width": 320
+      },
+      "id": "video_moving_text",
+      "media": "video",
+      "prompt": "Does anything move in this video? Answer yes or no.",
+      "relative_path": "video/video_moving_text.mp4",
+      "sha256": "f60b4757b15c3bd11bb2bb5b5716e3c7bbf2ae180eabe3af50272ffc594dfa97"
+    },
+    {
+      "axis": "motion_present",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_still_frame",
+      "media": "video",
+      "prompt": "Does anything move in this video? Answer yes or no.",
+      "relative_path": "video/video_still_frame.mp4",
+      "sha256": "ddeb432fa47a74b23ebe8ba6e67e94c175e64de9c626ddf8f80b72c876e02883"
+    },
+    {
+      "axis": "failure_frozen",
+      "expected_verdict": "reject",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue",
+          "text": "FROZEN"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "frozen_frame",
+        "width": 320
+      },
+      "id": "video_frozen",
+      "media": "video",
+      "prompt": "This video is supposed to show dynamic content. Does it look like a single frozen frame held for the whole duration? Answer yes or no.",
+      "relative_path": "video/video_frozen.mp4",
+      "sha256": "22fd627e9a42b50f699f589ff78320e6b8c44825c9d7ac5c25a7c5b6991e71c0"
+    },
+    {
+      "axis": "failure_black",
+      "expected_verdict": "reject",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {},
+        "fps": 15,
+        "height": 240,
+        "kind": "black_frame",
+        "width": 320
+      },
+      "id": "video_black",
+      "media": "video",
+      "prompt": "Is this video almost entirely black, with no visible content? Answer yes or no.",
+      "relative_path": "video/video_black.mp4",
+      "sha256": "a7e22d919feccd25a0803bf95b9428fd468465028f6705de7324c5fcd06d578f"
+    },
+    {
+      "axis": "failure_blown_out",
+      "expected_verdict": "reject",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {},
+        "fps": 15,
+        "height": 240,
+        "kind": "white_frame",
+        "width": 320
+      },
+      "id": "video_white",
+      "media": "video",
+      "prompt": "Is this video almost entirely pure white, with no visible content? Answer yes or no.",
+      "relative_path": "video/video_white.mp4",
+      "sha256": "f7d8d6c91c4c881740f2754e7cab557ca67226358726e0c0472acb9205682a69"
+    },
+    {
+      "axis": "narration_present",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "text": "hello world how are you today"
+        },
+        "kind": "narration",
+        "sample_rate": 16000
+      },
+      "id": "audio_hello_narration",
+      "media": "audio",
+      "prompt": "Does this audio clip contain intelligible English speech? Answer yes or no.",
+      "relative_path": "audio/audio_hello_narration.wav",
+      "sha256": "d40e117ab2096d11d8543ddff25732c26ce271947f3a13e00f74d77bb4bd3584"
+    },
+    {
+      "axis": "narration_present",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {},
+        "kind": "silence",
+        "sample_rate": 16000
+      },
+      "id": "audio_silence",
+      "media": "audio",
+      "prompt": "Does this audio clip contain intelligible English speech? Answer yes or no.",
+      "relative_path": "audio/audio_silence.wav",
+      "sha256": "20eaebffe1816e0ffa6f7f854f5ef4ea80d5349faaf0ce1fec1b713e7fde58fa"
+    },
+    {
+      "axis": "language_english",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "text": "the economy grew by two percent last quarter"
+        },
+        "kind": "narration",
+        "sample_rate": 16000
+      },
+      "id": "audio_english_narration",
+      "media": "audio",
+      "prompt": "Is the spoken language in this audio English? Answer yes or no.",
+      "relative_path": "audio/audio_english_narration.wav",
+      "sha256": "e10a8bc23461bd03e5491636720890e6d45fee3f1a4203d360b35599b93f6b49"
+    },
+    {
+      "axis": "language_english",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "text": "la economia crecio dos por ciento",
+          "voice": "es"
+        },
+        "kind": "narration",
+        "sample_rate": 16000
+      },
+      "id": "audio_spanish_narration",
+      "media": "audio",
+      "prompt": "Is the spoken language in this audio English? Answer yes or no.",
+      "relative_path": "audio/audio_spanish_narration.wav",
+      "sha256": "2eafe43f7ae2c294b708c0d481e370c2a458853e78d4cfe8cf56a1ee0dfae56c"
+    },
+    {
+      "axis": "failure_noise",
+      "expected_verdict": "reject",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "amplitude": 0.3,
+          "seed": 0
+        },
+        "kind": "white_noise",
+        "sample_rate": 16000
+      },
+      "id": "audio_noise_only",
+      "media": "audio",
+      "prompt": "Is this audio clip just white noise or static, with no intelligible speech? Answer yes or no.",
+      "relative_path": "audio/audio_noise_only.wav",
+      "sha256": "8971b6371eddf011279340c34e0710c4af7197728cd58ba0f8e1a2fb1cb5b5a8"
+    },
+    {
+      "axis": "failure_clipping",
+      "expected_verdict": "reject",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "text": "hello world this is a distorted test"
+        },
+        "kind": "clipping",
+        "sample_rate": 16000
+      },
+      "id": "audio_clipping",
+      "media": "audio",
+      "prompt": "Does this audio sound heavily distorted, like it is clipping or over-amplified? Answer yes or no.",
+      "relative_path": "audio/audio_clipping.wav",
+      "sha256": "b78fb555ed01eaa505318b9abd7c2942c829a20562f2b53a5b7dac0337fa87fc"
+    }
+  ]
+}
