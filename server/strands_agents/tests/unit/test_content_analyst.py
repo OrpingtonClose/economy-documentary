@@ -35,6 +35,7 @@ from strands_agents.content_analyst import (
     ContentAnalystHelperNotConfigured,
     _clamp_time_span,
     _phrase_id,
+    _scene_num,
     _segment_bounds,
     build_content_analyst_agent,
     clear_content_analyst_helpers,
@@ -109,6 +110,30 @@ def test_phrase_id_varies_with_scene_phrase_and_text() -> None:
     assert _phrase_id(2, 0, "same text") != base
     assert _phrase_id(1, 1, "same text") != base
     assert _phrase_id(1, 0, "different text") != base
+
+
+def test_scene_num_prefers_scene_num_key() -> None:
+    assert _scene_num({"scene_num": 3, "id": 99}) == 3
+
+
+def test_scene_num_falls_back_to_id_when_scene_num_is_none() -> None:
+    # Regression: `if key in scene` without a None-guard previously called
+    # int(None) and raised TypeError instead of falling through to `id`.
+    assert _scene_num({"scene_num": None, "id": 5}) == 5
+
+
+def test_scene_num_falls_back_to_scene_id_when_others_missing() -> None:
+    assert _scene_num({"scene_id": 7}) == 7
+
+
+def test_scene_num_raises_value_error_when_all_keys_missing() -> None:
+    with pytest.raises(ValueError, match="missing scene_num"):
+        _scene_num({"voices": []})
+
+
+def test_scene_num_raises_value_error_on_non_int_convertible() -> None:
+    with pytest.raises(ValueError, match="int-convertible"):
+        _scene_num({"scene_num": "not-a-number"})
 
 
 def test_clamp_time_span_within_bounds() -> None:
