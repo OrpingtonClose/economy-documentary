@@ -58,15 +58,27 @@ CorpusRole = Literal["golden", "adversarial", "ambiguous"]
 # Content type of the artifact's bytes.  Used to choose the right loader
 # in the fixture helpers; evaluators dispatch on this.
 CorpusContentType = Literal[
+    # Pipeline artifacts (JSON)
     "scenario_json",
     "timing_report_json",
+    "refined_scenario_json",
+    "audio_qa_report_json",
+    "otio_summary_json",
+    "critique_json",
+    "content_analysis_json",
+    "visual_concept_json",
+    "loop_trace_json",
+    "production_plan_json",
+    "recovery_decision_json",
+    "escalation_decision_json",
+    "pipeline_trace_json",
+    "approval_request_json",
+    # Binary media
     "audio_wav",
     "audio_mp3",
     "video_mp4",
     "video_frame_png",
     "otio_xml",
-    "critique_json",
-    "escalation_decision_json",
 ]
 
 # Storage scheme for an artifact's bytes.  ``seed`` means the bytes are

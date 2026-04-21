@@ -223,12 +223,19 @@ def build_judge_request(
     except UnicodeDecodeError:
         as_text = f"<binary artifact; sha256={artifact.sha256}>"
 
+    # Blind the judge: the manifest key encodes polarity (e.g.
+    # ``scenario.golden.offtopic``) and the role field states it outright,
+    # so neither can appear in the prompt — LLMs are known to latch onto
+    # context clues even when told to ignore them.  We pass a sha-derived
+    # opaque identifier instead; the test side keeps the real key to map
+    # verdicts back to ground truth.
+    blinded_id = f"artifact-{artifact.sha256[:12]}"
+
     return {
         "system": rubric_prompt,
         "user": (
-            f"Artifact key: {artifact.key}\n"
+            f"Artifact id: {blinded_id}\n"
             f"Content type: {artifact.content_type}\n"
-            f"Role (blinded, do not use): {artifact.role}\n"
             f"---\n{as_text}\n---\n"
             f"Grade this artifact per the rubric."
         ),
