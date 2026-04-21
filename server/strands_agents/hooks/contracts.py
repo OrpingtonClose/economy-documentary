@@ -67,9 +67,18 @@ class ContractEnforcer(HookProvider):
         dumped = raw.get() if hasattr(raw, "get") else raw
         if not isinstance(dumped, dict):
             dumped = {}
+        # Merge invocation_state per docs/strands-migration/contracts/CONTRACTS.md.
+        # Keys like ``timing_passed`` and ``timing_report`` live in
+        # invocation_state (see contracts/STATE_SCHEMA.md), not agent.state,
+        # so without this merge postcondition checks would raise a spurious
+        # ContractViolation on stages that produce those keys.
+        invocation_state = getattr(event, "invocation_state", None) or {}
+        if not isinstance(invocation_state, dict):
+            invocation_state = {}
+        merged = dumped | invocation_state
         if self.state_key is None:
-            return dumped
-        nested = dumped.get(self.state_key) or {}
+            return merged
+        nested = merged.get(self.state_key) or {}
         return nested if isinstance(nested, dict) else {}
 
     def _on_before(self, event: BeforeInvocationEvent) -> None:

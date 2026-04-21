@@ -355,6 +355,54 @@ def test_contract_enforcer_postcondition_passes_with_real_scenes() -> None:
     enforcer._on_after(event)  # should not raise
 
 
+def test_contract_enforcer_merges_invocation_state_for_postconditions() -> None:
+    """Keys produced into invocation_state must satisfy produced_state checks.
+
+    Regression guard for CONTRACTS.md: stages like timing write
+    ``timing_passed`` / ``timing_report`` onto ``invocation_state``, not
+    ``agent.state``. The enforcer must merge both before validating
+    postconditions or it will raise a spurious :class:`ContractViolation`.
+    """
+    from contracts import StageContract
+    from strands.hooks import AfterInvocationEvent
+
+    contract = StageContract(
+        name="invoc-merge",
+        required_state=[],
+        produced_state=["marker"],
+    )
+    enforcer = ContractEnforcer(contract, check_preconditions=False)
+
+    event = AfterInvocationEvent(
+        agent=_mk_agent({}),  # agent.state is empty
+        invocation_state={"marker": "ok"},
+        result=None,
+        resume=None,
+    )
+    enforcer._on_after(event)  # should not raise — marker comes from invocation_state
+
+
+def test_contract_enforcer_invocation_state_overrides_agent_state() -> None:
+    """Per CONTRACTS.md spec ``state | invocation_state``, invocation wins."""
+    from contracts import StageContract
+    from strands.hooks import AfterInvocationEvent
+
+    contract = StageContract(
+        name="invoc-override",
+        required_state=[],
+        produced_state=["timing_passed"],
+    )
+    enforcer = ContractEnforcer(contract, check_preconditions=False)
+
+    event = AfterInvocationEvent(
+        agent=_mk_agent({"timing_passed": "(not yet evaluated)"}),
+        invocation_state={"timing_passed": True},
+        result=None,
+        resume=None,
+    )
+    enforcer._on_after(event)  # invocation_state's truthy value wins over agent.state
+
+
 # ---------------------------------------------------------------------------
 # RevisionTagger
 # ---------------------------------------------------------------------------
