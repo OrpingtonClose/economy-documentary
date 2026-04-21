@@ -249,7 +249,10 @@ class FakeRenderer:
                 "workers_available": self._workers_available,
                 "queue_depth": self._queue_depth,
                 "per_worker": [
-                    {"worker_id": f"w{i}", "status": "ready"}
+                    {
+                        "worker_id": f"w{i}",
+                        "status": "ready" if i < self._workers_available else "unavailable",
+                    }
                     for i in range(self._workers_total)
                 ],
             }

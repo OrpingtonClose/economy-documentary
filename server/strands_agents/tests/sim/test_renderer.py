@@ -125,6 +125,24 @@ class TestFakeRendererHealth:
         assert snap["workers_available"] == 1
         assert snap["queue_depth"] == 4
 
+    def test_per_worker_reflects_available_count(self) -> None:
+        # Hard invariant #2 in AGENTS.md requires every declared worker
+        # to report status == "ready" before the orchestrator launches
+        # visual production. A degraded pool (workers_available <
+        # workers_total) must surface unavailable workers in
+        # ``per_worker`` so the orchestrator's health check fails loudly.
+        r = FakeRenderer(workers_total=3)
+        r.set_health(workers_available=1)
+        snap = r.health_check()
+        statuses = [w["status"] for w in snap["per_worker"]]
+        assert statuses == ["ready", "unavailable", "unavailable"]
+
+    def test_per_worker_all_ready_when_fully_available(self) -> None:
+        r = FakeRenderer(workers_total=2)
+        snap = r.health_check()
+        statuses = [w["status"] for w in snap["per_worker"]]
+        assert statuses == ["ready", "ready"]
+
     def test_scripted_error_raises_once(self) -> None:
         r = FakeRenderer(workers_total=2)
         r.set_health(error="fleet offline")
