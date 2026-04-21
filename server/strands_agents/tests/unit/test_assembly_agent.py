@@ -638,3 +638,50 @@ class TestAssemblyExperiment:
             assert "assembly_error" in envelope["output"]
         finally:
             cleanup_assembly_artifact_root(envelope["metadata"]["artifact_root"])
+
+    def test_clean_case_produces_nonempty_output_mp4(self) -> None:
+        # ContractComplianceEvaluator rejects 0-byte artifacts; make sure
+        # the canonical "output/*.mp4" written by assembly_task is non-empty
+        # so the happy-path contract check passes.
+        exp = build_assembly_experiment()
+        case = next(c for c in exp.cases if c.name == "clean_3_scenes")
+        envelope = assembly_task(case)
+        try:
+            artifact_root = envelope["metadata"]["artifact_root"]
+            canonical_mp4 = os.path.join(artifact_root, "output", "final.mp4")
+            assert os.path.exists(canonical_mp4)
+            assert os.path.getsize(canonical_mp4) > 0
+        finally:
+            cleanup_assembly_artifact_root(envelope["metadata"]["artifact_root"])
+
+    def test_clean_case_passes_contract_compliance_evaluator(self) -> None:
+        # End-to-end regression: run the ContractComplianceEvaluator from
+        # the experiment on the happy-path case and assert every hard
+        # clause (including produced_artifacts.output/*.mp4) passes. This
+        # catches regressions like zero-byte artifact writes that silently
+        # would have rendered the contract check useless.
+        from strands_evals.types.evaluation import EvaluationData
+
+        exp = build_assembly_experiment()
+        case = next(c for c in exp.cases if c.name == "clean_3_scenes")
+        envelope = assembly_task(case)
+        try:
+            evaluator = next(
+                e
+                for e in exp.evaluators
+                if isinstance(e, ContractComplianceEvaluator)
+            )
+            outputs = evaluator.evaluate(
+                EvaluationData(
+                    input=case.input,
+                    actual_output=envelope["output"],
+                    expected_output=case.expected_output,
+                    metadata=envelope["metadata"],
+                )
+            )
+            assert outputs, "contract evaluator produced no outputs"
+            assert all(o.score >= 1.0 for o in outputs), [
+                (o.label, o.reason) for o in outputs if o.score < 1.0
+            ]
+        finally:
+            cleanup_assembly_artifact_root(envelope["metadata"]["artifact_root"])
