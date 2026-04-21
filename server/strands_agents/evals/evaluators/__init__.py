@@ -14,10 +14,13 @@ wiring lands in PR 3/3.
 from __future__ import annotations
 
 from .approval_gate_trajectory import ApprovalGateTrajectoryEvaluator
+from .assembly_ordering import AssemblyOrderingEvaluator
 from .audio_invariant import AudioInvariantEvaluator
+from .audio_worker_invariant import AudioWorkerInvariantEvaluator
 from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
 from .escalation_decision import EscalationDecisionEvaluator
+from .escalation_taxonomy import EscalationTaxonomyEvaluator
 from .memory_honoring import MemoryHonoringEvaluator
 from .parallel_launch import ParallelLaunchEvaluator
 from .pipeline_trajectory import PipelineTrajectoryEvaluator
@@ -30,10 +33,13 @@ from .visual_loop_trajectory import VisualLoopTrajectoryEvaluator
 
 __all__ = [
     "ApprovalGateTrajectoryEvaluator",
+    "AssemblyOrderingEvaluator",
     "AudioInvariantEvaluator",
+    "AudioWorkerInvariantEvaluator",
     "ContractComplianceEvaluator",
     "CritiqueStoreEvaluator",
     "EscalationDecisionEvaluator",
+    "EscalationTaxonomyEvaluator",
     "MemoryHonoringEvaluator",
     "ParallelLaunchEvaluator",
     "PipelineTrajectoryEvaluator",

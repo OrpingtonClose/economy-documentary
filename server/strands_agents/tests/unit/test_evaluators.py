@@ -25,10 +25,13 @@ from critique.record import ArtifactCritiqueRecord, QaVerdict
 from critique.store import ArtifactCritiqueStore
 from strands_agents.evals.evaluators import (
     ApprovalGateTrajectoryEvaluator,
+    AssemblyOrderingEvaluator,
     AudioInvariantEvaluator,
+    AudioWorkerInvariantEvaluator,
     ContractComplianceEvaluator,
     CritiqueStoreEvaluator,
     EscalationDecisionEvaluator,
+    EscalationTaxonomyEvaluator,
     MemoryHonoringEvaluator,
     ParallelLaunchEvaluator,
     PipelineTrajectoryEvaluator,
@@ -1258,3 +1261,809 @@ def test_approval_decision_mismatch_fails() -> None:
     outputs = evaluator.evaluate(case)
     by_label = {o.label: o for o in outputs}
     assert by_label["approval.decision"].test_pass is False
+
+
+# ---------------------------------------------------------------------------
+# AudioWorkerInvariantEvaluator
+# ---------------------------------------------------------------------------
+
+
+def test_audio_worker_no_calls_fails_voice_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=[{"name": "plan", "at_turn": 0, "args": {}}],
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is False
+
+
+def test_audio_worker_single_voice_batch_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s3", "voice_id": "V1"}},
+        {"name": "await_tasks", "at_turn": 2, "args": {}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is True
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+    assert "audio_worker.no_pool_rebind" not in by_label
+
+
+def test_audio_worker_cross_voice_in_one_batch_fails() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V2"}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+
+
+def test_audio_worker_cross_voice_expected_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V2"}},
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_cross_voice_race": True},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_multi_voice_serialised_across_turns_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1", "voice_id": "V1"}},
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s2", "voice_id": "V1"}},
+        {"name": "await_tasks", "at_turn": 2, "args": {}},
+        {"name": "launch_audio_render", "at_turn": 3, "args": {"scene_id": "s3", "voice_id": "V2"}},
+        {"name": "launch_audio_render", "at_turn": 3, "args": {"scene_id": "s4", "voice_id": "V2"}},
+        {"name": "await_tasks", "at_turn": 4, "args": {}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_pool_rebind_fails() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1", "worker_pool": "pool-a"},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 3,
+            "args": {"scene_id": "s3", "voice_id": "V2", "worker_pool": "pool-a"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Single-voice per batch so the batch gate passes.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+    # But pool-a gets rebound from V1 → V2 across turns — that's the race.
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is False
+
+
+def test_audio_worker_distinct_pools_per_voice_passes() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1", "worker_pool": "pool-a"},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s2", "voice_id": "V2", "worker_pool": "pool-b"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # A cross-voice parallel batch still fails the batch gate even with
+    # distinct worker_pool values — because the parallel-launch
+    # evaluator cannot prove the LangGraph tool runner actually honoured
+    # the pool routing. Serialise across turns to be safe.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is True
+
+
+def test_audio_worker_voice_map_single_voice_extracted() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_map": {"narrator": "V1"}},
+        },
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s2", "voice_map": {"narrator": "V1"}},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is True
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is True
+
+
+def test_audio_worker_mixed_voice_map_fails_batch_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_map": {"narrator": "V1", "expert": "V2"}},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # A scene that binds two voice_ids is itself a race — one VM cannot
+    # voice two characters.
+    assert by_label["audio_worker.no_cross_voice_in_batch"].test_pass is False
+
+
+def test_audio_worker_missing_voice_id_fails_voice_gate() -> None:
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {"name": "launch_audio_render", "at_turn": 1, "args": {"scene_id": "s1"}},
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["audio_worker.voice_id_present"].test_pass is False
+
+
+def test_audio_worker_expect_pool_rebind_without_pools_fails_gate() -> None:
+    # Negative test dual: if a test declares expect_pool_rebind=True but the
+    # trajectory has no worker_pool args, the gate must still be emitted and
+    # fail loudly — otherwise the expectation is silently dropped.
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1"},
+        },
+    ]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_pool_rebind": True},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "audio_worker.no_pool_rebind" in by_label
+    assert by_label["audio_worker.no_pool_rebind"].test_pass is False
+
+
+def test_audio_worker_expect_pool_rebind_not_expected_without_pools_omits_gate() -> None:
+    # Converse of the above: when no pools are declared and no rebind is
+    # expected, the gate is silent (not emitted). This keeps the happy path
+    # quiet while only raising the gate when the test actually scripts an
+    # expectation about pool scheduling.
+    evaluator = AudioWorkerInvariantEvaluator()
+    trajectory = [
+        {
+            "name": "launch_audio_render",
+            "at_turn": 1,
+            "args": {"scene_id": "s1", "voice_id": "V1"},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "audio_worker.no_pool_rebind" not in by_label
+
+
+# ---------------------------------------------------------------------------
+# AssemblyOrderingEvaluator
+# ---------------------------------------------------------------------------
+
+
+def _launch(scene_id: str) -> dict[str, Any]:
+    return {"name": "launch_visual_production", "args": {"scene_id": scene_id}}
+
+
+def _qa(scene_id: str) -> dict[str, Any]:
+    return {
+        "name": "evaluate_visual_artifact_quality",
+        "args": {"scene_id": scene_id},
+    }
+
+
+def _skip(scene_id: str) -> dict[str, Any]:
+    return {"name": "skip_scene", "args": {"scene_id": scene_id}}
+
+
+def _escalate(scene_id: str) -> dict[str, Any]:
+    return {"name": "request_escalation", "args": {"scene_id": scene_id}}
+
+
+_HEALTH = {"name": "check_worker_health", "args": {}}
+_ASSEMBLY = {"name": "assemble_final_cut", "args": {}}
+
+
+def test_assembly_ordering_no_trajectory_emits_missing() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=None)
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"assembly.missing_trajectory"}
+    assert outputs[0].test_pass is False
+
+
+def test_assembly_ordering_skips_malformed_entries() -> None:
+    # A production trajectory may interleave tool-call dicts with other
+    # event shapes (interrupt events, routing breadcrumbs, etc.). The
+    # evaluator must filter those out and grade the remaining tool
+    # calls, not hard-fail with ``missing_trajectory``.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory: list[Any] = [
+        {"kind": "interrupt", "at_turn": 0},
+        _HEALTH,
+        "not-a-dict",
+        _launch("s1"),
+        {"args": {"scene_id": "s1"}},  # missing 'name' key
+        _qa("s1"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "assembly.missing_trajectory" not in by_label
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_post_assembly_launch_fails_no_pending_gate() -> None:
+    # Launching a scene *after* assembly is a distinct violation of
+    # invariant #6: assembly fired prematurely. The no-pending gate
+    # must flag this rather than silently pass (which would happen if
+    # ``launched_scenes`` were scoped to only pre-assembly launches
+    # without a dedicated post-assembly check).
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _launch("s2"),
+        _qa("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    reason = by_label["assembly.no_pending_at_assembly"].reason
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is False
+    assert "after" in reason.lower()
+    assert "s2" in reason
+
+
+def test_assembly_ordering_post_assembly_launch_without_metadata() -> None:
+    # Regression: with the old scoping bug, a post-assembly launch
+    # would be folded into ``launched_scenes`` and reported as a
+    # phantom "pending" failure (s2 is in expected_scenes but not in
+    # terminal_before_assembly). The fix restricts launched_scenes to
+    # pre-assembly launches and emits a dedicated post-assembly-launch
+    # failure with the correct reason instead.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _launch("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    reason = by_label["assembly.no_pending_at_assembly"].reason
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is False
+    assert "pending" not in reason.lower()
+    assert "after" in reason.lower()
+    assert "s2" in reason
+
+
+def test_assembly_ordering_happy_path_passes_every_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _qa("s2"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_missing_health_fails_first_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.health_check_first"]
+    assert gate.test_pass is False
+    assert "without any prior check_worker_health" in gate.reason
+
+
+def test_assembly_ordering_late_health_fails_first_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_launch("s1"), _HEALTH, _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.health_check_first"]
+    assert gate.test_pass is False
+    assert "fires after" in gate.reason
+
+
+def test_assembly_ordering_no_launches_health_gate_skips() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_assembly": False},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Health gate skips (no launches); QA gate also skips (no launches).
+    assert by_label["assembly.health_check_first"].test_pass is True
+    assert "SKIP" in by_label["assembly.health_check_first"].reason
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert "SKIP" in by_label["assembly.qa_after_each_launch"].reason
+
+
+def test_assembly_ordering_missing_qa_fails_second_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    # s2 is launched but never QA'd / skipped / escalated.
+    trajectory = [_HEALTH, _launch("s1"), _launch("s2"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.qa_after_each_launch"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason
+
+
+def test_assembly_ordering_qa_before_launch_does_not_satisfy_gate() -> None:
+    # A pre-launch QA for a scene must not be credited as covering a
+    # later launch for the same scene — otherwise a stale QA could mask
+    # a fresh render that never got graded.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _qa("s1"),  # pre-launch — should not count
+        _launch("s1"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is False
+
+
+def test_assembly_ordering_skip_satisfies_qa_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _launch("s2"), _qa("s1"), _skip("s2"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_escalation_satisfies_qa_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _escalate("s2"),
+        _ASSEMBLY,
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["assembly.qa_after_each_launch"].test_pass is True
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is True
+
+
+def test_assembly_ordering_assembly_before_all_qa_fails_third_gate() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    # s2's QA comes AFTER assembly — forbidden.
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _launch("s2"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _qa("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason
+
+
+def test_assembly_ordering_expected_assembly_missing_fails() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1")]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "no assemble_final_cut" in gate.reason
+
+
+def test_assembly_ordering_unexpected_assembly_fails() -> None:
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"expect_assembly": False},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "expect_assembly=False" in gate.reason
+
+
+def test_assembly_ordering_metadata_scenes_enforces_coverage() -> None:
+    # The trajectory only launches s1, but the test declares s1+s2 as
+    # expected. Since s2 was never launched, nothing terminates it — the
+    # assembly gate must fail.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [_HEALTH, _launch("s1"), _qa("s1"), _ASSEMBLY]
+    case = EvaluationData[Any, Any](
+        input=None,
+        actual_trajectory=trajectory,
+        metadata={"scenes": ["s1", "s2"]},
+    )
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["assembly.no_pending_at_assembly"]
+    assert gate.test_pass is False
+    assert "s2" in gate.reason
+
+
+# ---------------------------------------------------------------------------
+# EscalationTaxonomyEvaluator
+# ---------------------------------------------------------------------------
+
+
+def _fail(scene_id: str, tool: str = "launch_visual_production") -> dict[str, Any]:
+    return {
+        "name": "record_scene_failure",
+        "args": {"scene_id": scene_id, "tool": tool},
+    }
+
+
+def _noop() -> dict[str, Any]:
+    return {"name": "record_refiner_noop", "args": {}}
+
+
+def _reject(tool: str, args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": "record_approval_reject",
+        "args": {"tool": tool, "args": args},
+    }
+
+
+def _refine() -> dict[str, Any]:
+    return {"name": "refine_scenario", "args": {}}
+
+
+def _audio_launch(scene_id: str) -> dict[str, Any]:
+    return {
+        "name": "launch_audio_render",
+        "args": {"scene_id": scene_id, "voice_id": "v1"},
+    }
+
+
+def _task_escalation(scene_id: str | None = None) -> dict[str, Any]:
+    args: dict[str, Any] = {"subagent_type": "escalation"}
+    if scene_id is not None:
+        args["scene_id"] = scene_id
+    return {"name": "task", "args": args}
+
+
+def test_escalation_taxonomy_missing_trajectory_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=None)
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"escalation.missing_trajectory"}
+    assert outputs[0].test_pass is False
+
+
+def test_escalation_taxonomy_empty_trajectory_emits_no_events() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=[])
+    outputs = evaluator.evaluate(case)
+    labels = {o.label for o in outputs}
+    assert labels == {"escalation.no_events"}
+    assert outputs[0].test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_then_escalate_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _escalate("s1"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_third_retry_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),  # violation: retry without escalating
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is False
+    assert "'s1'" in gate.reason
+    assert "launch_visual_production" in gate.reason
+
+
+def test_escalation_taxonomy_two_failures_escalate_via_task_subagent() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # ``task(subagent_type="escalation")`` counts as escalation even
+    # without an explicit scene_id — it covers every pending failure.
+    trajectory = [
+        _audio_launch("s1"),
+        _fail("s1", tool="launch_audio_render"),
+        _audio_launch("s1"),
+        _fail("s1", tool="launch_audio_render"),
+        _task_escalation(),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_two_failures_never_escalated_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        # trajectory ends without an escalation — orchestrator silently dropped it
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is False
+    assert "never escalated" in gate.reason
+
+
+def test_escalation_taxonomy_single_failure_then_success_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # One failure, one success.  No escalation needed.
+    trajectory = [_launch("s1"), _fail("s1"), _launch("s1")]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    # Gate emits a present-but-passing result because one failure was seen.
+    gate = by_label["escalation.two_failures_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_refiner_noop_then_escalate_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop(), _task_escalation()]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_refiner_noop_then_more_refine_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop(), _refine()]  # violation
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is False
+    assert "refine_scenario" in gate.reason
+
+
+def test_escalation_taxonomy_refiner_noop_without_escalation_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [_refine(), _refine(), _noop()]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is False
+    assert "never followed by an escalation" in gate.reason
+
+
+def test_escalation_taxonomy_approval_reject_retry_different_args_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 99},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_approval_reject_retry_same_args_fails() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 42},  # identical retry
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is False
+    assert "identical args" in gate.reason
+
+
+def test_escalation_taxonomy_approval_reject_escalation_closes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # Escalation after reject counts as re-planning — a subsequent
+    # identical-args call is allowed because the escalation SubAgent
+    # chose to re-run it deliberately.
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        _task_escalation(),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s1", "seed": 42},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_approval_reject_no_retry_passes() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42})
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is True
+
+
+def test_escalation_taxonomy_key_order_is_irrelevant_for_args_equality() -> None:
+    # The args-equality check uses sort_keys=True so dict ordering
+    # doesn't make two semantically-identical payloads compare unequal.
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory = [
+        _reject("launch_visual_production", {"scene_id": "s1", "seed": 42}),
+        {
+            "name": "launch_visual_production",
+            "args": {"seed": 42, "scene_id": "s1"},  # same kv, different order
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    gate = by_label["escalation.approval_reject_retry_with_different_args"]
+    assert gate.test_pass is False
+
+
+def test_escalation_taxonomy_all_three_gates_fire_together() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    # One trajectory that exercises all three gates simultaneously and
+    # escalates correctly for each.
+    trajectory = [
+        # Two failures on s1 → escalate before any further retry.
+        _launch("s1"),
+        _fail("s1"),
+        _launch("s1"),
+        _fail("s1"),
+        _escalate("s1"),
+        # Refiner noop → escalate before any further refine_scenario.
+        _noop(),
+        _task_escalation(),
+        # Approval reject → retry with different seed.
+        _reject("launch_visual_production", {"scene_id": "s2", "seed": 7}),
+        {
+            "name": "launch_visual_production",
+            "args": {"scene_id": "s2", "seed": 13},
+        },
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert by_label["escalation.two_failures_trigger"].test_pass is True
+    assert by_label["escalation.refiner_noop_trigger"].test_pass is True
+    assert (
+        by_label[
+            "escalation.approval_reject_retry_with_different_args"
+        ].test_pass
+        is True
+    )
+
+
+def test_escalation_taxonomy_skips_malformed_entries() -> None:
+    evaluator = EscalationTaxonomyEvaluator()
+    trajectory: list[Any] = [
+        "not-a-dict",
+        {"args": {"x": 1}},  # missing 'name'
+        _noop(),
+        _task_escalation(),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    assert "escalation.missing_trajectory" not in by_label
+    gate = by_label["escalation.refiner_noop_trigger"]
+    assert gate.test_pass is True
