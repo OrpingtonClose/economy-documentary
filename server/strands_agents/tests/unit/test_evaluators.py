@@ -1538,6 +1538,55 @@ def test_assembly_ordering_skips_malformed_entries() -> None:
     assert by_label["assembly.no_pending_at_assembly"].test_pass is True
 
 
+def test_assembly_ordering_post_assembly_launch_fails_no_pending_gate() -> None:
+    # Launching a scene *after* assembly is a distinct violation of
+    # invariant #6: assembly fired prematurely. The no-pending gate
+    # must flag this rather than silently pass (which would happen if
+    # ``launched_scenes`` were scoped to only pre-assembly launches
+    # without a dedicated post-assembly check).
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _launch("s2"),
+        _qa("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    reason = by_label["assembly.no_pending_at_assembly"].reason
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is False
+    assert "after" in reason.lower()
+    assert "s2" in reason
+
+
+def test_assembly_ordering_post_assembly_launch_without_metadata() -> None:
+    # Regression: with the old scoping bug, a post-assembly launch
+    # would be folded into ``launched_scenes`` and reported as a
+    # phantom "pending" failure (s2 is in expected_scenes but not in
+    # terminal_before_assembly). The fix restricts launched_scenes to
+    # pre-assembly launches and emits a dedicated post-assembly-launch
+    # failure with the correct reason instead.
+    evaluator = AssemblyOrderingEvaluator()
+    trajectory = [
+        _HEALTH,
+        _launch("s1"),
+        _qa("s1"),
+        _ASSEMBLY,
+        _launch("s2"),
+    ]
+    case = EvaluationData[Any, Any](input=None, actual_trajectory=trajectory)
+    outputs = evaluator.evaluate(case)
+    by_label = {o.label: o for o in outputs}
+    reason = by_label["assembly.no_pending_at_assembly"].reason
+    assert by_label["assembly.no_pending_at_assembly"].test_pass is False
+    assert "pending" not in reason.lower()
+    assert "after" in reason.lower()
+    assert "s2" in reason
+
+
 def test_assembly_ordering_happy_path_passes_every_gate() -> None:
     evaluator = AssemblyOrderingEvaluator()
     trajectory = [

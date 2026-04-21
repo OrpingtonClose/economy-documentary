@@ -62,9 +62,12 @@ Three :class:`EvaluationOutput` entries (all hard gates):
   ``scene_id`` (or a terminal ``skip_scene`` / ``request_escalation``
   for that scene).
 * ``assembly.no_pending_at_assembly`` — every scene that was launched
-  reached a terminal signal before any ``assemble_final_cut`` call.
-  When ``expect_assembly`` is ``False``, the gate asserts that
-  ``assemble_final_cut`` was not called.
+  reached a terminal signal before any ``assemble_final_cut`` call,
+  *and* no ``launch_visual_production`` calls fire after assembly (a
+  post-assembly launch means assembly was premature — a distinct
+  violation of the same invariant).  When ``expect_assembly`` is
+  ``False``, the gate asserts that ``assemble_final_cut`` was not
+  called.
 """
 
 from __future__ import annotations
@@ -299,11 +302,27 @@ class AssemblyOrderingEvaluator(Evaluator[Any, Any]):
                 assembly_idx = idx
                 break
 
+        # When an assembly call is present, scope launched_scenes to
+        # pre-assembly launches so the set is consistent with
+        # terminal_before_assembly below. Launches that fire *after*
+        # assembly are a separate, louder violation: assembly was
+        # premature. They're caught by the post-assembly-launch branch
+        # further down rather than being folded into "pending scenes".
         launched_scenes = {
             sid
-            for call in calls
-            if call["name"] == _LAUNCH_TOOL and (sid := _scene_id(call)) is not None
+            for idx, call in enumerate(calls)
+            if (assembly_idx is None or idx < assembly_idx)
+            and call["name"] == _LAUNCH_TOOL
+            and (sid := _scene_id(call)) is not None
         }
+        post_assembly_launches: list[str] = []
+        if assembly_idx is not None:
+            for idx in range(assembly_idx + 1, len(calls)):
+                call = calls[idx]
+                if call["name"] == _LAUNCH_TOOL:
+                    sid = _scene_id(call)
+                    if sid is not None:
+                        post_assembly_launches.append(sid)
 
         if isinstance(expected_scenes_meta, list) and all(
             isinstance(s, str) for s in expected_scenes_meta
@@ -380,6 +399,20 @@ class AssemblyOrderingEvaluator(Evaluator[Any, Any]):
                     reason=(
                         f"FAIL assemble_final_cut at index {assembly_idx} fired "
                         f"while scenes were still pending: {pending_scenes}"
+                    ),
+                    label="assembly.no_pending_at_assembly",
+                )
+            ]
+
+        if post_assembly_launches:
+            return [
+                EvaluationOutput(
+                    score=0.0,
+                    test_pass=False,
+                    reason=(
+                        f"FAIL launch_visual_production fired after "
+                        f"assemble_final_cut at index {assembly_idx} "
+                        f"for scene(s): {sorted(set(post_assembly_launches))}"
                     ),
                     label="assembly.no_pending_at_assembly",
                 )
