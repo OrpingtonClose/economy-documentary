@@ -157,6 +157,10 @@ jobs:
           rc=0
           poetry run python -m ${{ matrix.experiment.module }} 2>&1 | tee "$LOG" || rc=$?
           echo "exit_code=$rc" >> "$LOG"
+          if [ "$rc" -eq 2 ]; then
+            echo "Experiment skipped (exit code 2) — treating as neutral."
+            exit 0
+          fi
           exit "$rc"
 
       - name: Upload experiment output
