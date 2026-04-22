@@ -268,8 +268,17 @@ class VideoConsensus:
         gemini_yes: True iff Gemini's answer parses as "yes".
         qwen_yes: True iff Qwen's answer parses as "yes".
         agree: True iff both flags match.  Disagreement fails the test.
-        gemini_text: Raw Gemini answer, for diagnostics.
-        qwen_text: Raw Qwen answer, for diagnostics.
+        gemini_text: Raw Gemini answer text, or error/diagnostic text when
+            the judge was disabled or returned nothing usable.  Callers that
+            need to distinguish "answered" from "disabled" must consult the
+            ``gemini_disabled`` / ``qwen_disabled`` flags instead of parsing
+            this string.
+        qwen_text: Raw Qwen answer, same semantics as ``gemini_text``.
+        gemini_disabled: True iff the Gemini voter was disabled (missing
+            credentials, provider error, safety filter) and did not return a
+            real answer.
+        qwen_disabled: True iff the Qwen voter was disabled for the same
+            reasons.
     """
 
     gemini_yes: bool
@@ -277,6 +286,8 @@ class VideoConsensus:
     agree: bool
     gemini_text: str
     qwen_text: str
+    gemini_disabled: bool = False
+    qwen_disabled: bool = False
 
 
 def judge_video_consensus(
@@ -332,6 +343,8 @@ def judge_video_consensus(
         agree=(gemini_yes == qwen_yes),
         gemini_text=gemini_text or (gemini_verdict.error or ""),
         qwen_text=qwen_text or (qwen_verdict.error or ""),
+        gemini_disabled=gemini_verdict.disabled,
+        qwen_disabled=qwen_verdict.disabled,
     )
 
 

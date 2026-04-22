@@ -335,6 +335,57 @@ def _cases_with_any_hard_failure(
     return failing
 
 
+def test_default_video_judge_honours_consensus_disabled_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a disabled voter must surface as ``ran=False``.
+
+    ``VideoConsensus`` historically stored the error string in
+    ``gemini_text`` / ``qwen_text`` when a voter was disabled, which
+    made ``bool(gemini_text)`` look like a real answer and flipped
+    valid "yes" fixtures to "no". The evaluator now reads the
+    explicit ``*_disabled`` flags, and this test pins that behaviour:
+    a stub ``judge_video_consensus`` that reports ``gemini_disabled=
+    True`` must produce a ``_JudgeResult`` with ``ran=False`` and a
+    populated ``error``, not a silent "no" answer.
+    """
+    from strands_agents.evals.evaluators.live_media_judge import (
+        _default_video_judge,
+    )
+    from strands_agents.tests.live import _judges as judges_module
+
+    class _FakeConsensus:
+        gemini_yes = False
+        qwen_yes = True
+        agree = False
+        gemini_text = "GOOGLE_API_KEY not set."
+        qwen_text = "yes"
+        gemini_disabled = True
+        qwen_disabled = False
+
+    def _fake_consensus(**_kwargs: Any) -> _FakeConsensus:
+        return _FakeConsensus()
+
+    monkeypatch.setattr(judges_module, "judge_video_consensus", _fake_consensus)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "dummy")
+
+    results = _default_video_judge(
+        local_path="/tmp/fake.mp4",
+        public_url="https://example.com/fake.mp4",
+        prompt="is this video of a cat?",
+    )
+
+    assert len(results) == 2, "consensus path must return two JudgeResults"
+    gemini, qwen = results
+    assert gemini.model == "gemini-2.5-flash"
+    assert gemini.ran is False, "disabled gemini must not be marked ran"
+    assert gemini.error, "disabled gemini must surface an error string"
+    assert qwen.model == "qwen-vl-plus"
+    assert qwen.ran is True, "enabled qwen must be marked ran"
+    assert qwen.judged_yes is True
+    assert qwen.error is None
+
+
 def _assert_every_case_passes_strict(report: EvaluationReport) -> None:
     """Strict assertion: every case in a report must pass every output.
 

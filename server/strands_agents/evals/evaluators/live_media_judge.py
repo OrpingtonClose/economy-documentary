@@ -295,20 +295,32 @@ def _default_video_judge(
             public_url=public_url,
             prompt=prompt,
         )
+        # Use the explicit ``*_disabled`` flags to distinguish "judge
+        # answered" from "judge was disabled (no key, safety filter)".
+        # The ``*_text`` fields collapse error and answer text into a
+        # single string, so a truthy text does not imply the judge ran.
         return (
             _JudgeResult(
                 model="gemini-2.5-flash",
-                ran=bool(consensus.gemini_text),
+                ran=not consensus.gemini_disabled,
                 judged_yes=consensus.gemini_yes,
                 raw_text=consensus.gemini_text,
-                error=None if consensus.gemini_text else "gemini returned empty/disabled",
+                error=(
+                    consensus.gemini_text or "gemini disabled"
+                    if consensus.gemini_disabled
+                    else None
+                ),
             ),
             _JudgeResult(
                 model="qwen-vl-plus",
-                ran=bool(consensus.qwen_text),
+                ran=not consensus.qwen_disabled,
                 judged_yes=consensus.qwen_yes,
                 raw_text=consensus.qwen_text,
-                error=None if consensus.qwen_text else "qwen returned empty/disabled",
+                error=(
+                    consensus.qwen_text or "qwen disabled"
+                    if consensus.qwen_disabled
+                    else None
+                ),
             ),
         )
 
