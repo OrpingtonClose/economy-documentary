@@ -164,7 +164,11 @@ def provision_vm(offer_id: str, disk_gb: int, branch: str) -> str:
     """Create a Vast.ai instance that bootstraps itself on first boot."""
     print(f"\nProvisioning VM from offer {offer_id} (branch {branch}) …")
     env_pairs = _forwarded_env_pairs()
-    env_flag = f"{PORTS_EXPOSED} " + " ".join(env_pairs) if env_pairs else PORTS_EXPOSED
+    # Forward the selected branch into the VM so the bootstrap's
+    # `git fetch && git reset --hard` picks it up. Without this the
+    # bootstrap defaults to `main` and silently undoes the onstart clone.
+    env_pairs.append(f"-e PLAYGROUND_GIT_BRANCH={branch}")
+    env_flag = f"{PORTS_EXPOSED} " + " ".join(env_pairs)
 
     # The onstart command runs as root once the container is up. Clone
     # (or update) the repo then hand off to the bootstrap script. The
