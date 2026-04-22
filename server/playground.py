@@ -248,8 +248,15 @@ RUN_STATUS_TASK_ERROR: str = "TASK_ERROR"
 
 
 @router.post("/components/{component_id}/run", response_class=JSONResponse)
-async def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
+def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
     """Run a single case against the component.
+
+    Intentionally declared ``def`` rather than ``async def``. The
+    component ``task`` callables may do blocking work (temp-dir
+    allocation in ``assembly_task``, classifier inference in
+    ``recovery_task``, ffmpeg in the visual path). A synchronous
+    handler lets FastAPI run the whole call in its threadpool
+    instead of stalling the event loop on the blocking sections.
 
     Order of operations:
 
