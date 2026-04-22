@@ -178,7 +178,7 @@ def provision_vm(offer_id: str, disk_gb: int, branch: str) -> str:
         f"(git -C /workspace/economy-documentary pull --ff-only || "
         f"git clone --branch {branch} --depth 1 "
         f"https://github.com/OrpingtonClose/economy-documentary.git "
-        f"/workspace/economy-documentary) && "
+        f"/workspace/economy-documentary || true) && "
         f"bash {BOOTSTRAP_PATH}"
     )
 
