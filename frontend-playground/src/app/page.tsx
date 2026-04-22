@@ -74,7 +74,7 @@ export default function PlaygroundLanding() {
         <pre className="overflow-x-auto rounded border border-pg-border bg-pg-surface p-4 text-xs text-pg-muted">
 {`GET  /playground/components
 GET  /playground/components/{id}
-GET  /playground/components/{id}/health
+GET  /playground/components/{id}/models/health
 POST /playground/components/{id}/run
 POST /playground/components/{id}/evaluate`}
         </pre>
