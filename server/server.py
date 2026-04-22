@@ -74,6 +74,7 @@ from agui import (
 from dashboard.sse import router as dashboard_router
 from dashboard_directives import router as dashboard_directives_router
 from fleet.router import router as fleet_router
+from playground import router as playground_router
 from plugins import build_plugins, setup_otel
 from run_registry import get_run_registry
 
@@ -296,6 +297,10 @@ if os.environ.get("DOCUMENTARY_AUDIT_HOOKS") == "1":
     app.include_router(_audit_debug_router)
     logger.info("Audit debug router mounted at /debug (DOCUMENTARY_AUDIT_HOOKS=1)")
 
+# Component Playground — read-only catalog for the standalone
+# frontend-playground workbench (docs/strands-migration/plans/
+# component-playground.md). Additive; does not touch /agui.
+app.include_router(playground_router)
 
 # AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
 # into the CopilotKit SSE stream so the connection never goes idle.

@@ -102,3 +102,28 @@ Any failure, crash, hang, or degradation must be reported to the operator
 - Provision VMs **before** starting the pipeline (pre-flight enforces this).
 - **Terminate VMs** when the pipeline run is complete to stop billing.
 - Each project gets its own B2 bucket for artifact storage.
+
+## 10. Dev-Only UI Chrome (UX-09 / UX-10)
+
+The primary dashboard is demoed to non-technical observers. Any
+engineering widget floating over the surface breaks the illusion that
+the pipeline is a finished product. We currently suppress:
+
+- **Next.js dev error overlay** (`<nextjs-portal>`): hidden via CSS in
+  `frontend/src/app/globals.css`. The overlay still mounts and logs to
+  the browser console, so developers can still diagnose problems — but
+  the red modal is hidden from view. Full suppression requires running
+  the frontend with `NODE_ENV=production` (`npm run build && npm run
+  start`); `next dev` always injects the overlay runtime regardless of
+  config. `next.config.js` disables the build-activity and ISR status
+  indicators, which *can* be config-gated.
+- **"Powered by CopilotKit" footer** (`.copilotKitMessagesFooter`):
+  hidden via CSS. This is vendor branding that CopilotKit only hides
+  automatically when a `publicApiKey` is set; we do not ship one in
+  local/CI builds, so the CSS override is the supported workaround.
+- **Next.js web-inspector toolbar**: hidden via CSS (`nextjs-build-
+  indicator`, `[data-nextjs-build-indicator]`, `#__next-build-watcher`).
+
+If you are debugging a production regression and need the error overlay
+back, comment out the `nextjs-portal` block in `globals.css` locally —
+do not check that change in.

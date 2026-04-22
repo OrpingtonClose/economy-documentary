@@ -22,3 +22,216 @@ body {
   flex: 1 1 auto !important;
   min-height: 0 !important;
 }
+
+/* UX-10 (#252): hide the "Powered by CopilotKit" footer. It is a piece
+ * of vendor branding unrelated to the documentary workflow and only
+ * confuses first-time viewers of the primary dashboard. Scoped to the
+ * exact CopilotKit class so it does not hide any of our own footers. */
+.copilotKitMessagesFooter {
+  display: none !important;
+}
+
+/* UX-09 (#251): hide the Next.js dev error overlay and route inspector
+ * toolbar in local dev. The overlay mounts as a shadow-DOM portal
+ * rooted at ``<nextjs-portal>`` / ``nextjs-build-indicator``. Hiding
+ * it at the CSS level is a soft suppression — errors still print to
+ * the browser console, so developers who need them can still diagnose
+ * problems; the primary dashboard no longer shows an engineering
+ * widget to non-technical viewers. Full suppression requires running
+ * with ``NODE_ENV=production`` (see SKILL.md). */
+nextjs-portal,
+#nextjs-dev-overlay,
+[data-nextjs-dialog-overlay],
+[data-nextjs-toast],
+[data-nextjs-dialog] {
+  display: none !important;
+}
+
+/* UX-10 (#252): hide the Next.js dev "web inspector" toolbar (the
+ * floating route-info / devtools widget rendered at the bottom of the
+ * viewport in dev mode). */
+#__next-build-watcher,
+[data-nextjs-build-indicator],
+nextjs-build-indicator {
+  display: none !important;
+}
+
+@layer base {
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.205 0 0);
+    --primary-foreground: oklch(0.985 0 0);
+    --secondary: oklch(0.97 0 0);
+    --secondary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --radius: 0.5rem;
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.145 0 0);
+    --sidebar-primary: oklch(0.205 0 0);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.97 0 0);
+    --sidebar-accent-foreground: oklch(0.205 0 0);
+    --sidebar-border: oklch(0.922 0 0);
+    --sidebar-ring: oklch(0.708 0 0);
+  }
+  .dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* DESIGN-10 (#262): Live Architecture Map overlays.
+ *
+ * These classes are applied by `architecture-map.tsx` to the SVG
+ * Mermaid emits. The Mermaid source graph definitions in
+ * `docs/ARCHITECTURE_DIAGRAMS.md` are never mutated — all "lights"
+ * are CSS on top of the existing SVG nodes / edges. */
+
+@keyframes architecture-node-active-pulse {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 1.5px oklch(0.72 0.14 156 / 0.55));
+  }
+  50% {
+    filter: drop-shadow(0 0 9px oklch(0.78 0.18 156 / 0.85));
+  }
+}
+
+.architecture-map-surface .architecture-node--active rect,
+.architecture-map-surface .architecture-node--active polygon,
+.architecture-map-surface .architecture-node--active circle,
+.architecture-map-surface .architecture-node--active ellipse,
+.architecture-map-surface .architecture-node--active path {
+  stroke: oklch(0.55 0.17 156);
+  stroke-width: 2.5px;
+}
+
+.architecture-map-surface .architecture-node--active {
+  animation: architecture-node-active-pulse 2.4s ease-in-out infinite;
+}
+
+.architecture-map-surface .architecture-node--visited rect,
+.architecture-map-surface .architecture-node--visited polygon,
+.architecture-map-surface .architecture-node--visited circle,
+.architecture-map-surface .architecture-node--visited ellipse {
+  fill: oklch(0.93 0.025 65);
+  stroke: oklch(0.62 0.09 65);
+}
+
+.architecture-map-surface .architecture-node--unvisited rect,
+.architecture-map-surface .architecture-node--unvisited polygon,
+.architecture-map-surface .architecture-node--unvisited circle,
+.architecture-map-surface .architecture-node--unvisited ellipse {
+  opacity: 0.85;
+}
+
+.architecture-map-surface .architecture-gate--passed rect,
+.architecture-map-surface .architecture-gate--passed polygon,
+.architecture-map-surface .architecture-gate--passed path {
+  fill: oklch(0.88 0.13 155);
+  stroke: oklch(0.52 0.18 155);
+}
+.architecture-map-surface .architecture-gate--pending rect,
+.architecture-map-surface .architecture-gate--pending polygon,
+.architecture-map-surface .architecture-gate--pending path {
+  fill: oklch(0.9 0.14 75);
+  stroke: oklch(0.6 0.18 75);
+}
+.architecture-map-surface .architecture-gate--failed rect,
+.architecture-map-surface .architecture-gate--failed polygon,
+.architecture-map-surface .architecture-gate--failed path {
+  fill: oklch(0.86 0.14 27);
+  stroke: oklch(0.55 0.2 27);
+}
+
+@keyframes architecture-artefact-pulse {
+  0% {
+    filter: drop-shadow(0 0 0 oklch(0.6 0.17 156 / 0));
+  }
+  40% {
+    filter: drop-shadow(0 0 12px oklch(0.72 0.18 156 / 0.85));
+  }
+  100% {
+    filter: drop-shadow(0 0 0 oklch(0.6 0.17 156 / 0));
+  }
+}
+
+.architecture-map-surface .architecture-artefact--pulse {
+  animation: architecture-artefact-pulse 1.5s ease-out;
+}
+
+@keyframes architecture-edge-back-edge-pulse {
+  0% {
+    stroke: oklch(0.6 0.18 75 / 0);
+    stroke-width: 1.5px;
+  }
+  30% {
+    stroke: oklch(0.7 0.2 75);
+    stroke-width: 3.5px;
+  }
+  100% {
+    stroke: oklch(0.6 0.18 75 / 0);
+    stroke-width: 1.5px;
+  }
+}
+
+.architecture-map-surface .architecture-edge--back-edge {
+  animation: architecture-edge-back-edge-pulse 1.8s ease-out;
+}

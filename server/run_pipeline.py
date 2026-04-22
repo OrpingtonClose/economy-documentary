@@ -519,7 +519,20 @@ def main():
                         help="Quick test mode: 2 scenes, ~15s each, ~1 min total movie")
     parser.add_argument("--output-dir", default="/tmp/documentary-pipeline/output",
                         help="Output directory for the final documentary")
+    parser.add_argument("--pipeline", default="adk", choices=["adk", "strands"],
+                        help="Which pipeline implementation to run. 'adk' (default) "
+                             "runs the current Google-ADK pipeline under server/agents/. "
+                             "'strands' routes to the Strands + DeepAgent pipeline "
+                             "under server/strands_agents/ — not yet wired end-to-end "
+                             "(lands with component 14); raises NotImplementedError until then.")
     args = parser.parse_args()
+
+    if args.pipeline == "strands":
+        raise NotImplementedError(
+            "--pipeline=strands is reserved for the Strands + DeepAgent migration. "
+            "Component 14 (pipeline-graph) wires it up; until then, use --pipeline=adk "
+            "(the default) or drop the flag. See docs/strands-migration/SEQUENCE.md."
+        )
 
     # Ensure output dirs exist
     os.makedirs(args.output_dir, exist_ok=True)

@@ -64,6 +64,85 @@ const TRACK_DEFS: Array<{
   { name: "A2_Music", label: "A2 · Music", accent: "bg-purple-500/60" },
 ];
 
+// ---------------------------------------------------------------------------
+// DESIGN-04 (#256) — state-coded colour language
+// ---------------------------------------------------------------------------
+
+/** Six UI states keyed off each slot. ``gap`` is the seventh rendering
+ * branch (not a slot state; an OTIO gap segment).  Every slot visual is
+ * driven by one of these values — no ad-hoc colour decisions.
+ */
+export type SlotVisualState =
+  | "pending"
+  | "generating"
+  | "drafted"
+  | "approved"
+  | "flagged"
+  | "locked";
+
+/** Class map the timeline commits to.  All colours flow through either
+ * Tailwind tokens or shadcn CSS variables — no raw hex literals live
+ * inside slot rendering, which makes theme swaps a one-file change and
+ * keeps the ribbon in sync with the rest of the dashboard.
+ *
+ * Design invariants (issue #256):
+ *   - ``pending``    — outline only (not started yet).
+ *   - ``generating`` — soft green pulse (working now).
+ *   - ``drafted``    — muted fill (have a draft, not yet signed off).
+ *   - ``approved``   — solid fill (committed / authoritative).
+ *   - ``flagged``    — amber border (needs attention; never red).
+ *   - ``locked``     — gold border (final cut, do-not-touch).
+ */
+export const SLOT_STATE_CLASSES: Record<SlotVisualState, string> = {
+  pending:
+    "border border-dashed border-muted-foreground/50 bg-transparent text-muted-foreground",
+  generating:
+    "border border-emerald-400 bg-emerald-500/20 text-emerald-50 animate-pulse",
+  drafted:
+    "border border-muted-foreground/40 bg-muted/40 text-foreground",
+  approved:
+    "border border-emerald-500 bg-emerald-600/70 text-emerald-50",
+  flagged:
+    "border-2 border-amber-500 bg-amber-500/20 text-amber-50",
+  locked:
+    "border-2 border-yellow-500 bg-yellow-500/20 text-yellow-50",
+};
+
+/** Derive the UI state from the backend ``slot.status`` plus timeline
+ * context. The backend never emits the six design-language states
+ * directly — we project them here so the DESIGN-04 swap is a
+ * frontend-only change (no backend migration, per issue scope).
+ *
+ *   pending     → pending
+ *   in_progress → generating
+ *   delivered   → locked   (if the finished film has been stitched)
+ *                 approved (if the OTIO timeline is authoritative)
+ *                 drafted  (timeline still in draft)
+ *   failed      → flagged  (amber — nothing is red unless action needed)
+ *   gap         → not a slot state; rendered as a dashed pacing silence.
+ */
+export function deriveSlotState(
+  slot: OtioSlot,
+  timeline: OtioTimelineStatus,
+): SlotVisualState | "gap" {
+  switch (slot.status) {
+    case "pending":
+      return "pending";
+    case "in_progress":
+      return "generating";
+    case "delivered":
+      if (timeline.finished_film) return "locked";
+      if (timeline.state === "authoritative") return "approved";
+      return "drafted";
+    case "failed":
+      return "flagged";
+    case "gap":
+      return "gap";
+    default:
+      return "pending";
+  }
+}
+
 export function OtioTimeline() {
   const { timeline, connected, error, openGates, drift } = useOtioStream();
   const { state: previewState } = usePreviewStream();
@@ -139,44 +218,56 @@ export function OtioTimeline() {
     <div className="flex h-full flex-col gap-3">
       <header className="flex items-center justify-between px-1">
         <div>
+          {/* UX-05 (#247): plain-English header. The older
+            * "OTIO Timeline · Centrepiece" phrasing only makes sense to
+            * engineers who know what OTIO is. */}
           <h2 className="text-lg font-semibold text-pipeline-accent">
-            OTIO Timeline · Centrepiece
+            Your film so far
           </h2>
           <p className="text-xs text-pipeline-muted">
-            Three-track authoritative view. All media drawn to scale against
-            real seconds.
-            {timeline.source_file && (
-              <>
-                {" "}
-                <span className="font-mono text-pipeline-muted/70">
-                  {timeline.source_file}
-                </span>
-              </>
-            )}
+            Scenes, narration, and music drawn to scale against real seconds.
+            {/* UX-05 (#247): filesystem path removed from the header.
+              * It leaked a CI-only detail (``demo.otio``) and made the
+              * dashboard look like a debug console. The path is still
+              * available to power users via the slot detail drilldown. */}
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span
-            className={
-              "rounded-full px-2 py-0.5 font-medium " +
-              (timeline.state === "authoritative"
-                ? "bg-emerald-800/50 text-emerald-200"
-                : "bg-amber-900/60 text-amber-200")
-            }
-            title={
+          {/* UX-05 (#247): consolidate the three internal status badges
+            * (draft/authoritative, total duration, SSE live/connecting)
+            * into small info icons with title tooltips. Primary users
+            * no longer see jargon in the header; advanced users still
+            * get the details on hover. */}
+          <InfoDot
+            label={
               timeline.state === "authoritative"
-                ? "OTIO crystallised — pacing locked"
-                : "OTIO draft — reconciliation overlay visible"
+                ? "Locked"
+                : "Still drafting"
             }
-          >
-            {timeline.state === "authoritative" ? "authoritative" : "draft"}
-          </span>
-          <span className="text-pipeline-muted">
-            {totalDuration.toFixed(1)}s
-          </span>
-          <span className="text-pipeline-muted">
-            SSE: {connected ? "live" : "connecting"}
-          </span>
+            tooltip={
+              timeline.state === "authoritative"
+                ? "Timeline finalised — pacing locked."
+                : "Timeline still being assembled. A reconciliation overlay highlights segments that are still moving."
+            }
+            tone={timeline.state === "authoritative" ? "ok" : "warn"}
+            testId="otio-state-info"
+          />
+          <InfoDot
+            label="Length"
+            tooltip={`Total runtime: ${totalDuration.toFixed(1)} seconds.`}
+            tone="muted"
+            testId="otio-duration-info"
+          />
+          <InfoDot
+            label={connected ? "Live" : "Reconnecting"}
+            tooltip={
+              connected
+                ? "Live stream connected — updates arrive as the pipeline runs."
+                : "Reconnecting to the live event stream…"
+            }
+            tone={connected ? "ok" : "warn"}
+            testId="otio-sse-info"
+          />
           <ZoomControls zoom={zoom} onChange={setZoom} />
         </div>
       </header>
@@ -268,6 +359,7 @@ export function OtioTimeline() {
                   onSelect={handleSelect}
                   selectedSlotId={selectedSlotId}
                   drift={drift}
+                  timeline={timeline}
                 />
               );
             })}
@@ -494,6 +586,7 @@ function TrackRow({
   onSelect,
   selectedSlotId,
   drift,
+  timeline,
 }: {
   top: number;
   track: OtioTrack;
@@ -504,6 +597,7 @@ function TrackRow({
   onSelect: (slotId: string) => void;
   selectedSlotId: string | null;
   drift: DriftState;
+  timeline: OtioTimelineStatus;
 }) {
   return (
     <div
@@ -541,6 +635,7 @@ function TrackRow({
               <SlotBlock
                 key={slot.slot_id}
                 slot={slot}
+                state={deriveSlotState(slot, timeline)}
                 zoom={zoom}
                 selected={selectedSlotId === slot.slot_id}
                 onSelect={onSelect}
@@ -561,6 +656,7 @@ function TrackRow({
 
 function SlotBlock({
   slot,
+  state,
   zoom,
   selected,
   onSelect,
@@ -568,6 +664,7 @@ function SlotBlock({
   driftStage,
 }: {
   slot: OtioSlot;
+  state: SlotVisualState | "gap";
   zoom: number;
   selected: boolean;
   onSelect: (slotId: string) => void;
@@ -577,27 +674,16 @@ function SlotBlock({
   const left = slot.start_sec * zoom;
   const width = Math.max(slot.duration_sec * zoom, 2);
 
-  if (slot.status === "gap") {
+  if (state === "gap") {
     return (
       <div
         className="absolute top-0 h-full border-l border-dashed border-pipeline-blue/50"
         style={{ left, width }}
+        data-state="gap"
         title={`gap · ${slot.duration_sec.toFixed(2)}s`}
       />
     );
   }
-
-  const classNameByStatus: Record<OtioSlot["status"], string> = {
-    pending:
-      "bg-pipeline-blue/30 border border-dashed border-pipeline-blue/70 text-pipeline-muted",
-    in_progress:
-      "bg-amber-600/50 border border-amber-400 text-amber-50",
-    delivered:
-      "bg-emerald-700/60 border border-emerald-400 text-emerald-50",
-    failed:
-      "bg-red-800/70 border border-red-400 text-red-50",
-    gap: "",
-  };
 
   // UI-05b: amber outline + badge for slots whose derivation is
   // drifting against the preference ledger.  Never mutates the
@@ -613,9 +699,10 @@ function SlotBlock({
       onClick={() => onSelect(slot.slot_id)}
       title={tooltip}
       data-drifting={drifting ? "true" : undefined}
+      data-state={state}
       className={
         "group absolute top-1 flex h-[calc(100%-6px)] items-stretch overflow-hidden rounded text-[10px] transition " +
-        classNameByStatus[slot.status] +
+        SLOT_STATE_CLASSES[state] +
         (selected ? " ring-2 ring-pipeline-accent" : "") +
         (drifting
           ? " outline outline-2 outline-amber-400 outline-offset-[-2px] animate-pulse"
@@ -625,9 +712,9 @@ function SlotBlock({
     >
       <div className="flex h-full w-full flex-col items-start justify-between p-1 text-left">
         <div className="line-clamp-2 font-medium">
-          {slot.status === "failed" && slot.failure_reason
-            ? `✖ ${slot.failure_reason}`
-            : slot.status === "in_progress"
+          {state === "flagged" && slot.failure_reason
+            ? `⚠ ${slot.failure_reason}`
+            : state === "generating"
             ? `${slot.rung || "running"}…`
             : slot.label}
         </div>
@@ -641,7 +728,8 @@ function SlotBlock({
         </div>
       </div>
 
-      {/* Delivered video: thumbnail strip */}
+      {/* Delivered video: thumbnail strip. ``drafted`` / ``approved`` /
+        * ``locked`` all imply the clip was produced and B2-uploaded. */}
       {slot.status === "delivered" && slot.track === "V1_Video" && slot.thumbnail_url && (
         /* eslint-disable-next-line @next/next/no-img-element */
         <img
@@ -732,8 +820,17 @@ function ZoomControls({
   zoom: number;
   onChange: (next: number) => void;
 }) {
+  // UX-05 (#247): the internal ``px/s`` readout moves to a tooltip so
+  // the primary dashboard shows only a compact zoom label. The numeric
+  // value is still surfaced on hover (and in the data-zoom attribute)
+  // for power users and tests.
   return (
-    <div className="flex items-center gap-1">
+    <div
+      className="flex items-center gap-1"
+      title={`Zoom: ${zoom.toFixed(0)} px/s`}
+      data-zoom={zoom.toFixed(0)}
+      data-testid="otio-zoom-controls"
+    >
       <button
         type="button"
         className="rounded bg-pipeline-bg px-2 py-0.5 hover:bg-pipeline-blue/30"
@@ -742,8 +839,8 @@ function ZoomControls({
       >
         −
       </button>
-      <span className="w-16 text-center font-mono text-[11px] text-pipeline-muted">
-        {zoom.toFixed(0)} px/s
+      <span className="w-10 text-center text-[11px] text-pipeline-muted">
+        Zoom
       </span>
       <button
         type="button"
@@ -754,6 +851,41 @@ function ZoomControls({
         +
       </button>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// InfoDot — tiny pill used to tuck internal status (draft/authoritative,
+// duration, SSE live, zoom) behind a tooltip so the primary dashboard
+// surface stays plain-English. (UX-05, #247)
+// ---------------------------------------------------------------------------
+
+function InfoDot({
+  label,
+  tooltip,
+  tone = "muted",
+  testId,
+}: {
+  label: string;
+  tooltip: string;
+  tone?: "ok" | "warn" | "muted";
+  testId?: string;
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "bg-emerald-900/30 text-emerald-200 border-emerald-700/60"
+      : tone === "warn"
+      ? "bg-amber-900/30 text-amber-200 border-amber-700/60"
+      : "bg-pipeline-bg text-pipeline-muted border-pipeline-blue/60";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${toneClass}`}
+      title={tooltip}
+      data-testid={testId}
+    >
+      <span aria-hidden="true">ⓘ</span>
+      <span>{label}</span>
+    </span>
   );
 }
 

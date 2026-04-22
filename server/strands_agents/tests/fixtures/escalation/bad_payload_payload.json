@@ -1,0 +1,7 @@
+{
+  "error_class": "transient_retry",
+  "error_message": "missing target.scope",
+  "retries": 1,
+  "retries_max": 3,
+  "target": {"id": "s3"}
+}

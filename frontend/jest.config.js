@@ -27,5 +27,12 @@ module.exports = {
     "<rootDir>/src/**/__tests__/**/*.test.(ts|tsx)",
     "<rootDir>/src/**/*.test.(ts|tsx)",
   ],
+  // chat-tokens.test.ts is a ``node --test`` file (native Node test
+  // runner, ``node:test`` imports) — skip it under Jest so the suite
+  // does not trip on ``node:test`` resolution.
+  testPathIgnorePatterns: [
+    "/node_modules/",
+    "<rootDir>/src/lib/chat-tokens.test.ts",
+  ],
   transformIgnorePatterns: ["/node_modules/(?!(zustand)/)"],
 };

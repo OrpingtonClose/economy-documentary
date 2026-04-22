@@ -32,16 +32,21 @@ Human-in-the-loop gates (AG-UI approval workflow):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Optional
+from typing import Any, Optional
 
-from google.adk.agents import SequentialAgent
+from google.adk.agents import Agent, SequentialAgent
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.loop_agent import LoopAgent
 from google.genai import types as genai_types
 
 from agents.assembler_agent import assembler_agent
 from agents.audio_agent import audio_agent
+from agents.intent_extractor import (
+    IntentExtractionError,
+    run_intent_extractor,
+)
 from agents.production_supervisor import production_supervisor
 from agents.scenario_director import scenario_director
 from agents.scenario_refiner import scenario_refiner
@@ -53,6 +58,15 @@ from callbacks.approval_gate import (
     wait_for_approval,
 )
 from callbacks.consistency_gate import wire_consistency_checks_into_agents
+from callbacks.intent_gate import (
+    GATE_ATTEMPT_KEY,
+    GATE_CRITIQUE_KEY,
+    MAX_GATE_ATTEMPTS,
+    IntentGateHalt,
+    reset_intent_gate,
+    run_preflight_gate,
+)
+from callbacks.intent_verifier import verify_and_log
 from callbacks.state_manager import build_pipeline_state, safe_state_dict
 from contracts import (
     ASSEMBLY_CONTRACT,
@@ -131,14 +145,24 @@ def _validate_postconditions_and_log(
 # returns Content (skipping the LLM) when timing passes, and sets
 # actions.escalate=True so the LoopAgent exits immediately.
 # ---------------------------------------------------------------------------
+# TTS-fit loop cap.  User spec ("regenerate audio until it fits, escalation
+# after 10 tries") — we run up to TIMING_LOOP_MAX_ITERATIONS rounds of
+# audio_agent → timing_evaluator → scenario_refiner.  On the 11th miss the
+# ``_timing_loop_after_with_gate`` callback emits a human-escalation halt
+# so the user can approve as-is or redraft; nothing downstream runs until
+# the user responds.
+TIMING_LOOP_MAX_ITERATIONS: int = 10
+
+
 timing_loop = LoopAgent(
     name="timing_loop",
     description=(
         "Audio generation with timing feedback: generates TTS narration, "
-        "evaluates duration compliance, and refines scene text if the "
-        "total duration deviates from the target budget by more than 15%."
+        "measures total film runtime, and regenerates narration until "
+        "the delivered film duration lands within ±2s of the user's "
+        "stated target.  Caps at 10 attempts, then escalates to a human."
     ),
-    max_iterations=3,
+    max_iterations=TIMING_LOOP_MAX_ITERATIONS,
     sub_agents=[
         audio_agent,
         timing_evaluator,
@@ -163,18 +187,114 @@ _orig_production_after = production_supervisor.after_agent_callback
 _orig_assembly_before = assembler_agent.before_agent_callback
 
 
-def _scenario_after_with_gate(callback_context):
-    """After scenario_director: validate postconditions, then mark ready."""
+def _scenario_after_postconditions(callback_context):
+    """After each scenario_director iteration: validate postconditions.
+
+    The approval gate + R0 constraint gate fire later on the outer
+    ``scenario_with_gate`` LoopAgent so the human only approves (and we
+    only evaluate R0) on the *final* scenario draft, not on intermediate
+    refiner-loop iterations.
+    """
     result = None
     if _orig_scenario_after:
         result = _orig_scenario_after(callback_context)
     _validate_postconditions_and_log(SCENARIO_CONTRACT, callback_context)
+    return result
+
+
+def _preflight_gate_before(callback_context):
+    """Evaluate the R0 constraint gate (INTENT-02) and drive the outer loop.
+
+    Runs as a pure-callback sub-agent — no LLM call.  Behaviour:
+
+    * Gate passes → set ``actions.escalate=True`` so the outer
+      ``scenario_with_gate`` LoopAgent exits immediately and downstream
+      stages (audio, visual, production) proceed.  INTENT-05 worker
+      provisioning is unblocked by the same call
+      (see :func:`callbacks.intent_gate.run_preflight_gate`).
+    * Gate fails with retries left → leave ``escalate`` unset so the
+      LoopAgent re-enters ``scenario_director`` on the next iteration;
+      the critique written under ``GATE_CRITIQUE_KEY`` is visible to
+      the director's instruction.
+    * Gate halts (retries exhausted) → emit a plain-English
+      ``halt_fired`` narrator event, set ``escalate=True``, and return
+      an error Content so the SequentialAgent short-circuits.
+    """
+    state = callback_context.state
+    try:
+        verdict = run_preflight_gate(state, max_attempts=MAX_GATE_ATTEMPTS)
+    except IntentGateHalt as halt:
+        callback_context.actions.escalate = True
+        logger.error("INTENT-02: gate halted after max attempts — %s", halt)
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text=f"HALT: {halt}")],
+        )
+
+    if verdict.passed:
+        callback_context.actions.escalate = True
+        logger.info(
+            "INTENT-02: gate PASSED on attempt %d — unblocking downstream "
+            "stages and lazy GPU provisioning",
+            verdict.attempt,
+        )
+        try:
+            from agents.chat_narrator import emit_narrator_event
+
+            emit_narrator_event(
+                "stage_completed",
+                fields={
+                    "stage": "scenario",
+                    "checkpoint": "intent_gate",
+                    "message": (
+                        "Understood your brief, drafted the scenario, "
+                        "passed the constraint check — booking GPUs now."
+                    ),
+                },
+            )
+        except Exception as exc:  # pragma: no cover -- best-effort narration
+            logger.debug("INTENT-02: narrator emit on pass failed: %s", exc)
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(text="INTENT GATE PASSED")],
+        )
+
+    logger.warning(
+        "INTENT-02: gate FAILED on attempt %d — retrying scenario_director",
+        verdict.attempt,
+    )
+    return genai_types.Content(
+        role="model",
+        parts=[genai_types.Part(
+            text="INTENT GATE FAILED — retrying with critique"
+        )],
+    )
+
+
+def _scenario_stage_after(callback_context):
+    """After the full scenario_with_gate loop: R0 verify + approval gate."""
+    # INTENT-04: re-verify R0 constraints on the final scenario artefact.
+    record = verify_and_log("scenario", callback_context.state)
+    if not record.passed:
+        logger.error(
+            "INTENT-04 scenario verification FAILED after gate: %s",
+            "; ".join(record.failures),
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=(
+                    "HALT: scenario artefact drifted from R0 after the "
+                    "constraint gate — " + "; ".join(record.failures)
+                )
+            )],
+        )
     mark_stage_ready("scenario")
     logger.info("APPROVAL GATE: scenario stage ready — waiting for human approval")
     approved = wait_for_approval("scenario", state=callback_context.state)
     if not approved:
         logger.error("APPROVAL GATE: timed out waiting for scenario approval")
-    return result
+    return None
 
 
 def _timing_loop_before_with_gate(callback_context):
@@ -230,11 +350,107 @@ def _timing_loop_before_with_gate(callback_context):
 
 
 def _timing_loop_after_with_gate(callback_context):
-    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready."""
+    """After timing_loop: validate AUDIO_CONTRACT postconditions + mark audio ready.
+
+    Also enforces the user's TTS-fit policy: if the timing loop ran all
+    ``TIMING_LOOP_MAX_ITERATIONS`` attempts without landing inside the
+    ±2s target window, we HALT with a plain-English question asking
+    the user to approve the closest take or redraft.  No downstream
+    stage (visual, production, assembly) runs until the user responds.
+    """
     result = None
     if _orig_timing_loop_after:
         result = _orig_timing_loop_after(callback_context)
     _validate_postconditions_and_log(AUDIO_CONTRACT, callback_context)
+
+    # ── TTS-fit exhaustion check ─────────────────────────────────
+    # timing_evaluator writes ``timing_passed`` after every iteration;
+    # when the loop exits we read the final value.  A False here means
+    # the LoopAgent exhausted its iteration budget without fitting.
+    state = callback_context.state
+    timing_passed = state.get("timing_passed", False)
+    if isinstance(timing_passed, str):
+        timing_passed = timing_passed.lower() in ("true", "1", "yes")
+    if not timing_passed:
+        # Surface the latest measurement for the user so the halt
+        # message is actionable (numbers, not jargon).
+        try:
+            analysis_raw = state.get("timing_analysis") or "{}"
+            analysis = json.loads(str(analysis_raw)) if analysis_raw else {}
+        except (ValueError, TypeError):
+            analysis = {}
+        target_sec = analysis.get("target_duration")
+        actual_movie = analysis.get("movie_duration") or analysis.get("actual_duration")
+        deviation = analysis.get("deviation_sec")
+        tol = analysis.get("tolerance_sec")
+        logger.error(
+            "TTS-fit loop exhausted %d attempts — target=%.1fs, "
+            "delivered=%.1fs, drift=%.1fs (tol ±%.1fs)",
+            TIMING_LOOP_MAX_ITERATIONS,
+            float(target_sec or 0.0),
+            float(actual_movie or 0.0),
+            float(deviation or 0.0),
+            float(tol or 0.0),
+        )
+        # Mark the stage as needing human intervention so the UI can
+        # render the escalation card.  The flag is read by the
+        # /agui endpoints and by the chat narrator.
+        state["tts_fit_escalation"] = json.dumps(
+            {
+                "attempts": TIMING_LOOP_MAX_ITERATIONS,
+                "target_duration_sec": target_sec,
+                "delivered_duration_sec": actual_movie,
+                "deviation_sec": deviation,
+                "tolerance_sec": tol,
+            }
+        )
+        # Friendly halt copy — the user asked for plain English.
+        if (
+            target_sec is not None
+            and actual_movie is not None
+            and deviation is not None
+        ):
+            human_msg = (
+                f"The narration keeps landing about "
+                f"{abs(float(deviation)):.0f} seconds "
+                f"{'over' if float(deviation) > 0 else 'under'} your "
+                f"{float(target_sec):.0f}-second target after "
+                f"{TIMING_LOOP_MAX_ITERATIONS} regeneration attempts. "
+                "Please choose: (1) keep this take as-is, "
+                "(2) redraft the scenario from scratch, or "
+                "(3) give a hint and let me keep trying."
+            )
+        else:
+            human_msg = (
+                f"I regenerated the narration {TIMING_LOOP_MAX_ITERATIONS} "
+                "times and it still isn't landing on your target duration. "
+                "Please choose: (1) keep this take as-is, "
+                "(2) redraft the scenario from scratch, or "
+                "(3) give a hint and let me keep trying."
+            )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text="HALT_TTS_FIT_ESCALATION: " + human_msg
+            )],
+        )
+
+    # INTENT-04: narration-duration drift check against R0.
+    audio_record = verify_and_log("audio", callback_context.state)
+    if not audio_record.passed:
+        logger.error(
+            "INTENT-04 audio verification FAILED: %s",
+            "; ".join(audio_record.failures),
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=(
+                    "HALT: narration duration drifted from R0 — "
+                    + "; ".join(audio_record.failures)
+                )
+            )],
+        )
     mark_stage_ready("audio")
     logger.info("APPROVAL GATE: audio stage ready — waiting for human approval")
     approved = wait_for_approval("audio", state=callback_context.state)
@@ -249,6 +465,22 @@ def _visual_after_with_gate(callback_context):
     if _orig_visual_after:
         result = _orig_visual_after(callback_context)
     _validate_postconditions_and_log(VISUAL_DIRECTION_CONTRACT, callback_context)
+    # INTENT-04: visual-direction coverage / aspect-ratio drift check.
+    visual_record = verify_and_log("visual", callback_context.state)
+    if not visual_record.passed:
+        logger.error(
+            "INTENT-04 visual verification FAILED: %s",
+            "; ".join(visual_record.failures),
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=(
+                    "HALT: visual direction drifted from R0 — "
+                    + "; ".join(visual_record.failures)
+                )
+            )],
+        )
     mark_stage_ready("prompts")
     logger.info("APPROVAL GATE: prompts stage ready — waiting for human approval")
     approved = wait_for_approval("prompts", state=callback_context.state)
@@ -312,6 +544,22 @@ def _production_after_with_gate(callback_context):
     if _orig_production_after:
         result = _orig_production_after(callback_context)
     _validate_postconditions_and_log(PRODUCTION_CONTRACT, callback_context)
+    # INTENT-04: per-clip timing / aspect-ratio drift check.
+    prod_record = verify_and_log("production", callback_context.state)
+    if not prod_record.passed:
+        logger.error(
+            "INTENT-04 production verification FAILED: %s",
+            "; ".join(prod_record.failures),
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=(
+                    "HALT: clip production drifted from R0 — "
+                    + "; ".join(prod_record.failures)
+                )
+            )],
+        )
     mark_stage_ready("clips")
     logger.info("APPROVAL GATE: clips stage ready — waiting for human approval")
     approved = wait_for_approval("clips", state=callback_context.state)
@@ -343,13 +591,54 @@ def _assembly_before_with_gate(callback_context):
 
 
 # Wire approval gates into sub-agents
-scenario_director.after_agent_callback = _scenario_after_with_gate
+scenario_director.after_agent_callback = _scenario_after_postconditions
 timing_loop.before_agent_callback = _timing_loop_before_with_gate
 timing_loop.after_agent_callback = _timing_loop_after_with_gate
 visual_director.after_agent_callback = _visual_after_with_gate
 production_supervisor.before_agent_callback = _production_before_with_gate
 production_supervisor.after_agent_callback = _production_after_with_gate
 assembler_agent.before_agent_callback = _assembly_before_with_gate
+
+
+# ---------------------------------------------------------------------------
+# INTENT-02 (#266): pre-flight constraint-gate sub-agent + outer LoopAgent
+# wrapping the scenario director.  On each iteration the scenario director
+# drafts (or redrafts) scenes, then the constraint_gate_agent evaluates R0.
+# When the gate passes it sets ``actions.escalate=True`` so the loop exits
+# and downstream stages proceed.  When it fails (with retries remaining)
+# the loop re-enters scenario_director with the critique staged under
+# ``GATE_CRITIQUE_KEY`` so the director's next attempt knows exactly what
+# to fix.  On retry exhaustion the gate halts the pipeline.
+# ---------------------------------------------------------------------------
+from agents.model_config import build_model as _build_model  # noqa: E402
+
+
+constraint_gate_agent = Agent(
+    name="constraint_gate_agent",
+    model=_build_model(),
+    instruction=(
+        "You are a placeholder for the R0 constraint gate.  The "
+        "before_agent_callback on this agent is the real gate — it "
+        "runs deterministically and either exits the outer loop on "
+        "pass or feeds a targeted critique back to scenario_director "
+        "on fail.  You should never be invoked."
+    ),
+    tools=[],
+    before_agent_callback=_preflight_gate_before,
+)
+
+
+scenario_with_gate = LoopAgent(
+    name="scenario_with_gate",
+    description=(
+        "Scenario director wrapped by the INTENT-02 R0 constraint gate. "
+        "Redrafts up to MAX_GATE_ATTEMPTS times when the gate detects "
+        "duration, required-topic, or forbidden-topic drift."
+    ),
+    max_iterations=MAX_GATE_ATTEMPTS,
+    sub_agents=[scenario_director, constraint_gate_agent],
+    after_agent_callback=_scenario_stage_after,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +838,30 @@ def _init_pipeline_state(
             )],
         )
 
+    # INTENT-01 (#265): parse the free-text brief into a typed BriefIntent
+    # and stage it on the blackboard under BRIEF_INTENT_KEY.  This runs
+    # BEFORE any producer agent so the pre-flight gate (INTENT-02) and
+    # per-stage verifiers (INTENT-04) always have R0 constraints to check.
+    reset_intent_gate()
+    state[GATE_ATTEMPT_KEY] = 0
+    # ADK's State object does not implement ``.pop`` / ``__delitem__``;
+    # overwrite to ``None`` to clear any stale critique from a prior run.
+    state[GATE_CRITIQUE_KEY] = None
+    try:
+        run_intent_extractor(state, use_llm=_r0_use_llm)
+    except IntentExtractionError as intent_err:
+        logger.error(
+            "INTENT-01 extraction failed: %s -- refusing to start pipeline "
+            "without a typed BriefIntent (R0)",
+            intent_err,
+        )
+        return genai_types.Content(
+            role="model",
+            parts=[genai_types.Part(
+                text=f"ERROR: intent extraction failed: {intent_err}"
+            )],
+        )
+
     # ── ADK Environment Simulation wiring ──────────────────────────────
     # When a simulation scenario is active, compose the ADK-native
     # before_tool_callback with each agent's existing callback so that
@@ -623,6 +936,42 @@ def _init_pipeline_state(
         provisioner = get_provisioner()
 
         def _start_provisioning_bg():
+            # INTENT-05 (#269): lazy GPU — do not start booting VMs until
+            # the pre-flight R0 constraint gate (INTENT-02) has passed.
+            # Cancelling a run before the gate passes costs zero
+            # GPU-seconds.  The gate signal is a process-wide
+            # threading.Event set by run_preflight_gate on pass; we wait
+            # here with a generous timeout that still bounds the life of
+            # this background thread.
+            try:
+                from callbacks.intent_gate import wait_for_intent_gate
+
+                lazy_gpu_timeout = float(
+                    os.environ.get("INTENT_GATE_WAIT_SEC", "3600")
+                )
+                fired = wait_for_intent_gate(timeout_sec=lazy_gpu_timeout)
+                if not fired:
+                    logger.error(
+                        "INTENT-05: intent gate never signalled within "
+                        "%.0fs — aborting lazy GPU provisioning",
+                        lazy_gpu_timeout,
+                    )
+                    provisioner._provision_start_error = (
+                        "intent gate did not pass — workers not provisioned"
+                    )
+                    provisioner._specs_ready.set()
+                    return
+                logger.info(
+                    "INTENT-05: intent gate passed — booking GPUs now"
+                )
+            except Exception as exc:
+                logger.error(
+                    "INTENT-05: wait_for_intent_gate failed: %s", exc
+                )
+                provisioner._provision_start_error = str(exc)
+                provisioner._specs_ready.set()
+                return
+
             try:
                 provisioner.start_provisioning(
                     require_tts=True,
@@ -742,15 +1091,16 @@ def _cleanup_pipeline_state(
 pipeline_agent = SequentialAgent(
     name="documentary_pipeline",
     description=(
-        "ADHD-friendly documentary pipeline: scenario generation with "
-        "evaluate-optimize loop, TTS narration with timing feedback loop "
-        "(audio → evaluate → refine → re-audio), iterative visual planning "
-        "with LoRA selection, GPU video production, and final assembly. "
-        "All phases validated by Timeline Guardian. "
-        "Each stage pauses for human approval before the next one begins."
+        "ADHD-friendly documentary pipeline: intent extraction (R0), "
+        "scenario generation wrapped by the R0 constraint gate, TTS "
+        "narration with timing feedback loop (audio → evaluate → refine "
+        "→ re-audio), iterative visual planning with LoRA selection, "
+        "GPU video production, and final assembly. Per-stage R0 "
+        "verification fails closed on drift. Each stage pauses for "
+        "human approval before the next one begins."
     ),
     sub_agents=[
-        scenario_director,
+        scenario_with_gate,
         timing_loop,
         visual_director,
         production_supervisor,
