@@ -152,6 +152,10 @@ jobs:
       - name: Run experiment
         env: ${{ matrix.experiment.env }}
         run: |
+          # GitHub Actions' default bash already sets `pipefail`, but pin it
+          # explicitly so the pipe below propagates python's exit code rather
+          # than tee's (which is effectively always 0).
+          set -o pipefail
           mkdir -p /tmp/strands-evals-out
           LOG="/tmp/strands-evals-out/${{ matrix.experiment.name }}.log"
           rc=0
