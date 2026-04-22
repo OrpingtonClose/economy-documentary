@@ -94,7 +94,13 @@ export async function getComponent(
 export async function getComponentHealth(
   componentId: string
 ): Promise<HealthResponse> {
-  return getJson<HealthResponse>(`/components/${componentId}/health`);
+  // Matches the FastAPI route registered in server/playground.py:
+  // @router.get("/components/{component_id}/models/health"). The
+  // shorter "/components/{id}/health" path is not registered and
+  // would 404.
+  return getJson<HealthResponse>(
+    `/components/${componentId}/models/health`,
+  );
 }
 
 export async function runCase(

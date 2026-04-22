@@ -71,7 +71,9 @@ describe("getComponent", () => {
 });
 
 describe("getComponentHealth", () => {
-  it("GETs /playground/components/{id}/health", async () => {
+  it("GETs /playground/components/{id}/models/health", async () => {
+    // Pinned to the FastAPI route in server/playground.py; the
+    // short "/{id}/health" form is not registered and would 404.
     const mock = installFetch(
       jsonResponse({
         component_id: "c01",
@@ -85,7 +87,7 @@ describe("getComponentHealth", () => {
     await getComponentHealth("c01");
 
     const [url] = mock.mock.calls[0];
-    expect(url).toBe(`${PLAYGROUND_BASE}/components/c01/health`);
+    expect(url).toBe(`${PLAYGROUND_BASE}/components/c01/models/health`);
   });
 });
 
