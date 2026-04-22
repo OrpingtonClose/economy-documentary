@@ -57,8 +57,9 @@ jobs:
         run: poetry install --no-root --with dev --with strands
 
       - name: Run strands_agents unit tests
-        # No LLM keys: Phase-0 tests only check imports and spec files.
-        # Per-component experiments land as subsequent matrix jobs.
+        # Unit suite only — the strands-evals Experiments are now
+        # invoked as native ``python -m`` entrypoints in the
+        # ``experiments`` matrix job below.
         run: poetry run pytest strands_agents/tests/unit/ -v --tb=short
 
       - name: Upload test artefacts on failure
@@ -69,3 +70,99 @@ jobs:
           if-no-files-found: ignore
           path: |
             server/strands_agents/evals/experiments/*.json
+
+  experiments:
+    # One job per strands-evals Experiment variant, invoked via the
+    # idiomatic ``python -m strands_agents.evals.experiments.<name>``
+    # entrypoint. Exit code is the gate:
+    #   0 — all cases green (honouring ``expect_pass=False`` metadata)
+    #   1 — at least one case failed (fails the matrix cell)
+    #   2 — skipped (missing env / no cases / factory ValueError)
+    #
+    # Each cell prints a JSON trailer ``summary: {...}`` parseable
+    # by jq, and the full stdout is uploaded as a workflow artifact.
+    #
+    # Experiments that require LLM credentials (live-judge media
+    # corpus, scenario/audio/visual LLM-as-judge stacks, etc.) are
+    # not in this matrix — they run in dedicated nightly workflows
+    # where keys are available.
+    name: Strands experiment · ${{ matrix.experiment.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: unit
+    strategy:
+      fail-fast: false
+      matrix:
+        experiment:
+          - name: smoke
+            module: strands_agents.evals.experiments.smoke
+            env: {}
+          - name: approval
+            module: strands_agents.evals.experiments.approval
+            env: {}
+          - name: escalation.primary
+            module: strands_agents.evals.experiments.escalation
+            env:
+              ESCALATION_EXPERIMENT: primary
+          - name: escalation.contract
+            module: strands_agents.evals.experiments.escalation
+            env:
+              ESCALATION_EXPERIMENT: contract
+          - name: recovery.primary
+            module: strands_agents.evals.experiments.recovery
+            env:
+              RECOVERY_EXPERIMENT: primary
+          - name: recovery.classifier_contract
+            module: strands_agents.evals.experiments.recovery
+            env:
+              RECOVERY_EXPERIMENT: classifier_contract
+          - name: recovery.remanifester_contract
+            module: strands_agents.evals.experiments.recovery
+            env:
+              RECOVERY_EXPERIMENT: remanifester_contract
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install "poetry>=2.1,<3"
+
+      - name: Cache Poetry virtualenv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pypoetry
+            ~/.cache/pip
+          key: poetry-strands-${{ runner.os }}-py3.12-${{ hashFiles('server/poetry.lock') }}
+          restore-keys: |
+            poetry-strands-${{ runner.os }}-py3.12-
+
+      - name: Install server dependencies with strands extra
+        run: poetry install --no-root --with dev --with strands
+
+      - name: Run experiment
+        env: ${{ matrix.experiment.env }}
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/strands-evals-out
+          LOG="/tmp/strands-evals-out/${{ matrix.experiment.name }}.log"
+          poetry run python -m ${{ matrix.experiment.module }} 2>&1 | tee "$LOG"
+          echo "exit_code=$?" >> "$LOG"
+
+      - name: Upload experiment output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strands-experiment-${{ matrix.experiment.name }}-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            /tmp/strands-evals-out/${{ matrix.experiment.name }}.log
