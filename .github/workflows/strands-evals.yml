@@ -124,6 +124,9 @@ jobs:
             module: strands_agents.evals.experiments.failure_mode_video
             env: {}
             needs_ffmpeg: true
+          - name: audio_failure_mode
+            module: strands_agents.evals.experiments.audio_failure_mode
+            env: {}
     defaults:
       run:
         working-directory: server
