@@ -9,6 +9,8 @@ committed fixtures in the experiment module.
 
 from __future__ import annotations
 
+import shutil
+
 import numpy as np
 import pytest
 
@@ -171,6 +173,15 @@ class TestAVSignalsDataclass:
             signals.desync_sec = 0.1  # type: ignore[misc]
 
 
+def _require_ffmpeg() -> None:
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not on PATH; skipping AV detector end-to-end tests")
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="ffmpeg not on PATH; end-to-end AV detector tests require ffmpeg",
+)
 class TestFfmpegEndToEnd:
     """End-to-end detector tests against the real committed fixtures.
 

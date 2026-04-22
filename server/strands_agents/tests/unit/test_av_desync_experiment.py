@@ -7,6 +7,7 @@ the runner-level shape of the task output.
 
 from __future__ import annotations
 
+import shutil
 from typing import Any
 
 import pytest
@@ -18,6 +19,11 @@ from strands_agents.evals.experiments.av_desync import (
     av_desync_task,
     build_av_desync_experiment,
     build_cases,
+)
+
+_FFMPEG_REQUIRED = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="ffmpeg not on PATH; end-to-end AV task tests require ffmpeg",
 )
 
 
@@ -72,6 +78,7 @@ class TestBuildExperiment:
             assert (case.metadata or {}).get("expected_desync_mode") is not None
 
 
+@_FFMPEG_REQUIRED
 class TestTask:
     def test_task_returns_signals_envelope(self) -> None:
         cases = build_cases()
@@ -160,6 +167,7 @@ class TestTask:
         assert signals["desync_sec"] is None
 
 
+@_FFMPEG_REQUIRED
 class TestExperimentEndToEnd:
     def test_full_run_exits_green(self) -> None:
         experiment = build_av_desync_experiment()
