@@ -19,6 +19,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from strands_evals.case import Case
 
 from strands_agents.playground import (
     Component,
@@ -180,6 +182,166 @@ async def component_models_health(component_id: str) -> dict[str, Any]:
         "total": len(statuses),
         "all_reachable": all(s.reachable for s in statuses),
         "unreachable_sentinel": MODEL_UNREACHABLE,
+    }
+
+
+def _infer_schema(cases: list[Case[Any, Any]]) -> dict[str, Any]:
+    """Return a per-key type-name schema inferred from cases.
+
+    The playground frontend uses this to render an input editor. We
+    don't claim JSON-Schema fidelity — the goal is enough structure
+    to drive the form, cheap to compute, and easy to inspect.
+    """
+    keys: dict[str, set[str]] = {}
+    for case in cases:
+        payload = case.input if isinstance(case.input, dict) else {}
+        for key, value in payload.items():
+            keys.setdefault(key, set()).add(type(value).__name__)
+    return {
+        "fields": [
+            {"name": name, "types": sorted(type_names)}
+            for name, type_names in sorted(keys.items())
+        ],
+        "sample_input": (
+            cases[0].input if cases and isinstance(cases[0].input, dict) else {}
+        ),
+    }
+
+
+@router.get("/components/{component_id}/schema", response_class=JSONResponse)
+async def component_schema(component_id: str) -> dict[str, Any]:
+    """Return an inferred input schema for the component."""
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+    return {
+        "component_id": component.id,
+        "schema": _infer_schema(component.cases()),
+    }
+
+
+class RunRequest(BaseModel):
+    """Body for ``POST /playground/components/{id}/run``.
+
+    Either ``case_name`` or ``custom_input`` must be provided.
+    ``custom_input`` takes precedence when both are supplied.
+    """
+
+    case_name: str | None = Field(
+        default=None,
+        description="Name of a registered case; looked up on the component.",
+    )
+    custom_input: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Arbitrary input dict. When set, bypasses the registered "
+            "case and runs the component against this payload "
+            "directly."
+        ),
+    )
+
+
+RUN_STATUS_OK: str = "OK"
+RUN_STATUS_MODEL_UNREACHABLE: str = MODEL_UNREACHABLE
+RUN_STATUS_NO_TASK_ADAPTER: str = "NO_TASK_ADAPTER"
+RUN_STATUS_TASK_ERROR: str = "TASK_ERROR"
+
+
+@router.post("/components/{component_id}/run", response_class=JSONResponse)
+async def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
+    """Run a single case against the component.
+
+    Order of operations:
+
+    1. Resolve the component or 404.
+    2. Probe every declared model. Any unreachable → return
+       ``MODEL_UNREACHABLE`` with the unreachable set surfaced. The
+       plan pins this as a hard-gate failure, not a degradation.
+    3. Resolve the case (registered or custom). Unknown registered
+       name → 400.
+    4. Load the task adapter. Missing → ``NO_TASK_ADAPTER``.
+    5. Dispatch. Exceptions return ``TASK_ERROR`` with the exception
+       string — this is a debugging surface, not user-facing.
+
+    The envelope shape matches ``strands-evals`` task envelopes so
+    the PR 4 evaluator endpoint can forward the same body through
+    the component's declared evaluator stack.
+    """
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+
+    reachability = probe_models(component.declared_models)
+    unreachable = [s for s in reachability if not s.reachable]
+    if unreachable:
+        return {
+            "status": RUN_STATUS_MODEL_UNREACHABLE,
+            "component_id": component.id,
+            "unreachable_models": [_serialise_reachability(s) for s in unreachable],
+            "output": None,
+            "trajectory": None,
+        }
+
+    case: Case[Any, Any] | None = None
+    if request.custom_input is not None:
+        case_name = request.case_name or "custom_input"
+        case = Case[Any, Any](
+            name=case_name,
+            session_id=f"playground-run-{component.id}-{case_name}",
+            input=request.custom_input,
+        )
+    elif request.case_name is not None:
+        cases_by_name = {c.name: c for c in component.cases()}
+        case = cases_by_name.get(request.case_name)
+        if case is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown case: {request.case_name} (component {component.id} "
+                    f"has {len(cases_by_name)} cases)"
+                ),
+            )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="either case_name or custom_input is required",
+        )
+
+    task = component.task()
+    if task is None:
+        return {
+            "status": RUN_STATUS_NO_TASK_ADAPTER,
+            "component_id": component.id,
+            "case_name": case.name,
+            "output": None,
+            "trajectory": None,
+        }
+
+    try:
+        result = task(case)
+    except Exception as exc:  # noqa: BLE001 — we surface the error to the UI
+        logger.exception("component run failed: %s/%s", component.id, case.name)
+        return {
+            "status": RUN_STATUS_TASK_ERROR,
+            "component_id": component.id,
+            "case_name": case.name,
+            "error": str(exc),
+            "output": None,
+            "trajectory": None,
+        }
+
+    if isinstance(result, dict):
+        output = result.get("output", result)
+        trajectory = result.get("trajectory")
+    else:
+        output = result
+        trajectory = None
+    return {
+        "status": RUN_STATUS_OK,
+        "component_id": component.id,
+        "case_name": case.name,
+        "output": output,
+        "trajectory": trajectory,
     }
 
 

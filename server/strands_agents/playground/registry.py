@@ -106,6 +106,13 @@ class Component:
     cases_factory: str
     thresholds_attr: str
     declared_models: tuple[DeclaredModel, ...]
+    #: Name of the ``*_task`` callable exported by the experiment
+    #: module, if any. The playground's run endpoint dispatches to it
+    #: after the model-reachability probe passes. Components whose
+    #: upstream experiment does not yet export a task callable
+    #: surface as ``NO_TASK_ADAPTER`` at run time — a deliberate
+    #: visible gap rather than a silent fallback.
+    task_attr: str | None = None
 
     # Internal caches populated on first access. The dataclass is
     # frozen, so we stash these in a mutable default via ``field``.
@@ -165,6 +172,38 @@ class Component:
             decls = []
         self._cache["evaluators"] = decls
         return decls
+
+    def task(self) -> Callable[[Case[Any, Any]], Any] | None:
+        """Return the component's task callable, lazy-loaded.
+
+        ``None`` when the component has no ``task_attr`` declared or
+        the upstream experiment module fails to expose it. Callers
+        surface a ``NO_TASK_ADAPTER`` status to the frontend rather
+        than crashing.
+        """
+        if self.task_attr is None:
+            return None
+        cached = self._cache.get("task")
+        if cached is not None:
+            return cached if cached is not _MISSING_TASK else None
+
+        try:
+            module = importlib.import_module(self.experiment_module)
+            callable_obj = getattr(module, self.task_attr, None)
+            if callable_obj is None or not callable(callable_obj):
+                self._cache["task"] = _MISSING_TASK
+                return None
+        except Exception:  # noqa: BLE001 — partial rollout safety net
+            self._cache["task"] = _MISSING_TASK
+            return None
+        self._cache["task"] = callable_obj
+        return callable_obj
+
+
+#: Internal sentinel so the ``task()`` cache can distinguish "never
+#: checked" from "checked, not available". ``None`` would collide with
+#: the public "no task adapter" semantic.
+_MISSING_TASK = object()
 
 
 _GEMINI_3_1: DeclaredModel = DeclaredModel(
@@ -341,6 +380,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_make_cases",
         thresholds_attr="ASSEMBLY_EVALUATOR_THRESHOLDS",
         declared_models=(),
+        task_attr="assembly_task",
     ),
     Component(
         id="c12",
@@ -355,6 +395,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="RECOVERY_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
+        task_attr="recovery_task",
     ),
     Component(
         id="c13",
@@ -370,6 +411,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="ESCALATION_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="escalation_task",
     ),
     Component(
         id="c14",
@@ -385,6 +427,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="PIPELINE_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="pipeline_task",
     ),
     Component(
         id="c15",
@@ -400,6 +443,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="APPROVAL_EVALUATOR_THRESHOLDS",
         declared_models=(),
+        task_attr="approval_task",
     ),
 )
 
