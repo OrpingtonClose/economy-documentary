@@ -24,8 +24,12 @@ from strands_agents.playground import (
     Component,
     DeclaredModel,
     EvaluatorDeclaration,
+    MODEL_UNREACHABLE,
+    ReachabilityStatus,
     get_component,
+    get_default_cache,
     iter_components,
+    probe_models,
 )
 
 logger = logging.getLogger(__name__)
@@ -139,6 +143,64 @@ async def list_component_cases(component_id: str) -> dict[str, Any]:
         "component_id": component.id,
         "cases": cases,
         "total": len(cases),
+    }
+
+
+def _serialise_reachability(status: ReachabilityStatus) -> dict[str, Any]:
+    return {
+        "model_id": status.model_id,
+        "provider": status.provider,
+        "reachable": status.reachable,
+        "reason": status.reason,
+        "checked_at": status.checked_at,
+        "latency_ms": status.latency_ms,
+    }
+
+
+@router.get(
+    "/components/{component_id}/models/health", response_class=JSONResponse
+)
+async def component_models_health(component_id: str) -> dict[str, Any]:
+    """Return reachability for every model the component declares.
+
+    Deterministic components (@tool functions with no LLM) declare no
+    models and get ``all_reachable=True`` trivially.
+
+    Per the plan: unreachable models produce ``MODEL_UNREACHABLE`` in
+    PR 3's run endpoint. This endpoint is the catalog-side view of the
+    same status so the UI can render a green/red dot up front.
+    """
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+    statuses = probe_models(component.declared_models)
+    return {
+        "component_id": component.id,
+        "models": [_serialise_reachability(s) for s in statuses],
+        "total": len(statuses),
+        "all_reachable": all(s.reachable for s in statuses),
+        "unreachable_sentinel": MODEL_UNREACHABLE,
+    }
+
+
+@router.get("/models/health", response_class=JSONResponse)
+async def all_models_health() -> dict[str, Any]:
+    """Return reachability for every declared model across all components.
+
+    Models shared between components are deduplicated by ``model_id``,
+    so a single probe result is reported once even if two components
+    declare the same model — keeps the sidebar's badge counts honest.
+    """
+    seen: dict[str, DeclaredModel] = {}
+    for component in iter_components():
+        for model in component.declared_models:
+            seen.setdefault(model.id, model)
+    statuses = probe_models(seen.values())
+    return {
+        "models": [_serialise_reachability(s) for s in statuses],
+        "total": len(statuses),
+        "all_reachable": all(s.reachable for s in statuses),
+        "unreachable_sentinel": MODEL_UNREACHABLE,
     }
 
 

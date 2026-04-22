@@ -13,6 +13,16 @@ same evaluator stacks the runtime uses, so any change upstream flows
 into the catalog without duplication.
 """
 
+from strands_agents.playground.reachability import (
+    MODEL_UNREACHABLE,
+    CredentialsProber,
+    ModelProber,
+    ReachabilityCache,
+    ReachabilityStatus,
+    get_default_cache,
+    probe_models,
+    set_default_cache,
+)
 from strands_agents.playground.registry import (
     COMPONENT_IDS,
     Component,
@@ -25,8 +35,16 @@ from strands_agents.playground.registry import (
 __all__ = [
     "COMPONENT_IDS",
     "Component",
+    "CredentialsProber",
     "DeclaredModel",
     "EvaluatorDeclaration",
+    "MODEL_UNREACHABLE",
+    "ModelProber",
+    "ReachabilityCache",
+    "ReachabilityStatus",
     "get_component",
+    "get_default_cache",
     "iter_components",
+    "probe_models",
+    "set_default_cache",
 ]
