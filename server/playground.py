@@ -507,7 +507,14 @@ def evaluate_component(
             logger.exception(
                 "evaluator %s raised on %s/%s", name, component.id, case.name
             )
-            overall_passed = False
+            # Match the non-exception branch's gate semantics: only
+            # a crashing hard-gate evaluator trips overall_passed.
+            # A soft evaluator crash is surfaced in its row (status
+            # EVALUATOR_ERROR, passed=False, error=…) but does not
+            # fail the overall evaluation, the same way a soft
+            # evaluator that returns a 0.0 score does not.
+            if hard_gate:
+                overall_passed = False
             results.append(
                 {
                     "name": name,
