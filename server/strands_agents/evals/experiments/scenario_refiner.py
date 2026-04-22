@@ -293,3 +293,23 @@ def refiner_evaluators() -> list[Evaluator[dict[str, Any], dict[str, Any]]]:
 def build_refiner_experiment() -> Experiment[dict[str, Any], dict[str, Any]]:
     """Construct the :class:`Experiment` for Component 03."""
     return Experiment(cases=refiner_cases(), evaluators=refiner_evaluators())
+
+
+def scenario_refiner_task(case: Case) -> dict[str, Any]:
+    """Replay task adapter for the component-playground surface.
+
+    Returns the case's canonical envelope so the evaluate endpoint can
+    score a known-good payload against this component's evaluator
+    stack without a live agent run. A live runner can replace this
+    once provider plumbing lands in the playground.
+    """
+    metadata = case.metadata or {}
+    return {
+        "output": case.expected_output or {},
+        "trajectory": list(
+            case.expected_trajectory
+            or metadata.get("canonical_trajectory")
+            or []
+        ),
+        "metadata": {"mode": "replay", "case": case.name},
+    }

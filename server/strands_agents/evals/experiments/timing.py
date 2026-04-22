@@ -281,3 +281,27 @@ def build_experiment() -> Experiment[dict[str, Any], dict[str, Any]]:
         cases=timing_cases(),
         evaluators=timing_evaluators(),
     )
+
+
+#: Alias so registry lookups resolve uniformly across components.
+build_timing_experiment = build_experiment
+
+
+def timing_task(case: Case[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
+    """Replay task adapter for the component-playground surface.
+
+    Returns the case's canonical envelope (``expected_output`` +
+    canonical trajectory from metadata) so the evaluate endpoint can
+    score a known-good payload against the timing contract without a
+    live WhisperX run.
+    """
+    metadata = case.metadata or {}
+    return {
+        "output": case.expected_output or {},
+        "trajectory": list(
+            case.expected_trajectory
+            or metadata.get("canonical_trajectory")
+            or []
+        ),
+        "metadata": {"mode": "replay", "case": case.name},
+    }
