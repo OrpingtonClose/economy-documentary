@@ -137,6 +137,150 @@ _VIDEO_DECLS: tuple[FixtureDeclaration, ...] = (
         prompt="Does anything move in this video? Answer yes or no.",
         video_spec=VideoSpec(kind="solid_color", extras={"color": "blue"}),
     ),
+    # --- text-content: WORLD vs HELLO (independent of HELLO/GOODBYE pair) ---
+    FixtureDeclaration(
+        id="video_world_blue",
+        axis="text_present_world",
+        media="video",
+        relative_path="video/video_world_blue.mp4",
+        expected_verdict="yes",
+        prompt="Does this video show the English word WORLD on screen? Answer yes or no.",
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "blue", "text": "WORLD", "font_size": 72},
+        ),
+    ),
+    FixtureDeclaration(
+        id="video_hello_blue_not_world",
+        axis="text_present_world",
+        media="video",
+        relative_path="video/video_hello_blue_not_world.mp4",
+        expected_verdict="no",
+        prompt="Does this video show the English word WORLD on screen? Answer yes or no.",
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "blue", "text": "HELLO", "font_size": 72},
+        ),
+    ),
+    # --- text-count: multiple words vs single word ---
+    FixtureDeclaration(
+        id="video_multi_word",
+        axis="text_multi_word",
+        media="video",
+        relative_path="video/video_multi_word.mp4",
+        expected_verdict="yes",
+        prompt=(
+            "Does this video show more than one English word on "
+            "screen? Answer yes or no."
+        ),
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "purple", "text": "ONE TWO THREE", "font_size": 48},
+        ),
+    ),
+    FixtureDeclaration(
+        id="video_single_word",
+        axis="text_multi_word",
+        media="video",
+        relative_path="video/video_single_word.mp4",
+        expected_verdict="no",
+        prompt=(
+            "Does this video show more than one English word on "
+            "screen? Answer yes or no."
+        ),
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "purple", "text": "ALONE", "font_size": 72},
+        ),
+    ),
+    # --- text-case: uppercase vs lowercase ---
+    FixtureDeclaration(
+        id="video_text_upper",
+        axis="text_uppercase",
+        media="video",
+        relative_path="video/video_text_upper.mp4",
+        expected_verdict="yes",
+        prompt=(
+            "Is the English text shown in this video written in all "
+            "uppercase letters? Answer yes or no."
+        ),
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "gray", "text": "HELLO", "font_size": 72},
+        ),
+    ),
+    FixtureDeclaration(
+        id="video_text_lower",
+        axis="text_uppercase",
+        media="video",
+        relative_path="video/video_text_lower.mp4",
+        expected_verdict="no",
+        prompt=(
+            "Is the English text shown in this video written in all "
+            "uppercase letters? Answer yes or no."
+        ),
+        video_spec=VideoSpec(
+            kind="text_on_color",
+            extras={"color": "gray", "text": "hello", "font_size": 72},
+        ),
+    ),
+    # --- color-dominance: blue ---
+    FixtureDeclaration(
+        id="video_solid_blue",
+        axis="color_blue",
+        media="video",
+        relative_path="video/video_solid_blue.mp4",
+        expected_verdict="yes",
+        prompt="Is this video predominantly blue? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "blue"}),
+    ),
+    FixtureDeclaration(
+        id="video_solid_yellow_not_blue",
+        axis="color_blue",
+        media="video",
+        relative_path="video/video_solid_yellow_not_blue.mp4",
+        expected_verdict="no",
+        prompt="Is this video predominantly blue? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "yellow"}),
+    ),
+    # --- color-dominance: yellow ---
+    FixtureDeclaration(
+        id="video_solid_yellow",
+        axis="color_yellow",
+        media="video",
+        relative_path="video/video_solid_yellow.mp4",
+        expected_verdict="yes",
+        prompt="Is this video predominantly yellow? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "yellow"}),
+    ),
+    FixtureDeclaration(
+        id="video_solid_purple_not_yellow",
+        axis="color_yellow",
+        media="video",
+        relative_path="video/video_solid_purple_not_yellow.mp4",
+        expected_verdict="no",
+        prompt="Is this video predominantly yellow? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "purple"}),
+    ),
+    # --- color-dominance: black vs any color ---
+    FixtureDeclaration(
+        id="video_solid_black_color",
+        axis="color_black",
+        media="video",
+        relative_path="video/video_solid_black_color.mp4",
+        expected_verdict="yes",
+        prompt="Is this video predominantly black? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "black"}),
+    ),
+    FixtureDeclaration(
+        id="video_solid_white_not_black",
+        axis="color_black",
+        media="video",
+        relative_path="video/video_solid_white_not_black.mp4",
+        expected_verdict="no",
+        prompt="Is this video predominantly black? Answer yes or no.",
+        video_spec=VideoSpec(kind="solid_color", extras={"color": "white"}),
+    ),
     # --- failure modes: must be rejected ---
     FixtureDeclaration(
         id="video_frozen",

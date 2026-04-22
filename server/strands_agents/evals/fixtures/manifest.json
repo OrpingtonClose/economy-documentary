@@ -121,6 +121,246 @@
       "sha256": "ddeb432fa47a74b23ebe8ba6e67e94c175e64de9c626ddf8f80b72c876e02883"
     },
     {
+      "axis": "text_present_world",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue",
+          "font_size": 72,
+          "text": "WORLD"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_world_blue",
+      "media": "video",
+      "prompt": "Does this video show the English word WORLD on screen? Answer yes or no.",
+      "relative_path": "video/video_world_blue.mp4",
+      "sha256": "cf7df4545333cf6fd6de77448c6e6a5784988b9188c0b28650fcd953bec714e6"
+    },
+    {
+      "axis": "text_present_world",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue",
+          "font_size": 72,
+          "text": "HELLO"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_hello_blue_not_world",
+      "media": "video",
+      "prompt": "Does this video show the English word WORLD on screen? Answer yes or no.",
+      "relative_path": "video/video_hello_blue_not_world.mp4",
+      "sha256": "3ec7c4e872b5c7bfc8be4699450d6153d8bb6b30e5b6ebd553e686ddcb4d94b1"
+    },
+    {
+      "axis": "text_multi_word",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "purple",
+          "font_size": 48,
+          "text": "ONE TWO THREE"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_multi_word",
+      "media": "video",
+      "prompt": "Does this video show more than one English word on screen? Answer yes or no.",
+      "relative_path": "video/video_multi_word.mp4",
+      "sha256": "b8cb138c2840ceaad9fa7f64079ea48ef48d93fc33878ac60a4ae848830abdf2"
+    },
+    {
+      "axis": "text_multi_word",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "purple",
+          "font_size": 72,
+          "text": "ALONE"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_single_word",
+      "media": "video",
+      "prompt": "Does this video show more than one English word on screen? Answer yes or no.",
+      "relative_path": "video/video_single_word.mp4",
+      "sha256": "4fb324ee3785674a8e85f4a4a066f4d7041eb24f5dcef58ac9cad259eb43ff16"
+    },
+    {
+      "axis": "text_uppercase",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "gray",
+          "font_size": 72,
+          "text": "HELLO"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_text_upper",
+      "media": "video",
+      "prompt": "Is the English text shown in this video written in all uppercase letters? Answer yes or no.",
+      "relative_path": "video/video_text_upper.mp4",
+      "sha256": "114614c107feb166a78a5f72013a216f632f473e1a4367c761dc0ea7e7e2c527"
+    },
+    {
+      "axis": "text_uppercase",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "gray",
+          "font_size": 72,
+          "text": "hello"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "text_on_color",
+        "width": 320
+      },
+      "id": "video_text_lower",
+      "media": "video",
+      "prompt": "Is the English text shown in this video written in all uppercase letters? Answer yes or no.",
+      "relative_path": "video/video_text_lower.mp4",
+      "sha256": "6d16f11ef9612e7833ab3c41a86df6da319bb6438f680b3ca5d66e034311893c"
+    },
+    {
+      "axis": "color_blue",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "blue"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_blue",
+      "media": "video",
+      "prompt": "Is this video predominantly blue? Answer yes or no.",
+      "relative_path": "video/video_solid_blue.mp4",
+      "sha256": "ddeb432fa47a74b23ebe8ba6e67e94c175e64de9c626ddf8f80b72c876e02883"
+    },
+    {
+      "axis": "color_blue",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "yellow"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_yellow_not_blue",
+      "media": "video",
+      "prompt": "Is this video predominantly blue? Answer yes or no.",
+      "relative_path": "video/video_solid_yellow_not_blue.mp4",
+      "sha256": "350c38aadd918f310abfcc372457c29b9b4b578fa06bfd6a1a3417e0ebbb7d64"
+    },
+    {
+      "axis": "color_yellow",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "yellow"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_yellow",
+      "media": "video",
+      "prompt": "Is this video predominantly yellow? Answer yes or no.",
+      "relative_path": "video/video_solid_yellow.mp4",
+      "sha256": "350c38aadd918f310abfcc372457c29b9b4b578fa06bfd6a1a3417e0ebbb7d64"
+    },
+    {
+      "axis": "color_yellow",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "purple"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_purple_not_yellow",
+      "media": "video",
+      "prompt": "Is this video predominantly yellow? Answer yes or no.",
+      "relative_path": "video/video_solid_purple_not_yellow.mp4",
+      "sha256": "4e550fe5bc37c325fee0e8da87afd840283448d9facbe8e206eb1087e8fdaae9"
+    },
+    {
+      "axis": "color_black",
+      "expected_verdict": "yes",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "black"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_black_color",
+      "media": "video",
+      "prompt": "Is this video predominantly black? Answer yes or no.",
+      "relative_path": "video/video_solid_black_color.mp4",
+      "sha256": "a7e22d919feccd25a0803bf95b9428fd468465028f6705de7324c5fcd06d578f"
+    },
+    {
+      "axis": "color_black",
+      "expected_verdict": "no",
+      "generator": {
+        "duration_sec": 2.0,
+        "extras": {
+          "color": "white"
+        },
+        "fps": 15,
+        "height": 240,
+        "kind": "solid_color",
+        "width": 320
+      },
+      "id": "video_solid_white_not_black",
+      "media": "video",
+      "prompt": "Is this video predominantly black? Answer yes or no.",
+      "relative_path": "video/video_solid_white_not_black.mp4",
+      "sha256": "f7d8d6c91c4c881740f2754e7cab557ca67226358726e0c0472acb9205682a69"
+    },
+    {
       "axis": "failure_frozen",
       "expected_verdict": "reject",
       "generator": {

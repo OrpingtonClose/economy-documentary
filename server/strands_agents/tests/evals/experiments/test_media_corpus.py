@@ -60,6 +60,12 @@ def _fake_video_judge_oracle(
         "video_hello_red.mp4",
         "video_solid_red.mp4",
         "video_moving_text.mp4",
+        "video_world_blue.mp4",
+        "video_multi_word.mp4",
+        "video_text_upper.mp4",
+        "video_solid_blue.mp4",
+        "video_solid_yellow.mp4",
+        "video_solid_black_color.mp4",
     }
     answer_yes = name in yes_names
     gemini = _JudgeResult(
