@@ -13,12 +13,14 @@ are wired in.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from strands_evals.case import Case
 from strands_evals.experiment import Experiment
 
 from contracts import StageContract
+from strands_agents.evals._runner import run_experiment_as_main
 from strands_agents.evals.evaluators import ContractComplianceEvaluator
 
 _SMOKE_CONTRACT = StageContract(
@@ -39,7 +41,11 @@ _CASES: list[Case] = [
         name="contract_missing_required",
         input={},
         expected_output={"scenario": {"scenes": []}},
-        metadata={"contract_name": _SMOKE_CONTRACT.name},
+        # The negative half of the pair: the evaluator is *supposed*
+        # to flag this case as a contract violation. ``expect_pass``
+        # tells the ``python -m`` runner to invert the gate for this
+        # case so a correct False report is treated as green.
+        metadata={"contract_name": _SMOKE_CONTRACT.name, "expect_pass": False},
     ),
 ]
 
@@ -70,3 +76,13 @@ def smoke_task(case: Case) -> dict[str, Any]:
     a required-state failure.
     """
     return {"output": case.expected_output or {}}
+
+
+if __name__ == "__main__":
+    sys.exit(
+        run_experiment_as_main(
+            build_smoke_experiment,
+            smoke_task,
+            name="smoke",
+        )
+    )

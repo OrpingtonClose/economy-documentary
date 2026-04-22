@@ -19,11 +19,13 @@ Scope for PR-M2
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from strands_evals.case import Case
 from strands_evals.experiment import Experiment
 
+from strands_agents.evals._runner import run_experiment_as_main
 from strands_agents.evals.evaluators import LiveMediaJudgeEvaluator
 from strands_agents.evals.fixtures.manifest import (
     FixtureEntry,
@@ -163,3 +165,21 @@ __all__ = [
     "build_media_corpus_experiment",
     "media_task",
 ]
+
+
+if __name__ == "__main__":
+    # Default to the video corpus; audio can be invoked explicitly
+    # via ``MEDIA_CORPUS_MEDIA=audio python -m
+    # strands_agents.evals.experiments.media_corpus``. No CLI parser
+    # by design — the idiom is ``python -m <module>``, with env vars
+    # for the one or two knobs that differ between runs.
+    import os as _os
+
+    _media = _os.environ.get("MEDIA_CORPUS_MEDIA", "video")
+    sys.exit(
+        run_experiment_as_main(
+            lambda: build_media_corpus_experiment(media=_media),
+            media_task,
+            name=f"media_corpus.{_media}",
+        )
+    )

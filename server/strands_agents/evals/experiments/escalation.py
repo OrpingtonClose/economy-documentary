@@ -325,3 +325,45 @@ __all__ = [
     "escalation_judge_task",
     "escalation_task",
 ]
+
+
+if __name__ == "__main__":
+    import os as _os
+    import sys as _sys
+
+    from strands_agents.evals._runner import run_experiment_as_main
+
+    _variant = _os.environ.get("ESCALATION_EXPERIMENT", "primary").strip().lower()
+
+    if _variant == "contract":
+        _sys.exit(
+            run_experiment_as_main(
+                build_escalation_contract_experiment,
+                escalation_contract_task,
+                name="escalation.contract",
+            )
+        )
+    elif _variant == "judge":
+        _judge_model = _os.environ.get("ESCALATION_JUDGE_MODEL")
+        if not _judge_model:
+            # No model configured — judge path is opt-in, skip cleanly.
+            print(
+                "ESCALATION_EXPERIMENT=judge requires ESCALATION_JUDGE_MODEL; skipping.",
+                file=_sys.stderr,
+            )
+            _sys.exit(2)
+        _sys.exit(
+            run_experiment_as_main(
+                lambda: build_escalation_judge_experiment(judge_model=_judge_model),
+                escalation_judge_task,
+                name="escalation.judge",
+            )
+        )
+    else:
+        _sys.exit(
+            run_experiment_as_main(
+                build_escalation_experiment,
+                escalation_task,
+                name="escalation.primary",
+            )
+        )

@@ -34,6 +34,7 @@ No new fixture bytes are added here; the corpus itself lives in
 
 from __future__ import annotations
 
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
@@ -42,13 +43,14 @@ from strands_evals.case import Case
 from strands_evals.experiment import Experiment
 from strands_evals.types.evaluation_report import EvaluationReport
 
+from strands_agents.evals._runner import run_experiment_as_main
 from strands_agents.evals.evaluators import LiveMediaJudgeEvaluator
 from strands_agents.evals.fixtures.manifest import (
     FixtureEntry,
     load_manifest,
 )
 
-from .media_corpus import _case_for_fixture
+from .media_corpus import _case_for_fixture, media_task
 
 _BINARY_VERDICTS = frozenset({"yes", "no"})
 
@@ -310,3 +312,16 @@ def _verdict_for(yes_side: _SideState, no_side: _SideState) -> str:
     if yes_side.answer == no_side.answer:
         return "same_answer"
     return "flipped"
+
+
+if __name__ == "__main__":
+    import os as _os
+
+    _media = _os.environ.get("MEDIA_CORPUS_MEDIA", "video")
+    sys.exit(
+        run_experiment_as_main(
+            lambda: build_pair_experiment(media=_media),
+            media_task,
+            name=f"media_corpus_pairs.{_media}",
+        )
+    )

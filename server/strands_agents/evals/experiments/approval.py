@@ -21,6 +21,7 @@ the contract the live run must satisfy.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from strands_evals.case import Case
@@ -28,6 +29,8 @@ from strands_evals.evaluators.deterministic import Equals
 from strands_evals.evaluators.evaluator import Evaluator
 from strands_evals.experiment import Experiment
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+
+from strands_agents.evals._runner import run_experiment_as_main
 
 from strands_agents.evals.evaluators import (
     ApprovalGateTrajectoryEvaluator,
@@ -412,3 +415,13 @@ __all__ = [
     "approval_task",
     "build_approval_experiment",
 ]
+
+
+if __name__ == "__main__":
+    sys.exit(
+        run_experiment_as_main(
+            build_approval_experiment,
+            approval_task,
+            name="approval",
+        )
+    )

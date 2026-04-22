@@ -573,3 +573,37 @@ __all__ = [
     "build_recovery_remanifester_contract_experiment",
     "recovery_task",
 ]
+
+
+if __name__ == "__main__":
+    import os as _os
+    import sys as _sys
+
+    from strands_agents.evals._runner import run_experiment_as_main
+
+    _variant = _os.environ.get("RECOVERY_EXPERIMENT", "primary").strip().lower()
+
+    if _variant == "classifier_contract":
+        _sys.exit(
+            run_experiment_as_main(
+                build_recovery_classifier_contract_experiment,
+                _classifier_contract_task_adapter,
+                name="recovery.classifier_contract",
+            )
+        )
+    elif _variant == "remanifester_contract":
+        _sys.exit(
+            run_experiment_as_main(
+                build_recovery_remanifester_contract_experiment,
+                _remanifester_contract_task_adapter,
+                name="recovery.remanifester_contract",
+            )
+        )
+    else:
+        _sys.exit(
+            run_experiment_as_main(
+                build_recovery_experiment,
+                recovery_task,
+                name="recovery.primary",
+            )
+        )
