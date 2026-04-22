@@ -95,30 +95,39 @@ cd "${REPO_DIR}"
 #
 # This list MUST stay in sync with server/pyproject.toml. CI will catch
 # drift: the playground catalog experiment imports every component.
-echo "=== Installing Python dependencies (with $PY) ==="
-$PY -m pip install --no-cache-dir --upgrade pip
-$PY -m pip install --no-cache-dir \
+echo "=== Installing Python dependencies (uv resolver, $PY interpreter) ==="
+# pip's backtracking resolver takes forever on this dependency set
+# (strands-agents + strands-agents-evals + deepagents + langgraph all
+# share pinned pydantic/protobuf constraints). uv's PubGrub-style
+# resolver handles it in seconds. Install uv once, then use it for
+# everything.
+if ! command -v uv >/dev/null 2>&1; then
+    curl -fsSL https://astral.sh/uv/install.sh | sh
+    export PATH="/root/.local/bin:${PATH}"
+fi
+
+# The playground server only needs the runtime slice — not the full
+# documentary pipeline (no GPU workers, no TTS, no B2 renders). This is
+# a deliberately minimal set: if a component at runtime needs something
+# missing, the dedicated-model reachability probe will surface it as a
+# MODEL_UNREACHABLE red dot, which is the fail-closed contract.
+uv pip install --system --python "$PY" \
     'fastapi>=0.100.0' \
     'uvicorn[standard]>=0.20.0' \
     'pydantic>=2.0.0' \
     'python-dotenv>=1.0.0' \
     'httpx>=0.24.0' \
-    'aiosqlite' \
     'litellm' \
-    'google-adk>=1.0.0' \
-    'ag-ui-adk>=0.5.0' \
     'opentimelineio>=0.17.0' \
-    'soundfile' \
     'numpy' \
-    'duckdb>=1.4.0,<1.5.0' \
-    'agentops>=0.4.21' \
     'b2sdk>=2.10.4,<3.0.0' \
-    'vastai' \
     'opentelemetry-sdk>=1.20.0' \
     'opentelemetry-api>=1.20.0' \
     'strands-agents==1.36.0' \
     'strands-agents-evals==0.1.15' \
-    'deepagents==0.5.3'
+    'deepagents==0.5.3' \
+    'langchain-core' \
+    'langgraph'
 
 # ---------------------------------------------------------------------------
 # Frontend (build for production)
