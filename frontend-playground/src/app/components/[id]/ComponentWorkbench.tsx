@@ -42,10 +42,19 @@ interface Props {
 }
 
 export function ComponentWorkbench({ detail }: Props) {
-  const initialCase = useMemo(() => firstSelectableCase(detail), [detail]);
+  // Selection is tracked by index rather than by case name because
+  // some cases carry ``name: null`` (unnamed edge-role cases in the
+  // registry). Using ``null === null`` for the active-highlight
+  // check would light up every unnamed case at once.
+  const initialIndex = useMemo(
+    () => firstSelectableCaseIndex(detail),
+    [detail],
+  );
+  const initialCase =
+    initialIndex !== null ? (detail.cases[initialIndex] ?? null) : null;
 
-  const [selectedCaseName, setSelectedCaseName] = useState<string | null>(
-    initialCase?.name ?? null,
+  const [selectedCaseIndex, setSelectedCaseIndex] = useState<number | null>(
+    initialIndex,
   );
   const [inputText, setInputText] = useState<string>(() =>
     initialCase ? prettyJson(initialCase.input) : "",
@@ -82,18 +91,23 @@ export function ComponentWorkbench({ detail }: Props) {
   }, [detail.id]);
 
   const loadCase = useCallback(
-    (summary: CaseSummary) => {
-      setSelectedCaseName(summary.name);
+    (summary: CaseSummary, index: number) => {
+      setSelectedCaseIndex(index);
       setInputText(prettyJson(summary.input));
       setRunResult(null);
       setRunError(null);
       setEvalResult(null);
       setEvalError(null);
     },
-    [setSelectedCaseName],
+    [setSelectedCaseIndex],
   );
 
   const onRun = useCallback(async () => {
+    // Clear previous run state up front so the Evaluate button
+    // (gated on ``runResult.status === "OK"``) cannot dispatch a
+    // stale ``actual_output`` while a fresh run is in flight or
+    // after a validation failure.
+    setRunResult(null);
     setRunError(null);
     setEvalResult(null);
     setEvalError(null);
@@ -107,14 +121,19 @@ export function ComponentWorkbench({ detail }: Props) {
       // The server accepts either ``case_name`` (replay) or
       // ``custom_input`` (arbitrary payload). When the user has
       // edited the textarea we send ``custom_input`` so the
-      // on-the-wire payload reflects what they see.
-      const selected = findCase(detail, selectedCaseName);
+      // on-the-wire payload reflects what they see. ``case_name``
+      // is only sent when the selected case is named — the backend
+      // has no way to address an unnamed case by key.
+      const selected = caseAt(detail, selectedCaseIndex);
       const selectedInputMatchesTextarea =
         selected !== null &&
         prettyJson(selected.input).trim() === inputText.trim();
-      const body = selectedInputMatchesTextarea
-        ? { case_name: selected.name ?? undefined }
-        : { custom_input: parsed.value };
+      const body =
+        selectedInputMatchesTextarea &&
+        selected !== null &&
+        selected.name !== null
+          ? { case_name: selected.name }
+          : { custom_input: parsed.value };
       const response = await runCase(detail.id, body);
       setRunResult(response);
     } catch (err) {
@@ -122,7 +141,7 @@ export function ComponentWorkbench({ detail }: Props) {
     } finally {
       setIsRunning(false);
     }
-  }, [detail, inputText, selectedCaseName]);
+  }, [detail, inputText, selectedCaseIndex]);
 
   const onEvaluate = useCallback(async () => {
     if (runResult === null) {
@@ -131,7 +150,7 @@ export function ComponentWorkbench({ detail }: Props) {
     setEvalError(null);
     setIsEvaluating(true);
     try {
-      const selected = findCase(detail, selectedCaseName);
+      const selected = caseAt(detail, selectedCaseIndex);
       const response = await evaluateCase(detail.id, {
         case_name: selected?.name ?? undefined,
         actual_output: runResult.output,
@@ -143,7 +162,7 @@ export function ComponentWorkbench({ detail }: Props) {
     } finally {
       setIsEvaluating(false);
     }
-  }, [detail, runResult, selectedCaseName]);
+  }, [detail, runResult, selectedCaseIndex]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -157,7 +176,7 @@ export function ComponentWorkbench({ detail }: Props) {
           />
           <CaseList
             cases={detail.cases}
-            selectedCaseName={selectedCaseName}
+            selectedCaseIndex={selectedCaseIndex}
             onSelect={loadCase}
           />
         </div>
@@ -179,25 +198,26 @@ export function ComponentWorkbench({ detail }: Props) {
   );
 }
 
-function firstSelectableCase(
+function firstSelectableCaseIndex(
   detail: ComponentDetail,
-): CaseSummary | null {
-  for (const candidate of detail.cases) {
+): number | null {
+  for (let i = 0; i < detail.cases.length; i += 1) {
+    const candidate = detail.cases[i];
     if (candidate.name !== null && candidate.name.length > 0) {
-      return candidate;
+      return i;
     }
   }
-  return detail.cases[0] ?? null;
+  return detail.cases.length > 0 ? 0 : null;
 }
 
-function findCase(
+function caseAt(
   detail: ComponentDetail,
-  name: string | null,
+  index: number | null,
 ): CaseSummary | null {
-  if (name === null) {
+  if (index === null || index < 0 || index >= detail.cases.length) {
     return null;
   }
-  return detail.cases.find((c) => c.name === name) ?? null;
+  return detail.cases[index] ?? null;
 }
 
 function Header({ detail }: { readonly detail: ComponentDetail }) {
@@ -294,12 +314,12 @@ function HealthPanel({
 
 function CaseList({
   cases,
-  selectedCaseName,
+  selectedCaseIndex,
   onSelect,
 }: {
   readonly cases: ComponentDetail["cases"];
-  readonly selectedCaseName: string | null;
-  readonly onSelect: (summary: CaseSummary) => void;
+  readonly selectedCaseIndex: number | null;
+  readonly onSelect: (summary: CaseSummary, index: number) => void;
 }) {
   return (
     <section className="rounded border border-pg-border bg-pg-surface p-4">
@@ -313,12 +333,14 @@ function CaseList({
       <ul className="mt-3 flex max-h-96 flex-col gap-1 overflow-y-auto">
         {cases.map((summary, index) => {
           const label = summary.name ?? `(unnamed case ${index + 1})`;
-          const active = summary.name === selectedCaseName;
+          // Compare by index so multiple cases with ``name: null``
+          // don't all light up simultaneously.
+          const active = index === selectedCaseIndex;
           return (
             <li key={`${label}-${index}`}>
               <button
                 type="button"
-                onClick={() => onSelect(summary)}
+                onClick={() => onSelect(summary, index)}
                 className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition ${
                   active
                     ? "bg-pg-accent/20 text-pg-accent"
