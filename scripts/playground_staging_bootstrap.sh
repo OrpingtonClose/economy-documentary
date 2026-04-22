@@ -198,7 +198,7 @@ grep -oE '^[A-Z_]+=' "${ENV_FILE}" | sort -u
 echo "=== Configuring supervisor ==="
 cat > /etc/supervisor/conf.d/playground.conf <<'SUPEOF'
 [program:playground-backend]
-command=python3.12 -m uvicorn server:app --host 0.0.0.0 --port 8000 --app-dir /workspace/economy-documentary/server
+command=python3.12 -m uvicorn playground_server:app --host 0.0.0.0 --port 8000 --app-dir /workspace/economy-documentary/server
 directory=/workspace/economy-documentary/server
 autostart=true
 autorestart=true
