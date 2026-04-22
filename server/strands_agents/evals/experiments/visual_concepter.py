@@ -513,4 +513,5 @@ __all__ = [
     "build_visual_concepter_experiment",
     "visual_concepter_cases",
     "visual_concepter_evaluators",
+    "visual_concepter_task",
 ]

@@ -698,4 +698,5 @@ __all__ = [
     "build_production_experiment",
     "production_cases",
     "production_evaluators",
+    "production_task",
 ]

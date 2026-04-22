@@ -307,5 +307,6 @@ __all__ = [
     "AUDIO_EVALUATOR_THRESHOLDS",
     "audio_cases",
     "audio_evaluators",
+    "audio_task",
     "build_audio_experiment",
 ]

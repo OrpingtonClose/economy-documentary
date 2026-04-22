@@ -499,4 +499,5 @@ __all__ = [
     "build_visual_loop_experiment",
     "visual_loop_cases",
     "visual_loop_evaluators",
+    "visual_loop_task",
 ]

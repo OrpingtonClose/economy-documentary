@@ -566,4 +566,5 @@ __all__ = [
     "build_coherence_evaluator_experiment",
     "coherence_evaluator_cases",
     "coherence_evaluator_evaluators",
+    "coherence_evaluator_task",
 ]

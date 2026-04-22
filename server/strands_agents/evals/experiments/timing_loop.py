@@ -467,4 +467,5 @@ __all__ = [
     "build_timing_loop_experiment",
     "timing_loop_cases",
     "timing_loop_evaluators",
+    "timing_loop_task",
 ]
