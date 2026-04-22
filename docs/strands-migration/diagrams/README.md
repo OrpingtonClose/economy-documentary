@@ -40,20 +40,33 @@ The HTML file is the source of truth. Cases are hand-synced from the
 `server/strands_agents/evals/experiments/*.py`. The PNG is rendered
 headlessly so it can be embedded in markdown and in the PR description:
 
+Run from the repo root:
+
 ```bash
+python3 -m pip install playwright
 python3 -m playwright install chromium
-python3 <<'PY'
+python3 - <<'PY'
 import asyncio
+from pathlib import Path
 from playwright.async_api import async_playwright
+
+ROOT = Path.cwd()
+HTML = ROOT / "docs" / "strands-migration" / "diagrams" / "test-case-atlas.html"
+PNG  = HTML.with_suffix(".png")
+
 async def main():
     async with async_playwright() as p:
-        b = await p.chromium.launch()
-        ctx = await b.new_context(viewport={"width":1620,"height":900}, device_scale_factor=2)
+        browser = await p.chromium.launch()
+        ctx = await browser.new_context(
+            viewport={"width": 1620, "height": 900},
+            device_scale_factor=2,
+        )
         page = await ctx.new_page()
-        await page.goto("file://$(pwd)/docs/strands-migration/diagrams/test-case-atlas.html")
+        await page.goto(HTML.resolve().as_uri())
         await page.wait_for_load_state("networkidle")
-        await page.screenshot(path="docs/strands-migration/diagrams/test-case-atlas.png", full_page=True)
-        await b.close()
+        await page.screenshot(path=str(PNG), full_page=True)
+        await browser.close()
+
 asyncio.run(main())
 PY
 ```
@@ -63,7 +76,7 @@ PY
 | | |
 |---|---|
 | Components | 15 |
-| Tier-1 cases | 87 |
+| Tier-1 cases | 85 |
 | Live component tests | 15 |
 | Trajectory harnesses | 5 |
 | Simulation fakes | 6 |
