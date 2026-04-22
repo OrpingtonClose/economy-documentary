@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from strands_evals.case import Case
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 
 from strands_agents.playground import (
     Component,
@@ -349,6 +350,201 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
         "case_name": case.name,
         "output": output,
         "trajectory": trajectory,
+    }
+
+
+class EvaluateRequest(BaseModel):
+    """Body for ``POST /playground/components/{id}/evaluate``.
+
+    The playground's typical flow is: call ``/run`` to get an output,
+    then forward that output plus the originating case (or a custom
+    case) here. The endpoint scores the output against every
+    evaluator the component declares.
+
+    Either ``case_name`` or ``custom_input`` must be provided.
+    ``actual_output`` is required — it is the payload being judged.
+    """
+
+    case_name: str | None = Field(
+        default=None,
+        description="Registered case to draw expected_output / trajectory from.",
+    )
+    custom_input: dict[str, Any] | None = Field(
+        default=None,
+        description="Custom input when no registered case matches.",
+    )
+    custom_expected: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Optional custom expected_output for the evaluation. Falls "
+            "back to the case's expected_output when omitted."
+        ),
+    )
+    actual_output: Any = Field(
+        ...,
+        description="The output produced by the component — what we score.",
+    )
+    actual_trajectory: list[Any] | None = Field(
+        default=None,
+        description="Optional tool-call / step trajectory for TrajectoryEvaluators.",
+    )
+
+
+EVAL_STATUS_OK: str = "OK"
+EVAL_STATUS_NO_EVALUATORS: str = "NO_EVALUATORS"
+EVAL_STATUS_EVALUATOR_ERROR: str = "EVALUATOR_ERROR"
+
+
+def _serialise_evaluation_output(output: EvaluationOutput) -> dict[str, Any]:
+    return {
+        "score": output.score,
+        "test_pass": output.test_pass,
+        "reason": output.reason,
+        "label": output.label,
+    }
+
+
+def _build_evaluation_data(
+    case: Case[Any, Any],
+    actual_output: Any,
+    actual_trajectory: list[Any] | None,
+    custom_expected: dict[str, Any] | None,
+) -> EvaluationData[Any, Any]:
+    """Assemble the :class:`EvaluationData` each evaluator consumes.
+
+    We copy every case-side hint the judges might need (expected
+    output, expected trajectory, expected assertion, metadata) so
+    deterministic and LLM evaluators get the same context the CI
+    harness gives them. ``custom_expected`` wins when provided — it's
+    how the workbench lets a user override the golden answer while
+    keeping the case identity.
+    """
+    expected_output: Any = case.expected_output
+    if custom_expected is not None:
+        expected_output = custom_expected
+    return EvaluationData(
+        input=case.input,
+        actual_output=actual_output,
+        name=case.name,
+        expected_output=expected_output,
+        expected_assertion=case.expected_assertion,
+        expected_trajectory=case.expected_trajectory,
+        actual_trajectory=actual_trajectory,
+        metadata=case.metadata,
+    )
+
+
+@router.post("/components/{component_id}/evaluate", response_class=JSONResponse)
+def evaluate_component(
+    component_id: str, request: EvaluateRequest
+) -> dict[str, Any]:
+    """Score a component output against its declared evaluator stack.
+
+    Intentionally synchronous: LLM-as-judge evaluators may make
+    blocking HTTP calls to remote model APIs. Running under FastAPI's
+    threadpool keeps the event loop responsive.
+
+    Per-evaluator pass judgment: the evaluator's mean ``score`` across
+    all returned :class:`EvaluationOutput` entries must be ``>=``
+    the component's declared ``threshold`` from
+    ``*_EVALUATOR_THRESHOLDS``. ``hard_gate`` evaluators that fail
+    set ``overall_passed`` to ``False``.
+    """
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+
+    if request.custom_input is not None:
+        case_name = request.case_name or "custom_input"
+        case: Case[Any, Any] = Case[Any, Any](
+            name=case_name,
+            session_id=f"playground-eval-{component.id}-{case_name}",
+            input=request.custom_input,
+        )
+    elif request.case_name is not None:
+        cases_by_name = {c.name: c for c in component.cases()}
+        lookup = cases_by_name.get(request.case_name)
+        if lookup is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown case: {request.case_name} (component {component.id} "
+                    f"has {len(cases_by_name)} cases)"
+                ),
+            )
+        case = lookup
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="either case_name or custom_input is required",
+        )
+
+    evaluators = component.evaluator_instances()
+    declarations = {decl.name: decl for decl in component.evaluators()}
+    if not evaluators:
+        return {
+            "status": EVAL_STATUS_NO_EVALUATORS,
+            "component_id": component.id,
+            "case_name": case.name,
+            "results": [],
+            "overall_passed": False,
+        }
+
+    data = _build_evaluation_data(
+        case, request.actual_output, request.actual_trajectory, request.custom_expected
+    )
+
+    results: list[dict[str, Any]] = []
+    overall_passed = True
+    for evaluator in evaluators:
+        name = type(evaluator).__name__
+        declaration = declarations.get(name)
+        threshold = declaration.threshold if declaration else 0.0
+        hard_gate = declaration.hard_gate if declaration else False
+        try:
+            outputs = evaluator.evaluate(data)
+        except Exception as exc:  # noqa: BLE001 — surface per-evaluator error
+            logger.exception(
+                "evaluator %s raised on %s/%s", name, component.id, case.name
+            )
+            overall_passed = False
+            results.append(
+                {
+                    "name": name,
+                    "threshold": threshold,
+                    "hard_gate": hard_gate,
+                    "passed": False,
+                    "status": EVAL_STATUS_EVALUATOR_ERROR,
+                    "error": str(exc),
+                    "outputs": [],
+                    "mean_score": None,
+                }
+            )
+            continue
+
+        scores = [o.score for o in outputs if o.score is not None]
+        mean_score = sum(scores) / len(scores) if scores else 0.0
+        passed = mean_score >= threshold
+        if hard_gate and not passed:
+            overall_passed = False
+        results.append(
+            {
+                "name": name,
+                "threshold": threshold,
+                "hard_gate": hard_gate,
+                "passed": passed,
+                "status": EVAL_STATUS_OK,
+                "mean_score": mean_score,
+                "outputs": [_serialise_evaluation_output(o) for o in outputs],
+            }
+        )
+
+    return {
+        "status": EVAL_STATUS_OK,
+        "component_id": component.id,
+        "case_name": case.name,
+        "results": results,
+        "overall_passed": overall_passed,
     }
 
 

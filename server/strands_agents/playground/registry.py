@@ -113,6 +113,12 @@ class Component:
     #: surface as ``NO_TASK_ADAPTER`` at run time — a deliberate
     #: visible gap rather than a silent fallback.
     task_attr: str | None = None
+    #: Name of the ``build_*_experiment`` callable that returns the
+    #: canonical :class:`Experiment` for this component. The
+    #: playground's evaluate endpoint instantiates it once and reuses
+    #: the ``.evaluators`` list to score user-supplied outputs. Kept
+    #: ``None`` for components whose builder is still pending.
+    experiment_builder_attr: str | None = None
 
     # Internal caches populated on first access. The dataclass is
     # frozen, so we stash these in a mutable default via ``field``.
@@ -199,11 +205,44 @@ class Component:
         self._cache["task"] = callable_obj
         return callable_obj
 
+    def evaluator_instances(self) -> list[Any]:
+        """Return live :class:`Evaluator` instances from the builder.
+
+        Empty list when the builder is missing, fails to import, or
+        raises at construction time. Callers surface a
+        ``NO_EVALUATORS`` status rather than 500-ing. Cached, so the
+        builder runs at most once per component per process.
+        """
+        if self.experiment_builder_attr is None:
+            return []
+        cached = self._cache.get("evaluator_instances")
+        if cached is not None:
+            return cached if cached is not _MISSING_BUILDER else []
+
+        try:
+            module = importlib.import_module(self.experiment_module)
+            builder = getattr(module, self.experiment_builder_attr, None)
+            if builder is None or not callable(builder):
+                self._cache["evaluator_instances"] = _MISSING_BUILDER
+                return []
+            experiment = builder()
+            instances = list(experiment.evaluators)
+        except Exception:  # noqa: BLE001 — partial rollout safety net
+            self._cache["evaluator_instances"] = _MISSING_BUILDER
+            return []
+        self._cache["evaluator_instances"] = instances
+        return instances
+
 
 #: Internal sentinel so the ``task()`` cache can distinguish "never
 #: checked" from "checked, not available". ``None`` would collide with
 #: the public "no task adapter" semantic.
 _MISSING_TASK = object()
+
+#: Same idea for the evaluator-builder cache — ``[]`` is a valid
+#: cached value (component declares no evaluators) so a distinct
+#: sentinel is needed for "builder missing / failed".
+_MISSING_BUILDER = object()
 
 
 _GEMINI_3_1: DeclaredModel = DeclaredModel(
@@ -238,6 +277,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="scenario_cases",
         thresholds_attr="SCENARIO_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
+        experiment_builder_attr="build_scenario_experiment",
     ),
     Component(
         id="c02",
@@ -253,6 +293,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="timing_cases",
         thresholds_attr="TIMING_EVALUATOR_THRESHOLDS",
         declared_models=(),  # deterministic tool: no LLM
+        experiment_builder_attr="build_experiment",
     ),
     Component(
         id="c03",
@@ -267,6 +308,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="refiner_cases",
         thresholds_attr="SCENARIO_REFINER_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        experiment_builder_attr="build_refiner_experiment",
     ),
     Component(
         id="c04",
@@ -281,6 +323,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.audio",
         cases_factory="audio_cases",
         thresholds_attr="AUDIO_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_audio_experiment",
         declared_models=(),  # TTS + WhisperX, not an LLM agent
     ),
     Component(
@@ -295,6 +338,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.timing_loop",
         cases_factory="timing_loop_cases",
         thresholds_attr="TIMING_LOOP_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_timing_loop_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
     ),
     Component(
@@ -309,6 +353,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.content_analyst",
         cases_factory="content_analyst_cases",
         thresholds_attr="CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_content_analyst_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
     ),
     Component(
@@ -323,6 +368,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.visual_concepter",
         cases_factory="visual_concepter_cases",
         thresholds_attr="VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_visual_concepter_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
     ),
     Component(
@@ -337,6 +383,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.coherence_evaluator",
         cases_factory="coherence_evaluator_cases",
         thresholds_attr="COHERENCE_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_coherence_evaluator_experiment",
         declared_models=(_GEMINI_3_1, _QWEN_OMNI, _GEMMA_4_URC),
     ),
     Component(
@@ -351,6 +398,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.visual_loop",
         cases_factory="visual_loop_cases",
         thresholds_attr="VISUAL_LOOP_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_visual_loop_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
     ),
     Component(
@@ -365,6 +413,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.production",
         cases_factory="production_cases",
         thresholds_attr="PRODUCTION_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_production_experiment",
         declared_models=(_OPENAI_4O, _GEMINI_3_1),
     ),
     Component(
@@ -379,6 +428,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.assembly",
         cases_factory="_make_cases",
         thresholds_attr="ASSEMBLY_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_assembly_experiment",
         declared_models=(),
         task_attr="assembly_task",
     ),
@@ -394,6 +444,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.recovery",
         cases_factory="_CASES",
         thresholds_attr="RECOVERY_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_recovery_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
         task_attr="recovery_task",
     ),
@@ -410,6 +461,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.escalation",
         cases_factory="_CASES",
         thresholds_attr="ESCALATION_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_escalation_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
         task_attr="escalation_task",
     ),
@@ -426,6 +478,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.pipeline",
         cases_factory="_CASES",
         thresholds_attr="PIPELINE_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_pipeline_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
         task_attr="pipeline_task",
     ),
@@ -442,6 +495,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.approval",
         cases_factory="_CASES",
         thresholds_attr="APPROVAL_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_approval_experiment",
         declared_models=(),
         task_attr="approval_task",
     ),
