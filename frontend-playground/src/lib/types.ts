@@ -42,6 +42,17 @@ export interface CaseSummary {
   readonly input?: unknown;
   readonly expected_output?: unknown;
   readonly metadata?: Record<string, unknown>;
+  /**
+   * ``"user"`` for cases persisted via
+   * ``POST /components/{id}/user-cases``; absent on canonical
+   * cases emitted by ``_serialise_case``. The workbench uses this
+   * to render a "saved by you" tag and to key off the user corpus
+   * when listing / filtering.
+   */
+  readonly source?: "user";
+  readonly notes?: string | null;
+  readonly created_at?: string | null;
+  readonly created_by?: string | null;
 }
 
 /**
@@ -70,6 +81,37 @@ export interface ComponentSummary {
  */
 export interface ComponentDetail extends ComponentSummary {
   readonly cases: readonly CaseSummary[];
+  /**
+   * User-authored cases persisted under
+   * ``server/strands_agents/playground/user_cases/``. Separate from
+   * ``cases`` (the canonical CI corpus) so the atlas chip counts
+   * stay stable — user additions are additive, never replace.
+   */
+  readonly user_cases?: readonly CaseSummary[];
+}
+
+/**
+ * Mirror of the ``preview`` envelope returned by
+ * ``POST /components/{id}/user-cases`` in ``server/playground.py``.
+ * Both the preview-only path (``confirm=False``) and the commit
+ * path (``confirm=True``) carry this bundle so the UI can render
+ * the same diff view in both flows.
+ */
+export interface SaveUserCasePreview {
+  readonly file_path: string;
+  readonly existed: boolean;
+  readonly diff: string;
+  readonly before: string;
+  readonly after: string;
+  readonly case_count_before: number;
+  readonly case_count_after: number;
+}
+
+export interface SaveUserCaseResponse {
+  readonly component_id: ComponentId;
+  readonly committed: boolean;
+  readonly preview: SaveUserCasePreview;
+  readonly case?: CaseSummary;
 }
 
 /**

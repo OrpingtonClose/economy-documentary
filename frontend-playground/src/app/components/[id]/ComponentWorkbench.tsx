@@ -7,10 +7,12 @@
  *
  *   1. Header + declared models with live reachability dots.
  *   2. Case list + input editor (pre-filled from the selected case).
- *   3. Run / evaluate output.
+ *   3. Run / evaluate output + save-as-case dialog.
  *
  * All state is local to the page — the playground is intentionally
- * session-scoped. Saving a custom case as a PR is the job of PR 8.
+ * session-scoped. Save-as-case commits through
+ * ``POST /components/{id}/user-cases`` which writes to the on-disk
+ * sidecar under ``server/strands_agents/playground/user_cases/``.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -21,11 +23,13 @@ import type {
   HealthResponse,
   ReachabilityEntry,
   RunResponse,
+  SaveUserCasePreview,
 } from "@/lib/types";
 import {
   evaluateCase,
   getComponentHealth,
   runCase,
+  saveUserCase,
 } from "@/lib/api";
 import {
   evaluateStatusClass,
@@ -41,17 +45,32 @@ interface Props {
   readonly detail: ComponentDetail;
 }
 
+type CaseRole = "pass" | "neg" | "edge";
+
 export function ComponentWorkbench({ detail }: Props) {
-  // Selection is tracked by index rather than by case name because
-  // some cases carry ``name: null`` (unnamed edge-role cases in the
-  // registry). Using ``null === null`` for the active-highlight
-  // check would light up every unnamed case at once.
+  // User cases live in component state so a commit updates the list
+  // without a full page reload. The initial value comes from the
+  // SSR'd detail payload, which the backend populates from the
+  // sidecar JSON.
+  const [userCases, setUserCases] = useState<readonly CaseSummary[]>(
+    detail.user_cases ?? [],
+  );
+
+  // Selection is tracked by index into the combined (canonical +
+  // user) array because some cases carry ``name: null`` and
+  // name-based comparison lights up every unnamed case at once.
+  const allCases = useMemo<readonly CaseSummary[]>(
+    () => [...detail.cases, ...userCases],
+    [detail.cases, userCases],
+  );
+  const canonicalCount = detail.cases.length;
+
   const initialIndex = useMemo(
-    () => firstSelectableCaseIndex(detail),
-    [detail],
+    () => firstSelectableCaseIndex(allCases),
+    [allCases],
   );
   const initialCase =
-    initialIndex !== null ? (detail.cases[initialIndex] ?? null) : null;
+    initialIndex !== null ? (allCases[initialIndex] ?? null) : null;
 
   const [selectedCaseIndex, setSelectedCaseIndex] = useState<number | null>(
     initialIndex,
@@ -68,6 +87,8 @@ export function ComponentWorkbench({ detail }: Props) {
 
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,8 +144,10 @@ export function ComponentWorkbench({ detail }: Props) {
       // edited the textarea we send ``custom_input`` so the
       // on-the-wire payload reflects what they see. ``case_name``
       // is only sent when the selected case is named — the backend
-      // has no way to address an unnamed case by key.
-      const selected = caseAt(detail, selectedCaseIndex);
+      // has no way to address an unnamed case by key. User cases
+      // are resolved server-side through the same ``case_name``
+      // lookup path as canonical cases.
+      const selected = caseAt(allCases, selectedCaseIndex);
       const selectedInputMatchesTextarea =
         selected !== null &&
         prettyJson(selected.input).trim() === inputText.trim();
@@ -141,7 +164,7 @@ export function ComponentWorkbench({ detail }: Props) {
     } finally {
       setIsRunning(false);
     }
-  }, [detail, inputText, selectedCaseIndex]);
+  }, [allCases, detail.id, inputText, selectedCaseIndex]);
 
   const onEvaluate = useCallback(async () => {
     if (runResult === null) {
@@ -150,7 +173,7 @@ export function ComponentWorkbench({ detail }: Props) {
     setEvalError(null);
     setIsEvaluating(true);
     try {
-      const selected = caseAt(detail, selectedCaseIndex);
+      const selected = caseAt(allCases, selectedCaseIndex);
       const response = await evaluateCase(detail.id, {
         case_name: selected?.name ?? undefined,
         actual_output: runResult.output,
@@ -162,7 +185,23 @@ export function ComponentWorkbench({ detail }: Props) {
     } finally {
       setIsEvaluating(false);
     }
-  }, [detail, runResult, selectedCaseIndex]);
+  }, [allCases, detail.id, runResult, selectedCaseIndex]);
+
+  const onSaveCommitted = useCallback(
+    (stamped: CaseSummary) => {
+      // Append to the local user-case list and move selection to
+      // the new entry so Evaluate/Run can be retried against the
+      // just-committed name.
+      setUserCases((prev) => {
+        const next = [...prev, stamped];
+        // Newly appended entry lives at (canonical length + prev length).
+        setSelectedCaseIndex(canonicalCount + prev.length);
+        return next;
+      });
+      setSaveDialogOpen(false);
+    },
+    [canonicalCount],
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -176,6 +215,8 @@ export function ComponentWorkbench({ detail }: Props) {
           />
           <CaseList
             cases={detail.cases}
+            userCases={userCases}
+            canonicalCount={canonicalCount}
             selectedCaseIndex={selectedCaseIndex}
             onSelect={loadCase}
           />
@@ -186,6 +227,7 @@ export function ComponentWorkbench({ detail }: Props) {
             onChange={setInputText}
             onRun={onRun}
             onEvaluate={onEvaluate}
+            onSaveAsCase={() => setSaveDialogOpen(true)}
             canEvaluate={runResult !== null && runResult.status === "OK"}
             isRunning={isRunning}
             isEvaluating={isEvaluating}
@@ -194,30 +236,38 @@ export function ComponentWorkbench({ detail }: Props) {
           <EvaluateResultPanel result={evalResult} error={evalError} />
         </div>
       </div>
+      {saveDialogOpen && (
+        <SaveCaseDialog
+          componentId={detail.id}
+          currentInput={inputText}
+          onClose={() => setSaveDialogOpen(false)}
+          onCommitted={onSaveCommitted}
+        />
+      )}
     </div>
   );
 }
 
 function firstSelectableCaseIndex(
-  detail: ComponentDetail,
+  cases: readonly CaseSummary[],
 ): number | null {
-  for (let i = 0; i < detail.cases.length; i += 1) {
-    const candidate = detail.cases[i];
+  for (let i = 0; i < cases.length; i += 1) {
+    const candidate = cases[i];
     if (candidate.name !== null && candidate.name.length > 0) {
       return i;
     }
   }
-  return detail.cases.length > 0 ? 0 : null;
+  return cases.length > 0 ? 0 : null;
 }
 
 function caseAt(
-  detail: ComponentDetail,
+  cases: readonly CaseSummary[],
   index: number | null,
 ): CaseSummary | null {
-  if (index === null || index < 0 || index >= detail.cases.length) {
+  if (index === null || index < 0 || index >= cases.length) {
     return null;
   }
-  return detail.cases[index] ?? null;
+  return cases[index] ?? null;
 }
 
 function Header({ detail }: { readonly detail: ComponentDetail }) {
@@ -314,47 +364,96 @@ function HealthPanel({
 
 function CaseList({
   cases,
+  userCases,
+  canonicalCount,
   selectedCaseIndex,
   onSelect,
 }: {
   readonly cases: ComponentDetail["cases"];
+  readonly userCases: readonly CaseSummary[];
+  readonly canonicalCount: number;
   readonly selectedCaseIndex: number | null;
   readonly onSelect: (summary: CaseSummary, index: number) => void;
 }) {
   return (
     <section className="rounded border border-pg-border bg-pg-surface p-4">
       <h2 className="text-sm font-semibold text-pg-text">
-        Cases ({cases.length})
+        Cases ({cases.length + userCases.length})
       </h2>
       <p className="mt-1 text-xs text-pg-muted">
-        Click a case to load its input into the editor. Green = pass
-        path, red = negative, amber = edge.
+        Green = pass path, red = negative, amber = edge. User-saved
+        cases appear below the canonical corpus and carry a
+        <span className="ml-1 font-mono text-pg-accent">saved</span> tag.
       </p>
       <ul className="mt-3 flex max-h-96 flex-col gap-1 overflow-y-auto">
-        {cases.map((summary, index) => {
-          const label = summary.name ?? `(unnamed case ${index + 1})`;
-          // Compare by index so multiple cases with ``name: null``
-          // don't all light up simultaneously.
-          const active = index === selectedCaseIndex;
+        {cases.map((summary, index) => (
+          <CaseRow
+            key={`canonical-${index}`}
+            summary={summary}
+            index={index}
+            active={index === selectedCaseIndex}
+            onSelect={onSelect}
+          />
+        ))}
+        {userCases.length > 0 && (
+          <li className="mt-3 flex items-center gap-2 text-[10px] uppercase tracking-widest text-pg-muted">
+            <span className="h-px flex-1 bg-pg-border" />
+            <span className="font-mono">saved by you ({userCases.length})</span>
+            <span className="h-px flex-1 bg-pg-border" />
+          </li>
+        )}
+        {userCases.map((summary, userIndex) => {
+          const index = canonicalCount + userIndex;
           return (
-            <li key={`${label}-${index}`}>
-              <button
-                type="button"
-                onClick={() => onSelect(summary, index)}
-                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition ${
-                  active
-                    ? "bg-pg-accent/20 text-pg-accent"
-                    : "text-pg-text hover:bg-pg-border"
-                }`}
-              >
-                <span className={`pg-dot ${caseRoleDot(summary.role)}`} />
-                <span className="font-mono">{label}</span>
-              </button>
-            </li>
+            <CaseRow
+              key={`user-${userIndex}`}
+              summary={summary}
+              index={index}
+              active={index === selectedCaseIndex}
+              onSelect={onSelect}
+              isUser
+            />
           );
         })}
       </ul>
     </section>
+  );
+}
+
+function CaseRow({
+  summary,
+  index,
+  active,
+  onSelect,
+  isUser,
+}: {
+  readonly summary: CaseSummary;
+  readonly index: number;
+  readonly active: boolean;
+  readonly onSelect: (summary: CaseSummary, index: number) => void;
+  readonly isUser?: boolean;
+}) {
+  const label = summary.name ?? `(unnamed case ${index + 1})`;
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onSelect(summary, index)}
+        className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition ${
+          active
+            ? "bg-pg-accent/20 text-pg-accent"
+            : "text-pg-text hover:bg-pg-border"
+        }`}
+      >
+        <span className={`pg-dot ${caseRoleDot(summary.role)}`} />
+        <span className="flex-1 truncate font-mono">{label}</span>
+        {isUser && (
+          <span className="rounded bg-pg-accent/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-pg-accent">
+            saved
+          </span>
+        )}
+      </button>
+    </li>
   );
 }
 
@@ -373,6 +472,7 @@ function InputEditor({
   onChange,
   onRun,
   onEvaluate,
+  onSaveAsCase,
   canEvaluate,
   isRunning,
   isEvaluating,
@@ -381,6 +481,7 @@ function InputEditor({
   readonly onChange: (next: string) => void;
   readonly onRun: () => void;
   readonly onEvaluate: () => void;
+  readonly onSaveAsCase: () => void;
   readonly canEvaluate: boolean;
   readonly isRunning: boolean;
   readonly isEvaluating: boolean;
@@ -398,7 +499,7 @@ function InputEditor({
         className="mt-3 h-64 w-full resize-y rounded border border-pg-border bg-pg-bg p-2 font-mono text-xs text-pg-text focus:border-pg-accent focus:outline-none"
         aria-label="Case input JSON"
       />
-      <div className="mt-3 flex gap-2">
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           type="button"
           onClick={onRun}
@@ -414,6 +515,13 @@ function InputEditor({
           className="rounded border border-pg-border px-3 py-1.5 text-xs font-semibold text-pg-text transition hover:border-pg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isEvaluating ? "Evaluating…" : "Evaluate"}
+        </button>
+        <button
+          type="button"
+          onClick={onSaveAsCase}
+          className="ml-auto rounded border border-dashed border-pg-accent/60 px-3 py-1.5 text-xs font-semibold text-pg-accent transition hover:bg-pg-accent/10"
+        >
+          Save as case…
         </button>
       </div>
     </section>
@@ -560,5 +668,190 @@ function EvaluateResultPanel({
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * Two-step save flow: ``Preview`` posts with ``confirm=false`` and
+ * shows the unified diff the commit would produce; ``Commit`` posts
+ * the same body with ``confirm=true`` and writes to disk. Splitting
+ * the interaction into preview → commit keeps the irreversible
+ * side-effect one click further from a mistaken input — and the
+ * backend enforces the same contract server-side, so a user who
+ * bypasses the dialog (e.g. via cURL) still sees the preview first.
+ */
+function SaveCaseDialog({
+  componentId,
+  currentInput,
+  onClose,
+  onCommitted,
+}: {
+  readonly componentId: string;
+  readonly currentInput: string;
+  readonly onClose: () => void;
+  readonly onCommitted: (committed: CaseSummary) => void;
+}) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState<CaseRole>("pass");
+  const [notes, setNotes] = useState("");
+  const [preview, setPreview] = useState<SaveUserCasePreview | null>(null);
+  const [pending, setPending] = useState<"preview" | "commit" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const buildBody = useCallback(
+    (confirm: boolean) => {
+      const parsed = parseJsonSafe(currentInput);
+      if (!parsed.ok) {
+        throw new Error(`Input is not valid JSON: ${parsed.error}`);
+      }
+      return {
+        name: name.trim(),
+        role,
+        input: parsed.value,
+        notes: notes.trim() || undefined,
+        confirm,
+      };
+    },
+    [currentInput, name, notes, role],
+  );
+
+  const onPreview = useCallback(async () => {
+    setError(null);
+    setPending("preview");
+    try {
+      const body = buildBody(false);
+      const response = await saveUserCase(componentId, body);
+      setPreview(response.preview);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+    }
+  }, [buildBody, componentId]);
+
+  const onCommit = useCallback(async () => {
+    setError(null);
+    setPending("commit");
+    try {
+      const body = buildBody(true);
+      const response = await saveUserCase(componentId, body);
+      if (response.committed && response.case) {
+        onCommitted(response.case);
+      } else {
+        setError("Server reported committed=false — check logs.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(null);
+    }
+  }, [buildBody, componentId, onCommitted]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Save as case"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col gap-4 overflow-y-auto rounded border border-pg-border bg-pg-bg p-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-pg-text">
+            Save as case · <span className="font-mono">{componentId}</span>
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded border border-pg-border px-2 py-1 text-xs text-pg-muted transition hover:border-pg-accent/60"
+          >
+            Close
+          </button>
+        </div>
+        <p className="text-xs text-pg-muted">
+          Saved cases land in
+          <span className="ml-1 font-mono text-pg-text">
+            server/strands_agents/playground/user_cases/{componentId}.json
+          </span>
+          . Case names must be unique across both the canonical and
+          user corpora for this component.
+        </p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1 text-xs text-pg-muted">
+            <span>Case name</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. user_fog_scene_01"
+              className="rounded border border-pg-border bg-pg-surface px-2 py-1.5 font-mono text-xs text-pg-text focus:border-pg-accent focus:outline-none"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-pg-muted">
+            <span>Role</span>
+            <select
+              value={role}
+              onChange={(event) => setRole(event.target.value as CaseRole)}
+              className="rounded border border-pg-border bg-pg-surface px-2 py-1.5 font-mono text-xs text-pg-text focus:border-pg-accent focus:outline-none"
+            >
+              <option value="pass">pass · green path</option>
+              <option value="neg">neg · negative expected</option>
+              <option value="edge">edge · boundary</option>
+            </select>
+          </label>
+        </div>
+        <label className="flex flex-col gap-1 text-xs text-pg-muted">
+          <span>Notes (optional)</span>
+          <textarea
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            rows={2}
+            placeholder="Why this case matters. Visible in the case list."
+            className="rounded border border-pg-border bg-pg-surface px-2 py-1.5 text-xs text-pg-text focus:border-pg-accent focus:outline-none"
+          />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onPreview}
+            disabled={pending !== null || !name.trim()}
+            className="rounded border border-pg-border px-3 py-1.5 text-xs font-semibold text-pg-text transition hover:border-pg-accent/60 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending === "preview" ? "Previewing…" : "Preview diff"}
+          </button>
+          <button
+            type="button"
+            onClick={onCommit}
+            disabled={pending !== null || !name.trim() || preview === null}
+            className="rounded bg-pg-accent px-3 py-1.5 text-xs font-semibold text-pg-bg transition hover:bg-pg-accent/80 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending === "commit" ? "Committing…" : "Commit"}
+          </button>
+        </div>
+        {error !== null && (
+          <p
+            role="alert"
+            className="rounded border border-pg-red/40 bg-pg-red/10 p-2 font-mono text-xs text-pg-red"
+          >
+            {error}
+          </p>
+        )}
+        {preview !== null && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between text-xs text-pg-muted">
+              <span className="font-mono">{preview.file_path}</span>
+              <span>
+                {preview.case_count_before} → {preview.case_count_after} cases
+              </span>
+            </div>
+            <pre className="max-h-72 overflow-auto rounded border border-pg-border bg-pg-surface p-2 font-mono text-[11px] text-pg-text">
+              {preview.diff || "(no diff — file will be created)"}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

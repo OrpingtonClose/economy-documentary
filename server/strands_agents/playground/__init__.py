@@ -31,20 +31,38 @@ from strands_agents.playground.registry import (
     get_component,
     iter_components,
 )
+from strands_agents.playground.user_cases import (
+    DEFAULT_USER_CASES_DIR,
+    DuplicateCaseNameError,
+    UserCase,
+    VALID_ROLES,
+    append_user_case,
+    load_user_cases,
+    preview_diff,
+    user_cases_path,
+)
 
 __all__ = [
     "COMPONENT_IDS",
     "Component",
     "CredentialsProber",
+    "DEFAULT_USER_CASES_DIR",
     "DeclaredModel",
+    "DuplicateCaseNameError",
     "EvaluatorDeclaration",
     "MODEL_UNREACHABLE",
     "ModelProber",
     "ReachabilityCache",
     "ReachabilityStatus",
+    "UserCase",
+    "VALID_ROLES",
+    "append_user_case",
     "get_component",
     "get_default_cache",
     "iter_components",
+    "load_user_cases",
+    "preview_diff",
     "probe_models",
     "set_default_cache",
+    "user_cases_path",
 ]

@@ -20,7 +20,9 @@ import {
   getComponent,
   getComponentHealth,
   listComponents,
+  listUserCases,
   runCase,
+  saveUserCase,
 } from "@/lib/api";
 
 type FetchMock = jest.Mock<Promise<Response>, [RequestInfo | URL, RequestInit?]>;
@@ -133,6 +135,106 @@ describe("evaluateCase", () => {
     expect(JSON.parse(String(init?.body ?? "")).actual_output).toEqual({
       whatever: 1,
     });
+  });
+});
+
+describe("listUserCases", () => {
+  it("GETs /playground/components/{id}/user-cases and unwraps", async () => {
+    const mock = installFetch(
+      jsonResponse({
+        component_id: "c02",
+        user_cases: [
+          { name: "saved_a", role: "pass", input: {}, source: "user" },
+        ],
+        total: 1,
+      }),
+    );
+
+    const result = await listUserCases("c02");
+
+    const [url, init] = mock.mock.calls[0];
+    expect(url).toBe(`${PLAYGROUND_BASE}/components/c02/user-cases`);
+    expect(init?.method ?? "GET").toBe("GET");
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("saved_a");
+  });
+});
+
+describe("saveUserCase", () => {
+  it("POSTs preview body with confirm=false by default", async () => {
+    const mock = installFetch(
+      jsonResponse({
+        component_id: "c02",
+        committed: false,
+        preview: {
+          file_path: "/tmp/x.json",
+          existed: false,
+          diff: "",
+          before: "",
+          after: "[]",
+          case_count_before: 0,
+          case_count_after: 1,
+        },
+      }),
+    );
+
+    const result = await saveUserCase("c02", {
+      name: "my_case",
+      role: "edge",
+      input: { a: 1 },
+    });
+
+    const [url, init] = mock.mock.calls[0];
+    expect(url).toBe(`${PLAYGROUND_BASE}/components/c02/user-cases`);
+    expect(init?.method).toBe("POST");
+    const body = JSON.parse(String(init?.body ?? ""));
+    expect(body.name).toBe("my_case");
+    expect(body.role).toBe("edge");
+    expect(result.committed).toBe(false);
+  });
+
+  it("commits when confirm=true", async () => {
+    const mock = installFetch(
+      jsonResponse({
+        component_id: "c02",
+        committed: true,
+        preview: {
+          file_path: "/tmp/x.json",
+          existed: false,
+          diff: "",
+          before: "",
+          after: "[]",
+          case_count_before: 0,
+          case_count_after: 1,
+        },
+        case: { name: "my_case", role: "pass", input: {}, source: "user" },
+      }),
+    );
+
+    const result = await saveUserCase("c02", {
+      name: "my_case",
+      input: {},
+      confirm: true,
+    });
+
+    expect(result.committed).toBe(true);
+    expect(result.case?.name).toBe("my_case");
+    const [, init] = mock.mock.calls[0];
+    const body = JSON.parse(String(init?.body ?? ""));
+    expect(body.confirm).toBe(true);
+  });
+
+  it("surfaces 409 collisions as PlaygroundApiError", async () => {
+    installFetch(
+      new Response("name collides with canonical case", {
+        status: 409,
+        statusText: "Conflict",
+      }),
+    );
+
+    await expect(
+      saveUserCase("c02", { name: "intent_exact", input: {}, confirm: true }),
+    ).rejects.toMatchObject({ status: 409 });
   });
 });
 

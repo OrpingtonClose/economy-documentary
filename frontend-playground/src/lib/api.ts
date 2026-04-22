@@ -11,11 +11,13 @@
  */
 
 import type {
+  CaseSummary,
   ComponentDetail,
   ComponentSummary,
   EvaluateResponse,
   HealthResponse,
   RunResponse,
+  SaveUserCaseResponse,
 } from "./types";
 
 /** Playground catalog root — every request starts here. */
@@ -121,4 +123,38 @@ export async function evaluateCase(
   }
 ): Promise<EvaluateResponse> {
   return postJson<EvaluateResponse>(`/components/${componentId}/evaluate`, body);
+}
+
+/**
+ * Body for the save-as-case endpoint. ``confirm=false`` (the default)
+ * returns a preview only; ``confirm=true`` writes to the on-disk
+ * sidecar under ``server/strands_agents/playground/user_cases/``.
+ */
+export interface SaveUserCaseBody {
+  readonly name: string;
+  readonly role?: "pass" | "neg" | "edge";
+  readonly input: unknown;
+  readonly metadata?: Record<string, unknown>;
+  readonly notes?: string;
+  readonly created_by?: string;
+  readonly confirm?: boolean;
+}
+
+export async function listUserCases(
+  componentId: string
+): Promise<readonly CaseSummary[]> {
+  const payload = await getJson<{ user_cases: CaseSummary[] }>(
+    `/components/${componentId}/user-cases`
+  );
+  return payload.user_cases;
+}
+
+export async function saveUserCase(
+  componentId: string,
+  body: SaveUserCaseBody
+): Promise<SaveUserCaseResponse> {
+  return postJson<SaveUserCaseResponse>(
+    `/components/${componentId}/user-cases`,
+    body
+  );
 }

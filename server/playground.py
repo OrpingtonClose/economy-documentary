@@ -15,6 +15,8 @@ Nothing in :mod:`server.agui` moves. ``/playground`` is additive.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -26,12 +28,17 @@ from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
 from strands_agents.playground import (
     Component,
     DeclaredModel,
+    DuplicateCaseNameError,
     EvaluatorDeclaration,
     MODEL_UNREACHABLE,
     ReachabilityStatus,
+    UserCase,
+    append_user_case,
     get_component,
     get_default_cache,
     iter_components,
+    load_user_cases,
+    preview_diff,
     probe_models,
 )
 
@@ -126,12 +133,19 @@ async def list_components() -> dict[str, Any]:
 
 @router.get("/components/{component_id}", response_class=JSONResponse)
 async def get_component_detail(component_id: str) -> dict[str, Any]:
-    """Return one component's full metadata, including its cases."""
+    """Return one component's full metadata, including its cases.
+
+    ``cases`` contains the canonical corpus — the same cases CI runs
+    against. ``user_cases`` contains anything the user has saved via
+    ``POST /components/{id}/user-cases``. Both carry the ``role``
+    classification so the frontend can colour their chips identically.
+    """
     component = get_component(component_id)
     if component is None:
         raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
     detail = _component_summary(component)
     detail["cases"] = [_serialise_case(c) for c in component.cases()]
+    detail["user_cases"] = _user_case_payloads(component_id)
     return detail
 
 
@@ -299,14 +313,14 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
             input=request.custom_input,
         )
     elif request.case_name is not None:
-        cases_by_name = {c.name: c for c in component.cases()}
-        case = cases_by_name.get(request.case_name)
+        case = _lookup_case_by_name(component, request.case_name)
         if case is None:
+            user_total = len(_user_case_payloads(component.id))
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"unknown case: {request.case_name} (component {component.id} "
-                    f"has {len(cases_by_name)} cases)"
+                    f"has {len(component.cases())} canonical + {user_total} user cases)"
                 ),
             )
     else:
@@ -462,14 +476,14 @@ def evaluate_component(
             input=request.custom_input,
         )
     elif request.case_name is not None:
-        cases_by_name = {c.name: c for c in component.cases()}
-        lookup = cases_by_name.get(request.case_name)
+        lookup = _lookup_case_by_name(component, request.case_name)
         if lookup is None:
+            user_total = len(_user_case_payloads(component.id))
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"unknown case: {request.case_name} (component {component.id} "
-                    f"has {len(cases_by_name)} cases)"
+                    f"has {len(component.cases())} canonical + {user_total} user cases)"
                 ),
             )
         case = lookup
@@ -552,6 +566,196 @@ def evaluate_component(
         "case_name": case.name,
         "results": results,
         "overall_passed": overall_passed,
+    }
+
+
+def _user_cases_base_dir() -> Path | None:
+    """Return the configured user-cases directory, or ``None`` for default.
+
+    Tests point ``PLAYGROUND_USER_CASES_DIR`` at a temp dir so they
+    never touch the repo tree. In production the env var is unset
+    and :func:`load_user_cases` falls through to
+    :data:`DEFAULT_USER_CASES_DIR` (the in-repo sidecar folder).
+    """
+    override = os.environ.get("PLAYGROUND_USER_CASES_DIR")
+    return Path(override) if override else None
+
+
+def _lookup_case_by_name(
+    component: Component, name: str
+) -> Case[Any, Any] | None:
+    """Look ``name`` up across canonical cases and user cases.
+
+    Canonical cases win on collision — but the POST handler rejects
+    collisions at save time so the lookup order is belt-and-braces.
+    Returns ``None`` when the name matches neither corpus; callers
+    surface the miss as a 400 with the size of each corpus included
+    in the detail so the UI can distinguish "typo" from "wrong
+    component".
+    """
+    for case in component.cases():
+        if case.name == name:
+            return case
+    for user_case in load_user_cases(component.id, _user_cases_base_dir()):
+        if user_case.name == name:
+            return user_case.to_case()
+    return None
+
+
+def _user_case_payloads(component_id: str) -> list[dict[str, Any]]:
+    """Return serialised user cases for ``component_id``.
+
+    The shape mirrors :func:`_serialise_case` so the frontend can
+    render canonical and user cases through the same renderer; the
+    ``source`` field is the only cue distinguishing the two.
+    """
+    cases = load_user_cases(component_id, _user_cases_base_dir())
+    out: list[dict[str, Any]] = []
+    for case in cases:
+        payload = case.model_dump(mode="json", exclude_none=True)
+        payload["source"] = "user"
+        # ``role`` is already present on UserCase (pass/neg/edge) so
+        # we don't re-derive it from the name like canonical cases.
+        out.append(payload)
+    return out
+
+
+class SaveUserCaseRequest(BaseModel):
+    """Body for ``POST /playground/components/{id}/user-cases``.
+
+    ``confirm=False`` (the default) returns a preview bundle with the
+    unified diff the commit would produce; ``confirm=True`` writes the
+    case to disk and returns the landed payload. Splitting the two
+    into the same endpoint keeps the UI flow simple: render diff,
+    click commit, re-POST with ``confirm=True``.
+    """
+
+    name: str = Field(
+        ...,
+        description=(
+            "Unique case name within the component. Alphanumerics "
+            "plus ``_``/``-``; 1-64 chars."
+        ),
+    )
+    role: str = Field(
+        default="pass",
+        description="One of ``pass`` / ``neg`` / ``edge``.",
+    )
+    input: Any = Field(
+        ...,
+        description="Input payload for the component under test.",
+    )
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional free-form metadata.",
+    )
+    notes: str | None = Field(
+        default=None,
+        description="Optional human-facing comment shown in the UI.",
+    )
+    created_by: str | None = Field(
+        default=None,
+        description="Optional attribution (e.g. CLI user).",
+    )
+    confirm: bool = Field(
+        default=False,
+        description=(
+            "When ``True`` the case is written to disk. When ``False`` "
+            "(default) only the diff preview is returned."
+        ),
+    )
+
+
+@router.get(
+    "/components/{component_id}/user-cases", response_class=JSONResponse
+)
+async def list_user_cases(component_id: str) -> dict[str, Any]:
+    """Return just the user-authored cases for a component."""
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+    payloads = _user_case_payloads(component.id)
+    return {
+        "component_id": component.id,
+        "user_cases": payloads,
+        "total": len(payloads),
+    }
+
+
+@router.post(
+    "/components/{component_id}/user-cases", response_class=JSONResponse
+)
+def save_user_case(
+    component_id: str, request: SaveUserCaseRequest
+) -> dict[str, Any]:
+    """Preview or commit a user-authored case.
+
+    The endpoint enforces two disjoint pre-conditions:
+
+    1. The requested name must not collide with a canonical case.
+       Canonical cases are the source of truth for CI and we never
+       let a user entry shadow one.
+    2. The requested name must not collide with an existing user
+       case. Append-only is a product decision: editing a case
+       belongs in a PR review, not in the workbench.
+
+    A violation of either rule returns ``409 Conflict`` before the
+    preview / commit paths diverge so both modes produce the same
+    rejection for the same input.
+    """
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+
+    canonical_names = {c.name for c in component.cases() if c.name}
+    if request.name in canonical_names:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"name collides with canonical case {request.name!r}; "
+                "pick a different name or edit the canonical case "
+                "upstream instead."
+            ),
+        )
+
+    try:
+        new_case = UserCase(
+            name=request.name,
+            role=request.role,
+            input=request.input,
+            metadata=request.metadata or {},
+            notes=request.notes,
+            created_by=request.created_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    base_dir = _user_cases_base_dir()
+
+    try:
+        preview = preview_diff(component.id, new_case, base_dir)
+    except DuplicateCaseNameError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if not request.confirm:
+        return {
+            "component_id": component.id,
+            "committed": False,
+            "preview": preview,
+        }
+
+    try:
+        stamped = append_user_case(component.id, new_case, base_dir)
+    except DuplicateCaseNameError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    payload = stamped.model_dump(mode="json", exclude_none=True)
+    payload["source"] = "user"
+    return {
+        "component_id": component.id,
+        "committed": True,
+        "preview": preview,
+        "case": payload,
     }
 
 
