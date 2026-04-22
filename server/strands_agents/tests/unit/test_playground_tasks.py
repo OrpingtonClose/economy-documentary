@@ -140,3 +140,51 @@ def test_case_name_normalisation_promotes_metadata_names() -> None:
             f"c04 case #{idx} must have a non-empty name after "
             "registry normalisation"
         )
+
+
+@pytest.mark.parametrize(
+    "module_path,task_attr,cases_attr,case_name",
+    [
+        (
+            "strands_agents.evals.experiments.scenario_refiner",
+            "scenario_refiner_task",
+            "refiner_cases",
+            "timing_passed_noop",
+        ),
+        (
+            "strands_agents.evals.experiments.content_analyst",
+            "content_analyst_task",
+            "content_analyst_cases",
+            "missing_alignment",
+        ),
+    ],
+)
+def test_task_adapter_preserves_explicit_empty_trajectory(
+    module_path: str, task_attr: str, cases_attr: str, case_name: str
+) -> None:
+    """A case that sets ``expected_trajectory=[]`` must round-trip as ``[]``.
+
+    Prior to the review fix the adapter used
+    ``case.expected_trajectory or metadata.get("canonical_trajectory") or []``
+    which treats ``[]`` as falsy and silently falls through to the
+    metadata fallback. The current implementation uses explicit ``is
+    None`` checks so an intentional empty trajectory survives. Same
+    guarantee applies to ``expected_output={}`` — it would have been
+    replaced by ``{}`` from the ``or`` fallback anyway, but the new
+    code makes the intent explicit.
+    """
+    module = importlib.import_module(module_path)
+    task = getattr(module, task_attr)
+    cases_fn = getattr(module, cases_attr)
+    cases = [c for c in cases_fn() if c.name == case_name]
+    assert cases, f"case {case_name!r} not found in {module_path}"
+    case = cases[0]
+    assert case.expected_trajectory == [], (
+        f"precondition: {case_name} must set expected_trajectory=[]"
+    )
+
+    result = task(case)
+    assert result["trajectory"] == [], (
+        f"{module_path}.{task_attr} must preserve an explicit "
+        f"expected_trajectory=[] as []; got {result['trajectory']!r}"
+    )

@@ -304,12 +304,16 @@ def scenario_refiner_task(case: Case) -> dict[str, Any]:
     once provider plumbing lands in the playground.
     """
     metadata = case.metadata or {}
+    expected_output: Any = (
+        case.expected_output if case.expected_output is not None else {}
+    )
+    trajectory = case.expected_trajectory
+    if trajectory is None:
+        trajectory = metadata.get("canonical_trajectory")
+    if trajectory is None:
+        trajectory = []
     return {
-        "output": case.expected_output or {},
-        "trajectory": list(
-            case.expected_trajectory
-            or metadata.get("canonical_trajectory")
-            or []
-        ),
+        "output": expected_output,
+        "trajectory": list(trajectory),
         "metadata": {"mode": "replay", "case": case.name},
     }
