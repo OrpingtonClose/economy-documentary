@@ -34,6 +34,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -153,10 +154,11 @@ def _forwarded_env_pairs() -> list[str]:
         val = os.environ.get(var)
         if not val:
             continue
-        # Vast.ai's --env expects shell-safe values. The keys are opaque
-        # blobs from providers, so quoting is sufficient; there is no
-        # legitimate reason for them to contain single quotes.
-        pairs.append(f"-e {var}={val}")
+        # env_flag is space-delimited and fed into a shell via vastai's
+        # --env, so any value containing spaces or metacharacters would
+        # get mis-split. OPENAI_API_BASE (URL) and ADK_MODEL (freeform)
+        # are the realistic offenders; quote unconditionally.
+        pairs.append(f"-e {var}={shlex.quote(val)}")
     return pairs
 
 
@@ -167,16 +169,20 @@ def provision_vm(offer_id: str, disk_gb: int, branch: str) -> str:
     # Forward the selected branch into the VM so the bootstrap's
     # `git fetch && git reset --hard` picks it up. Without this the
     # bootstrap defaults to `main` and silently undoes the onstart clone.
-    env_pairs.append(f"-e PLAYGROUND_GIT_BRANCH={branch}")
+    env_pairs.append(f"-e PLAYGROUND_GIT_BRANCH={shlex.quote(branch)}")
     env_flag = f"{PORTS_EXPOSED} " + " ".join(env_pairs)
 
     # The onstart command runs as root once the container is up. Clone
     # (or update) the repo then hand off to the bootstrap script. The
     # bootstrap is idempotent so re-running onstart is safe.
+    # --branch comes from the user's CLI and lands inside a shell string,
+    # so quote it to keep a pathological value from running arbitrary
+    # commands on the VM.
+    quoted_branch = shlex.quote(branch)
     onstart = (
         "apt-get update && apt-get install -y git curl && "
         f"(git -C /workspace/economy-documentary pull --ff-only || "
-        f"git clone --branch {branch} --depth 1 "
+        f"git clone --branch {quoted_branch} --depth 1 "
         f"https://github.com/OrpingtonClose/economy-documentary.git "
         f"/workspace/economy-documentary || true) && "
         f"bash {BOOTSTRAP_PATH}"
