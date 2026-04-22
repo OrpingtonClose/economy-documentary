@@ -61,11 +61,43 @@ output carries:
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
 from strands_evals.evaluators.evaluator import Evaluator
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+
+# Bounded wait so a runaway PROCESSING state can never stall CI. A
+# 2-second fixture typically reaches ACTIVE in < 10s; 60s covers the
+# long tail without hiding genuine server-side failures.
+_GEMINI_FILE_ACTIVATION_TIMEOUT_S = 60.0
+_GEMINI_FILE_ACTIVATION_POLL_S = 1.0
+
+
+def _await_gemini_file_active(client: Any, uploaded: Any) -> Any:
+    """Poll a freshly uploaded Gemini file until it reaches ACTIVE.
+
+    Gemini's Files API returns the upload object immediately with
+    ``state == PROCESSING``; calling ``generateContent`` against a
+    PROCESSING file fails with HTTP 400. Poll until the state
+    advances. Raises :class:`TimeoutError` if activation exceeds the
+    bounded deadline.
+    """
+    deadline = time.monotonic() + _GEMINI_FILE_ACTIVATION_TIMEOUT_S
+    while True:
+        state = getattr(uploaded, "state", None)
+        state_name = getattr(state, "name", None) or str(state) if state else ""
+        if not state_name.endswith("PROCESSING"):
+            return uploaded
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"gemini file upload did not reach ACTIVE within "
+                f"{_GEMINI_FILE_ACTIVATION_TIMEOUT_S:.0f}s "
+                f"(last state: {state_name})"
+            )
+        time.sleep(_GEMINI_FILE_ACTIVATION_POLL_S)
+        uploaded = client.files.get(name=uploaded.name)
 
 
 @dataclass(frozen=True)
@@ -364,6 +396,10 @@ def _call_gemini_video_only(local_path: str, prompt: str) -> _JudgeResult:
     client = genai.Client(api_key=api_key)
     try:
         uploaded = client.files.upload(file=local_path)
+        # Gemini's Files API returns immediately with the upload in
+        # PROCESSING state; calling generateContent before the file
+        # reaches ACTIVE fails with a 400. Poll until ready.
+        uploaded = _await_gemini_file_active(client, uploaded)
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[uploaded, prompt],

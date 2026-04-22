@@ -27,7 +27,9 @@ from strands_agents.evals.evaluators.live_media_judge import (
 )
 from strands_agents.evals.experiments.media_corpus import media_task
 from strands_agents.evals.experiments.media_corpus_pairs import (
+    _SideState,
     _dominant_judge_answer,
+    _verdict_for,
     build_pair_cases,
     build_pair_experiment,
     summarize_pair_discrimination,
@@ -182,6 +184,80 @@ def test_dominant_judge_answer_skips_consensus_and_skipped_labels() -> None:
     # ``answered yes/no`` phrase anyway but we check the prefix filter
     # directly.
     assert _dominant_judge_answer([per_model_yes, consensus, skipped]) == "yes"
+
+
+def test_verdict_for_all_skipped_is_unclear_not_both_correct() -> None:
+    """Both sides all-skipped → ``unclear``, never ``both_correct``.
+
+    When every judge is skipped (e.g. no API key available) both
+    sides' ``_side_state`` returns ``passed=True, answer=None``:
+    ``passed`` is True because there were no hard failures, but
+    ``answer`` is None because no judge actually answered. The
+    classifier must treat ``answer=None`` as the stronger signal and
+    return ``unclear``. Reporting ``both_correct`` in this case would
+    let a zero-evidence run slip past ``PairSummary.all_discriminated``.
+    """
+    skipped_side = _SideState(case_name="fixture.x", passed=True, answer=None)
+    assert _verdict_for(skipped_side, skipped_side) == "unclear"
+
+    # Mixed: yes-side answered, no-side all skipped → still unclear.
+    answered = _SideState(case_name="fixture.y", passed=True, answer="yes")
+    assert _verdict_for(answered, skipped_side) == "unclear"
+    assert _verdict_for(skipped_side, answered) == "unclear"
+
+
+def test_verdict_for_classification_matrix() -> None:
+    """Cover every (yes_side, no_side) combination the classifier sees."""
+    # Both answered correctly → both_correct.
+    yes_ok = _SideState(case_name="fixture.yes", passed=True, answer="yes")
+    no_ok = _SideState(case_name="fixture.no", passed=True, answer="no")
+    assert _verdict_for(yes_ok, no_ok) == "both_correct"
+
+    # Judge answered "yes" on both sides → same_answer.
+    yes_wrong = _SideState(case_name="fixture.yes", passed=True, answer="yes")
+    no_wrong = _SideState(case_name="fixture.no", passed=False, answer="yes")
+    assert _verdict_for(yes_wrong, no_wrong) == "same_answer"
+
+    # Judge inverted both sides → flipped.
+    yes_flip = _SideState(case_name="fixture.yes", passed=False, answer="no")
+    no_flip = _SideState(case_name="fixture.no", passed=False, answer="yes")
+    assert _verdict_for(yes_flip, no_flip) == "flipped"
+
+
+def test_summary_flags_all_skipped_pair_as_unclear(monkeypatch) -> None:
+    """End-to-end: a report where every judge is skipped reports ``unclear``.
+
+    Stubs every judge helper to return an empty tuple (no judges ran).
+    The evaluator then emits ``judge.skipped.*`` outputs with
+    ``test_pass=True`` — the very shape that triggered the original
+    bug. ``PairSummary.all_discriminated`` must be False, and every
+    outcome verdict must be ``unclear``.
+    """
+
+    def _no_judges(
+        local_path: str, public_url: str | None, prompt: str
+    ) -> tuple[_JudgeResult, ...]:
+        return ()
+
+    evaluator = LiveMediaJudgeEvaluator(
+        video_judge=_no_judges, audio_judge=_no_judges
+    )
+    cases = build_pair_cases(media="video")
+
+    from strands_evals.experiment import Experiment
+
+    experiment = Experiment(cases=cases, evaluators=[evaluator])
+    reports = experiment.run_evaluations(task=media_task)
+
+    summary = summarize_pair_discrimination(reports[0])
+    assert summary.outcomes
+    assert not summary.all_discriminated, (
+        "all-skipped report must not be reported as discriminated"
+    )
+    assert all(o.verdict == "unclear" for o in summary.outcomes), (
+        f"all-skipped report must surface every axis as unclear, got "
+        f"{[(o.axis, o.verdict) for o in summary.outcomes]}"
+    )
 
 
 def test_dominant_judge_answer_returns_none_on_empty_or_tie() -> None:

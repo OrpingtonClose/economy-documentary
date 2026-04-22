@@ -298,10 +298,15 @@ def _verdict_for(yes_side: _SideState, no_side: _SideState) -> str:
 
     See :class:`PairOutcome` for the full semantics.
     """
-    if yes_side.passed and no_side.passed:
-        return "both_correct"
+    # ``unclear`` must be checked before ``both_correct``: a pair whose
+    # judges were all skipped has ``passed=True`` on both sides (no hard
+    # failures) but ``answer=None`` (no parseable yes/no). Reporting
+    # that as ``both_correct`` would silently mask a lack of
+    # discrimination evidence.
     if yes_side.answer is None or no_side.answer is None:
         return "unclear"
+    if yes_side.passed and no_side.passed:
+        return "both_correct"
     if yes_side.answer == no_side.answer:
         return "same_answer"
     return "flipped"
