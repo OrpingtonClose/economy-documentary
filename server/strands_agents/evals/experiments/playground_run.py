@@ -153,21 +153,6 @@ def playground_run_cases() -> list[Case[dict[str, Any], dict[str, Any]]]:
                 },
             },
         ),
-        # LLM component, full env → passes reachability; c01 has no
-        # task_attr → NO_TASK_ADAPTER (visible gap).
-        _run_case(
-            "reachable_but_no_task_adapter",
-            component_id="c01",
-            body={"case_name": "economics_basics"},
-            env=_FULL_ENV,
-            expected={
-                "status_code": 200,
-                "body": {
-                    "status": "NO_TASK_ADAPTER",
-                    "component_id": "c01",
-                },
-            },
-        ),
         # Unknown component → 404.
         _run_case(
             "unknown_component_returns_404",

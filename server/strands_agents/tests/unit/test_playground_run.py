@@ -24,7 +24,6 @@ def test_run_experiment_case_corpus_covers_every_status() -> None:
     assert "deterministic_component_runs_ok" in names
     assert "custom_input_runs_ok" in names
     assert "llm_component_without_credentials_hard_fails" in names
-    assert "reachable_but_no_task_adapter" in names
     assert "unknown_component_returns_404" in names
     assert "missing_case_and_custom_returns_400" in names
     assert "unknown_case_name_returns_400" in names
@@ -67,7 +66,25 @@ def test_registry_task_attr_consistent_with_upstream_modules() -> None:
 
 
 def test_registry_task_returns_none_when_task_attr_unset() -> None:
-    component = get_component("c01")  # c01 has no task_attr
-    assert component is not None
-    assert component.task_attr is None
-    assert component.task() is None
+    # After PR 5 every registered component declares a task_attr, so
+    # the NO_TASK_ADAPTER fallback is exercised against a synthetic
+    # ``Component`` with ``task_attr=None``. The fallback is kept as
+    # a defensive surface for any future component added without a
+    # task adapter — it must still resolve to ``None`` rather than
+    # raising.
+    from strands_agents.playground.registry import Component
+
+    synthetic = Component(
+        id="c_synthetic_no_task",
+        title="Synthetic",
+        kind="leaf",
+        row=1,
+        summary="",
+        experiment_module="strands_agents.evals.experiments.scenario",
+        cases_factory="scenario_cases",
+        thresholds_attr="SCENARIO_EVALUATOR_THRESHOLDS",
+        declared_models=(),
+        task_attr=None,
+    )
+    assert synthetic.task_attr is None
+    assert synthetic.task() is None

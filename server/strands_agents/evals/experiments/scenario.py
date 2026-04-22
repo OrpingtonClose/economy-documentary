@@ -181,3 +181,27 @@ def scenario_evaluators() -> list[Evaluator[str, dict[str, Any]]]:
 def build_scenario_experiment() -> Experiment[str, dict[str, Any]]:
     """Construct the :class:`Experiment` for Component 01."""
     return Experiment(cases=scenario_cases(), evaluators=scenario_evaluators())
+
+
+def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
+    """Replay task adapter for the component-playground surface.
+
+    The scenario agent requires a live LLM run to produce real output,
+    which the playground can't do offline. This adapter returns the
+    case's canonical expected envelope so the evaluator endpoint can
+    exercise its full stack against a known-good payload. Real live
+    runs are a separate adapter to be added once the playground's
+    provider plumbing lands.
+
+    Shape matches the other component tasks: ``{"output", "trajectory"}``.
+    """
+    metadata = case.metadata or {}
+    return {
+        "output": case.expected_output or {},
+        "trajectory": list(
+            case.expected_trajectory
+            or metadata.get("canonical_trajectory")
+            or []
+        ),
+        "metadata": {"mode": "replay", "case": case.name},
+    }

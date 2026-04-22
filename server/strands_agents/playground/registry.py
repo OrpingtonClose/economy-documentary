@@ -21,6 +21,7 @@ its model, or writing a case is handled by other playground modules.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -149,8 +150,35 @@ class Component:
             cases = source() if callable(source) else list(source)
         except Exception:  # noqa: BLE001 — partial rollout safety net
             cases = []
+        cases = [self._normalised_case(c, i) for i, c in enumerate(cases)]
         self._cache["cases"] = cases
         return cases
+
+    @staticmethod
+    def _normalised_case(case: Case[Any, Any], index: int) -> Case[Any, Any]:
+        """Promote ``metadata["case_name"]`` to ``Case.name`` when missing.
+
+        Some upstream experiments (notably c04 audio) historically set
+        the case name in metadata rather than on the dataclass. Those
+        cases become unaddressable by the run/evaluate endpoints, since
+        the endpoints key lookups by ``Case.name``. Normalising once
+        at registry surface keeps endpoint code uniform without
+        touching the source experiments.
+        """
+        if getattr(case, "name", None):
+            return case
+        metadata = getattr(case, "metadata", None) or {}
+        promoted = metadata.get("case_name") or f"case_{index}"
+        try:
+            return dataclasses.replace(case, name=promoted)
+        except (dataclasses.FrozenInstanceError, TypeError):
+            # Fall back to attribute assignment for non-dataclass Case
+            # shapes; the playground's catalog serialiser reads .name.
+            try:
+                case.name = promoted  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+            return case
 
     def evaluators(self) -> list[EvaluatorDeclaration]:
         """Return the component's evaluator stack in declaration order.
@@ -278,6 +306,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="SCENARIO_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
         experiment_builder_attr="build_scenario_experiment",
+        task_attr="scenario_task",
     ),
     Component(
         id="c02",
@@ -294,6 +323,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="TIMING_EVALUATOR_THRESHOLDS",
         declared_models=(),  # deterministic tool: no LLM
         experiment_builder_attr="build_experiment",
+        task_attr="timing_task",
     ),
     Component(
         id="c03",
@@ -309,6 +339,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="SCENARIO_REFINER_EVALUATOR_THRESHOLDS",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
         experiment_builder_attr="build_refiner_experiment",
+        task_attr="scenario_refiner_task",
     ),
     Component(
         id="c04",
@@ -325,6 +356,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="AUDIO_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_audio_experiment",
         declared_models=(),  # TTS + WhisperX, not an LLM agent
+        task_attr="audio_task",
     ),
     Component(
         id="c05",
@@ -340,6 +372,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="TIMING_LOOP_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_timing_loop_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="timing_loop_task",
     ),
     Component(
         id="c06",
@@ -355,6 +388,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_content_analyst_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="content_analyst_task",
     ),
     Component(
         id="c07",
@@ -370,6 +404,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_visual_concepter_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="visual_concepter_task",
     ),
     Component(
         id="c08",
@@ -385,6 +420,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="COHERENCE_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_coherence_evaluator_experiment",
         declared_models=(_GEMINI_3_1, _QWEN_OMNI, _GEMMA_4_URC),
+        task_attr="coherence_evaluator_task",
     ),
     Component(
         id="c09",
@@ -400,6 +436,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="VISUAL_LOOP_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_visual_loop_experiment",
         declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        task_attr="visual_loop_task",
     ),
     Component(
         id="c10",
@@ -415,6 +452,7 @@ _COMPONENTS: tuple[Component, ...] = (
         thresholds_attr="PRODUCTION_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_production_experiment",
         declared_models=(_OPENAI_4O, _GEMINI_3_1),
+        task_attr="production_task",
     ),
     Component(
         id="c11",
