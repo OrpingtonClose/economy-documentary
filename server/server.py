@@ -74,6 +74,7 @@ from agui import (
 from dashboard.sse import router as dashboard_router
 from dashboard_directives import router as dashboard_directives_router
 from fleet.router import router as fleet_router
+from playground import router as playground_router
 from plugins import build_plugins, setup_otel
 from run_registry import get_run_registry
 
@@ -288,6 +289,11 @@ app.include_router(dashboard_directives_router)
 
 # Fleet coordination routes (pull-work, report, queue status)
 app.include_router(fleet_router)
+
+# Component Playground — read-only catalog for the standalone
+# frontend-playground workbench (docs/strands-migration/plans/
+# component-playground.md). Additive; does not touch /agui.
+app.include_router(playground_router)
 
 
 # AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
