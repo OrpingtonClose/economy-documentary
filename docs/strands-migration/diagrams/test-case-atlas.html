@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1600" />
+<title>Strands Migration — Test Case Atlas</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg-2: #0f1530;
+    --panel: #141a36;
+    --panel-2: #1b2350;
+    --ink: #e7ecff;
+    --mute: #9aa6d0;
+    --line: #2a3366;
+    --accent: #7ad1ff;
+    --ok: #5be3a1;
+    --warn: #ffc664;
+    --fail: #ff7a7a;
+    --mag: #c29cff;
+    --tier1: #7ad1ff;
+    --tier2: #c29cff;
+    --sim:   #ffc664;
+    --live:  #5be3a1;
+  }
+  html, body { margin:0; padding:0; background:
+    radial-gradient(1200px 800px at 20% -10%, #1a2159 0%, transparent 60%),
+    radial-gradient(1000px 700px at 90% 10%, #25184a 0%, transparent 60%),
+    var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Inter, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1560px; margin: 0 auto; padding: 36px 28px 80px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: .2px; }
+  h1 .sub { color: var(--mute); font-weight: 500; margin-left: 10px; font-size: 16px; }
+  .tagline { color: var(--mute); margin: 0 0 22px; font-size: 14px; }
+  .legend { display:flex; gap:18px; flex-wrap: wrap; margin: 0 0 24px; font-size: 12.5px; color: var(--mute); }
+  .legend .sw { display:inline-block; width:10px; height:10px; border-radius: 3px; margin-right: 6px; vertical-align: 2px; }
+
+  /* Pipeline row with rounded boxes and arrows */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(15, 1fr);
+    gap: 10px;
+    position: relative;
+    margin-bottom: 18px;
+  }
+  .stage {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 10px 10px 12px;
+    min-height: 300px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .stage.kind-leaf  { border-top: 3px solid var(--accent); }
+  .stage.kind-tool  { border-top: 3px solid var(--warn); }
+  .stage.kind-loop  { border-top: 3px solid var(--mag); }
+  .stage.kind-graph { border-top: 3px solid var(--ok);   }
+  .stage.kind-gate  { border-top: 3px solid var(--fail); }
+
+  .stage h3 {
+    margin: 0 0 2px;
+    font-size: 13px;
+    letter-spacing: .3px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .stage .id {
+    display: inline-block;
+    background: #0a0f24;
+    color: var(--accent);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px;
+    padding: 1px 5px;
+  }
+  .stage .kind {
+    font-size: 10px;
+    color: var(--mute);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+  .cases { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 8px; }
+  .case {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10.5px;
+    background: #0c1330;
+    border: 1px solid var(--line);
+    color: var(--ink);
+    border-radius: 5px;
+    padding: 2px 6px;
+    white-space: nowrap;
+  }
+  .case.pass   { border-color: #2c5f49; background: #0c2118; }
+  .case.neg    { border-color: #5f2c36; background: #20101a; }
+  .case.hidden { border-color: #493a1c; background: #221a0c; }
+
+  .evrow { display:flex; flex-wrap: wrap; gap:3px; margin-top:auto; padding-top:8px; border-top:1px dashed var(--line); }
+  .ev { font-size: 10px; padding: 1px 5px; border-radius: 4px; background: #0f1b3b; border: 1px solid var(--line); color: #b9c5ef;}
+  .ev.hard { background: #22102a; border-color: #5a2d6f; color: #e0bfff; }
+  .ev.live { background: #0f2a1f; border-color: #2c5f49; color: #b7f0cf; }
+
+  .flow {
+    display:flex; align-items:center; gap:10px;
+    color: var(--mute); font-size: 12px; margin: 10px 0 18px;
+  }
+  .flow .arrow { flex:1; height: 2px; background: linear-gradient(90deg, transparent, var(--line), transparent); }
+
+  /* cross-cutting bands */
+  .band {
+    background: linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px 20px;
+    margin: 14px 0;
+  }
+  .band h2 { margin: 0 0 4px; font-size: 17px; }
+  .band p  { margin: 0 0 10px; color: var(--mute); font-size: 13px; }
+  .grid-4 { display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .grid-5 { display:grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .grid-6 { display:grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .card {
+    background: #0c1330;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+  }
+  .card h4 { margin: 0 0 6px; font-size: 12.5px; color: var(--ink); display:flex; gap:6px; align-items:center; }
+  .card small { color: var(--mute); font-size: 11px; }
+  .card .case { margin: 2px 3px 0 0; }
+
+  .total {
+    background:#0a0f24;
+    border:1px solid var(--line);
+    border-radius: 10px;
+    display: inline-flex; gap: 18px; align-items: center;
+    padding: 10px 14px; font-size: 13px; color: var(--mute);
+  }
+  .total b { color: var(--ink); }
+
+  .footer { color: var(--mute); font-size: 11.5px; margin-top: 24px; line-height: 1.5; }
+  .footer code { background:#0a0f24; padding: 1px 5px; border-radius: 4px; border:1px solid var(--line); color:#d9e2ff; }
+
+  /* cycle arcs hint */
+  .cycle-label {
+    font-size: 10.5px; color: var(--mag);
+    background: #1a0f2a; border:1px dashed #5a2d6f;
+    border-radius: 999px; padding: 2px 8px;
+    display:inline-block; margin: 4px 0 0;
+  }
+
+  .legend-chips .case { background:#0c1330; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Strands Migration — Test Case Atlas<span class="sub">economy-documentary / strands_agents</span></h1>
+  <p class="tagline">
+    Every atomic component of the documentary pipeline, with the exact test cases, evaluators, and live-judge suites
+    that guard it. Arrows follow production execution order; bottoms of boxes list the evaluator stack. Negative-path
+    cases (red tint) force the evaluator to reject on purpose.
+  </p>
+
+  <div class="legend">
+    <span><span class="sw" style="background:var(--accent)"></span>leaf agent</span>
+    <span><span class="sw" style="background:var(--warn)"></span>pure <code>@tool</code> (deterministic)</span>
+    <span><span class="sw" style="background:var(--mag)"></span>cyclic loop (GraphBuilder)</span>
+    <span><span class="sw" style="background:var(--ok)"></span>composition graph</span>
+    <span><span class="sw" style="background:var(--fail)"></span>human-in-the-loop gate</span>
+    <span class="legend-chips">&nbsp;&nbsp;<span class="case pass">pass-path case</span>
+    <span class="case neg">negative/failure case</span>
+    <span class="case hidden">edge/boundary case</span></span>
+  </div>
+
+  <!-- ROW 1: Scenario → Timing → Refiner → Audio → Timing-Loop -->
+  <div class="pipeline" style="grid-template-columns: repeat(5, 1fr);">
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent</div>
+      <h3><span class="id">C01</span> Scenario</h3>
+      <div class="cases">
+        <span class="case pass">economics_basics</span>
+        <span class="case pass">complex_monetary_policy</span>
+        <span class="case hidden">edge_single_scene</span>
+        <span class="case hidden">edge_max_scenes</span>
+        <span class="case neg">failure_empty_topic</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">ScenarioQuality ≥ .7</span>
+        <span class="ev">Coherence ≥ .75</span>
+        <span class="ev">Faithfulness ≥ .7</span>
+        <span class="ev hard">Trajectory ≥ .8</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: Gemini 3.1 judge</span>
+      </div>
+    </div>
+
+    <div class="stage kind-tool">
+      <div class="kind">pure tool</div>
+      <h3><span class="id">C02</span> Timing Evaluator</h3>
+      <div class="cases">
+        <span class="case pass">intent_exact</span>
+        <span class="case pass">intent_within_2s_over</span>
+        <span class="case neg">intent_over_by_3s</span>
+        <span class="case pass">legacy_exact</span>
+        <span class="case pass">legacy_within_15pct_under</span>
+        <span class="case neg">legacy_over_by_18pct</span>
+        <span class="case neg">per_scene_spike</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">Equals(timing_passed)</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: deterministic</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent</div>
+      <h3><span class="id">C03</span> Scenario Refiner</h3>
+      <div class="cases">
+        <span class="case hidden">timing_passed_noop</span>
+        <span class="case pass">shorten_single_scene</span>
+        <span class="case pass">lengthen_single_scene</span>
+        <span class="case pass">total_off_per_scene_ok</span>
+        <span class="case pass">preserve_pronunciation_hints</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">Contract</span>
+        <span class="ev">OutputRubric (schema preserved)</span>
+        <span class="ev">Contains(pronunciation_hints)</span>
+        <span class="ev live">live: Gemini 3.1</span>
+      </div>
+    </div>
+
+    <div class="stage kind-tool">
+      <div class="kind">pure tool</div>
+      <h3><span class="id">C04</span> Audio Agent</h3>
+      <div class="cases">
+        <span class="case pass">basic_3_scenes</span>
+        <span class="case pass">long_scene_45s</span>
+        <span class="case pass">multi_voice_blocks</span>
+        <span class="case neg">tts_transient_failure</span>
+        <span class="case neg">tts_persistent_failure</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">AudioInvariant (7 checks)</span>
+        <span class="ev hard">Contract</span>
+        <span class="ev">TTS ToolSimulator</span>
+        <span class="ev live">live: espeak-ng + WhisperX</span>
+      </div>
+    </div>
+
+    <div class="stage kind-loop">
+      <div class="kind">cyclic graph</div>
+      <h3><span class="id">C05</span> Timing Loop</h3>
+      <div class="cases">
+        <span class="case pass">one_shot_pass</span>
+        <span class="case pass">one_refine_pass</span>
+        <span class="case pass">per_scene_spike</span>
+        <span class="case neg">refiner_no_op</span>
+        <span class="case neg">max_iterations</span>
+      </div>
+      <div class="cycle-label">↻ audio → timing → refiner (max 10)</div>
+      <div class="evrow">
+        <span class="ev">TimingLoopTrajectory</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: sim substrate</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ROW 2: Content → Visual Concept → Coherence → Visual Loop → Production -->
+  <div class="pipeline" style="grid-template-columns: repeat(5, 1fr);">
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent</div>
+      <h3><span class="id">C06</span> Content Analyst</h3>
+      <div class="cases">
+        <span class="case pass">standard_5_scenes</span>
+        <span class="case pass">data_heavy_scene</span>
+        <span class="case hidden">short_scene_10s</span>
+        <span class="case pass">multi_voice_scene</span>
+        <span class="case neg">missing_alignment</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">Contract</span>
+        <span class="ev">Faithfulness</span>
+        <span class="ev">Trajectory</span>
+        <span class="ev live">live: Gemini 3.1</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent</div>
+      <h3><span class="id">C07</span> Visual Concepter</h3>
+      <div class="cases">
+        <span class="case pass">cinematic_doc</span>
+        <span class="case pass">hand_drawn</span>
+        <span class="case pass">realism_anchor</span>
+        <span class="case neg">forbidden_style</span>
+        <span class="case pass">phrase_data_heavy</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">StyleLock</span>
+        <span class="ev">ToolSelectionAccuracy</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: Gemini 3.1</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent</div>
+      <h3><span class="id">C08</span> Coherence Evaluator</h3>
+      <div class="cases">
+        <span class="case pass">clean_concepts</span>
+        <span class="case neg">style_lock_violation</span>
+        <span class="case neg">repetitive_shots</span>
+        <span class="case neg">missing_visual</span>
+        <span class="case hidden">minor_palette_drift</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">VisualCoherence (LLM-judge)</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: Gemini 3.1 + Qwen3.5-Omni</span>
+      </div>
+    </div>
+
+    <div class="stage kind-loop">
+      <div class="kind">cyclic graph</div>
+      <h3><span class="id">C09</span> Visual Loop</h3>
+      <div class="cases">
+        <span class="case pass">one_shot_good</span>
+        <span class="case pass">one_revise</span>
+        <span class="case neg">persistent_fair</span>
+        <span class="case neg">analyst_fails</span>
+        <span class="case neg">style_lock_drift</span>
+      </div>
+      <div class="cycle-label">↻ analyst → concepter → coherence (max 5)</div>
+      <div class="evrow">
+        <span class="ev">VisualLoopTrajectory</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: sim substrate</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">leaf agent (supervisor)</div>
+      <h3><span class="id">C10</span> Production Supervisor</h3>
+      <div class="cases">
+        <span class="case pass">one_shot_success</span>
+        <span class="case pass">transient_worker_error</span>
+        <span class="case pass">prompt_issue</span>
+        <span class="case neg">persistent_failure</span>
+        <span class="case neg">worker_starved</span>
+        <span class="case neg">budget_exhausted</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">ProductionSupervisorTrajectory</span>
+        <span class="ev hard">GoalSuccessRate ≥ .8</span>
+        <span class="ev">AudioWorkerInvariant</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: FakeRenderer</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ROW 3: Assembly → Recovery → Escalation → Pipeline → Approval -->
+  <div class="pipeline" style="grid-template-columns: repeat(5, 1fr);">
+
+    <div class="stage kind-tool">
+      <div class="kind">pure tool</div>
+      <h3><span class="id">C11</span> Assembly Agent</h3>
+      <div class="cases">
+        <span class="case pass">clean_3_scenes</span>
+        <span class="case neg">missing_clip</span>
+        <span class="case neg">gap_in_timeline</span>
+        <span class="case neg">outro_missing</span>
+        <span class="case neg">b2_upload_fails</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">TimelineCompliance (OTIO)</span>
+        <span class="ev hard">AssemblyOrdering</span>
+        <span class="ev hard">Contract</span>
+        <span class="ev live">live: OTIO + B2</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">recovery agents (SWCM)</div>
+      <h3><span class="id">C12</span> Recovery Agents</h3>
+      <div class="cases">
+        <span class="case pass">cuda_oom</span>
+        <span class="case pass">connection_reset</span>
+        <span class="case pass">wrong_style_output</span>
+        <span class="case pass">prompt_too_vague</span>
+        <span class="case neg">same_error_3x</span>
+        <span class="case neg">worker_500_all</span>
+        <span class="case pass">fixable_then_pass</span>
+        <span class="case hidden">recovery_log_integrity</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">EscalationDecision (LLM-judge)</span>
+        <span class="ev">MemoryHonoring</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: Gemini 3.1 judge</span>
+      </div>
+    </div>
+
+    <div class="stage kind-leaf">
+      <div class="kind">escalation supervisor</div>
+      <h3><span class="id">C13</span> Escalation Supervisor</h3>
+      <div class="cases">
+        <span class="case pass">transient_retry</span>
+        <span class="case pass">persistent_fail</span>
+        <span class="case neg">invariant_violation</span>
+        <span class="case neg">budget_exhausted_whole_stage</span>
+        <span class="case neg">catastrophic_worker_crash</span>
+        <span class="case pass">style_drift</span>
+        <span class="case neg">timing_loop_stuck</span>
+        <span class="case neg">bad_payload</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">EscalationTaxonomy</span>
+        <span class="ev hard">EscalationDecision ≥ .7</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: Gemini 3.1 judge</span>
+      </div>
+    </div>
+
+    <div class="stage kind-graph">
+      <div class="kind">composition graph</div>
+      <h3><span class="id">C14</span> Pipeline Graph</h3>
+      <div class="cases">
+        <span class="case pass">happy_path_5min</span>
+        <span class="case pass">timing_refine_once</span>
+        <span class="case pass">visual_revise</span>
+        <span class="case neg">escalation_path</span>
+        <span class="case pass">operator_approval_edit</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">PipelineTrajectory</span>
+        <span class="ev">Interactions ≥ .6</span>
+        <span class="ev">Contract (all stages)</span>
+        <span class="ev live">live: sim + DeepAgent</span>
+      </div>
+    </div>
+
+    <div class="stage kind-gate">
+      <div class="kind">human-in-the-loop</div>
+      <h3><span class="id">C15</span> Approval Gates</h3>
+      <div class="cases">
+        <span class="case pass">accept_visual_dispatch</span>
+        <span class="case pass">edit_visual_prompt</span>
+        <span class="case pass">reject_visual_dispatch</span>
+        <span class="case pass">respond_assembly_hold</span>
+        <span class="case pass">escalation_decision</span>
+        <span class="case pass">resume_after_restart</span>
+      </div>
+      <div class="evrow">
+        <span class="ev hard">ApprovalGateTrajectory</span>
+        <span class="ev hard">AllowedDecisions match</span>
+        <span class="ev">Contract</span>
+        <span class="ev live">live: HTTP /approval/pending</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- CROSS-CUTTING: Sim substrate -->
+  <div class="band">
+    <h2>Simulation Substrate — deterministic mocks the loop tests run against</h2>
+    <p>Six fakes (<code>FakeLLM · FakeRenderer · FakeTTS · FakeB2 · FakeClock · FakeInterrupt</code>) plus a composer <code>Substrate</code> and an <code>OrchestratorSimulator</code> that boots a real <code>create_deep_agent()</code> on top of the fakes. Every cyclic graph test exercises this substrate before running live.</p>
+    <div class="grid-6">
+      <div class="card"><h4>FakeLLM</h4><small>Scripted rules, reusable deep-copy, locked dispatch.</small></div>
+      <div class="card"><h4>FakeRenderer</h4><small>Worker pool; health snapshots under lock.</small></div>
+      <div class="card"><h4>FakeTTS</h4><small>Per-voice synth; transient/persistent fault injection.</small></div>
+      <div class="card"><h4>FakeB2</h4><small>Content-addressed cache; <code>verify_bytes</code> on store.</small></div>
+      <div class="card"><h4>FakeClock</h4><small>Monotonic, advanceable, deterministic jitter.</small></div>
+      <div class="card"><h4>FakeInterrupt</h4><small>Scripted approval decisions, deep-copied.</small></div>
+    </div>
+  </div>
+
+  <!-- CROSS-CUTTING: Sim trajectory tests -->
+  <div class="band">
+    <h2>Trajectory Tests — what the agent did, not just what it returned</h2>
+    <p>Each trajectory test drives a component through the sim substrate and asserts the exact sequence of tool calls, the per-iteration shape of the loop, and the presence of contractual side-effects.</p>
+    <div class="grid-5">
+      <div class="card">
+        <h4>Timing Trajectory</h4>
+        <small>one_shot · one_refine · two_iterations_one_refine · refine_count_mismatch · delegate_to_escalation</small>
+      </div>
+      <div class="card">
+        <h4>Audio-Worker Invariant</h4>
+        <small>pool rebind on voice_map change · gate emitted even without declared pool · retry after transient TTS</small>
+      </div>
+      <div class="card">
+        <h4>Assembly Ordering</h4>
+        <small>launched-before-assemble · no post-assembly launches · malformed entries skipped</small>
+      </div>
+      <div class="card">
+        <h4>Escalation Taxonomy</h4>
+        <small>8 payload fixtures · fix/retry/skip/escalate_to_human/abort mapping</small>
+      </div>
+      <div class="card">
+        <h4>Orchestrator Simulator</h4>
+        <small>Boots real <code>create_deep_agent(memory=[AGENTS.md])</code> over the fakes; asserts happy-path + escalation-path traces.</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- CROSS-CUTTING: Media corpus + judge fleet -->
+  <div class="band">
+    <h2>Media Corpus &amp; Judge Fleet — real artifacts, real judges</h2>
+    <p>Content-addressed B2 cache of media fixtures (audio WAV/LUFS-spec, PNG stills, short MP4 clips, OTIO timelines). A blinded pair-discrimination harness shows every judge a <em>yes</em> artifact and a <em>no</em> artifact on the same axis and demands both verdicts right.</p>
+    <div class="grid-4">
+      <div class="card">
+        <h4>Judge Fleet</h4>
+        <small>
+          Gemini 3.1 Pro (text + vision + audio · remote)<br>
+          Qwen3.5-Omni (video + audio · remote)<br>
+          Gemma 4 abliterated (local, B2-hosted)
+        </small>
+      </div>
+      <div class="card">
+        <h4>Judge Ensemble</h4>
+        <small>Local-first routing; proprietary fallback; JSON-blob verification; disabled-judge detection via <code>gemini_disabled</code> / <code>qwen_disabled</code> fields.</small>
+      </div>
+      <div class="card">
+        <h4>Pair Discrimination</h4>
+        <small>
+          16 axes × (yes, no) = 32 artifacts per nightly run.<br>
+          Verdicts: <code>both_correct</code> / <code>yes_only</code> / <code>no_only</code> / <code>both_wrong</code> / <code>unclear</code>.
+        </small>
+      </div>
+      <div class="card">
+        <h4>Tier-2 Nightly</h4>
+        <small>CI matrix (linux · macos · py3.11/3.12) · shell-injection-safe workflow · exit-code-2 = neutral · artifacts uploaded on failure.</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- CROSS-CUTTING: Live component tests -->
+  <div class="band">
+    <h2>Live Component Tests — 15 end-to-end tests, one per component</h2>
+    <p>Gated by real-API env flags (<code>GOOGLE_API_KEY</code>, <code>ANTHROPIC_API_KEY</code>, <code>DASHSCOPE_API_KEY</code> / <code>DASHSCOPE_INTL_API_KEY</code>). Each runs the production tool set (not placeholders) against a real judge and a real worker.</p>
+    <div class="grid-5">
+      <div class="card"><h4>test_01 · Scenario</h4><small>GOOGLE_API_KEY — Gemini 3.1 end-to-end scenario draft.</small></div>
+      <div class="card"><h4>test_02 · Timing</h4><small>deterministic — real OTIO + real WhisperX alignment.</small></div>
+      <div class="card"><h4>test_03 · Refiner</h4><small>GOOGLE_API_KEY — refine + preserve pronunciation_hints.</small></div>
+      <div class="card"><h4>test_04 · Audio</h4><small>espeak-ng + WhisperX + audio-invariants.</small></div>
+      <div class="card"><h4>test_05 · Timing Loop</h4><small>sim substrate cycle; asserts ≤10 iterations.</small></div>
+      <div class="card"><h4>test_06 · Content Analyst</h4><small>GOOGLE_API_KEY — full content analysis JSON.</small></div>
+      <div class="card"><h4>test_07 · Visual Concepter</h4><small>GOOGLE_API_KEY — style-lock round-trip.</small></div>
+      <div class="card"><h4>test_08 · Coherence</h4><small>GOOGLE_API_KEY — LLM-judge coherence verdict.</small></div>
+      <div class="card"><h4>test_09 · Visual Loop</h4><small>sim substrate cycle; asserts ≤5 iterations.</small></div>
+      <div class="card"><h4>test_10 · Production</h4><small>FakeRenderer pool rebind + invariant audit.</small></div>
+      <div class="card"><h4>test_11 · Assembly</h4><small>OTIO timeline + B2 upload + non-empty artifact.</small></div>
+      <div class="card"><h4>test_12 · Recovery</h4><small>GOOGLE_API_KEY — SWCM memory + decision grading.</small></div>
+      <div class="card"><h4>test_13 · Escalation</h4><small>GOOGLE_API_KEY — 8-axis taxonomy decision grading.</small></div>
+      <div class="card"><h4>test_14 · Pipeline Graph</h4><small>DeepAgent orchestrator + all 15 nodes over sim.</small></div>
+      <div class="card"><h4>test_15 · Approval Gates</h4><small>HTTP /approval/pending + async list_pending.</small></div>
+    </div>
+  </div>
+
+  <!-- Totals -->
+  <div style="margin-top:18px;">
+    <span class="total">
+      <b>15</b> components
+      &nbsp;·&nbsp; <b>87</b> Tier-1 cases
+      &nbsp;·&nbsp; <b>15</b> live component tests
+      &nbsp;·&nbsp; <b>5</b> trajectory harnesses
+      &nbsp;·&nbsp; <b>6</b> sim fakes
+      &nbsp;·&nbsp; <b>3</b> judge providers
+      &nbsp;·&nbsp; <b>32</b> pair-discrimination artifacts per nightly
+    </span>
+  </div>
+
+  <div class="footer">
+    <p>
+      Sources — cases generated from
+      <code>server/strands_agents/evals/experiments/*.py</code>,
+      trajectory harnesses from <code>server/strands_agents/tests/sim/*</code>,
+      live suite from <code>server/strands_agents/tests/live/components/*</code>,
+      judge fleet from <code>server/strands_agents/judges/*</code>,
+      corpus from <code>server/strands_agents/corpus/*</code>.
+    </p>
+    <p>Hard-gate evaluators (purple/red chips) must score 1.0 or above a named threshold for the component to ship. Soft evaluators are tracked as regressions but do not block the graph.</p>
+  </div>
+</div>
+</body>
+</html>
