@@ -53,7 +53,8 @@ def _subset_match(expected: Any, actual: Any) -> tuple[bool, str]:
     * Dicts: every key in ``expected`` must be present in ``actual``
       and subset-match recursively.
     * Lists: ``expected`` entries must all appear (subset-match) in
-      ``actual`` at the same index. Length must match.
+      ``actual`` at the same index. ``actual`` may contain trailing
+      entries ``expected`` did not pin — consistent with the dict arm.
     * Scalars: compared with ``==``.
 
     Returning the first mismatch's reason keeps failure diagnostics
@@ -72,8 +73,8 @@ def _subset_match(expected: Any, actual: Any) -> tuple[bool, str]:
     if isinstance(expected, list):
         if not isinstance(actual, list):
             return False, f"expected list, got {type(actual).__name__}"
-        if len(actual) != len(expected):
-            return False, f"length {len(actual)} != {len(expected)}"
+        if len(actual) < len(expected):
+            return False, f"length {len(actual)} < {len(expected)}"
         for idx, value in enumerate(expected):
             ok, reason = _subset_match(value, actual[idx])
             if not ok:

@@ -17,10 +17,26 @@ from __future__ import annotations
 
 from strands_agents.evals.experiments.playground_catalog import (
     PLAYGROUND_CATALOG_EVALUATOR_THRESHOLDS,
+    _subset_match,
     build_playground_catalog_experiment,
     playground_catalog_task,
 )
 from strands_agents.playground import COMPONENT_IDS, iter_components
+
+
+def test_subset_match_list_allows_trailing_actual_entries() -> None:
+    # Superset semantic: actual may have more list entries than
+    # expected. A previous implementation required strict length
+    # equality, contradicting both the docstring and the evaluator's
+    # name. Locked as a regression test.
+    ok, reason = _subset_match([1, 2], [1, 2, 3, 4])
+    assert ok, reason
+
+
+def test_subset_match_list_rejects_missing_expected_prefix() -> None:
+    ok, reason = _subset_match([1, 2, 3], [1, 2])
+    assert not ok
+    assert "length" in reason
 
 
 def test_registry_enumerates_all_fifteen_components_in_atlas_order() -> None:
