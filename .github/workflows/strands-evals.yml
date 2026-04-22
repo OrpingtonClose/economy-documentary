@@ -152,11 +152,12 @@ jobs:
       - name: Run experiment
         env: ${{ matrix.experiment.env }}
         run: |
-          set -o pipefail
           mkdir -p /tmp/strands-evals-out
           LOG="/tmp/strands-evals-out/${{ matrix.experiment.name }}.log"
-          poetry run python -m ${{ matrix.experiment.module }} 2>&1 | tee "$LOG"
-          echo "exit_code=$?" >> "$LOG"
+          rc=0
+          poetry run python -m ${{ matrix.experiment.module }} 2>&1 | tee "$LOG" || rc=$?
+          echo "exit_code=$rc" >> "$LOG"
+          exit "$rc"
 
       - name: Upload experiment output
         if: always()
