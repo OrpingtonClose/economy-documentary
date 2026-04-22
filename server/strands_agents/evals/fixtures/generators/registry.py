@@ -31,6 +31,7 @@ from typing import Any
 
 from ..manifest import FixtureEntry, FixtureManifest
 from .audio import AudioSpec, generate_audio
+from .av import AVSpec, generate_av
 from .video import VideoSpec, generate_video
 
 
@@ -62,6 +63,7 @@ class FixtureDeclaration:
     prompt: str
     video_spec: VideoSpec | None = None
     audio_spec: AudioSpec | None = None
+    av_spec: AVSpec | None = None
     public_url: str | None = None
 
 
@@ -420,9 +422,115 @@ _AUDIO_DECLS: tuple[FixtureDeclaration, ...] = (
 )
 
 
+# Combined audio+video fixtures.
+#
+# Each AV fixture muxes an already-declared video fixture with an
+# already-declared audio fixture, with an optional deliberate
+# time offset. Used by the ``av_desync`` Experiment to pin the
+# assembly-layer invariant "audio and video must be aligned within
+# ±150 ms and both must carry signal".
+_AV_DECLS: tuple[FixtureDeclaration, ...] = (
+    # --- clean, synced control ---
+    # Static-content video + narration, both start at t=0.
+    # Expected: audio_onset ≈ 0, video_content_onset ≈ 0, |desync| < 0.15s.
+    FixtureDeclaration(
+        id="av_synced_narration",
+        axis="desync_synced",
+        media="av",
+        relative_path="av/av_synced_narration.mp4",
+        expected_verdict="yes",
+        prompt=(
+            "Are the audio and video in this clip synchronised, with "
+            "both audible speech and visible content? Answer yes or no."
+        ),
+        av_spec=AVSpec(
+            video_source="video/video_hello_red.mp4",
+            audio_source="audio/audio_english_narration.wav",
+            audio_offset_sec=0.0,
+        ),
+    ),
+    # --- audio ahead of video (audio_offset_sec < 0) ---
+    # Video has 0.5s black head prepended; audio plays from t=0.
+    # Expected: audio_onset ≈ 0, video_content_onset ≈ 0.5s.
+    FixtureDeclaration(
+        id="av_audio_ahead",
+        axis="desync_ahead",
+        media="av",
+        relative_path="av/av_audio_ahead.mp4",
+        expected_verdict="reject",
+        prompt=(
+            "In this clip, does the audio start noticeably before "
+            "the video has any visible content? Answer yes or no."
+        ),
+        av_spec=AVSpec(
+            video_source="video/video_hello_red.mp4",
+            audio_source="audio/audio_english_narration.wav",
+            audio_offset_sec=-0.5,
+        ),
+    ),
+    # --- audio behind video (audio_offset_sec > 0) ---
+    # Audio has 0.5s silence prepended; video plays from t=0.
+    # Expected: audio_onset ≈ 0.5s, video_content_onset ≈ 0.
+    FixtureDeclaration(
+        id="av_audio_behind",
+        axis="desync_behind",
+        media="av",
+        relative_path="av/av_audio_behind.mp4",
+        expected_verdict="reject",
+        prompt=(
+            "In this clip, does the audio start noticeably after "
+            "the video has already shown visible content? Answer "
+            "yes or no."
+        ),
+        av_spec=AVSpec(
+            video_source="video/video_hello_red.mp4",
+            audio_source="audio/audio_english_narration.wav",
+            audio_offset_sec=0.5,
+        ),
+    ),
+    # --- audio missing (video present, audio is pure silence) ---
+    # Expected: audio_onset is None, video_content_onset ≈ 0.
+    FixtureDeclaration(
+        id="av_audio_missing",
+        axis="desync_audio_missing",
+        media="av",
+        relative_path="av/av_audio_missing.mp4",
+        expected_verdict="reject",
+        prompt=(
+            "Is this clip silent (no audible speech or sound) "
+            "despite showing visible video content? Answer yes or no."
+        ),
+        av_spec=AVSpec(
+            video_source="video/video_hello_red.mp4",
+            audio_source="audio/audio_silence.wav",
+            audio_offset_sec=0.0,
+        ),
+    ),
+    # --- video missing (narration present, but video is pure black) ---
+    # Expected: audio_onset ≈ 0, video_content_onset is None.
+    FixtureDeclaration(
+        id="av_video_missing",
+        axis="desync_video_missing",
+        media="av",
+        relative_path="av/av_video_missing.mp4",
+        expected_verdict="reject",
+        prompt=(
+            "Does this clip have audible narration but a video track "
+            "that is entirely black with no visible content? Answer "
+            "yes or no."
+        ),
+        av_spec=AVSpec(
+            video_source="video/video_black.mp4",
+            audio_source="audio/audio_english_narration.wav",
+            audio_offset_sec=0.0,
+        ),
+    ),
+)
+
+
 def all_declarations() -> tuple[FixtureDeclaration, ...]:
-    """Return every declared fixture (video + audio)."""
-    return _VIDEO_DECLS + _AUDIO_DECLS
+    """Return every declared fixture (video + audio + av)."""
+    return _VIDEO_DECLS + _AUDIO_DECLS + _AV_DECLS
 
 
 def _regenerate_one(decl: FixtureDeclaration, root: Path) -> FixtureEntry:
@@ -447,6 +555,16 @@ def _regenerate_one(decl: FixtureDeclaration, root: Path) -> FixtureEntry:
             "duration_sec": decl.audio_spec.duration_sec,
             "sample_rate": decl.audio_spec.sample_rate,
             "extras": dict(decl.audio_spec.extras),
+        }
+    elif decl.media == "av":
+        assert decl.av_spec is not None, f"{decl.id} missing av_spec"
+        _, sha = generate_av(decl.av_spec, out_path, fixtures_root=root)
+        generator = {
+            "kind": "av_mux",
+            "video_source": decl.av_spec.video_source,
+            "audio_source": decl.av_spec.audio_source,
+            "audio_offset_sec": decl.av_spec.audio_offset_sec,
+            "extras": dict(decl.av_spec.extras),
         }
     else:
         raise ValueError(f"unknown media {decl.media!r} for fixture {decl.id!r}")

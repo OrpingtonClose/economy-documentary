@@ -127,6 +127,10 @@ jobs:
           - name: audio_failure_mode
             module: strands_agents.evals.experiments.audio_failure_mode
             env: {}
+          - name: av_desync
+            module: strands_agents.evals.experiments.av_desync
+            env: {}
+            needs_ffmpeg: true
     defaults:
       run:
         working-directory: server

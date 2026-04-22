@@ -18,6 +18,7 @@ from .assembly_ordering import AssemblyOrderingEvaluator
 from .audio_failure_mode import AudioFailureModeEvaluator
 from .audio_invariant import AudioInvariantEvaluator
 from .audio_worker_invariant import AudioWorkerInvariantEvaluator
+from .av_desync import AVDesyncEvaluator
 from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
 from .escalation_decision import EscalationDecisionEvaluator
@@ -37,6 +38,7 @@ from .visual_loop_trajectory import VisualLoopTrajectoryEvaluator
 __all__ = [
     "ApprovalGateTrajectoryEvaluator",
     "AssemblyOrderingEvaluator",
+    "AVDesyncEvaluator",
     "AudioFailureModeEvaluator",
     "AudioInvariantEvaluator",
     "AudioWorkerInvariantEvaluator",

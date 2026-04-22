@@ -515,6 +515,86 @@
       "prompt": "Does this audio sound heavily distorted, like it is clipping or over-amplified? Answer yes or no.",
       "relative_path": "audio/audio_clipping.wav",
       "sha256": "b78fb555ed01eaa505318b9abd7c2942c829a20562f2b53a5b7dac0337fa87fc"
+    },
+    {
+      "axis": "desync_synced",
+      "expected_verdict": "yes",
+      "generator": {
+        "audio_offset_sec": 0.0,
+        "audio_source": "audio/audio_english_narration.wav",
+        "extras": {},
+        "kind": "av_mux",
+        "video_source": "video/video_hello_red.mp4"
+      },
+      "id": "av_synced_narration",
+      "media": "av",
+      "prompt": "Are the audio and video in this clip synchronised, with both audible speech and visible content? Answer yes or no.",
+      "relative_path": "av/av_synced_narration.mp4",
+      "sha256": "0d15d40bd0e8f9b7aa5cbb91f0b44bc6522fc5407dad8d765cdc38260d05c357"
+    },
+    {
+      "axis": "desync_ahead",
+      "expected_verdict": "reject",
+      "generator": {
+        "audio_offset_sec": -0.5,
+        "audio_source": "audio/audio_english_narration.wav",
+        "extras": {},
+        "kind": "av_mux",
+        "video_source": "video/video_hello_red.mp4"
+      },
+      "id": "av_audio_ahead",
+      "media": "av",
+      "prompt": "In this clip, does the audio start noticeably before the video has any visible content? Answer yes or no.",
+      "relative_path": "av/av_audio_ahead.mp4",
+      "sha256": "297310e5be518878a4a0e96ec80f0f0334005447ba882e9abec30e14162fcff4"
+    },
+    {
+      "axis": "desync_behind",
+      "expected_verdict": "reject",
+      "generator": {
+        "audio_offset_sec": 0.5,
+        "audio_source": "audio/audio_english_narration.wav",
+        "extras": {},
+        "kind": "av_mux",
+        "video_source": "video/video_hello_red.mp4"
+      },
+      "id": "av_audio_behind",
+      "media": "av",
+      "prompt": "In this clip, does the audio start noticeably after the video has already shown visible content? Answer yes or no.",
+      "relative_path": "av/av_audio_behind.mp4",
+      "sha256": "4120711ee0479ee5bb56fab5fca5634d439190ab203cf9fd7c6beb754499908e"
+    },
+    {
+      "axis": "desync_audio_missing",
+      "expected_verdict": "reject",
+      "generator": {
+        "audio_offset_sec": 0.0,
+        "audio_source": "audio/audio_silence.wav",
+        "extras": {},
+        "kind": "av_mux",
+        "video_source": "video/video_hello_red.mp4"
+      },
+      "id": "av_audio_missing",
+      "media": "av",
+      "prompt": "Is this clip silent (no audible speech or sound) despite showing visible video content? Answer yes or no.",
+      "relative_path": "av/av_audio_missing.mp4",
+      "sha256": "f254a519f006fb0a55fcc173d697aa31de7018b87298f1d27aa7a7b89ba275be"
+    },
+    {
+      "axis": "desync_video_missing",
+      "expected_verdict": "reject",
+      "generator": {
+        "audio_offset_sec": 0.0,
+        "audio_source": "audio/audio_english_narration.wav",
+        "extras": {},
+        "kind": "av_mux",
+        "video_source": "video/video_black.mp4"
+      },
+      "id": "av_video_missing",
+      "media": "av",
+      "prompt": "Does this clip have audible narration but a video track that is entirely black with no visible content? Answer yes or no.",
+      "relative_path": "av/av_video_missing.mp4",
+      "sha256": "a740416f29a3d4afc6b3ec68330c2c58358e275a92851c345d9c983dcb3414b7"
     }
   ]
 }
