@@ -698,11 +698,31 @@ function SaveCaseDialog({
   const [pending, setPending] = useState<"preview" | "commit" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Any edit to the saved-case body invalidates an earlier preview —
+  // otherwise the user could preview ``name=test_a`` and commit
+  // ``name=test_b`` while staring at a diff for ``test_a``. Gate Commit
+  // behind ``preview !== null`` and force a fresh preview on every
+  // field change so the on-screen diff always matches what Commit
+  // would send.
+  useEffect(() => {
+    setPreview(null);
+  }, [name, role, notes, currentInput]);
+
   const buildBody = useCallback(
     (confirm: boolean) => {
       const parsed = parseJsonSafe(currentInput);
       if (!parsed.ok) {
         throw new Error(`Input is not valid JSON: ${parsed.error}`);
+      }
+      // An empty textarea yields ``value === undefined``. ``JSON.stringify``
+      // silently drops ``undefined`` properties, so sending that straight
+      // through would land at the backend with no ``input`` key and
+      // surface as a generic 422 "field required". Fail early with a
+      // clear message instead.
+      if (parsed.value === undefined) {
+        throw new Error(
+          "Input is required — paste a JSON payload before saving.",
+        );
       }
       return {
         name: name.trim(),
