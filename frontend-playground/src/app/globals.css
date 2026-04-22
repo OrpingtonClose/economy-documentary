@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Standalone playground stylesheet — no imports from frontend/ so
+   this app can be deployed independently (e.g. preview deploys
+   pointing at a different backend). */
+
+html,
+body {
+  background-color: theme("colors.pg-bg");
+  color: theme("colors.pg-text");
+}
+
+/* Reachability dot pattern — mirrored from the test-case atlas so
+   the green/red semantics read the same whether you're looking at a
+   PR's rendered diagram or the live workbench. */
+.pg-dot {
+  @apply inline-block h-2 w-2 rounded-full;
+}
+.pg-dot-green {
+  @apply bg-pg-green;
+}
+.pg-dot-amber {
+  @apply bg-pg-amber;
+}
+.pg-dot-red {
+  @apply bg-pg-red;
+}
