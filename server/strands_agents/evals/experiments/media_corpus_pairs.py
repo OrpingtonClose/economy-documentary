@@ -257,9 +257,16 @@ def _dominant_judge_answer(side_outputs: list[Any]) -> str | None:
 
     Scans per-model judge outputs (labels of the form
     ``judge.<model>.<axis>``) for the ``answered yes`` / ``answered no``
-    phrase emitted by :func:`_grade`. Returns the majority answer if
-    judges disagree, or ``None`` if no answer could be parsed (all
-    skipped, empty report, unrecognised label).
+    phrase emitted by :func:`_grade`. The reason string has shape
+    ``"<model> answered <y/n>; expected <y/n>; raw=<up-to-120-char
+    model output>"``. Only the prefix before ``"; raw="`` is scanned,
+    because the raw model output can itself contain the
+    ``"answered yes"`` / ``"answered no"`` substrings and would
+    otherwise poison the match.
+
+    Returns the majority answer if judges disagree, or ``None`` if no
+    answer could be parsed (all skipped, empty report, unrecognised
+    label, tied judges).
     """
     yes = 0
     no = 0
@@ -270,9 +277,12 @@ def _dominant_judge_answer(side_outputs: list[Any]) -> str | None:
         if label.startswith("judge.consensus.") or label.startswith("judge.skipped."):
             continue
         reason = (getattr(out, "reason", "") or "").lower()
-        if "answered yes" in reason:
+        # Strip the ``; raw=…`` tail before scanning — it's the raw
+        # model output and can contain the same answer phrases.
+        prefix = reason.split("; raw=", 1)[0]
+        if "answered yes" in prefix:
             yes += 1
-        elif "answered no" in reason:
+        elif "answered no" in prefix:
             no += 1
     if yes == 0 and no == 0:
         return None

@@ -27,10 +27,12 @@ from strands_agents.evals.evaluators.live_media_judge import (
 )
 from strands_agents.evals.experiments.media_corpus import media_task
 from strands_agents.evals.experiments.media_corpus_pairs import (
+    _dominant_judge_answer,
     build_pair_cases,
     build_pair_experiment,
     summarize_pair_discrimination,
 )
+from strands_evals.types.evaluation import EvaluationOutput
 from strands_agents.evals.fixtures.manifest import load_manifest
 
 
@@ -121,6 +123,89 @@ def _flipping_video_judge(
         )
         return (gemini, qwen)
     return (gemini,)
+
+
+def test_dominant_judge_answer_ignores_raw_output_poison() -> None:
+    """Poisoned raw model output must not be mistaken for the judge's answer.
+
+    ``_grade`` emits ``reason`` strings of shape
+    ``"<model> answered no; expected yes; raw='…answered yes…'"``.
+    A naive substring scan would see the ``answered yes`` inside the
+    raw tail and flip the parsed answer. The parser must restrict its
+    scan to the prefix before ``"; raw="``.
+    """
+    poisoned = EvaluationOutput(
+        score=0.0,
+        test_pass=False,
+        reason=(
+            "gemini-2.5-flash answered no; expected yes; "
+            "raw='yes the model clearly answered yes to this question'"
+        ),
+        label="judge.gemini-2.5-flash.color_red",
+    )
+    assert _dominant_judge_answer([poisoned]) == "no"
+
+    # Mirror case: prefix says yes, raw tail carries a "no" phrase.
+    poisoned_yes = EvaluationOutput(
+        score=1.0,
+        test_pass=True,
+        reason=(
+            "qwen-vl-plus answered yes; expected yes; "
+            "raw='the correct response would have answered no historically'"
+        ),
+        label="judge.qwen-vl-plus.color_red",
+    )
+    assert _dominant_judge_answer([poisoned_yes]) == "yes"
+
+
+def test_dominant_judge_answer_skips_consensus_and_skipped_labels() -> None:
+    """Aggregate labels must be ignored — only per-model entries vote."""
+    per_model_yes = EvaluationOutput(
+        score=1.0,
+        test_pass=True,
+        reason="gemini-2.5-flash answered yes; expected yes; raw='yes'",
+        label="judge.gemini-2.5-flash.x",
+    )
+    consensus = EvaluationOutput(
+        score=0.0,
+        test_pass=False,
+        reason="judges disagree with each other or with expected verdict",
+        label="judge.consensus.x",
+    )
+    skipped = EvaluationOutput(
+        score=0.0,
+        test_pass=False,
+        reason="no judges available",
+        label="judge.skipped.x",
+    )
+    # Only the per-model entry should count; the other two contain no
+    # ``answered yes/no`` phrase anyway but we check the prefix filter
+    # directly.
+    assert _dominant_judge_answer([per_model_yes, consensus, skipped]) == "yes"
+
+
+def test_dominant_judge_answer_returns_none_on_empty_or_tie() -> None:
+    """No parseable answers → ``None``; 1-yes-1-no tie → ``None``."""
+    assert _dominant_judge_answer([]) is None
+
+    unrelated = EvaluationOutput(
+        score=0.0, test_pass=False, reason="totally unrelated text", label="judge.x.y"
+    )
+    assert _dominant_judge_answer([unrelated]) is None
+
+    yes_out = EvaluationOutput(
+        score=1.0,
+        test_pass=True,
+        reason="a answered yes; expected yes; raw='yes'",
+        label="judge.a.x",
+    )
+    no_out = EvaluationOutput(
+        score=0.0,
+        test_pass=False,
+        reason="b answered no; expected yes; raw='no'",
+        label="judge.b.x",
+    )
+    assert _dominant_judge_answer([yes_out, no_out]) is None
 
 
 def test_pair_cases_are_closed_pairs() -> None:
