@@ -137,16 +137,18 @@ def build_cases() -> list[Case[dict[str, Any], dict[str, Any]]]:
 def build_failure_mode_video_experiment() -> Experiment[dict[str, Any], dict[str, Any]]:
     """Construct the failure-mode :class:`Experiment`.
 
+    The factory is pure — it composes cases and wires the evaluator
+    without touching the filesystem or spawning subprocesses, so
+    unit tests can call it without ffmpeg installed. The pixel
+    decode path (which does need ffmpeg) runs inside
+    :func:`failure_mode_video_task` when the experiment is actually
+    executed.
+
     Raises:
         ValueError: If no cases could be built (no fixtures present).
             The runner turns this into an ``EXIT_SKIP`` so CI reports
             a neutral yellow rather than a false-positive green.
     """
-    if shutil.which("ffmpeg") is None:
-        raise ValueError(
-            "ffmpeg not found on PATH — failure-mode video experiment "
-            "requires ffmpeg for pixel decoding"
-        )
     cases = build_cases()
     if not cases:
         raise ValueError(
@@ -211,6 +213,15 @@ __all__ = [
 
 
 if __name__ == "__main__":
+    # ffmpeg is needed by the task's decode path, not the factory.
+    # Fail fast with a clear message when invoked as a CLI without it.
+    if shutil.which("ffmpeg") is None:
+        print(
+            "ffmpeg not found on PATH — failure-mode video experiment "
+            "requires ffmpeg for pixel decoding",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     sys.exit(
         run_experiment_as_main(
             build_failure_mode_video_experiment,
