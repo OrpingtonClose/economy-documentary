@@ -21,6 +21,7 @@ from .contract_compliance import ContractComplianceEvaluator
 from .critique_store import CritiqueStoreEvaluator
 from .escalation_decision import EscalationDecisionEvaluator
 from .escalation_taxonomy import EscalationTaxonomyEvaluator
+from .failure_mode import FailureModeEvaluator
 from .live_media_judge import LiveMediaJudgeEvaluator
 from .memory_honoring import MemoryHonoringEvaluator
 from .parallel_launch import ParallelLaunchEvaluator
@@ -41,6 +42,7 @@ __all__ = [
     "CritiqueStoreEvaluator",
     "EscalationDecisionEvaluator",
     "EscalationTaxonomyEvaluator",
+    "FailureModeEvaluator",
     "LiveMediaJudgeEvaluator",
     "MemoryHonoringEvaluator",
     "ParallelLaunchEvaluator",

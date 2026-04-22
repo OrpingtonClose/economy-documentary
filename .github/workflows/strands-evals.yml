@@ -120,6 +120,10 @@ jobs:
             module: strands_agents.evals.experiments.recovery
             env:
               RECOVERY_EXPERIMENT: remanifester_contract
+          - name: failure_mode_video
+            module: strands_agents.evals.experiments.failure_mode_video
+            env: {}
+            needs_ffmpeg: true
     defaults:
       run:
         working-directory: server
@@ -148,6 +152,12 @@ jobs:
 
       - name: Install server dependencies with strands extra
         run: poetry install --no-root --with dev --with strands
+
+      - name: Install ffmpeg (pixel-level detectors)
+        if: matrix.experiment.needs_ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Run experiment
         env: ${{ matrix.experiment.env }}
