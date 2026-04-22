@@ -138,6 +138,53 @@ def test_sidecar_drops_malformed_entries_but_keeps_valid_ones(
     assert [c.name for c in cases] == ["valid", "also_valid"]
 
 
+def test_save_user_case_preview_and_commit_share_timestamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``preview`` and ``case`` in one response must share ``created_at``.
+
+    ``UserCase.stamped`` fills ``created_at`` at call time. Previously
+    the endpoint called it twice — once inside ``preview_diff`` and
+    once inside ``append_user_case`` — so the response's diff payload
+    and the committed case carried different ``created_at`` values and
+    the diff never matched what landed on disk. The endpoint now
+    stamps once up front; this test pins that contract.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from playground import router as playground_router
+
+    monkeypatch.setenv("PLAYGROUND_USER_CASES_DIR", str(tmp_path))
+
+    app = FastAPI()
+    app.include_router(playground_router)
+    client = TestClient(app)
+
+    response = client.post(
+        "/playground/components/c02/user-cases",
+        json={
+            "name": "stamped_once",
+            "role": "pass",
+            "input": {"k": 1},
+            "confirm": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    committed_stamp = body["case"]["created_at"]
+    assert committed_stamp is not None
+    assert committed_stamp in body["preview"]["after"], (
+        "preview.after must embed the same timestamp as the committed case"
+    )
+    assert committed_stamp in body["preview"]["diff"], (
+        "preview.diff must embed the same timestamp as the committed case"
+    )
+    # And the on-disk file agrees.
+    reloaded = load_user_cases("c02", base_dir=tmp_path)
+    assert [c.created_at for c in reloaded] == [committed_stamp]
+
+
 def test_user_cases_experiment_passes_every_case() -> None:
     reset_experiment_state()
     try:

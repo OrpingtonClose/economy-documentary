@@ -732,6 +732,17 @@ def save_user_case(
 
     base_dir = _user_cases_base_dir()
 
+    # Stamp the case once up front. ``UserCase.stamped`` is idempotent
+    # when ``created_at`` is already set, so the inner calls inside
+    # :func:`preview_diff` and :func:`append_user_case` now become
+    # no-ops and both paths serialise the same timestamp. Without this
+    # a ``confirm=True`` save returned a ``preview`` bundle whose
+    # ``after`` / ``diff`` carried the preview-time timestamp while
+    # the ``case`` payload (and the on-disk file) carried the commit-
+    # time timestamp — contradictory ``created_at`` values in one
+    # response body.
+    new_case = new_case.stamped()
+
     try:
         preview = preview_diff(component.id, new_case, base_dir)
     except DuplicateCaseNameError as exc:
