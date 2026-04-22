@@ -47,9 +47,21 @@ df -h /
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
-    git curl ca-certificates gnupg \
-    python3 python3-pip python3-venv \
+    git curl ca-certificates gnupg software-properties-common \
     supervisor nginx jq
+
+# strands-agents-evals 0.1.15 requires Python ≥ 3.12; ubuntu:22.04 ships
+# 3.10 by default. Install 3.12 from the deadsnakes PPA and use it as
+# the interpreter for the playground.
+if ! command -v python3.12 >/dev/null 2>&1; then
+    echo "=== Installing Python 3.12 (deadsnakes PPA) ==="
+    add-apt-repository -y ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y python3.12 python3.12-venv python3.12-dev
+    curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.12 -
+fi
+PY=python3.12
+echo "interpreter: $($PY --version)"
 
 # Node.js 20 LTS (for Next.js 14)
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v)" != v20* ]]; then
@@ -83,9 +95,9 @@ cd "${REPO_DIR}"
 #
 # This list MUST stay in sync with server/pyproject.toml. CI will catch
 # drift: the playground catalog experiment imports every component.
-echo "=== Installing Python dependencies ==="
-python3 -m pip install --no-cache-dir --upgrade pip
-python3 -m pip install --no-cache-dir \
+echo "=== Installing Python dependencies (with $PY) ==="
+$PY -m pip install --no-cache-dir --upgrade pip
+$PY -m pip install --no-cache-dir \
     'fastapi>=0.100.0' \
     'uvicorn[standard]>=0.20.0' \
     'pydantic>=2.0.0' \
@@ -177,7 +189,7 @@ grep -oE '^[A-Z_]+=' "${ENV_FILE}" | sort -u
 echo "=== Configuring supervisor ==="
 cat > /etc/supervisor/conf.d/playground.conf <<'SUPEOF'
 [program:playground-backend]
-command=python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --app-dir /workspace/economy-documentary/server
+command=python3.12 -m uvicorn server:app --host 0.0.0.0 --port 8000 --app-dir /workspace/economy-documentary/server
 directory=/workspace/economy-documentary/server
 autostart=true
 autorestart=true
