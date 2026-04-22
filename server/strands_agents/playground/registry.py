@@ -79,13 +79,13 @@ class EvaluatorDeclaration:
     Attributes:
         name: The ``Evaluator`` subclass name, as it appears in the
             component's ``*_EVALUATOR_THRESHOLDS`` dict.
-        min_score: The minimum ``overall_score`` the CI runner accepts
+        threshold: The minimum ``overall_score`` the CI runner accepts
             before flagging a regression.
         hard_gate: Whether a single-case regression fails the build.
     """
 
     name: str
-    min_score: float
+    threshold: float
     hard_gate: bool
 
 
@@ -158,7 +158,7 @@ class Component:
                 module, self.thresholds_attr
             )
             decls = [
-                EvaluatorDeclaration(name=name, min_score=score, hard_gate=hard)
+                EvaluatorDeclaration(name=name, threshold=score, hard_gate=hard)
                 for name, (score, hard) in thresholds.items()
             ]
         except Exception:  # noqa: BLE001

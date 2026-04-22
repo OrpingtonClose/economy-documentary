@@ -40,7 +40,7 @@ def _serialise_model(model: DeclaredModel) -> dict[str, str]:
 def _serialise_evaluator(evaluator: EvaluatorDeclaration) -> dict[str, Any]:
     return {
         "name": evaluator.name,
-        "min_score": evaluator.min_score,
+        "threshold": evaluator.threshold,
         "hard_gate": evaluator.hard_gate,
     }
 
