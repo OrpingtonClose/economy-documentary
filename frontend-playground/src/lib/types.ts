@@ -13,7 +13,7 @@
 
 export type ComponentId = string; // "c01".."c15"
 
-export type ComponentKind = "leaf" | "loop" | "gate" | "graph";
+export type ComponentKind = "leaf" | "tool" | "loop" | "gate" | "graph";
 
 /**
  * Mirror of ``_serialise_model`` in ``server/playground.py``:
@@ -130,7 +130,7 @@ export interface ReachabilityEntry {
   readonly provider: string;
   readonly reachable: boolean;
   readonly reason: string | null;
-  readonly checked_at: string | null;
+  readonly checked_at: number | null;
   readonly latency_ms: number | null;
 }
 

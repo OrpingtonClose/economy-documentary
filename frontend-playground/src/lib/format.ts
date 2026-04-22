@@ -20,6 +20,8 @@ export function kindLabel(kind: ComponentKind): string {
   switch (kind) {
     case "leaf":
       return "leaf";
+    case "tool":
+      return "tool";
     case "loop":
       return "loop";
     case "gate":
@@ -40,6 +42,8 @@ export function kindChipClass(kind: ComponentKind): string {
   switch (kind) {
     case "leaf":
       return "bg-pg-surface text-pg-text";
+    case "tool":
+      return "bg-pg-green/10 text-pg-green";
     case "loop":
       return "bg-pg-accent/20 text-pg-accent";
     case "gate":
