@@ -43,12 +43,22 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "component-playground"}
 
 
-# Lazy import so the module file itself parses even if optional deps
-# aren't installed — lets the supervisor log a clean import error
-# rather than a silent restart loop on a deps-drift bug.
-from playground import router as playground_router  # noqa: E402
+# Keep /health reachable even if the playground router's transitive
+# imports (strands_evals, strands_agents.playground, …) fail — otherwise
+# uvicorn can't construct `app`, supervisor's autorestart loop kicks in,
+# and nginx has nothing to probe against. A guarded import means a deps
+# drift gets logged once and surfaces via /health, not via a crash loop.
+try:
+    from playground import router as playground_router  # noqa: E402
 
-app.include_router(playground_router)
+    app.include_router(playground_router)
+except ImportError as _imp_err:  # pragma: no cover - diagnostic path
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "playground router unavailable — /playground endpoints disabled: %s",
+        _imp_err,
+    )
 
 
 # Handy for `python -m playground_server` one-shots during debugging.
