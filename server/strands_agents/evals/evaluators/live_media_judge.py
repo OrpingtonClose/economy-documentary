@@ -207,7 +207,13 @@ class LiveMediaJudgeEvaluator(Evaluator[dict[str, Any], str]):
         expected_yes = expected_verdict == "yes"
 
         if media == "video":
-            judge_results = self._video_judge(local_path, public_url, prompt)
+            # The docstring contract allows video_judge to return either
+            # a single _JudgeResult (Gemini-only path, no public URL) or
+            # a tuple of results (Gemini + Qwen consensus path). Normalize
+            # to a tuple so _grade can iterate uniformly — a bare
+            # _JudgeResult is a frozen dataclass and not iterable.
+            video_raw = self._video_judge(local_path, public_url, prompt)
+            judge_results = video_raw if isinstance(video_raw, tuple) else (video_raw,)
         elif media == "audio":
             judge_results = (self._audio_judge(local_path, prompt),)
         else:

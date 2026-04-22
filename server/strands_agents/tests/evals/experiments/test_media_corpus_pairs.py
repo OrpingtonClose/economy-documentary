@@ -260,6 +260,41 @@ def test_summary_flags_all_skipped_pair_as_unclear(monkeypatch) -> None:
     )
 
 
+def test_evaluator_accepts_bare_judgeresult_from_video_judge() -> None:
+    """``video_judge`` may return a bare ``_JudgeResult`` per the docstring.
+
+    ``_default_video_judge`` already returns a tuple in every branch,
+    but :class:`LiveMediaJudgeEvaluator`'s own docstring advertises
+    the single-result shape. A custom video_judge that honors the
+    documented contract must not crash the evaluator — a frozen
+    dataclass is not iterable, so the evaluator has to normalize.
+    """
+
+    def _single_result_judge(
+        local_path: str, public_url: str | None, prompt: str
+    ) -> _JudgeResult:
+        return _JudgeResult(
+            model="test.video-judge",
+            ran=True,
+            judged_yes=True,
+            raw_text="yes",
+        )
+
+    evaluator = LiveMediaJudgeEvaluator(video_judge=_single_result_judge)
+    cases = build_pair_cases(media="video")
+    from strands_evals.experiment import Experiment
+
+    experiment = Experiment(cases=cases, evaluators=[evaluator])
+    # Must not raise ``TypeError: '_JudgeResult' object is not iterable``.
+    reports = experiment.run_evaluations(task=media_task)
+    assert reports, "evaluator should produce a report for every fixture"
+    for report in reports:
+        assert report.detailed_results, (
+            f"evaluator emitted no outputs for case "
+            f"{report.cases[0] if report.cases else '?'!r}"
+        )
+
+
 def test_dominant_judge_answer_returns_none_on_empty_or_tie() -> None:
     """No parseable answers → ``None``; 1-yes-1-no tie → ``None``."""
     assert _dominant_judge_answer([]) is None
