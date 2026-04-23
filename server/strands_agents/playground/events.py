@@ -41,6 +41,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
+from .agui import agui_envelope
+
 _MAX_EVENTS: int = 256
 _MAX_RUNS_KEPT: int = 64
 
@@ -79,12 +81,30 @@ class Event:
     detail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialise the event.
+
+        Every envelope carries two discriminators side by side:
+
+        * ``kind`` — the legacy internal vocabulary (``tool.called``,
+          ``probe.start``, …). Stable; backs the narrator prompt,
+          the stall-budget table, and every existing consumer.
+        * ``type`` (+ optional ``step_name`` / ``source`` / ``name``
+          / ``cancelled``) — the `AG-UI`_ envelope. Same source of
+          truth as the legacy kind, derived via
+          :func:`.agui.agui_envelope` so the two can't drift.
+
+        See ``server/strands_agents/playground/agui.py`` for the
+        authoritative mapping table.
+
+        .. _AG-UI: https://docs.ag-ui.com
+        """
         return {
             "seq": self.seq,
             "ts": self.ts,
             "kind": self.kind,
             "summary": self.summary,
             "detail": self.detail,
+            **agui_envelope(self.kind),
         }
 
 

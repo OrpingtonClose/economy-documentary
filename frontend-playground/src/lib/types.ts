@@ -201,9 +201,40 @@ export interface EvaluateResponse {
 // --------------------------------------------------------------------------
 
 /**
+ * AG-UI event types emitted alongside the legacy ``kind``. Mirror of
+ * ``AGUI_TYPES`` in ``server/strands_agents/playground/agui.py``.
+ *
+ * The server emits **both** ``kind`` (legacy, stable internal
+ * vocabulary) and ``type`` (AG-UI wire protocol) on every envelope.
+ * Existing consumers branch on ``kind``; AG-UI-aware tooling
+ * (Langfuse dashboards, the AG-UI SDK, third-party frontends)
+ * branches on ``type``. Both fields derive from the same source of
+ * truth so they can never disagree.
+ *
+ * See https://docs.ag-ui.com for the protocol spec.
+ */
+export type AgUiEventType =
+  | "RUN_STARTED"
+  | "RUN_FINISHED"
+  | "RUN_ERROR"
+  | "STEP_STARTED"
+  | "STEP_FINISHED"
+  | "TOOL_CALL_START"
+  | "TOOL_CALL_END"
+  | "TEXT_MESSAGE_CONTENT"
+  | "CUSTOM";
+
+/**
  * One structured step in a run's timeline. The ``kind`` vocabulary is
  * shared with the narrator prompt — keep it in sync with the list
  * in ``events.py``'s docstring.
+ *
+ * ``type`` is the AG-UI wire-protocol discriminator; it is always
+ * present in live server output (every envelope carries it via
+ * ``Event.to_dict``) but is typed optional here so fixtures and
+ * older snapshots that pre-date the AG-UI migration still compile.
+ * ``step_name`` / ``source`` / ``name`` / ``cancelled`` are AG-UI
+ * sub-discriminators — present only on the events where they apply.
  */
 export interface RunEvent {
   readonly seq: number;
@@ -211,6 +242,15 @@ export interface RunEvent {
   readonly kind: string;
   readonly summary: string;
   readonly detail: Record<string, unknown>;
+  readonly type?: AgUiEventType;
+  /** AG-UI step name for ``STEP_STARTED`` / ``STEP_FINISHED``. */
+  readonly step_name?: string;
+  /** AG-UI attribution for ``TEXT_MESSAGE_CONTENT`` (``narrator`` / ``interpreter``). */
+  readonly source?: string;
+  /** AG-UI sub-kind for ``CUSTOM`` events (carries the legacy ``kind``). */
+  readonly name?: string;
+  /** ``true`` when a run ends via cancellation rather than success. */
+  readonly cancelled?: boolean;
 }
 
 /** Mirror of ``_serialise_run_state`` in ``server/playground.py``. */
