@@ -314,6 +314,8 @@ class WorkerRegistry:
             raise ValueError(f"unknown worker role: {role!r}")
         if vram_gb <= 0:
             raise ValueError(f"vram_gb must be positive, got {vram_gb}")
+        if voice_id is not None and not voice_id:
+            raise ValueError("voice_id must be non-empty when provided")
 
         with self._lock:
             if worker_id in self._workers:
@@ -379,6 +381,9 @@ class WorkerRegistry:
             VoiceAlreadyPinnedError: the voice is pinned on a
                 different worker.
         """
+
+        if not voice_id:
+            raise ValueError("voice_id must be non-empty")
 
         with self._lock:
             worker = self._workers.get(worker_id)

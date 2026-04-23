@@ -838,7 +838,7 @@ class _RegisterWorkerRequest(BaseModel):
     role: str = Field(..., description="tts | ltx_render | assembly")
     endpoint_url: str = Field(..., min_length=1, max_length=512)
     vram_gb: int = Field(..., gt=0, le=4096)
-    voice_id: str | None = Field(default=None, max_length=128)
+    voice_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class _HeartbeatRequest(BaseModel):

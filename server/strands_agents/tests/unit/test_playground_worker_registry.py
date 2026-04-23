@@ -84,6 +84,25 @@ def test_register_rejects_nonpositive_vram(registry: WorkerRegistry) -> None:
         )
 
 
+def test_register_rejects_empty_voice_id(registry: WorkerRegistry) -> None:
+    with pytest.raises(ValueError, match="voice_id must be non-empty"):
+        registry.register_worker(
+            worker_id="tts-x",
+            role="tts",
+            endpoint_url="http://x",
+            vram_gb=24,
+            voice_id="",
+        )
+
+
+def test_pin_voice_rejects_empty_voice_id(registry: WorkerRegistry) -> None:
+    registry.register_worker(
+        worker_id="tts-x", role="tts", endpoint_url="http://x", vram_gb=24,
+    )
+    with pytest.raises(ValueError, match="voice_id must be non-empty"):
+        registry.pin_voice("tts-x", "")
+
+
 def test_unregister_removes_worker_and_releases_voice(
     registry: WorkerRegistry,
 ) -> None:
