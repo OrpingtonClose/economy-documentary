@@ -52,7 +52,12 @@ from strands_agents.playground.events import (
     reset_active_stream,
     set_active_stream,
 )
+from strands_agents.playground.langfuse import (
+    frontend_config as langfuse_frontend_config,
+    langfuse_trace_url,
+)
 from strands_agents.playground.narrator import interpret_run, narrator_loop
+from strands_agents.playground.telemetry import playground_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +139,18 @@ def _serialise_case(case: Any) -> dict[str, Any]:
     payload = case.model_dump(mode="json", exclude_none=True)
     payload["role"] = _case_role(payload.get("name"))
     return payload
+
+
+@router.get("/config/langfuse", response_class=JSONResponse)
+async def get_langfuse_config() -> dict[str, Any]:
+    """Return whether Langfuse observability is wired and at which host.
+
+    The frontend polls this once on app load to decide whether to
+    render the "View Trace" button next to the live status rail.
+    Credentials never leave the backend — only the public host URL
+    plus an ``enabled`` flag.
+    """
+    return langfuse_frontend_config()
 
 
 @router.get("/components", response_class=JSONResponse)
@@ -844,6 +861,11 @@ def _serialise_event(event: Event) -> dict[str, Any]:
 
 
 def _serialise_run_state(stream: RunStream) -> dict[str, Any]:
+    trace_url = (
+        langfuse_trace_url(stream.trace_id)
+        if stream.trace_id is not None
+        else None
+    )
     return {
         "run_id": stream.run_id,
         "component_id": stream.component_id,
@@ -852,7 +874,40 @@ def _serialise_run_state(stream: RunStream) -> dict[str, Any]:
         "closed": stream.closed,
         "events": [_serialise_event(e) for e in stream.snapshot()],
         "terminal": stream.terminal,
+        "trace_id": stream.trace_id,
+        "trace_url": trace_url,
     }
+
+
+def _start_run_root_span(stream: RunStream) -> Any:
+    """Open the root OTel span for a run and pin its trace id onto ``stream``.
+
+    Returns a context manager the dispatcher ``with``-blocks on, or
+    ``None`` when OTel is not available. On entry the stream's
+    ``trace_id`` is populated so ``_serialise_run_state`` can surface
+    it to the frontend before the first event lands. On exit the
+    span closes normally — subsequent Strands / ADK child spans still
+    nest under this root via OTel's context propagation, which is
+    what gives Langfuse a single trace tree per playground run.
+    """
+    tracer = playground_tracer()
+    if tracer is None:
+        return None
+    span_cm = tracer.start_as_current_span(
+        "playground.run",
+        attributes={
+            "playground.run_id": stream.run_id,
+            "playground.component_id": stream.component_id,
+            "playground.case_name": stream.case_name or "",
+        },
+    )
+    span = span_cm.__enter__()
+    try:
+        ctx = span.get_span_context()
+        stream.trace_id = format(ctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001 — telemetry must never crash the run
+        pass
+    return span_cm
 
 
 async def _dispatch_run(
@@ -870,6 +925,8 @@ async def _dispatch_run(
     """
     loop = asyncio.get_running_loop()
     stream.attach_loop(loop)
+
+    run_span_cm = _start_run_root_span(stream)
 
     narrator_task = asyncio.create_task(narrator_loop(stream))
 
@@ -1058,6 +1115,11 @@ async def _dispatch_run(
             await narrator_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+        if run_span_cm is not None:
+            try:
+                run_span_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 — telemetry must never crash the run
+                logger.debug("run span close failed", exc_info=True)
         # ``terminal`` is seeded with a defensive default at the top of
         # the function and overwritten on every normal control-flow
         # path, so close() always sees a well-formed payload.

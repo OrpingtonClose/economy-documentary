@@ -16,6 +16,7 @@ import type {
   ComponentSummary,
   EvaluateResponse,
   HealthResponse,
+  LangfuseConfig,
   RunResponse,
   RunState,
   SaveUserCaseResponse,
@@ -185,4 +186,19 @@ export async function getRunState(runId: string): Promise<RunState> {
 /** Absolute URL of the SSE event stream for one run. */
 export function runEventsUrl(runId: string): string {
   return `${PLAYGROUND_BASE}/runs/${runId}/events`;
+}
+
+/**
+ * Fetch the Langfuse observability config.
+ *
+ * Called once per workbench mount so the "View Trace" button can
+ * conditionally render. Never throws on a missing backend — returns
+ * the disabled default so the UI degrades cleanly.
+ */
+export async function getLangfuseConfig(): Promise<LangfuseConfig> {
+  try {
+    return await getJson<LangfuseConfig>("/config/langfuse");
+  } catch {
+    return { enabled: false, host: null };
+  }
 }

@@ -262,6 +262,32 @@ export interface RunState {
   readonly closed: boolean;
   readonly events: readonly RunEvent[];
   readonly terminal: RunTerminal | null;
+  /**
+   * 32-char hex OTel trace id for the dispatch root span, or ``null``
+   * when OTel is not configured. Used together with the Langfuse
+   * config to render a "View Trace" link next to the live rail —
+   * ``null`` means the button is hidden, not that the run failed.
+   */
+  readonly trace_id?: string | null;
+  /**
+   * Full ``LANGFUSE_HOST/trace/<trace_id>`` URL, or ``null`` when
+   * Langfuse is not wired. Precomputed server-side so the frontend
+   * doesn't have to concatenate and re-validate the host.
+   */
+  readonly trace_url?: string | null;
+}
+
+/**
+ * Mirror of ``/playground/config/langfuse``. The frontend polls this
+ * once on mount so the "View Trace" button can decide whether to
+ * render. ``host`` is returned for diagnostics (tooltip, dev tools)
+ * but the authoritative link is always ``RunState.trace_url`` —
+ * having the server hand back the full URL avoids double-encoding
+ * bugs when ``host`` contains a path prefix.
+ */
+export interface LangfuseConfig {
+  readonly enabled: boolean;
+  readonly host: string | null;
 }
 
 /** Terminal payload shape written into ``RunStream.terminal``. */
