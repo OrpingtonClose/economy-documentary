@@ -866,7 +866,21 @@ async def _dispatch_run(
 
     narrator_task = asyncio.create_task(narrator_loop(stream))
 
-    terminal: dict[str, Any]
+    # Defensive default. If anything in the ``try`` body raises before we
+    # assign a more specific terminal payload (e.g. ``probe_models``
+    # itself blows up, or an ``await stream.emit`` fails under load),
+    # the ``finally`` block still has a well-formed payload to close
+    # the stream with — no ``UnboundLocalError`` and no SSE clients
+    # left hanging on a stream that never closes.
+    terminal: dict[str, Any] = {
+        "status": RUN_STATUS_TASK_ERROR,
+        "component_id": component.id,
+        "case_name": case.name,
+        "error": "run failed with an unexpected internal error",
+        "error_class": "UnexpectedError",
+        "output": None,
+        "trajectory": None,
+    }
     try:
         # Reachability gate.
         await stream.emit(
@@ -1021,9 +1035,10 @@ async def _dispatch_run(
             await narrator_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
-        # `terminal` is always assigned on the success / error paths
-        # above; the cancellation path reassigns it before the raise.
-        await stream.close(terminal=terminal)  # type: ignore[possibly-unbound]
+        # ``terminal`` is seeded with a defensive default at the top of
+        # the function and overwritten on every normal control-flow
+        # path, so close() always sees a well-formed payload.
+        await stream.close(terminal=terminal)
 
 
 class StartRunRequest(BaseModel):

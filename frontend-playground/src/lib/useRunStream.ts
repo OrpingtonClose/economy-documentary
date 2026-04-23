@@ -147,7 +147,12 @@ export function useRunStream(runId: string | null): RunStreamState {
         const parsed = JSON.parse(ev.data) as RunEvent;
         setEvents((prev) => mergeEvent(prev, parsed));
         if (TERMINAL_KINDS.has(parsed.kind)) {
-          void hydrateTerminal(runId, setTerminal);
+          // Guard against a slow hydrate landing after the user has
+          // already kicked off a second run. ``runIdRef.current`` is
+          // updated synchronously by the reset effect the moment
+          // ``runId`` changes, so comparing against it inside
+          // ``hydrateTerminal`` is enough to drop stale payloads.
+          void hydrateTerminal(runId, runIdRef, setTerminal);
         }
       } catch {
         // Malformed payloads are ignored — the raw stream UI will
@@ -260,10 +265,16 @@ function computeStall(
 
 async function hydrateTerminal(
   runId: string,
+  currentRunIdRef: { readonly current: string | null },
   setTerminal: (t: RunTerminal | null) => void
 ): Promise<void> {
   try {
     const state: RunState = await getRunState(runId);
+    // Drop the payload if the user has already moved on to another
+    // run. Without this guard a slow ``GET /runs/{id}`` can overwrite
+    // the freshly-reset terminal state of the new run, briefly
+    // surfacing the previous run's output + interpretation card.
+    if (currentRunIdRef.current !== runId) return;
     if (state.terminal) setTerminal(state.terminal);
   } catch {
     // terminal state remains null; the SSE ``run.error`` event is
