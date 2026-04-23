@@ -192,3 +192,122 @@ export interface EvaluateResponse {
   readonly results: readonly EvaluatorResultRow[];
   readonly overall_passed: boolean;
 }
+
+// --------------------------------------------------------------------------
+// Event stream (for the live status line + interpretation card)
+//
+// Mirrors ``Event.to_dict`` in ``server/strands_agents/playground/events.py``
+// and the start-run / run-state envelopes in ``server/playground.py``.
+// --------------------------------------------------------------------------
+
+/**
+ * AG-UI event types emitted alongside the legacy ``kind``. Mirror of
+ * ``AGUI_TYPES`` in ``server/strands_agents/playground/agui.py``.
+ *
+ * The server emits **both** ``kind`` (legacy, stable internal
+ * vocabulary) and ``type`` (AG-UI wire protocol) on every envelope.
+ * Existing consumers branch on ``kind``; AG-UI-aware tooling
+ * (Langfuse dashboards, the AG-UI SDK, third-party frontends)
+ * branches on ``type``. Both fields derive from the same source of
+ * truth so they can never disagree.
+ *
+ * See https://docs.ag-ui.com for the protocol spec.
+ */
+export type AgUiEventType =
+  | "RUN_STARTED"
+  | "RUN_FINISHED"
+  | "RUN_ERROR"
+  | "STEP_STARTED"
+  | "STEP_FINISHED"
+  | "TOOL_CALL_START"
+  | "TOOL_CALL_END"
+  | "TEXT_MESSAGE_CONTENT"
+  | "CUSTOM";
+
+/**
+ * One structured step in a run's timeline. The ``kind`` vocabulary is
+ * shared with the narrator prompt — keep it in sync with the list
+ * in ``events.py``'s docstring.
+ *
+ * ``type`` is the AG-UI wire-protocol discriminator; it is always
+ * present in live server output (every envelope carries it via
+ * ``Event.to_dict``) but is typed optional here so fixtures and
+ * older snapshots that pre-date the AG-UI migration still compile.
+ * ``step_name`` / ``source`` / ``name`` / ``cancelled`` are AG-UI
+ * sub-discriminators — present only on the events where they apply.
+ */
+export interface RunEvent {
+  readonly seq: number;
+  readonly ts: number;
+  readonly kind: string;
+  readonly summary: string;
+  readonly detail: Record<string, unknown>;
+  readonly type?: AgUiEventType;
+  /** AG-UI step name for ``STEP_STARTED`` / ``STEP_FINISHED``. */
+  readonly step_name?: string;
+  /** AG-UI attribution for ``TEXT_MESSAGE_CONTENT`` (``narrator`` / ``interpreter``). */
+  readonly source?: string;
+  /** AG-UI sub-kind for ``CUSTOM`` events (carries the legacy ``kind``). */
+  readonly name?: string;
+  /** ``true`` when a run ends via cancellation rather than success. */
+  readonly cancelled?: boolean;
+}
+
+/** Mirror of ``_serialise_run_state`` in ``server/playground.py``. */
+export interface RunState {
+  readonly run_id: string;
+  readonly component_id: ComponentId;
+  readonly case_name: string | null;
+  readonly created_at: number;
+  readonly closed: boolean;
+  readonly events: readonly RunEvent[];
+  readonly terminal: RunTerminal | null;
+  /**
+   * 32-char hex OTel trace id for the dispatch root span, or ``null``
+   * when OTel is not configured. Used together with the Langfuse
+   * config to render a "View Trace" link next to the live rail —
+   * ``null`` means the button is hidden, not that the run failed.
+   */
+  readonly trace_id?: string | null;
+  /**
+   * Full ``LANGFUSE_HOST/trace/<trace_id>`` URL, or ``null`` when
+   * Langfuse is not wired. Precomputed server-side so the frontend
+   * doesn't have to concatenate and re-validate the host.
+   */
+  readonly trace_url?: string | null;
+}
+
+/**
+ * Mirror of ``/playground/config/langfuse``. The frontend polls this
+ * once on mount so the "View Trace" button can decide whether to
+ * render. ``host`` is returned for diagnostics (tooltip, dev tools)
+ * but the authoritative link is always ``RunState.trace_url`` —
+ * having the server hand back the full URL avoids double-encoding
+ * bugs when ``host`` contains a path prefix.
+ */
+export interface LangfuseConfig {
+  readonly enabled: boolean;
+  readonly host: string | null;
+}
+
+/** Terminal payload shape written into ``RunStream.terminal``. */
+export interface RunTerminal {
+  readonly status: RunStatus | "CANCELLED";
+  readonly component_id: ComponentId;
+  readonly case_name?: string | null;
+  readonly output?: unknown;
+  readonly trajectory?: unknown;
+  readonly error?: string;
+  readonly error_class?: string;
+  readonly unreachable_models?: readonly ReachabilityEntry[];
+  readonly interpretation?: string;
+}
+
+/** Mirror of the ``start_run`` response envelope. */
+export interface StartRunResponse {
+  readonly run_id: string;
+  readonly component_id: ComponentId;
+  readonly case_name: string;
+  readonly events_url: string;
+  readonly state_url: string;
+}

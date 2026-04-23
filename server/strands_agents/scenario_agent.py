@@ -26,8 +26,10 @@ Usage::
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
+import os
 from typing import Any, Callable
 
 from strands import Agent, tool
@@ -58,10 +60,16 @@ from a topic description. You have four tools:
    POOR | FAIR | GOOD | EXCELLENT.
 3. refine_scenario(scenes, feedback)
    Call this when rating is POOR or FAIR, or when any issues remain.
-   Returns {scenes} with the same cardinality but adjusted values.
+   Returns {scenes} with the same cardinality but adjusted values,
+   plus refine_iteration and refine_cap counters.
+   When the refine_cap is reached, the return shape is
+   {scenes, refine_cap_reached: true, message}. Treat that as a
+   hard stop: call create_timeline(scenes) next with those scenes.
+   Do NOT call refine_scenario again after refine_cap_reached.
 4. create_timeline(scenes)
    Call this LAST, once rating is GOOD or EXCELLENT with no remaining
-   issues. Returns {timeline_path, total_duration_sec}.
+   issues, OR immediately after a refine_scenario returns
+   refine_cap_reached: true. Returns {timeline_path, total_duration_sec}.
 
 Hard constraints every generation must satisfy:
 
@@ -81,16 +89,106 @@ Stop only after create_timeline returns successfully.
 # ---------------------------------------------------------------------------
 
 
-_GENERATOR: Callable[[str, int, str, str], dict[str, Any]] | None = None
-_REFINER: Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None = None
+#: Per-call helper bindings. ContextVar (not plain module globals) so
+#: concurrent ``scenario_task`` calls — FastAPI runs sync endpoints in a
+#: thread pool, so two simultaneous playground ``/run`` requests really
+#: do execute this code in parallel — each get their own isolated
+#: generator/refiner without stomping each other. ``set_scenario_helpers``
+#: returns the :class:`contextvars.Token`s its caller must pass back to
+#: ``clear_scenario_helpers`` to restore the prior binding.
+_GENERATOR: contextvars.ContextVar[
+    Callable[[str, int, str, str], dict[str, Any]] | None
+] = contextvars.ContextVar("scenario_generator", default=None)
+_REFINER: contextvars.ContextVar[
+    Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None
+] = contextvars.ContextVar("scenario_refiner", default=None)
+
+#: Hard cap on how many times ``refine_scenario`` will call out to the
+#: LLM-backed refiner within a single run. The scenario agent's system
+#: prompt is LLM-driven ("stop only after create_timeline returns"), so
+#: without a cap a refiner that cannot converge ties the agent up
+#: forever. When the cap is reached ``refine_scenario`` stops calling
+#: the refiner entirely — it returns the unchanged scenes plus a
+#: ``refine_cap_reached: True`` flag and an instruction field telling
+#: the LLM to call ``create_timeline`` next. The agent still decides
+#: whether to comply, but after a couple more evaluate/refine cycles
+#: the SlidingWindowConversationManager loses the pre-cap context and
+#: ``create_timeline`` becomes the path of least resistance.
+_DEFAULT_REFINE_CAP_ENV: str = "SCENARIO_REFINE_CAP"
+_DEFAULT_REFINE_CAP: int = 3
+
+
+def _default_refine_cap() -> int:
+    raw = os.environ.get(_DEFAULT_REFINE_CAP_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_REFINE_CAP
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return _DEFAULT_REFINE_CAP
+    return max(0, parsed)
+
+
+_REFINE_CAP: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "scenario_refine_cap", default=_DEFAULT_REFINE_CAP
+)
+_REFINE_COUNT: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "scenario_refine_count", default=0
+)
+
+
+class ScenarioHelperTokens(tuple):
+    """ContextVar reset tokens returned by :func:`set_scenario_helpers`.
+
+    Carries reset tokens for the generator + refiner helper bindings
+    plus the per-run refine cap and iteration counter. Existing callers
+    interact via :func:`clear_scenario_helpers` and never unpack the
+    tuple by index, so the extra slots are transparent.
+    """
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        generator_token: contextvars.Token,
+        refiner_token: contextvars.Token,
+        refine_cap_token: contextvars.Token,
+        refine_count_token: contextvars.Token,
+    ) -> "ScenarioHelperTokens":
+        return super().__new__(
+            cls,
+            (
+                generator_token,
+                refiner_token,
+                refine_cap_token,
+                refine_count_token,
+            ),
+        )
+
+    @property
+    def generator(self) -> contextvars.Token:
+        return self[0]
+
+    @property
+    def refiner(self) -> contextvars.Token:
+        return self[1]
+
+    @property
+    def refine_cap(self) -> contextvars.Token:
+        return self[2]
+
+    @property
+    def refine_count(self) -> contextvars.Token:
+        return self[3]
 
 
 def set_scenario_helpers(
     *,
     generator: Callable[[str, int, str, str], dict[str, Any]] | None = None,
     refiner: Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None = None,
-) -> None:
-    """Register test-time or production helpers for the LLM-backed tools.
+    refine_cap: int | None = None,
+) -> ScenarioHelperTokens:
+    """Register helpers for the LLM-backed tools within the current context.
 
     When no helper is registered the corresponding tool raises
     :class:`ScenarioHelperNotConfigured` so missing wiring shows up
@@ -99,20 +197,45 @@ def set_scenario_helpers(
     Args:
         generator: Callable implementing ``(topic, num_scenes, style, language)
             -> {"scenes": [...], "visual_style": {...}, "style_lock": {...}}``.
-            Pass ``None`` to clear the registry.
+            Pass ``None`` to clear within this context.
         refiner: Callable implementing ``(scenes, feedback) -> {"scenes": [...]}``.
-            Pass ``None`` to clear the registry.
+            Pass ``None`` to clear within this context.
+        refine_cap: Hard ceiling on ``refine_scenario`` delegations for
+            this context. ``None`` reads the ``SCENARIO_REFINE_CAP``
+            environment variable with a fallback of ``3``. The refine
+            iteration counter is reset to ``0`` on every call.
+
+    Returns:
+        :class:`ScenarioHelperTokens` carrying reset tokens for the
+        generator, refiner, cap, and counter. Pass back to
+        :func:`clear_scenario_helpers` to restore the prior binding.
     """
-    global _GENERATOR, _REFINER
-    _GENERATOR = generator
-    _REFINER = refiner
+    effective_cap = _default_refine_cap() if refine_cap is None else max(0, refine_cap)
+    return ScenarioHelperTokens(
+        _GENERATOR.set(generator),
+        _REFINER.set(refiner),
+        _REFINE_CAP.set(effective_cap),
+        _REFINE_COUNT.set(0),
+    )
 
 
-def clear_scenario_helpers() -> None:
-    """Reset injected helpers. Primarily for test isolation."""
-    global _GENERATOR, _REFINER
-    _GENERATOR = None
-    _REFINER = None
+def clear_scenario_helpers(tokens: ScenarioHelperTokens | None = None) -> None:
+    """Restore the prior helper binding for the current context.
+
+    When ``tokens`` is ``None`` the helpers are cleared unconditionally
+    (legacy behaviour, kept for tests that don't care about the prior
+    binding).
+    """
+    if tokens is None:
+        _GENERATOR.set(None)
+        _REFINER.set(None)
+        _REFINE_CAP.set(_default_refine_cap())
+        _REFINE_COUNT.set(0)
+        return
+    _GENERATOR.reset(tokens.generator)
+    _REFINER.reset(tokens.refiner)
+    _REFINE_CAP.reset(tokens.refine_cap)
+    _REFINE_COUNT.reset(tokens.refine_count)
 
 
 class ScenarioHelperNotConfigured(RuntimeError):
@@ -150,7 +273,8 @@ def generate_scenario(
     Raises:
         ScenarioHelperNotConfigured: When no generator helper is wired.
     """
-    if _GENERATOR is None:
+    generator = _GENERATOR.get()
+    if generator is None:
         raise ScenarioHelperNotConfigured(
             "generator helper not configured; call set_scenario_helpers"
         )
@@ -161,7 +285,7 @@ def generate_scenario(
         style,
         language,
     )
-    return _GENERATOR(topic, num_scenes, style, language)
+    return generator(topic, num_scenes, style, language)
 
 
 @tool
@@ -216,27 +340,72 @@ def refine_scenario(
     Delegates to the injected refiner helper. The helper preserves
     scene cardinality and field schema; it only changes values.
 
+    The scenario agent is LLM-driven — its system prompt only tells it
+    to "stop after create_timeline returns". A refiner that cannot
+    converge on a GOOD rating can therefore wedge the agent forever
+    in an evaluate/refine loop. To bound total wall-clock, this tool
+    tracks the number of delegations per context (via
+    :data:`_REFINE_COUNT`) and compares it against :data:`_REFINE_CAP`
+    (default from ``SCENARIO_REFINE_CAP`` env or ``3``). Past the cap
+    it returns the unchanged scenes with a ``refine_cap_reached: True``
+    flag and a short ``message`` instructing the LLM to call
+    ``create_timeline`` next. The refiner helper is not invoked.
+
     Args:
         scenes: Current scene list to refine.
         feedback: Result of :func:`evaluate_scenario` — the refiner
             reads ``issues`` and ``suggestions`` to decide what to edit.
 
     Returns:
-        ``{"scenes": [...]}`` with the same length as ``scenes``.
+        ``{"scenes": [...]}`` with the same length as ``scenes``, plus
+        ``refine_iteration`` / ``refine_cap`` annotations. When the
+        cap has been reached, additionally ``refine_cap_reached: True``
+        and a ``message`` field.
 
     Raises:
-        ScenarioHelperNotConfigured: When no refiner helper is wired.
+        ScenarioHelperNotConfigured: When no refiner helper is wired
+            (before the cap is reached).
     """
-    if _REFINER is None:
+    cap = _REFINE_CAP.get()
+    count = _REFINE_COUNT.get()
+    issues = feedback.get("issues") or []
+    if count >= cap:
+        logger.info(
+            "scenario_refine_cap_reached cap=%d count=%d scenes=%d issues=%d",
+            cap,
+            count,
+            len(scenes),
+            len(issues),
+        )
+        return {
+            "scenes": scenes,
+            "refine_iteration": count,
+            "refine_cap": cap,
+            "refine_cap_reached": True,
+            "message": (
+                f"Refine cap of {cap} reached. These scenes are final. "
+                "Call create_timeline(scenes) now with this list. "
+                "Do not call refine_scenario again."
+            ),
+        }
+    refiner = _REFINER.get()
+    if refiner is None:
         raise ScenarioHelperNotConfigured(
             "refiner helper not configured; call set_scenario_helpers"
         )
     logger.debug(
-        "scene_count=<%d>, issue_count=<%d> | refining scenario",
+        "scene_count=<%d>, issue_count=<%d>, refine_iteration=<%d>/<%d> | refining scenario",
         len(scenes),
-        len(feedback.get("issues", [])),
+        len(issues),
+        count + 1,
+        cap,
     )
-    return _REFINER(scenes, feedback)
+    _REFINE_COUNT.set(count + 1)
+    result = refiner(scenes, feedback)
+    if isinstance(result, dict):
+        result.setdefault("refine_iteration", count + 1)
+        result.setdefault("refine_cap", cap)
+    return result
 
 
 @tool

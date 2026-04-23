@@ -23,6 +23,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest (>=9.0.3,<10.0.0)",
+    # ``pytest-asyncio`` is needed by ``test_playground_events.py`` —
+    # the event-stream tests drive ``RunStream`` / ``wait_for_after``
+    # directly as coroutines. ``asyncio_mode = "auto"`` below lets us
+    # write ``async def test_...`` without per-test decorators.
+    "pytest-asyncio (>=0.23,<2.0)",
     # Pin the ADK version used for the eval harness so CI is deterministic.
     # The production install (``google-adk >= 1.0.0`` above) stays unpinned.
     "google-adk (==1.29.0)",
@@ -40,3 +45,7 @@ strands = [
 [tool.pytest.ini_options]
 testpaths = ["tests", "adk_eval", "strands_agents/tests"]
 pythonpath = ["."]
+# ``auto`` mode lets ``async def test_...`` work without a per-test
+# ``@pytest.mark.asyncio`` decorator. The event-stream tests need it;
+# the rest of the suite is unaffected.
+asyncio_mode = "auto"

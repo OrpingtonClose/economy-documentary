@@ -14,13 +14,17 @@ Nothing in :mod:`server.agui` moves. ``/playground`` is additive.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from strands_evals.case import Case
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
@@ -41,6 +45,19 @@ from strands_agents.playground import (
     preview_diff,
     probe_models,
 )
+from strands_agents.playground.events import (
+    Event,
+    RunStream,
+    get_registry,
+    reset_active_stream,
+    set_active_stream,
+)
+from strands_agents.playground.langfuse import (
+    frontend_config as langfuse_frontend_config,
+    langfuse_trace_url,
+)
+from strands_agents.playground.narrator import interpret_run, narrator_loop
+from strands_agents.playground.telemetry import playground_tracer
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +139,18 @@ def _serialise_case(case: Any) -> dict[str, Any]:
     payload = case.model_dump(mode="json", exclude_none=True)
     payload["role"] = _case_role(payload.get("name"))
     return payload
+
+
+@router.get("/config/langfuse", response_class=JSONResponse)
+async def get_langfuse_config() -> dict[str, Any]:
+    """Return whether Langfuse observability is wired and at which host.
+
+    The frontend polls this once on app load to decide whether to
+    render the "View Trace" button next to the live status rail.
+    Credentials never leave the backend — only the public host URL
+    plus an ``enabled`` flag.
+    """
+    return langfuse_frontend_config()
 
 
 @router.get("/components", response_class=JSONResponse)
@@ -276,9 +305,13 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
     Order of operations:
 
     1. Resolve the component or 404.
-    2. Probe every declared model. Any unreachable → return
-       ``MODEL_UNREACHABLE`` with the unreachable set surfaced. The
-       plan pins this as a hard-gate failure, not a degradation.
+    2. Probe every declared model. If the declared set is non-empty
+       and **none** are reachable → return ``MODEL_UNREACHABLE`` with
+       the unreachable set surfaced. The plan pins this as a hard-gate
+       failure. Partial reachability (some green, some red) is not a
+       gate on the run itself — the run drives one reachable model at
+       a time, and the red entries are exposed on the catalog endpoint
+       so the UI can flag them as discard candidates.
     3. Resolve the case (registered or custom). Unknown registered
        name → 400.
     4. Load the task adapter. Missing → ``NO_TASK_ADAPTER``.
@@ -293,9 +326,18 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
     if component is None:
         raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
 
+    # A run drives ONE model at a time (picked from the declared set
+    # by the component's task adapter). MODEL_UNREACHABLE fires only
+    # when no declared model is reachable — that's the case where the
+    # run can't proceed at all. A partially-reachable declared set
+    # (e.g. canonical green, one candidate red because its key is
+    # invalid) is still a valid run against the reachable model; the
+    # unreachable entries surface on the catalog endpoint so the UI can
+    # render the red dot and flag the model as a discard candidate,
+    # per the "no artificial model pinning" rule.
     reachability = probe_models(component.declared_models)
     unreachable = [s for s in reachability if not s.reachable]
-    if unreachable:
+    if reachability and not any(s.reachable for s in reachability):
         return {
             "status": RUN_STATUS_MODEL_UNREACHABLE,
             "component_id": component.id,
@@ -789,6 +831,444 @@ async def all_models_health() -> dict[str, Any]:
         "all_reachable": all(s.reachable for s in statuses),
         "unreachable_sentinel": MODEL_UNREACHABLE,
     }
+
+
+# --------------------------------------------------------------------------
+# Event-driven run endpoints
+#
+# The sync ``POST /components/{id}/run`` above stays for programmatic /
+# curl callers: one request in, one terminal JSON body out. The UI
+# needs a different shape — a live feedback line backed by structured
+# events + an LLM narrator — so it drives the run through the
+# ``runs`` family below:
+#
+#   POST /components/{id}/runs   → {run_id} (immediate)
+#   GET  /runs/{run_id}          → current state (polling)
+#   GET  /runs/{run_id}/events   → Server-Sent Events stream
+#
+# The run itself is dispatched on a background task; the sync task
+# adapter is hosted on a worker thread so it can emit ``emit_sync``
+# events onto the main loop without blocking FastAPI.
+# --------------------------------------------------------------------------
+
+
+_EVENT_STREAM_HEARTBEAT_SECONDS: float = 3.0
+_EVENT_STREAM_MAX_SECONDS: float = 900.0
+
+
+def _serialise_event(event: Event) -> dict[str, Any]:
+    return event.to_dict()
+
+
+def _serialise_run_state(stream: RunStream) -> dict[str, Any]:
+    trace_url = (
+        langfuse_trace_url(stream.trace_id)
+        if stream.trace_id is not None
+        else None
+    )
+    return {
+        "run_id": stream.run_id,
+        "component_id": stream.component_id,
+        "case_name": stream.case_name,
+        "created_at": stream.created_at,
+        "closed": stream.closed,
+        "events": [_serialise_event(e) for e in stream.snapshot()],
+        "terminal": stream.terminal,
+        "trace_id": stream.trace_id,
+        "trace_url": trace_url,
+    }
+
+
+def _start_run_root_span(stream: RunStream) -> Any:
+    """Open the root OTel span for a run and pin its trace id onto ``stream``.
+
+    Returns a context manager the dispatcher ``with``-blocks on, or
+    ``None`` when OTel is not available. On entry the stream's
+    ``trace_id`` is populated so ``_serialise_run_state`` can surface
+    it to the frontend before the first event lands. On exit the
+    span closes normally — subsequent Strands / ADK child spans still
+    nest under this root via OTel's context propagation, which is
+    what gives Langfuse a single trace tree per playground run.
+    """
+    tracer = playground_tracer()
+    if tracer is None:
+        return None
+    span_cm = tracer.start_as_current_span(
+        "playground.run",
+        attributes={
+            "playground.run_id": stream.run_id,
+            "playground.component_id": stream.component_id,
+            "playground.case_name": stream.case_name or "",
+        },
+    )
+    span = span_cm.__enter__()
+    try:
+        ctx = span.get_span_context()
+        stream.trace_id = format(ctx.trace_id, "032x")
+    except Exception:  # noqa: BLE001 — telemetry must never crash the run
+        pass
+    return span_cm
+
+
+async def _dispatch_run(
+    *,
+    stream: RunStream,
+    component: Component,
+    case: Case[Any, Any],
+) -> None:
+    """Run the component and pump events into ``stream``.
+
+    Executes the synchronous task adapter in a worker thread so the
+    FastAPI loop keeps serving SSE / state reads. Terminates the
+    stream with exactly one of ``run.ok`` / ``run.error`` /
+    ``run.cancelled`` and closes it with a terminal payload.
+    """
+    loop = asyncio.get_running_loop()
+    stream.attach_loop(loop)
+
+    run_span_cm = _start_run_root_span(stream)
+
+    narrator_task = asyncio.create_task(narrator_loop(stream))
+
+    # Defensive default. If anything in the ``try`` body raises before we
+    # assign a more specific terminal payload (e.g. ``probe_models``
+    # itself blows up, or an ``await stream.emit`` fails under load),
+    # the ``finally`` block still has a well-formed payload to close
+    # the stream with — no ``UnboundLocalError`` and no SSE clients
+    # left hanging on a stream that never closes.
+    terminal: dict[str, Any] = {
+        "status": RUN_STATUS_TASK_ERROR,
+        "component_id": component.id,
+        "case_name": case.name,
+        "error": "run failed with an unexpected internal error",
+        "error_class": "UnexpectedError",
+        "output": None,
+        "trajectory": None,
+    }
+    try:
+        # Reachability gate.
+        await stream.emit(
+            "probe.start",
+            f"probing {len(component.declared_models)} declared model(s)",
+            detail={"count": len(component.declared_models)},
+        )
+        probe_start = time.perf_counter()
+        reachability = await asyncio.to_thread(
+            probe_models, component.declared_models
+        )
+        probe_elapsed_ms = int((time.perf_counter() - probe_start) * 1000)
+        for status in reachability:
+            await stream.emit(
+                "probe.done",
+                (
+                    f"{'reachable' if status.reachable else 'unreachable'}: "
+                    f"{status.model_id} ({status.reason})"
+                ),
+                detail={
+                    "model_id": status.model_id,
+                    "provider": status.provider,
+                    "reachable": status.reachable,
+                    "reason": status.reason,
+                    "latency_ms": status.latency_ms,
+                },
+            )
+        if reachability and not any(s.reachable for s in reachability):
+            unreachable = [
+                _serialise_reachability(s) for s in reachability if not s.reachable
+            ]
+            await stream.emit(
+                "run.error",
+                "all declared models unreachable",
+                detail={
+                    "status": RUN_STATUS_MODEL_UNREACHABLE,
+                    "probe_elapsed_ms": probe_elapsed_ms,
+                },
+            )
+            terminal = {
+                "status": RUN_STATUS_MODEL_UNREACHABLE,
+                "component_id": component.id,
+                "case_name": case.name,
+                "unreachable_models": unreachable,
+                "output": None,
+                "trajectory": None,
+            }
+            return
+
+        # Task adapter gate.
+        task = component.task()
+        if task is None:
+            await stream.emit(
+                "run.error",
+                "no task adapter registered for this component",
+                detail={"status": RUN_STATUS_NO_TASK_ADAPTER},
+            )
+            terminal = {
+                "status": RUN_STATUS_NO_TASK_ADAPTER,
+                "component_id": component.id,
+                "case_name": case.name,
+                "output": None,
+                "trajectory": None,
+            }
+            return
+
+        # Dispatch.
+        await stream.emit(
+            "task.start",
+            f"dispatching {component.id}",
+            detail={"component_id": component.id, "case": case.name},
+        )
+        task_start = time.perf_counter()
+
+        # Task adapters run on a worker thread via ``asyncio.to_thread``.
+        # Copying the current context into the worker and binding the
+        # stream inside it lets adapters discover the active stream
+        # (via :func:`strands_agents.playground.events.get_active_stream`)
+        # and register playground hooks against it — without widening
+        # every adapter's signature. The binding is torn down
+        # automatically when the copied context goes out of scope.
+        def _run_task_with_stream() -> Any:
+            token = set_active_stream(stream)
+            try:
+                return task(case)
+            finally:
+                reset_active_stream(token)
+
+        ctx = contextvars.copy_context()
+        try:
+            result = await asyncio.to_thread(ctx.run, _run_task_with_stream)
+        except Exception as exc:  # noqa: BLE001 — surface to UI
+            elapsed_ms = int((time.perf_counter() - task_start) * 1000)
+            logger.exception(
+                "component run failed: %s/%s", component.id, case.name
+            )
+            await stream.emit(
+                "run.error",
+                f"{type(exc).__name__}: {exc}",
+                detail={
+                    "status": RUN_STATUS_TASK_ERROR,
+                    "error_class": type(exc).__name__,
+                    "error": str(exc),
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
+            terminal = {
+                "status": RUN_STATUS_TASK_ERROR,
+                "component_id": component.id,
+                "case_name": case.name,
+                "error": str(exc),
+                "error_class": type(exc).__name__,
+                "output": None,
+                "trajectory": None,
+            }
+            return
+
+        elapsed_ms = int((time.perf_counter() - task_start) * 1000)
+        if isinstance(result, dict):
+            output = result.get("output", result)
+            trajectory = result.get("trajectory")
+        else:
+            output = result
+            trajectory = None
+        await stream.emit(
+            "task.done",
+            f"{component.id} completed in {elapsed_ms}ms",
+            detail={
+                "elapsed_ms": elapsed_ms,
+                "trajectory_len": len(trajectory) if isinstance(trajectory, list) else 0,
+            },
+        )
+        await stream.emit(
+            "run.ok",
+            "run completed",
+            detail={"elapsed_ms": elapsed_ms},
+        )
+        terminal = {
+            "status": RUN_STATUS_OK,
+            "component_id": component.id,
+            "case_name": case.name,
+            "output": output,
+            "trajectory": trajectory,
+        }
+
+        # Post-run LLM interpretation. Best effort — if the narrator
+        # model is unreachable or the LLM call raises, we still close
+        # the run cleanly.
+        interpretation = await interpret_run(
+            stream, output=output, evaluator_scores=None
+        )
+        if interpretation:
+            terminal["interpretation"] = interpretation
+
+    except asyncio.CancelledError:
+        await stream.emit("run.cancelled", "run cancelled by client")
+        terminal = {
+            "status": "CANCELLED",
+            "component_id": component.id,
+            "case_name": case.name,
+            "output": None,
+            "trajectory": None,
+        }
+        raise
+    finally:
+        narrator_task.cancel()
+        try:
+            await narrator_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        if run_span_cm is not None:
+            try:
+                run_span_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 — telemetry must never crash the run
+                logger.debug("run span close failed", exc_info=True)
+        # ``terminal`` is seeded with a defensive default at the top of
+        # the function and overwritten on every normal control-flow
+        # path, so close() always sees a well-formed payload.
+        await stream.close(terminal=terminal)
+
+
+class StartRunRequest(BaseModel):
+    """Body for ``POST /components/{id}/runs``.
+
+    Same semantics as :class:`RunRequest` — either a registered case
+    name or a custom input. The split into a separate type leaves
+    room for future async-only parameters (e.g. ``narrator: bool``)
+    without disturbing the synchronous endpoint's shape.
+    """
+
+    case_name: str | None = Field(default=None)
+    custom_input: dict[str, Any] | None = Field(default=None)
+
+
+@router.post("/components/{component_id}/runs", response_class=JSONResponse)
+async def start_run(
+    component_id: str,
+    request: StartRunRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    """Allocate a run_id, kick off the dispatcher, return immediately.
+
+    The returned ``run_id`` is used by the frontend to subscribe to
+    ``GET /runs/{run_id}/events`` for live narration and to
+    ``GET /runs/{run_id}`` for a polling fallback.
+    """
+    component = get_component(component_id)
+    if component is None:
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
+
+    if request.custom_input is not None:
+        case_name = request.case_name or "custom_input"
+        case: Case[Any, Any] = Case[Any, Any](
+            name=case_name,
+            session_id=f"playground-run-{component.id}-{case_name}",
+            input=request.custom_input,
+        )
+    elif request.case_name is not None:
+        found = _lookup_case_by_name(component, request.case_name)
+        if found is None:
+            user_total = len(_user_case_payloads(component.id))
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown case: {request.case_name} (component {component.id} "
+                    f"has {len(component.cases())} canonical + {user_total} user cases)"
+                ),
+            )
+        case = found
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="either case_name or custom_input is required",
+        )
+
+    registry = get_registry()
+    stream = registry.new_run(
+        component_id=component.id, case_name=case.name
+    )
+    await stream.emit(
+        "run.dispatched",
+        f"queued {component.id} / {case.name}",
+        detail={"component_id": component.id, "case": case.name},
+    )
+    # BackgroundTasks runs after the response is sent. For a real
+    # HTTP client this is immediate — the frontend can open the SSE
+    # subscription as soon as the POST returns. For TestClient the
+    # background task completes before the POST returns, which is
+    # the pattern we lean on in unit tests.
+    background_tasks.add_task(
+        _dispatch_run, stream=stream, component=component, case=case
+    )
+    return {
+        "run_id": stream.run_id,
+        "component_id": component.id,
+        "case_name": case.name,
+        "events_url": f"/playground/runs/{stream.run_id}/events",
+        "state_url": f"/playground/runs/{stream.run_id}",
+    }
+
+
+@router.get("/runs/{run_id}", response_class=JSONResponse)
+async def get_run(run_id: str) -> dict[str, Any]:
+    """Polling fallback: return the current state of a run."""
+    stream = get_registry().get(run_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+    return _serialise_run_state(stream)
+
+
+@router.get("/runs/{run_id}/events")
+async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
+    """Server-Sent Events stream of one run's event bus.
+
+    Emission format is one ``data: <json>\\n\\n`` per event. Heartbeats
+    (``:heartbeat\\n\\n`` comments) are injected every
+    ``_EVENT_STREAM_HEARTBEAT_SECONDS`` so intermediaries don't close
+    an idle connection. Clients watch for the ``run.ok`` /
+    ``run.error`` / ``run.cancelled`` event kinds to know the run is
+    done; the server also closes the stream cleanly once the terminal
+    event has been delivered.
+    """
+    stream = get_registry().get(run_id)
+    if stream is None:
+        raise HTTPException(status_code=404, detail=f"unknown run: {run_id}")
+
+    async def event_iter() -> Any:
+        # Replay any events that landed before the client connected.
+        last_seq = 0
+        for event in stream.snapshot():
+            payload = json.dumps(_serialise_event(event))
+            yield f"data: {payload}\n\n"
+            last_seq = max(last_seq, event.seq)
+
+        deadline = time.time() + _EVENT_STREAM_MAX_SECONDS
+        while time.time() < deadline:
+            if await request.is_disconnected():
+                return
+            tail = await stream.wait_for_after(
+                last_seq, timeout=_EVENT_STREAM_HEARTBEAT_SECONDS
+            )
+            if tail:
+                for event in tail:
+                    payload = json.dumps(_serialise_event(event))
+                    yield f"data: {payload}\n\n"
+                    last_seq = max(last_seq, event.seq)
+            else:
+                # heartbeat comment — SSE comments start with ':' and
+                # are never surfaced to the client as an event.
+                yield ":heartbeat\n\n"
+            if stream.closed and not tail:
+                return
+
+    return StreamingResponse(
+        event_iter(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # nginx: don't buffer SSE
+            "Connection": "keep-alive",
+        },
+    )
 
 
 __all__ = ["router"]

@@ -15,22 +15,25 @@
  * sidecar under ``server/strands_agents/playground/user_cases/``.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CaseSummary,
   ComponentDetail,
   EvaluateResponse,
   HealthResponse,
   ReachabilityEntry,
+  RunEvent,
   RunResponse,
+  RunTerminal,
   SaveUserCasePreview,
 } from "@/lib/types";
 import {
   evaluateCase,
   getComponentHealth,
-  runCase,
   saveUserCase,
+  startRun,
 } from "@/lib/api";
+import { useRunStream, type RunStreamState } from "@/lib/useRunStream";
 import {
   evaluateStatusClass,
   formatScore,
@@ -81,6 +84,10 @@ export function ComponentWorkbench({ detail }: Props) {
   const [runResult, setRunResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  // runId is non-null once the dispatch POST returns; the SSE hook
+  // uses it to subscribe. Resets to null on each fresh Run click.
+  const [runId, setRunId] = useState<string | null>(null);
+  const stream: RunStreamState = useRunStream(runId);
   const [evalResult, setEvalResult] = useState<EvaluateResponse | null>(null);
   const [evalError, setEvalError] = useState<string | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -132,6 +139,7 @@ export function ComponentWorkbench({ detail }: Props) {
     setRunError(null);
     setEvalResult(null);
     setEvalError(null);
+    setRunId(null);
     const parsed = parseJsonSafe(inputText);
     if (!parsed.ok) {
       setRunError(`Input is not valid JSON: ${parsed.error}`);
@@ -139,14 +147,14 @@ export function ComponentWorkbench({ detail }: Props) {
     }
     setIsRunning(true);
     try {
-      // The server accepts either ``case_name`` (replay) or
-      // ``custom_input`` (arbitrary payload). When the user has
-      // edited the textarea we send ``custom_input`` so the
-      // on-the-wire payload reflects what they see. ``case_name``
-      // is only sent when the selected case is named — the backend
-      // has no way to address an unnamed case by key. User cases
-      // are resolved server-side through the same ``case_name``
-      // lookup path as canonical cases.
+      // Same case_name / custom_input disambiguation as before, but
+      // we now dispatch through the event-driven endpoint. The
+      // ``POST /components/{id}/runs`` call returns immediately with
+      // a ``run_id``; live progress flows through the SSE stream
+      // subscribed by ``useRunStream``. Terminal state is folded
+      // back into ``runResult`` so the rest of the UI (Evaluate
+      // button, output / trajectory panes) keeps its existing
+      // contract.
       const selected = caseAt(allCases, selectedCaseIndex);
       const selectedInputMatchesTextarea =
         selected !== null &&
@@ -157,14 +165,39 @@ export function ComponentWorkbench({ detail }: Props) {
         selected.name !== null
           ? { case_name: selected.name }
           : { custom_input: parsed.value };
-      const response = await runCase(detail.id, body);
-      setRunResult(response);
+      const response = await startRun(detail.id, body);
+      setRunId(response.run_id);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
-    } finally {
       setIsRunning(false);
     }
   }, [allCases, detail.id, inputText, selectedCaseIndex]);
+
+  // Fold the SSE terminal payload back into the existing
+  // ``runResult`` / ``isRunning`` contract so the Evaluate button
+  // and output panes keep working without further refactor.
+  useEffect(() => {
+    if (stream.terminal === null) return;
+    const folded = terminalToRunResponse(detail.id, stream.terminal);
+    setRunResult(folded);
+    setIsRunning(false);
+    if (
+      folded.status !== "OK" &&
+      folded.error !== undefined &&
+      folded.error.trim().length > 0
+    ) {
+      setRunError(folded.error);
+    }
+  }, [detail.id, stream.terminal]);
+
+  // A lost SSE connection is treated exactly like a run error —
+  // post-initiation silence is loud, not silent.
+  useEffect(() => {
+    if (stream.connection === "lost" && runId !== null) {
+      setRunError(stream.error ?? "lost connection to backend");
+      setIsRunning(false);
+    }
+  }, [stream.connection, stream.error, runId]);
 
   const onEvaluate = useCallback(async () => {
     if (runResult === null) {
@@ -232,7 +265,18 @@ export function ComponentWorkbench({ detail }: Props) {
             isRunning={isRunning}
             isEvaluating={isEvaluating}
           />
+          <LiveStatusLine stream={stream} runId={runId} />
           <RunResultPanel result={runResult} error={runError} />
+          <InterpretationCard
+            interpretation={
+              stream.terminal?.interpretation?.trim().length
+                ? stream.terminal.interpretation
+                : null
+            }
+            status={stream.terminal?.status ?? null}
+            isRunning={isRunning}
+          />
+          <RawEventLog events={stream.events} />
           <EvaluateResultPanel result={evalResult} error={evalError} />
         </div>
       </div>
@@ -268,6 +312,268 @@ function caseAt(
     return null;
   }
   return cases[index] ?? null;
+}
+
+/**
+ * Project an SSE-terminal payload back into the legacy
+ * ``RunResponse`` envelope so the Evaluate button and the output /
+ * trajectory panels don't need to know the stream exists.
+ *
+ * A run that ends with ``status: "CANCELLED"`` (backend ran out of
+ * time, user navigated away, etc.) is surfaced as a ``TASK_ERROR``
+ * — the evaluate path will skip itself and the user sees the
+ * cancellation reason in the run-result banner.
+ */
+function terminalToRunResponse(
+  componentId: string,
+  terminal: RunTerminal,
+): RunResponse {
+  if (terminal.status === "CANCELLED") {
+    return {
+      status: "TASK_ERROR",
+      component_id: componentId,
+      case_name: terminal.case_name ?? null,
+      error: terminal.error ?? "run cancelled",
+    };
+  }
+  return {
+    status: terminal.status,
+    component_id: componentId,
+    case_name: terminal.case_name ?? null,
+    output: terminal.output,
+    trajectory: terminal.trajectory,
+    error: terminal.error,
+    unreachable_models: terminal.unreachable_models,
+  };
+}
+
+/**
+ * Single live-status line under the Run button.
+ *
+ * Priorities, from most salient to least:
+ *   1. A backend error while dispatching the run.
+ *   2. ``connection === "lost"`` — SSE channel died.
+ *   3. The narrator's most recent one-sentence update, or the
+ *      raw last-event summary if the narrator hasn't caught up.
+ *   4. The stall indicator, once the last event's budget has
+ *      elapsed. Post-initiation silence must be loud.
+ *
+ * Idle state (no ``runId``) renders nothing — silence when nothing
+ * has been asked of the system is the point.
+ */
+/**
+ * Reveal ``target`` character-by-character, one ``stepMs`` apart.
+ *
+ * Returns the currently-visible prefix. When ``target`` changes the
+ * typewriter resets from the longest common prefix so swapping
+ * narrations feels like a continuation, not a cut-and-restart.
+ *
+ * A null target clears the display without a cut so fading states
+ * (terminal → idle) stay smooth.
+ */
+function useTypewriter(
+  target: string | null,
+  stepMs: number = 12,
+): string {
+  const [shown, setShown] = useState<string>(target ?? "");
+  const shownRef = useRef<string>(shown);
+  useEffect(() => {
+    shownRef.current = shown;
+  }, [shown]);
+  useEffect(() => {
+    if (target === null) {
+      setShown("");
+      return;
+    }
+    // Trim the current reveal back to the longest common prefix
+    // with the new target, then let the ticker walk forward.
+    let common = 0;
+    const prev = shownRef.current;
+    while (
+      common < prev.length &&
+      common < target.length &&
+      prev.charCodeAt(common) === target.charCodeAt(common)
+    ) {
+      common += 1;
+    }
+    if (common !== prev.length) {
+      setShown(target.slice(0, common));
+    }
+    if (common === target.length) return;
+    const id = window.setInterval(() => {
+      setShown((current) => {
+        if (current.length >= target.length) {
+          window.clearInterval(id);
+          return current;
+        }
+        return target.slice(0, current.length + 1);
+      });
+    }, stepMs);
+    return () => window.clearInterval(id);
+  }, [target, stepMs]);
+  return shown;
+}
+
+function LiveStatusLine({
+  stream,
+  runId,
+}: {
+  readonly stream: RunStreamState;
+  readonly runId: string | null;
+}) {
+  const isStalled = stream.stall !== null;
+  const isLost = stream.connection === "lost";
+  const isTerminal = stream.terminal !== null;
+  const rawLine = isLost
+    ? "lost connection to backend"
+    : runId === null
+      ? null
+      : stream.liveLine ??
+        (stream.connection === "connecting" ? "dispatching…" : null);
+  const typed = useTypewriter(rawLine ?? null);
+  const wrapperClass = isLost
+    ? "border-pg-red/40 bg-pg-red/10 text-pg-red"
+    : isStalled
+      ? "border-pg-amber/40 bg-pg-amber/10 text-pg-amber"
+      : isTerminal
+        ? "border-pg-border bg-pg-surface text-pg-muted"
+        : runId === null
+          ? "border-pg-border bg-pg-surface text-pg-muted"
+          : "border-pg-accent/40 bg-pg-accent/5 text-pg-text";
+  const dotClass = isLost
+    ? "pg-dot-red"
+    : isStalled
+      ? "pg-dot-amber"
+      : runId === null
+        ? "pg-dot-muted"
+        : "pg-dot-green";
+  // Fixed-height rail. The inner text is single-line + truncated,
+  // so a 90-char narration never pushes neighbouring panels down.
+  return (
+    <section
+      aria-live="polite"
+      className={`flex h-11 items-center gap-3 rounded border px-3 text-xs transition-colors duration-300 ${wrapperClass}`}
+    >
+      <span
+        className={`pg-dot transition-colors duration-300 ${dotClass}`}
+      />
+      <span className="flex-1 overflow-hidden whitespace-nowrap font-mono">
+        <span className="inline-block min-w-0 max-w-full truncate align-middle">
+          {typed || (runId === null ? "" : " ")}
+          {runId !== null && (
+            <span
+              aria-hidden="true"
+              className="ml-0.5 inline-block w-[1px] animate-pulse bg-current align-middle"
+              style={{ height: "0.8em" }}
+            />
+          )}
+        </span>
+      </span>
+      <span className="hidden w-40 justify-end font-mono text-[10px] uppercase tracking-widest text-pg-muted md:inline-flex">
+        {stream.lastEvent !== null
+          ? `#${stream.lastEvent.seq} · ${stream.lastEvent.kind}`
+          : ""}
+      </span>
+      {stream.traceUrl !== null ? (
+        <a
+          href={stream.traceUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={
+            stream.traceId !== null
+              ? `Langfuse trace ${stream.traceId}`
+              : "Langfuse trace"
+          }
+          className="inline-flex items-center gap-1 rounded border border-pg-border bg-pg-surface px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-pg-muted transition-colors hover:border-pg-accent hover:text-pg-accent"
+        >
+          View Trace ↗
+        </a>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * One-paragraph LLM interpretation of the run, written by the
+ * post-run interpreter. Contract-honest: if the run failed, this
+ * paragraph will say what failed and where.
+ */
+function InterpretationCard({
+  interpretation,
+  status,
+  isRunning,
+}: {
+  readonly interpretation: string | null;
+  readonly status: RunTerminal["status"] | null;
+  readonly isRunning: boolean;
+}) {
+  const typed = useTypewriter(interpretation ?? null, 6);
+  const hasInterpretation = interpretation !== null;
+  // Always render — with a fixed minimum height — so the card
+  // landing after a run does not shunt the raw event log and
+  // evaluator panel down the page.
+  const placeholder = hasInterpretation
+    ? null
+    : isRunning
+      ? "awaiting interpretation — will land once the run terminates"
+      : "run a case to see a one-paragraph interpretation here";
+  const wrapperClass = hasInterpretation
+    ? "border-pg-accent/40 bg-pg-accent/5"
+    : "border-dashed border-pg-border bg-transparent";
+  return (
+    <section
+      aria-label="Run interpretation"
+      className={`min-h-[128px] rounded border p-4 transition-colors duration-300 ${wrapperClass}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2
+          className={`text-sm font-semibold ${
+            hasInterpretation ? "text-pg-accent" : "text-pg-muted"
+          }`}
+        >
+          Interpretation
+        </h2>
+        {status !== null && (
+          <span
+            className={`rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${runStatusClass(
+              status === "CANCELLED" ? "TASK_ERROR" : status,
+            )}`}
+          >
+            {status}
+          </span>
+        )}
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-pg-text">
+        {hasInterpretation ? typed : (
+          <span className="italic text-pg-muted">{placeholder}</span>
+        )}
+      </p>
+    </section>
+  );
+}
+
+/** Full event log, collapsed by default — for when you want detail. */
+function RawEventLog({ events }: { readonly events: readonly RunEvent[] }) {
+  if (events.length === 0) return null;
+  return (
+    <details className="rounded border border-pg-border bg-pg-surface p-3">
+      <summary className="cursor-pointer text-xs text-pg-muted">
+        Raw event log ({events.length})
+      </summary>
+      <ul className="mt-2 flex max-h-80 flex-col gap-1 overflow-auto">
+        {events.map((e) => (
+          <li
+            key={e.seq}
+            className="grid grid-cols-[4rem_8rem_1fr] gap-2 font-mono text-[11px]"
+          >
+            <span className="text-pg-muted">#{e.seq}</span>
+            <span className="truncate text-pg-accent">{e.kind}</span>
+            <span className="truncate text-pg-text">{e.summary}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function Header({ detail }: { readonly detail: ComponentDetail }) {
@@ -539,7 +845,7 @@ function RunResultPanel({
     return (
       <section
         role="alert"
-        className="rounded border border-pg-red/40 bg-pg-red/10 p-4"
+        className="pg-stable-surface rounded border border-pg-red/40 bg-pg-red/10 p-4 transition-colors duration-300"
       >
         <h2 className="text-sm font-semibold text-pg-red">Run failed</h2>
         <p className="mt-2 font-mono text-xs text-pg-red">{error}</p>
@@ -548,14 +854,14 @@ function RunResultPanel({
   }
   if (result === null) {
     return (
-      <section className="rounded border border-dashed border-pg-border bg-transparent p-4 text-xs text-pg-muted">
-        Click <span className="font-mono">Run</span> to dispatch the
+      <section className="pg-stable-surface flex items-center rounded border border-dashed border-pg-border bg-transparent p-4 text-xs text-pg-muted transition-colors duration-300">
+        Click <span className="mx-1 font-mono">Run</span> to dispatch the
         current input against this component.
       </section>
     );
   }
   return (
-    <section className="rounded border border-pg-border bg-pg-surface p-4">
+    <section className="pg-stable-surface rounded border border-pg-border bg-pg-surface p-4 transition-colors duration-300">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-pg-text">Run result</h2>
         <span
@@ -610,7 +916,7 @@ function EvaluateResultPanel({
     return (
       <section
         role="alert"
-        className="rounded border border-pg-red/40 bg-pg-red/10 p-4"
+        className="rounded border border-pg-red/40 bg-pg-red/10 p-4 transition-colors duration-300"
       >
         <h2 className="text-sm font-semibold text-pg-red">Evaluate failed</h2>
         <p className="mt-2 font-mono text-xs text-pg-red">{error}</p>

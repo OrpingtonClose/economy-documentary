@@ -89,7 +89,7 @@ def _scenario_helpers_registered() -> bool:
     itself, rather than poking at the real agent tool (which would
     require a live model to round-trip through).
     """
-    return scenario_agent._GENERATOR is not None
+    return scenario_agent._GENERATOR.get() is not None
 
 
 # ---------------------------------------------------------------------------
