@@ -95,12 +95,23 @@ mkdir -p "$LANGFUSE_HOME"
 # on every run, which breaks Postgres/Langfuse authentication
 # because Postgres was initialised with the old password and the
 # encrypted columns were sealed with the old ENCRYPTION_KEY.
+#
+# We must NOT let the source step clobber operator-supplied inputs on
+# a re-run (e.g. an operator migrating the VM to a new IP will pass a
+# new LANGFUSE_PUBLIC_HOST). Save such inputs before the source and
+# restore them afterward.
+_SAVED_PUBLIC_HOST="$LANGFUSE_PUBLIC_HOST"
+_SAVED_UPSTREAM_REF="${LANGFUSE_UPSTREAM_REF:-}"
 if [[ -f "$LANGFUSE_HOME/.env" ]]; then
     echo "=== Sourcing existing $LANGFUSE_HOME/.env (idempotent re-run) ==="
     # shellcheck disable=SC1091
     set -a
     source "$LANGFUSE_HOME/.env"
     set +a
+fi
+LANGFUSE_PUBLIC_HOST="$_SAVED_PUBLIC_HOST"
+if [[ -n "$_SAVED_UPSTREAM_REF" ]]; then
+    LANGFUSE_UPSTREAM_REF="$_SAVED_UPSTREAM_REF"
 fi
 
 LANGFUSE_UPSTREAM_REF="${LANGFUSE_UPSTREAM_REF:-$LANGFUSE_UPSTREAM_REF_DEFAULT}"
@@ -195,13 +206,20 @@ docker compose --env-file "$LANGFUSE_HOME/.env" \
 # Wait for readiness (web returns 200 on /api/public/health)
 # ---------------------------------------------------------------------------
 echo "=== Waiting for Langfuse web to become ready ==="
+LANGFUSE_HEALTHY=false
 for _ in $(seq 1 120); do
     if curl -fsS "http://localhost:3000/api/public/health" >/dev/null 2>&1; then
         echo "Langfuse web is healthy."
+        LANGFUSE_HEALTHY=true
         break
     fi
     sleep 2
 done
+if [[ "$LANGFUSE_HEALTHY" != "true" ]]; then
+    echo "ERROR: Langfuse web did not become healthy within 240s." >&2
+    echo "Run 'docker compose -f $LANGFUSE_UPSTREAM_DIR/docker-compose.yml logs' for diagnostics." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Next-step hints — surfaced so the operator can finish wiring in ~2 min.
