@@ -210,7 +210,7 @@ _PROVIDER_ENV: dict[str, tuple[str, ...]] = {
 #: :mod:`strands_agents.playground.registry`: gemini first, then
 #: openai, then moonshot.
 _DEFAULT_MODEL_ORDER: tuple[str, ...] = (
-    "gemini/gemini-3.1-pro",
+    "gemini/gemini-3-pro-preview",
     "openai/gpt-4o",
     "moonshot/kimi-k2",
 )

@@ -96,6 +96,15 @@ def _now() -> float:
     return time.time()
 
 
+#: Env flag opting into live-ping reachability (the real thing). When
+#: set (staging / production), the default prober becomes
+#: :class:`LiteLLMPingProber`, which actually calls the model with a
+#: one-token completion and fails red if the upstream rejects the
+#: request — including the "declared id is wrong" case that slipped past
+#: the credentials-only probe in early staging runs.
+PLAYGROUND_LIVE_PING_ENV: str = "PLAYGROUND_REACHABILITY_PING"
+
+
 class CredentialsProber:
     """Default prober: credentials-presence only, no network.
 
@@ -152,6 +161,88 @@ class CredentialsProber:
         )
 
 
+class LiteLLMPingProber:
+    """Live prober: fires a one-token completion at the declared model.
+
+    Catches three failure modes that :class:`CredentialsProber` misses:
+
+    * wrong declared id (``gemini/gemini-3.1-pro`` → 404 NOT_FOUND);
+    * revoked / expired credentials (present in env but rejected);
+    * upstream outage.
+
+    The probe is capped at ``max_tokens=1`` so the cost per probe is
+    effectively zero (single-token completion) but the request round-
+    trips through the provider's actual routing, which is the point.
+
+    Args:
+        timeout_seconds: Per-probe upper bound. Short by default so a
+            slow provider can't stall the catalog UI.
+        complete: Injectable hook for tests. Defaults to
+            :func:`litellm.completion`.
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 15.0,
+        complete: Callable[..., object] | None = None,
+    ) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._complete = complete
+
+    def _resolve_complete(self) -> Callable[..., object]:
+        if self._complete is not None:
+            return self._complete
+        import litellm  # local import keeps module import side-effect-free
+
+        return litellm.completion
+
+    def probe(self, model: DeclaredModel) -> ReachabilityStatus:
+        checked_at = _now()
+        start = time.perf_counter()
+        try:
+            complete = self._resolve_complete()
+            complete(
+                model=model.id,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+                timeout=self._timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001 — any error → unreachable
+            latency_ms = (time.perf_counter() - start) * 1000.0
+            detail = _short_error(exc)
+            return ReachabilityStatus(
+                model_id=model.id,
+                provider=model.provider,
+                reachable=False,
+                reason=f"probe_error:{detail}",
+                checked_at=checked_at,
+                latency_ms=latency_ms,
+            )
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        return ReachabilityStatus(
+            model_id=model.id,
+            provider=model.provider,
+            reachable=True,
+            reason="ok",
+            checked_at=checked_at,
+            latency_ms=latency_ms,
+        )
+
+
+def _short_error(exc: BaseException) -> str:
+    """Compact single-line error suitable for ``reason`` fields.
+
+    Keeps 404 / authentication / timeout classes visible while
+    trimming multi-line provider noise.
+    """
+    name = type(exc).__name__
+    msg = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    if len(msg) > 160:
+        msg = msg[:157] + "..."
+    return f"{name}: {msg}" if msg else name
+
+
 @dataclass
 class _CacheEntry:
     status: ReachabilityStatus
@@ -197,8 +288,22 @@ class ReachabilityCache:
             self._entries.clear()
 
 
+def _build_default_prober() -> ModelProber:
+    """Pick the production prober based on ``PLAYGROUND_REACHABILITY_PING``.
+
+    Live ping is opt-in because it costs a round-trip per declared
+    model and we don't want CI (where provider credentials may be
+    deliberately absent) to hit real endpoints. Staging / production
+    set ``PLAYGROUND_REACHABILITY_PING=1`` to get the real signal.
+    """
+    flag = os.environ.get(PLAYGROUND_LIVE_PING_ENV, "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return LiteLLMPingProber()
+    return CredentialsProber()
+
+
 #: Module-level singleton. Tests override via :func:`set_default_cache`.
-_default_cache: ReachabilityCache = ReachabilityCache(CredentialsProber())
+_default_cache: ReachabilityCache = ReachabilityCache(_build_default_prober())
 
 
 def get_default_cache() -> ReachabilityCache:
@@ -223,7 +328,9 @@ def probe_models(
 
 __all__ = [
     "MODEL_UNREACHABLE",
+    "PLAYGROUND_LIVE_PING_ENV",
     "CredentialsProber",
+    "LiteLLMPingProber",
     "ModelProber",
     "ReachabilityCache",
     "ReachabilityStatus",

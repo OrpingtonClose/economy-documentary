@@ -273,8 +273,15 @@ _MISSING_TASK = object()
 _MISSING_BUILDER = object()
 
 
-_GEMINI_3_1: DeclaredModel = DeclaredModel(
-    id="gemini/gemini-3.1-pro", provider="gemini", role="canonical"
+#: LiteLLM exposes the current Gemini 3 Pro as
+#: ``gemini/gemini-3-pro-preview`` (verified against the live Gemini API
+#: on the staging VM with ``GOOGLE_API_KEY``). The older
+#: ``gemini-3.1-pro`` string was not a real model id and returned
+#: ``404 NOT_FOUND`` from ``generativelanguage.googleapis.com``. See
+#: ``docs/strands-migration/deploy/PLAYGROUND_STAGING.md`` for the
+#: verification command.
+_GEMINI_3_PRO: DeclaredModel = DeclaredModel(
+    id="gemini/gemini-3-pro-preview", provider="gemini", role="canonical"
 )
 _GEMMA_4_URC: DeclaredModel = DeclaredModel(
     id="local/gemma-4-uncensored", provider="local", role="candidate"
@@ -304,7 +311,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.scenario",
         cases_factory="scenario_cases",
         thresholds_attr="SCENARIO_EVALUATOR_THRESHOLDS",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O, _KIMI_K2),
         experiment_builder_attr="build_scenario_experiment",
         task_attr="scenario_task",
     ),
@@ -337,7 +344,7 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_module="strands_agents.evals.experiments.scenario_refiner",
         cases_factory="refiner_cases",
         thresholds_attr="SCENARIO_REFINER_EVALUATOR_THRESHOLDS",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         experiment_builder_attr="build_refiner_experiment",
         task_attr="scenario_refiner_task",
     ),
@@ -371,7 +378,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="timing_loop_cases",
         thresholds_attr="TIMING_LOOP_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_timing_loop_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="timing_loop_task",
     ),
     Component(
@@ -387,7 +394,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="content_analyst_cases",
         thresholds_attr="CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_content_analyst_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="content_analyst_task",
     ),
     Component(
@@ -403,7 +410,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="visual_concepter_cases",
         thresholds_attr="VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_visual_concepter_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="visual_concepter_task",
     ),
     Component(
@@ -419,7 +426,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="coherence_evaluator_cases",
         thresholds_attr="COHERENCE_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_coherence_evaluator_experiment",
-        declared_models=(_GEMINI_3_1, _QWEN_OMNI, _GEMMA_4_URC),
+        declared_models=(_GEMINI_3_PRO, _QWEN_OMNI, _GEMMA_4_URC),
         task_attr="coherence_evaluator_task",
     ),
     Component(
@@ -435,7 +442,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="visual_loop_cases",
         thresholds_attr="VISUAL_LOOP_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_visual_loop_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="visual_loop_task",
     ),
     Component(
@@ -451,7 +458,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="production_cases",
         thresholds_attr="PRODUCTION_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_production_experiment",
-        declared_models=(_OPENAI_4O, _GEMINI_3_1),
+        declared_models=(_OPENAI_4O, _GEMINI_3_PRO),
         task_attr="production_task",
     ),
     Component(
@@ -483,7 +490,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="RECOVERY_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_recovery_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O, _KIMI_K2),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O, _KIMI_K2),
         task_attr="recovery_task",
     ),
     Component(
@@ -500,7 +507,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="ESCALATION_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_escalation_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="escalation_task",
     ),
     Component(
@@ -517,7 +524,7 @@ _COMPONENTS: tuple[Component, ...] = (
         cases_factory="_CASES",
         thresholds_attr="PIPELINE_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_pipeline_experiment",
-        declared_models=(_GEMINI_3_1, _OPENAI_4O),
+        declared_models=(_GEMINI_3_PRO, _OPENAI_4O),
         task_attr="pipeline_task",
     ),
     Component(

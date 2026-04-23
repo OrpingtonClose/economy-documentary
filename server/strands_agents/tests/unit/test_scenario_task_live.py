@@ -60,7 +60,7 @@ def test_pick_model_falls_back_to_canonical_when_no_credentials(
     monkeypatch.delenv(SCENARIO_PLAYGROUND_MODEL_ENV, raising=False)
     for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
-    assert _pick_model() == "gemini/gemini-3.1-pro"
+    assert _pick_model() == "gemini/gemini-3-pro-preview"
 
 
 # ---------------------------------------------------------------------------
