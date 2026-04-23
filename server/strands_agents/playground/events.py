@@ -34,6 +34,7 @@ Design decisions:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import time
 import uuid
 from collections import deque
@@ -239,9 +240,48 @@ def get_registry() -> RunRegistry:
     return _registry
 
 
+#: ContextVar holding the stream the currently-executing task adapter
+#: is feeding. ``_dispatch_run`` sets this before handing the
+#: synchronous adapter to ``asyncio.to_thread`` so task code can
+#: discover the active stream (and register tool-call hooks against
+#: it) without the adapter signature changing. When no run is active
+#: (e.g. pytest importing a task) the var is ``None`` and adapters
+#: skip instrumentation entirely.
+_ACTIVE_STREAM: contextvars.ContextVar[RunStream | None] = contextvars.ContextVar(
+    "playground_active_stream", default=None
+)
+
+
+def set_active_stream(stream: RunStream | None) -> contextvars.Token:
+    """Bind ``stream`` as the active playground stream for the current context.
+
+    Returns the reset token the caller must pass to
+    :func:`reset_active_stream` once the task adapter returns, so
+    nested contexts don't leak onto unrelated runs.
+    """
+    return _ACTIVE_STREAM.set(stream)
+
+
+def reset_active_stream(token: contextvars.Token) -> None:
+    _ACTIVE_STREAM.reset(token)
+
+
+def get_active_stream() -> RunStream | None:
+    """Return the active playground stream, if one is bound.
+
+    Task adapters call this to decide whether to register playground
+    hooks (tool-call emission, etc.). Returns ``None`` outside a run,
+    which means ``emit_sync`` wouldn't reach a live loop anyway.
+    """
+    return _ACTIVE_STREAM.get()
+
+
 __all__ = [
     "Event",
     "RunRegistry",
     "RunStream",
+    "get_active_stream",
     "get_registry",
+    "reset_active_stream",
+    "set_active_stream",
 ]

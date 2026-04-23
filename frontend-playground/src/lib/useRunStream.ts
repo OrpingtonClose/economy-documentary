@@ -248,9 +248,13 @@ function computeStall(
   _tick: number
 ): RunStall | null {
   if (events.length === 0) return null;
+  // Once any terminal event has landed the run is done — the rail
+  // must not keep ticking a stall counter against whatever event
+  // happened to arrive last (for example ``interpret``, which is
+  // emitted *after* ``run.ok`` as the final post-run narration).
+  if (events.some((e) => TERMINAL_KINDS.has(e.kind))) return null;
   const tail = events[events.length - 1];
   if (tail === undefined) return null;
-  if (TERMINAL_KINDS.has(tail.kind)) return null;
   const budget = STEP_BUDGET_MS[tail.kind] ?? DEFAULT_BUDGET_MS;
   const elapsed = Date.now() - tail.ts * 1000;
   if (elapsed < budget) return null;

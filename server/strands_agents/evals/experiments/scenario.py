@@ -423,6 +423,21 @@ def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
             model=LiteLLMModel(model_id=model_id),
             enforce_contract=False,
         )
+        # When this task is driven by the playground, pipe every tool
+        # call (generate_scenario / evaluate_scenario / refine_scenario /
+        # create_timeline) into the playground event stream so the
+        # live narrator has a steady stream of real signal to
+        # paraphrase, instead of staring at a single ``task.start``
+        # event for 30-200 seconds while the agent loops internally.
+        from strands_agents.playground.events import get_active_stream
+
+        stream = get_active_stream()
+        if stream is not None:
+            from strands_agents.playground.tool_event_hook import (
+                PlaygroundToolEventEmitter,
+            )
+
+            agent.hooks.add_hook(PlaygroundToolEventEmitter(stream))
         agent(prompt)
         messages = list(agent.messages or [])
     finally:

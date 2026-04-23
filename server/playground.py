@@ -15,6 +15,7 @@ Nothing in :mod:`server.agui` moves. ``/playground`` is additive.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
@@ -44,7 +45,13 @@ from strands_agents.playground import (
     preview_diff,
     probe_models,
 )
-from strands_agents.playground.events import Event, RunStream, get_registry
+from strands_agents.playground.events import (
+    Event,
+    RunStream,
+    get_registry,
+    reset_active_stream,
+    set_active_stream,
+)
 from strands_agents.playground.narrator import interpret_run, narrator_loop
 
 logger = logging.getLogger(__name__)
@@ -954,8 +961,24 @@ async def _dispatch_run(
             detail={"component_id": component.id, "case": case.name},
         )
         task_start = time.perf_counter()
+
+        # Task adapters run on a worker thread via ``asyncio.to_thread``.
+        # Copying the current context into the worker and binding the
+        # stream inside it lets adapters discover the active stream
+        # (via :func:`strands_agents.playground.events.get_active_stream`)
+        # and register playground hooks against it — without widening
+        # every adapter's signature. The binding is torn down
+        # automatically when the copied context goes out of scope.
+        def _run_task_with_stream() -> Any:
+            token = set_active_stream(stream)
+            try:
+                return task(case)
+            finally:
+                reset_active_stream(token)
+
+        ctx = contextvars.copy_context()
         try:
-            result = await asyncio.to_thread(task, case)
+            result = await asyncio.to_thread(ctx.run, _run_task_with_stream)
         except Exception as exc:  # noqa: BLE001 — surface to UI
             elapsed_ms = int((time.perf_counter() - task_start) * 1000)
             logger.exception(

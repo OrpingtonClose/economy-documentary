@@ -75,29 +75,101 @@ def _resolve_complete(
     return litellm.completion
 
 
+_RICH_DETAIL_KEYS: tuple[str, ...] = (
+    "model_id",
+    "provider",
+    "tool",
+    "step",
+    "elapsed_ms",
+    "latency_ms",
+    "reason",
+    "error",
+    "error_class",
+    "score",
+    "rating",
+    "num_scenes",
+    "num_issues",
+    "total_duration_sec",
+    "input_keys",
+    "result_shape",
+    "input_digest",
+    "result_digest",
+)
+
+
 def _tail_to_prompt(events: list[Event], *, now: float | None = None) -> str:
     """Compact the tail into an LLM-friendly bullet list.
 
-    If ``now`` is provided, each line is suffixed with an elapsed-age
-    hint (e.g. ``(4.2s ago)``) so the narrator can keep talking about
-    an in-flight step even when no new backend event has arrived.
+    Each event line carries:
+
+    * kind + summary,
+    * every narrator-relevant detail key (see :data:`_RICH_DETAIL_KEYS`
+      — the full tapestry, not just model_id + elapsed_ms),
+    * an elapsed-age hint like ``(4.2s ago)`` when ``now`` is passed,
+      so the narrator can keep talking about an in-flight step even
+      when no new backend event has arrived.
+
+    A ``CONTEXT:`` header is prepended with aggregate facts the
+    per-event rendering alone would hide — total run elapsed,
+    distinct kinds, and a repeat-count for the most common kind.
+    Those aggregates are what lets the narrator say "still on
+    generate_scenario — 6th evaluate_scenario iteration, 41s total"
+    instead of "still probing gemini" for the thirtieth time.
     """
-    lines: list[str] = []
     import time as _time
 
     reference = now if now is not None else _time.time()
-    for event in events[-_MAX_TAIL_EVENTS:]:
+    tail = events[-_MAX_TAIL_EVENTS:]
+    lines: list[str] = []
+    for event in tail:
         detail = event.detail or {}
         detail_parts: list[str] = []
-        for key in ("model_id", "provider", "tool", "elapsed_ms",
-                    "latency_ms", "reason", "error", "score"):
+        for key in _RICH_DETAIL_KEYS:
             if key in detail:
-                detail_parts.append(f"{key}={detail[key]}")
+                value = detail[key]
+                if isinstance(value, (list, tuple)):
+                    value = ",".join(str(v) for v in value)
+                detail_parts.append(f"{key}={value}")
         age_s = max(0.0, reference - event.ts)
         age = f" ({age_s:.1f}s ago)"
-        tail = (" " + " ".join(detail_parts)) if detail_parts else ""
-        lines.append(f"- [{event.kind}] {event.summary}{tail}{age}")
-    return "\n".join(lines)
+        tail_str = (" " + " ".join(detail_parts)) if detail_parts else ""
+        lines.append(f"- [{event.kind}] {event.summary}{tail_str}{age}")
+
+    header = _context_header(events, tail, reference)
+    return header + "\n".join(lines)
+
+
+def _context_header(
+    all_events: list[Event],
+    tail: list[Event],
+    reference: float,
+) -> str:
+    """Aggregate facts the per-event lines don't carry on their own.
+
+    * ``total_elapsed_s`` — time since the *first* event in the run,
+      so the narrator can frame "42s into the run" instead of only
+      knowing per-event ages.
+    * ``kinds`` — compact histogram of kinds in the tail so the
+      narrator can spot a tight loop ("tool.called × 6 in 12s").
+    * ``repeated_kind`` — the dominant kind and its count, surfacing
+      the "same event fired N times" signal that drives the
+      novel-or-admit-repetition rule in the system prompt.
+    """
+    if not all_events:
+        return "CONTEXT: empty\n"
+    first_ts = all_events[0].ts
+    total_elapsed = max(0.0, reference - first_ts)
+    histogram: dict[str, int] = {}
+    for ev in tail:
+        histogram[ev.kind] = histogram.get(ev.kind, 0) + 1
+    dominant = max(histogram.items(), key=lambda kv: kv[1]) if histogram else ("-", 0)
+    kinds_str = ",".join(f"{k}={v}" for k, v in sorted(histogram.items()))
+    return (
+        f"CONTEXT: total_elapsed={total_elapsed:.1f}s "
+        f"tail_kinds={kinds_str} "
+        f"dominant={dominant[0]}×{dominant[1]} "
+        f"total_events={len(all_events)}\n"
+    )
 
 
 _NARRATE_SYSTEM = """You narrate a single in-flight software task to a developer.
@@ -105,24 +177,47 @@ _NARRATE_SYSTEM = """You narrate a single in-flight software task to a developer
 Ground rules:
 - Write one sentence. <= 90 characters. No preamble.
 - Terse, technical, no marketing voice. The reader is not a layperson.
-- Prefer concrete facts: model id, elapsed ms, provider, tool name, tool count.
+- Draw from the full tapestry in the event list: CONTEXT header
+  (total_elapsed, tail_kinds histogram, dominant kind × count),
+  every detail key on each line (model_id, tool, step, elapsed_ms,
+  num_scenes, rating, num_issues, result_shape, input_digest,
+  error_class, score, ...). Use whatever is most salient right
+  now — not just model_id and elapsed.
 - Never reassure ("we're working on it"); state the step.
-- Never invent steps that aren't in the event list.
-- If the last event is an error, repeat its error class and short message verbatim.
-- If the latest event is old (the age in parentheses is several seconds),
-  keep talking about that same step but frame it with the elapsed time —
-  users need to know the task is still on the same thing, not silent.
-- Only return the word NONE if the event list is empty.
-- Do not repeat the previous narration verbatim; advance it (newer facts,
-  higher elapsed, different framing) even when the underlying step hasn't
-  changed.
+- Never invent steps or facts that aren't in the event list.
+- If the last event is an error, repeat its error class and short
+  message verbatim.
+- If the latest event is old (the age in parentheses is several
+  seconds), keep talking about that same step but frame it with
+  the elapsed time — the user needs to know the task is still
+  on the same thing, not silent.
+
+Try hard to say something novel and pertinent every time:
+- Prefer a concrete new fact from the latest event (new tool,
+  new step number, new rating, new num_scenes, new elapsed).
+- If no new fact exists, be ever more specific about what IS
+  happening (which tool, which step number, which model) or
+  hypothesise the likely outcome using only known facts
+  ("gemini 3 Pro preview cold-starts ~30s on first call —
+  still within budget at 18s").
+- Never repeat the previous narration verbatim. Advance it:
+  higher elapsed, different framing, a detail you hadn't named.
+
+If you absolutely cannot say something novel and pertinent,
+acknowledge the repetition explicitly instead of paraphrasing.
+Format: "no new signal, still on <step> — <Ns>". That honest
+line is preferred over an invented "different framing" that
+adds no information.
+
+Only return the word NONE if the event list is empty.
 
 Examples of good lines:
 - probing gemini/gemini-3-pro-preview (3.8s elapsed)
 - still probing gemini — 12s, preview models often cold-start this slow
-- scenario_agent selected openai/gpt-4o, 11 trajectory steps so far
-- scenario_agent still on step 11 (tool.called write_scenes) — 7s
-- evaluator ContractEnforcer scored 0.83 (hard gate)
+- scenario_agent picked openai/gpt-4o, on tool.called step 3 (evaluate_scenario)
+- evaluate_scenario returned rating=FAIR with 2 issues — expecting refine next
+- refine_scenario step 5 returned 7 scenes, 318s total — converging on target
+- no new signal, still on evaluate_scenario — 8s
 - task raised Timeout after 41.2s
 """
 
