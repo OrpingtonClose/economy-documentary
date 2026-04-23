@@ -87,6 +87,21 @@ export interface RunStreamState {
   readonly terminal: RunTerminal | null;
   readonly connection: RunConnectionState;
   readonly error: string | null;
+  /**
+   * 32-char hex OTel trace id for the run's root dispatch span, or
+   * ``null`` when tracing is not wired (no OTel SDK in the backend,
+   * or Langfuse creds unset). Hydrated from ``GET /runs/<id>`` the
+   * first time the endpoint responds and once more when the run
+   * terminates so a delayed-set trace still lands in the UI.
+   */
+  readonly traceId: string | null;
+  /**
+   * Full ``LANGFUSE_HOST/trace/<trace_id>`` URL for the "View Trace"
+   * button, or ``null`` when Langfuse is not configured. Precomputed
+   * server-side so the frontend never concatenates hosts and can
+   * trust the value verbatim.
+   */
+  readonly traceUrl: string | null;
 }
 
 const INITIAL_STATE: RunStreamState = {
@@ -99,6 +114,8 @@ const INITIAL_STATE: RunStreamState = {
   terminal: null,
   connection: "idle",
   error: null,
+  traceId: null,
+  traceUrl: null,
 };
 
 export function useRunStream(runId: string | null): RunStreamState {
@@ -107,6 +124,8 @@ export function useRunStream(runId: string | null): RunStreamState {
   const [connection, setConnection] =
     useState<RunConnectionState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [traceId, setTraceId] = useState<string | null>(null);
+  const [traceUrl, setTraceUrl] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const runIdRef = useRef<string | null>(null);
 
@@ -117,11 +136,41 @@ export function useRunStream(runId: string | null): RunStreamState {
     setEvents([]);
     setTerminal(null);
     setError(null);
+    setTraceId(null);
+    setTraceUrl(null);
     if (!runId) {
       setConnection("idle");
       return;
     }
     setConnection("connecting");
+  }, [runId]);
+
+  // Hydrate the OTel trace id shortly after the run kicks off. The
+  // root span is opened inside ``_dispatch_run`` which runs in a
+  // background task, so a single fetch a few hundred ms after the
+  // SSE connects is enough to pick up the now-pinned trace id.
+  // Missing values simply stay ``null`` and the "View Trace" button
+  // stays hidden — no retry storm.
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    const fetchTrace = async () => {
+      try {
+        const state = await getRunState(runId);
+        if (cancelled || runIdRef.current !== runId) return;
+        if (state.trace_id) setTraceId(state.trace_id);
+        if (state.trace_url) setTraceUrl(state.trace_url);
+      } catch {
+        // Tracing is observability — never surface a fetch failure.
+      }
+    };
+    const id = window.setTimeout(() => {
+      void fetchTrace();
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(id);
+    };
   }, [runId]);
 
   // SSE subscription.
@@ -152,7 +201,13 @@ export function useRunStream(runId: string | null): RunStreamState {
           // updated synchronously by the reset effect the moment
           // ``runId`` changes, so comparing against it inside
           // ``hydrateTerminal`` is enough to drop stale payloads.
-          void hydrateTerminal(runId, runIdRef, setTerminal);
+          void hydrateTerminal(
+            runId,
+            runIdRef,
+            setTerminal,
+            setTraceId,
+            setTraceUrl,
+          );
         }
       } catch {
         // Malformed payloads are ignored — the raw stream UI will
@@ -201,8 +256,10 @@ export function useRunStream(runId: string | null): RunStreamState {
       terminal,
       connection,
       error,
+      traceId,
+      traceUrl,
     };
-  }, [runId, events, terminal, connection, error, tick]);
+  }, [runId, events, terminal, connection, error, tick, traceId, traceUrl]);
 
   return derived;
 }
@@ -270,7 +327,9 @@ function computeStall(
 async function hydrateTerminal(
   runId: string,
   currentRunIdRef: { readonly current: string | null },
-  setTerminal: (t: RunTerminal | null) => void
+  setTerminal: (t: RunTerminal | null) => void,
+  setTraceId?: (t: string | null) => void,
+  setTraceUrl?: (t: string | null) => void,
 ): Promise<void> {
   try {
     const state: RunState = await getRunState(runId);
@@ -280,6 +339,8 @@ async function hydrateTerminal(
     // surfacing the previous run's output + interpretation card.
     if (currentRunIdRef.current !== runId) return;
     if (state.terminal) setTerminal(state.terminal);
+    if (setTraceId && state.trace_id) setTraceId(state.trace_id);
+    if (setTraceUrl && state.trace_url) setTraceUrl(state.trace_url);
   } catch {
     // terminal state remains null; the SSE ``run.error`` event is
     // still visible in the feed.

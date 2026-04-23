@@ -474,6 +474,21 @@ function LiveStatusLine({
           ? `#${stream.lastEvent.seq} · ${stream.lastEvent.kind}`
           : ""}
       </span>
+      {stream.traceUrl !== null ? (
+        <a
+          href={stream.traceUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          title={
+            stream.traceId !== null
+              ? `Langfuse trace ${stream.traceId}`
+              : "Langfuse trace"
+          }
+          className="inline-flex items-center gap-1 rounded border border-pg-border bg-pg-surface px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-pg-muted transition-colors hover:border-pg-accent hover:text-pg-accent"
+        >
+          View Trace ↗
+        </a>
+      ) : null}
     </section>
   );
 }

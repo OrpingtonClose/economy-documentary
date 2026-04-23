@@ -132,6 +132,13 @@ class RunStream:
         #: as an event — consumed directly by the runs collection
         #: endpoint + the post-run interpreter.
         self.terminal: dict[str, Any] | None = None
+        #: 32-char lowercase hex OTel trace id for the root dispatch
+        #: span. Set by ``_dispatch_run`` once the span is active so
+        #: the run state payload can surface it to the frontend
+        #: (and the "View Trace" button can link to Langfuse). ``None``
+        #: when OTel tracing is not configured — the frontend hides
+        #: the button instead of linking to a dead URL.
+        self.trace_id: str | None = None
 
     @property
     def closed(self) -> bool:

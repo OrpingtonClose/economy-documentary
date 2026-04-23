@@ -20,6 +20,27 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+# Wire OpenTelemetry + the Langfuse exporter (slice 2 of the Wave 2/3
+# pipeline). Guarded import so a deps drift (missing opentelemetry SDK,
+# wrong Langfuse package pin) logs a warning instead of crashing the
+# ``uvicorn`` worker — the frontend "View Trace" button hides itself
+# when ``/playground/config/langfuse`` returns ``enabled: false``, so
+# graceful degradation is wired end-to-end.
+try:
+    from strands_agents.playground.telemetry import (  # noqa: E402
+        setup_playground_otel,
+    )
+
+    setup_playground_otel()
+except Exception as _telemetry_err:  # noqa: BLE001 — telemetry is optional
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "playground telemetry disabled — /config/langfuse will report "
+        "enabled: false: %s",
+        _telemetry_err,
+    )
+
 app = FastAPI(
     title="Component Playground",
     description="Sealed inspection workbench for the 15 atomic components.",
