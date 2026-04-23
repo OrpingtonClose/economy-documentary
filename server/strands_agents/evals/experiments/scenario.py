@@ -414,7 +414,15 @@ def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
         refiner=make_refiner(model_id=model_id),
     )
     try:
-        agent = build_scenario_agent(model=LiteLLMModel(model_id=model_id))
+        # Contract enforcement reads ``agent.state['scenes']`` which the
+        # scenario tools don't populate (they return JSON to the LLM, not
+        # to the state blackboard). The playground rebuilds the output
+        # envelope from ``agent.messages`` itself, so we disable the
+        # postcondition hook here. The full pipeline leaves it on.
+        agent = build_scenario_agent(
+            model=LiteLLMModel(model_id=model_id),
+            enforce_contract=False,
+        )
         agent(prompt)
         messages = list(agent.messages or [])
     finally:
