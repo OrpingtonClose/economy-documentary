@@ -27,3 +27,14 @@ body {
 .pg-dot-red {
   @apply bg-pg-red;
 }
+.pg-dot-muted {
+  @apply bg-pg-border;
+}
+
+/* Reserve vertical space for empty / transitional panels so a run
+   landing mid-session does not shove neighbouring panels down the
+   page. Individual components add their own min-heights too — these
+   are a floor. */
+.pg-stable-surface {
+  min-height: 96px;
+}

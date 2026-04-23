@@ -14,6 +14,7 @@ from strands_agents.evals.experiments.playground_reachability import (
 from strands_agents.playground.reachability import (
     MODEL_UNREACHABLE,
     CredentialsProber,
+    LiteLLMPingProber,
     ReachabilityCache,
     set_default_cache,
 )
@@ -109,6 +110,54 @@ def test_models_health_returns_404_for_unknown_component() -> None:
     client = TestClient(app)
     response = client.get("/playground/components/c99/models/health")
     assert response.status_code == 404
+
+
+def test_ping_prober_reports_reachable_when_complete_returns() -> None:
+    calls: list[dict] = []
+
+    def fake_complete(**kwargs: object) -> object:
+        calls.append(kwargs)
+        return object()
+
+    prober = LiteLLMPingProber(complete=fake_complete)
+    status = prober.probe(
+        DeclaredModel(id="gemini/gemini-3-pro-preview", provider="gemini", role="canonical")
+    )
+    assert status.reachable is True
+    assert status.reason == "ok"
+    assert status.latency_ms is not None
+    assert calls and calls[0]["model"] == "gemini/gemini-3-pro-preview"
+    assert calls[0]["max_tokens"] == 1
+
+
+def test_ping_prober_reports_unreachable_on_exception() -> None:
+    def fake_complete(**_: object) -> object:
+        raise RuntimeError("404 NOT_FOUND: models/x not found for API version v1alpha")
+
+    prober = LiteLLMPingProber(complete=fake_complete)
+    status = prober.probe(
+        DeclaredModel(id="gemini/x", provider="gemini", role="canonical")
+    )
+    assert status.reachable is False
+    assert status.reason.startswith("probe_error:RuntimeError:")
+    assert "404 NOT_FOUND" in status.reason
+
+
+def test_ping_prober_truncates_long_error_messages() -> None:
+    long_tail = "x" * 500
+
+    def fake_complete(**_: object) -> object:
+        raise ValueError(long_tail)
+
+    prober = LiteLLMPingProber(complete=fake_complete)
+    status = prober.probe(
+        DeclaredModel(id="openai/x", provider="openai", role="canonical")
+    )
+    # Prefix is ``probe_error:ValueError: ``; the message itself is
+    # trimmed to the 160-char cap plus an ellipsis, so the final
+    # reason stays comfortably under 200 chars.
+    assert len(status.reason) < 200
+    assert status.reason.endswith("...")
 
 
 def test_cache_invalidate_clears_results() -> None:

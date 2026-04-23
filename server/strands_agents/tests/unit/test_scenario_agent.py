@@ -239,6 +239,95 @@ def test_refine_scenario_dispatches_to_registered_helper() -> None:
     )
     assert len(result["scenes"]) == 2
     assert all(s["revised"] for s in result["scenes"])
+    assert result["refine_iteration"] == 1
+    assert result["refine_cap"] >= 1
+    assert "refine_cap_reached" not in result
+
+
+def test_refine_scenario_hard_cap_bypasses_helper_without_raising() -> None:
+    """Past the configured cap, refine_scenario returns unchanged scenes
+    with ``refine_cap_reached: True`` and never invokes the helper —
+    even if the helper is wired. This is the hard-terminate guard
+    documented in docs/strands-migration/AGENTS.md."""
+    calls: list[tuple[list[dict[str, Any]], dict[str, Any]]] = []
+
+    def recording_refiner(
+        scenes: list[dict[str, Any]], feedback: dict[str, Any]
+    ) -> dict[str, Any]:
+        calls.append((scenes, feedback))
+        return {"scenes": [{**s, "revised": True} for s in scenes]}
+
+    set_scenario_helpers(refiner=recording_refiner, refine_cap=2)
+
+    seed_scenes = [{"scene_num": 1}, {"scene_num": 2}]
+    # Within cap — helper invoked twice, iterations annotated.
+    for expected_iteration in (1, 2):
+        result = refine_scenario.__wrapped__(
+            scenes=seed_scenes,
+            feedback={"issues": [{"name": "duration"}]},
+        )
+        assert result.get("refine_iteration") == expected_iteration
+        assert result.get("refine_cap") == 2
+        assert result.get("refine_cap_reached") is not True
+    assert len(calls) == 2
+
+    # Third call is past cap — helper NOT invoked; scenes returned unchanged.
+    capped = refine_scenario.__wrapped__(
+        scenes=seed_scenes,
+        feedback={"issues": [{"name": "duration"}]},
+    )
+    assert capped["refine_cap_reached"] is True
+    assert capped["scenes"] == seed_scenes
+    assert capped["refine_cap"] == 2
+    assert "message" in capped
+    assert "create_timeline" in capped["message"]
+    assert len(calls) == 2  # helper was not called a third time
+
+
+def test_refine_scenario_cap_of_zero_never_invokes_helper() -> None:
+    """A cap of 0 is the strict-terminate setting — every call returns
+    refine_cap_reached: True on the first invocation, so any scenario
+    run with this cap can never wedge in an evaluate/refine loop."""
+
+    def refiner_that_should_not_run(*_: Any, **__: Any) -> dict[str, Any]:
+        raise AssertionError("refiner must not be called when cap=0")
+
+    set_scenario_helpers(refiner=refiner_that_should_not_run, refine_cap=0)
+    result = refine_scenario.__wrapped__(
+        scenes=[{"scene_num": 1}],
+        feedback={"issues": [{"name": "duration"}]},
+    )
+    assert result["refine_cap_reached"] is True
+    assert result["refine_cap"] == 0
+    assert result["scenes"] == [{"scene_num": 1}]
+
+
+def test_refine_scenario_counter_resets_between_set_scenario_helpers_calls() -> None:
+    """set_scenario_helpers is called once per playground run. Its
+    implicit counter reset guarantees a fresh run starts at iteration 0
+    regardless of prior runs in the same process."""
+
+    def fake_refiner(scenes: list[dict[str, Any]], feedback: dict[str, Any]) -> dict[str, Any]:
+        return {"scenes": scenes}
+
+    set_scenario_helpers(refiner=fake_refiner, refine_cap=3)
+    for _ in range(3):
+        refine_scenario.__wrapped__(
+            scenes=[{"scene_num": 1}], feedback={"issues": []}
+        )
+    # Third call exhausted the cap — a fourth would be capped.
+    capped = refine_scenario.__wrapped__(
+        scenes=[{"scene_num": 1}], feedback={"issues": []}
+    )
+    assert capped["refine_cap_reached"] is True
+
+    # Fresh set_scenario_helpers resets the counter.
+    set_scenario_helpers(refiner=fake_refiner, refine_cap=3)
+    fresh = refine_scenario.__wrapped__(
+        scenes=[{"scene_num": 1}], feedback={"issues": []}
+    )
+    assert fresh.get("refine_cap_reached") is not True
+    assert fresh.get("refine_iteration") == 1
 
 
 # ---------------------------------------------------------------------------

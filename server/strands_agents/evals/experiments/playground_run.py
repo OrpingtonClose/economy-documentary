@@ -4,9 +4,12 @@ Protects the run endpoint's four-state contract:
 
 * ``OK`` — model reachable, case resolved, task dispatched, envelope
   returned.
-* ``MODEL_UNREACHABLE`` — any declared model unreachable short-
-  circuits before the task runs. This is the hard-gate the plan
-  pins.
+* ``MODEL_UNREACHABLE`` — declared set non-empty and no model in it
+  is reachable → short-circuit before the task runs. This is the
+  hard-gate the plan pins. Partial reachability (some declared models
+  green, some red) is not a gate on the run itself — the task adapter
+  drives one reachable model at a time; the red entries stay visible
+  on the catalog endpoint so the UI flags them as discard candidates.
 * ``NO_TASK_ADAPTER`` — the upstream experiment module does not
   export the declared ``task_attr``. Visible gap, not a silent
   fallback.

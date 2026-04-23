@@ -72,13 +72,13 @@ class TestSubstrateInstallFlipsEveryHelper:
     def test_scenario_agent_generator_and_refiner(
         self, substrate: Substrate
     ) -> None:
-        assert _scenario_agent._GENERATOR is None
-        assert _scenario_agent._REFINER is None
+        assert _scenario_agent._GENERATOR.get() is None
+        assert _scenario_agent._REFINER.get() is None
         with substrate.installed():
-            assert self._bound_to(_scenario_agent._GENERATOR, substrate.llm)
-            assert self._bound_to(_scenario_agent._REFINER, substrate.llm)
-        assert _scenario_agent._GENERATOR is None
-        assert _scenario_agent._REFINER is None
+            assert self._bound_to(_scenario_agent._GENERATOR.get(), substrate.llm)
+            assert self._bound_to(_scenario_agent._REFINER.get(), substrate.llm)
+        assert _scenario_agent._GENERATOR.get() is None
+        assert _scenario_agent._REFINER.get() is None
 
     def test_scenario_refiner_text_rewriter(self, substrate: Substrate) -> None:
         assert _scenario_refiner._TEXT_REWRITER is None
@@ -169,7 +169,7 @@ class TestSubstrateFakesAreCalledThroughHelpers:
 
     def test_scenario_helper_flow(self, substrate: Substrate) -> None:
         with substrate.installed():
-            out = _scenario_agent._GENERATOR(
+            out = _scenario_agent._GENERATOR.get()(
                 "inflation", 3, "economic", "en"
             )
             assert out["scenes"][0]["id"] == "s1"
@@ -256,7 +256,7 @@ class TestSubstrateRecorderGetsAllChannels:
         self, substrate: Substrate, tmp_path
     ) -> None:
         with substrate.installed():
-            _scenario_agent._GENERATOR("t", 1, "s", "en")
+            _scenario_agent._GENERATOR.get()("t", 1, "s", "en")
             _audio_tool._HELPERS.tts_generate(1, "V1", "hi", "en")
             _task_tools._HELPERS.health_check()
             substrate.b2.upload_bytes(b"x", basename="x.bin")
