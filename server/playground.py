@@ -33,13 +33,22 @@ from strands_agents.playground import (
     Component,
     DeclaredModel,
     DuplicateCaseNameError,
+    DuplicateWorkerError,
     EvaluatorDeclaration,
     MODEL_UNREACHABLE,
     ReachabilityStatus,
     UserCase,
+    VoiceAlreadyPinnedError,
+    VoiceOnNonTtsWorkerError,
+    Worker,
+    WorkerAlreadyHasVoiceError,
+    WorkerNotFoundError,
+    WorkerRegistry,
+    WorkerRegistryError,
+    WorkerRole,
     append_user_case,
     get_component,
-    get_default_cache,
+    get_default_registry,
     iter_components,
     load_user_cases,
     preview_diff,
@@ -810,6 +819,192 @@ def save_user_case(
         "preview": preview,
         "case": payload,
     }
+
+
+# --------------------------------------------------------------------------
+# Worker fleet registry
+#
+# Workers self-register against `/playground/workers` on boot, heartbeat
+# periodically, and pin (or have pinned) a single TTS voice when they
+# are TTS workers. The playground consumes this registry to pre-flight
+# VRAM before entering the Production stage -- see
+# ``server/strands_agents/playground/worker_registry.py`` for the
+# invariants enforced here.
+# --------------------------------------------------------------------------
+
+
+class _RegisterWorkerRequest(BaseModel):
+    worker_id: str = Field(..., min_length=1, max_length=64)
+    role: str = Field(..., description="tts | ltx_render | assembly")
+    endpoint_url: str = Field(..., min_length=1, max_length=512)
+    vram_gb: int = Field(..., gt=0, le=4096)
+    voice_id: str | None = Field(default=None, max_length=128)
+
+
+class _HeartbeatRequest(BaseModel):
+    free_vram_gb: int | None = Field(default=None, ge=0, le=4096)
+
+
+class _PinVoiceRequest(BaseModel):
+    voice_id: str = Field(..., min_length=1, max_length=128)
+
+
+def _serialise_worker(worker: Worker, *, registry: WorkerRegistry) -> dict[str, Any]:
+    stale = registry.is_stale(worker)
+    last_probe = worker.last_probe
+    return {
+        "worker_id": worker.worker_id,
+        "role": worker.role,
+        "endpoint_url": worker.endpoint_url,
+        "vram_gb": worker.vram_gb,
+        "voice_id": worker.voice_id,
+        "registered_at": worker.registered_at,
+        "last_heartbeat_at": worker.last_heartbeat_at,
+        "stale": stale,
+        "last_probe": (
+            None
+            if last_probe is None
+            else {
+                "total_gb": last_probe.total_gb,
+                "free_gb": last_probe.free_gb,
+                "compute_capability": (
+                    None
+                    if last_probe.compute_capability is None
+                    else list(last_probe.compute_capability)
+                ),
+                "probed_at": last_probe.probed_at,
+            }
+        ),
+    }
+
+
+def _workers_registry_error_response(err: WorkerRegistryError) -> HTTPException:
+    """Map registry-raised errors to HTTP status codes with stable reason codes."""
+
+    if isinstance(err, WorkerNotFoundError):
+        return HTTPException(status_code=404, detail={"reason": "worker_not_found", "message": str(err)})
+    if isinstance(err, DuplicateWorkerError):
+        return HTTPException(status_code=409, detail={"reason": "duplicate_worker", "message": str(err)})
+    if isinstance(err, VoiceAlreadyPinnedError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "reason": "voice_already_pinned",
+                "voice_id": err.voice_id,
+                "other_worker_id": err.other_worker_id,
+                "message": str(err),
+            },
+        )
+    if isinstance(err, WorkerAlreadyHasVoiceError):
+        return HTTPException(
+            status_code=409,
+            detail={
+                "reason": "worker_already_has_voice",
+                "existing_voice_id": err.existing_voice_id,
+                "new_voice_id": err.new_voice_id,
+                "message": str(err),
+            },
+        )
+    if isinstance(err, VoiceOnNonTtsWorkerError):
+        return HTTPException(
+            status_code=400,
+            detail={
+                "reason": "voice_on_non_tts_worker",
+                "role": err.role,
+                "message": str(err),
+            },
+        )
+    return HTTPException(status_code=400, detail={"reason": "registry_error", "message": str(err)})
+
+
+@router.get("/workers", response_class=JSONResponse)
+async def list_workers(role: str | None = None) -> dict[str, Any]:
+    """Snapshot of the fleet. Used by the playground card to render the
+    VRAM dot alongside the existing model-reachability dot.
+    """
+
+    registry = get_default_registry()
+    role_filter: WorkerRole | None = None
+    if role is not None:
+        if role not in ("tts", "ltx_render", "assembly"):
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "unknown_role", "role": role},
+            )
+        role_filter = role  # type: ignore[assignment]
+    workers = [
+        _serialise_worker(w, registry=registry)
+        for w in registry.iter_workers(role=role_filter)
+    ]
+    return {
+        "workers": workers,
+        "total": len(workers),
+        "by_role": {
+            r: sum(1 for w in workers if w["role"] == r)
+            for r in ("tts", "ltx_render", "assembly")
+        },
+    }
+
+
+@router.post("/workers", response_class=JSONResponse)
+async def register_worker(request: _RegisterWorkerRequest) -> dict[str, Any]:
+    """Register a worker. Called by each worker VM's bootstrap script
+    once its local router is listening on ``endpoint_url``.
+    """
+
+    registry = get_default_registry()
+    if request.role not in ("tts", "ltx_render", "assembly"):
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "unknown_role", "role": request.role},
+        )
+    try:
+        worker = registry.register_worker(
+            worker_id=request.worker_id,
+            role=request.role,  # type: ignore[arg-type]
+            endpoint_url=request.endpoint_url,
+            vram_gb=request.vram_gb,
+            voice_id=request.voice_id,
+        )
+    except WorkerRegistryError as err:
+        raise _workers_registry_error_response(err) from err
+    return _serialise_worker(worker, registry=registry)
+
+
+@router.delete("/workers/{worker_id}", response_class=JSONResponse)
+async def unregister_worker(worker_id: str) -> dict[str, Any]:
+    registry = get_default_registry()
+    try:
+        registry.unregister_worker(worker_id)
+    except WorkerRegistryError as err:
+        raise _workers_registry_error_response(err) from err
+    return {"worker_id": worker_id, "unregistered": True}
+
+
+@router.post("/workers/{worker_id}/heartbeat", response_class=JSONResponse)
+async def heartbeat_worker(
+    worker_id: str, request: _HeartbeatRequest
+) -> dict[str, Any]:
+    registry = get_default_registry()
+    try:
+        registry.heartbeat(worker_id, free_vram_gb=request.free_vram_gb)
+        worker = registry.get_worker(worker_id)
+    except WorkerRegistryError as err:
+        raise _workers_registry_error_response(err) from err
+    return _serialise_worker(worker, registry=registry)
+
+
+@router.post("/workers/{worker_id}/voice", response_class=JSONResponse)
+async def pin_worker_voice(
+    worker_id: str, request: _PinVoiceRequest
+) -> dict[str, Any]:
+    registry = get_default_registry()
+    try:
+        registry.pin_voice(worker_id, request.voice_id)
+        worker = registry.get_worker(worker_id)
+    except WorkerRegistryError as err:
+        raise _workers_registry_error_response(err) from err
+    return _serialise_worker(worker, registry=registry)
 
 
 @router.get("/models/health", response_class=JSONResponse)
