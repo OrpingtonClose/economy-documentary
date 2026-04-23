@@ -115,6 +115,21 @@ class TestTraceUrl:
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-x")
         assert lf_module.langfuse_trace_url("z" * 32) is None
 
+    def test_rejects_host_without_scheme(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A scheme-less host must not yield a clickable URL.
+
+        Mirrors the ``frontend_config`` gate — otherwise the frontend
+        would render a "View Trace" button linking to
+        ``obs.example.com/trace/...`` (a relative path), which the
+        browser resolves against the playground origin.
+        """
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-lf-x")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-lf-x")
+        monkeypatch.setenv("LANGFUSE_HOST", "obs.example.com")
+        assert lf_module.langfuse_trace_url(self._VALID_TRACE_ID) is None
+
 
 class TestFrontendConfig:
     def test_disabled_without_creds(self) -> None:

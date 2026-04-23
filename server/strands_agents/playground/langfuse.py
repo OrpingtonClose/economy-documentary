@@ -98,20 +98,37 @@ def langfuse_host() -> str:
     return _host().rstrip("/")
 
 
+def _is_well_formed_host(host: str) -> bool:
+    """Return ``True`` iff ``host`` parses as an absolute URL with both
+    scheme and netloc.
+
+    Centralised so :func:`langfuse_trace_url` and :func:`frontend_config`
+    reject the same class of misconfigured hosts — an operator who sets
+    ``LANGFUSE_HOST=obs.example.com`` (no scheme) must not get a broken
+    ``obs.example.com/trace/<id>`` link surfaced to the UI.
+    """
+    parsed = urlparse(host)
+    return bool(parsed.scheme) and bool(parsed.netloc)
+
+
 def langfuse_trace_url(trace_id: str) -> str | None:
     """Return the Langfuse trace-page URL for an OTel ``trace_id``.
 
     ``trace_id`` must be the 32-char lowercase hex form produced by
     :meth:`opentelemetry.trace.Span.get_span_context`. Returns
-    ``None`` when Langfuse is not configured or when the trace id is
-    malformed — the frontend uses a ``None`` return to decide not to
-    render the "View Trace" button.
+    ``None`` when Langfuse is not configured, the trace id is
+    malformed, or the configured host is not a well-formed absolute
+    URL — the frontend uses a ``None`` return to decide not to render
+    the "View Trace" button.
     """
     if not is_langfuse_enabled():
         return None
     if not _is_valid_otel_trace_id(trace_id):
         return None
-    return f"{langfuse_host()}/trace/{trace_id}"
+    host = langfuse_host()
+    if not _is_well_formed_host(host):
+        return None
+    return f"{host}/trace/{trace_id}"
 
 
 def _is_valid_otel_trace_id(trace_id: str) -> bool:
@@ -212,13 +229,12 @@ def frontend_config() -> dict[str, Any]:
     exporter is active.
     """
     host = langfuse_host() if is_langfuse_enabled() else None
-    if host is not None:
-        # Sanity-check the host parses; a misconfigured
-        # ``LANGFUSE_HOST=foo`` (no scheme) would give the frontend
-        # a junk URL. Fall back to None so the button is hidden.
-        parsed = urlparse(host)
-        if not parsed.scheme or not parsed.netloc:
-            host = None
+    if host is not None and not _is_well_formed_host(host):
+        # A misconfigured ``LANGFUSE_HOST=foo`` (no scheme) would give
+        # the frontend a junk URL. Fall back to None so the button is
+        # hidden. ``langfuse_trace_url`` applies the same check so the
+        # two gates stay in lockstep.
+        host = None
     return {
         "enabled": host is not None,
         "host": host,
