@@ -1,41 +1,68 @@
 #!/usr/bin/env bash
 # Langfuse Self-Host VM Bootstrap Script
 #
-# Run this on a fresh Vast.ai CPU VM (Ubuntu 22.04+, ~2 vCPU / 4 GB RAM
-# / 20 GB disk) to stand up a single-node Langfuse deployment that
-# accepts OTel span pushes from the economy-documentary backend.
+# Run this on a fresh Vast.ai CPU VM (Ubuntu 22.04+, ~4 vCPU / 16 GB
+# RAM / 100 GB disk) to stand up a single-node Langfuse v3 deployment
+# that accepts OTel span pushes from the economy-documentary backend.
+#
+# Why we track upstream's compose file instead of inlining our own:
+# Langfuse v3 is a six-service stack (postgres + clickhouse + redis +
+# minio + langfuse-web + langfuse-worker). Hand-rolling a partial
+# compose (e.g. postgres-only) silently breaks v3 ingest because the
+# worker expects ClickHouse on boot. The upstream
+# ``docker-compose.yml`` is the single source of truth for which
+# services are required; we pull it at a pinned ref so CI remains
+# reproducible.
 #
 # The layout is:
 #   * Docker engine (installed if missing).
-#   * Postgres container — single-node data store.
-#   * Langfuse web + worker containers — ``ghcr.io/langfuse/langfuse``
-#     + ``ghcr.io/langfuse/langfuse-worker``.
+#   * Upstream ``langfuse/langfuse`` repo cloned to ``$LANGFUSE_HOME``
+#     (idempotent: ``git fetch && checkout`` on re-run).
+#   * The six-service compose stack started via ``docker compose up -d``.
 #   * OTel OTLP/HTTP endpoint at
 #     ``<LANGFUSE_HOST>/api/public/otel/v1/traces`` accepts spans
 #     with HTTP Basic auth built from the generated key pair.
 #
-# Idempotent by design — every step is guarded by a presence check
-# so re-running the script against a live VM is a no-op. Volumes
-# persist Postgres data across container restarts.
+# Idempotent by design:
+#   * Docker install guarded by ``command -v docker``.
+#   * Upstream clone guarded by ``.git`` presence; re-runs ``git fetch``
+#     + ``git checkout $LANGFUSE_UPSTREAM_REF``.
+#   * Secret material written once — re-runs source the existing
+#     ``.env`` and preserve the original NEXTAUTH_SECRET / SALT /
+#     ENCRYPTION_KEY / POSTGRES_PASSWORD. Rotating those on a
+#     running stack would break Postgres authentication and
+#     Langfuse's encrypted columns.
 #
 # Usage:
-#   bash langfuse_bootstrap.sh
+#   LANGFUSE_PUBLIC_HOST=http://<ip>:3000 bash langfuse_bootstrap.sh
 #
 # Required env vars (set via Vast.ai template or exported before run):
 #   LANGFUSE_PUBLIC_HOST      — Public URL the backend will target
 #                               (https://obs.example.com or
-#                               http://1.2.3.4:3001). Used for the
+#                               http://1.2.3.4:3000). Used for the
 #                               "View Trace" deep-link construction
 #                               and for Langfuse's own redirects.
 #
-# Optional env vars (generated and printed on first run if missing):
+# Optional env vars (generated and written to ``$LANGFUSE_HOME/.env``
+# on first run; preserved on subsequent runs):
+#   LANGFUSE_UPSTREAM_REF      — git ref to check out on the upstream
+#                                clone. Defaults to ``main``; pin to
+#                                a tag (e.g. ``v3.170.0``) for
+#                                reproducible deploys.
 #   LANGFUSE_SECRET            — NEXTAUTH_SECRET (32-byte hex).
 #   LANGFUSE_SALT              — SALT for sensitive column hashing.
 #   LANGFUSE_ENCRYPTION_KEY    — ENCRYPTION_KEY (32-byte hex).
 #   POSTGRES_PASSWORD          — Local postgres password.
+#   CLICKHOUSE_PASSWORD        — ClickHouse admin password.
+#   REDIS_AUTH                 — Redis auth token.
+#   MINIO_ROOT_PASSWORD        — MinIO root user password (also used
+#                                for S3 access-key secret).
 #
-# Ports exposed:
-#   3001 — Langfuse web UI + OTLP/HTTP ingest (behind auth).
+# Ports exposed by upstream's compose (on host):
+#   3000 — Langfuse web UI + OTLP/HTTP ingest (behind auth).
+#   9090 — MinIO console (only accessible from localhost by default
+#          on the upstream compose; expose via ``LANGFUSE_PUBLIC_HOST``
+#          security-group rules as needed).
 #
 # After the script finishes it prints:
 #   1. A URL to open the Langfuse UI.
@@ -54,16 +81,36 @@ df -h /
 # ---------------------------------------------------------------------------
 # Inputs & secret material
 # ---------------------------------------------------------------------------
-: "${LANGFUSE_PUBLIC_HOST:?LANGFUSE_PUBLIC_HOST must be set (e.g. https://obs.example.com or http://<ip>:3001)}"
+: "${LANGFUSE_PUBLIC_HOST:?LANGFUSE_PUBLIC_HOST must be set (e.g. https://obs.example.com or http://<ip>:3000)}"
 
 LANGFUSE_HOME="${LANGFUSE_HOME:-/opt/langfuse}"
+LANGFUSE_UPSTREAM_REF_DEFAULT="main"
+
+mkdir -p "$LANGFUSE_HOME"
+
+# Source the existing ``.env`` (if any) *before* the fallback
+# expansions below so a re-run preserves the secrets that were
+# written on the first invocation. Without this, the
+# ``${VAR:-$(openssl rand ...)}`` expansions generate fresh values
+# on every run, which breaks Postgres/Langfuse authentication
+# because Postgres was initialised with the old password and the
+# encrypted columns were sealed with the old ENCRYPTION_KEY.
+if [[ -f "$LANGFUSE_HOME/.env" ]]; then
+    echo "=== Sourcing existing $LANGFUSE_HOME/.env (idempotent re-run) ==="
+    # shellcheck disable=SC1091
+    set -a
+    source "$LANGFUSE_HOME/.env"
+    set +a
+fi
+
+LANGFUSE_UPSTREAM_REF="${LANGFUSE_UPSTREAM_REF:-$LANGFUSE_UPSTREAM_REF_DEFAULT}"
 LANGFUSE_SECRET="${LANGFUSE_SECRET:-$(openssl rand -hex 32)}"
 LANGFUSE_SALT="${LANGFUSE_SALT:-$(openssl rand -hex 32)}"
 LANGFUSE_ENCRYPTION_KEY="${LANGFUSE_ENCRYPTION_KEY:-$(openssl rand -hex 32)}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-$(openssl rand -hex 16)}"
-
-mkdir -p "$LANGFUSE_HOME"
-cd "$LANGFUSE_HOME"
+CLICKHOUSE_PASSWORD="${CLICKHOUSE_PASSWORD:-$(openssl rand -hex 16)}"
+REDIS_AUTH="${REDIS_AUTH:-$(openssl rand -hex 16)}"
+MINIO_ROOT_PASSWORD="${MINIO_ROOT_PASSWORD:-$(openssl rand -hex 16)}"
 
 # ---------------------------------------------------------------------------
 # Docker engine (install once, idempotent)
@@ -71,7 +118,7 @@ cd "$LANGFUSE_HOME"
 if ! command -v docker &>/dev/null; then
     echo "=== Installing Docker engine ==="
     apt-get update
-    apt-get install -y ca-certificates curl gnupg lsb-release
+    apt-get install -y ca-certificates curl gnupg lsb-release git
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
         | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
@@ -85,65 +132,48 @@ if ! command -v docker &>/dev/null; then
         docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin
 fi
+command -v git >/dev/null 2>&1 || apt-get install -y git
 docker --version
 docker compose version
 
 # ---------------------------------------------------------------------------
-# Compose stack
+# Clone (or update) the upstream Langfuse repo for its compose file.
 # ---------------------------------------------------------------------------
-cat > "$LANGFUSE_HOME/docker-compose.yml" <<YAML
-# Langfuse single-node self-host. Pinned to known-good tags; bump
-# in lockstep with the economy-documentary backend's exporter
-# compatibility window.
-services:
-  langfuse-db:
-    image: postgres:15-alpine
-    container_name: langfuse-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: langfuse
-      POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
-    volumes:
-      - langfuse_db:/var/lib/postgresql/data
-    # Exposed only on the docker network — never publish 5432.
+LANGFUSE_UPSTREAM_DIR="$LANGFUSE_HOME/upstream"
+if [[ ! -d "$LANGFUSE_UPSTREAM_DIR/.git" ]]; then
+    echo "=== Cloning langfuse/langfuse -> $LANGFUSE_UPSTREAM_DIR ==="
+    git clone --depth 1 --branch "$LANGFUSE_UPSTREAM_REF" \
+        https://github.com/langfuse/langfuse.git "$LANGFUSE_UPSTREAM_DIR" \
+        || git clone https://github.com/langfuse/langfuse.git "$LANGFUSE_UPSTREAM_DIR"
+fi
+(
+    cd "$LANGFUSE_UPSTREAM_DIR"
+    git fetch --tags origin "$LANGFUSE_UPSTREAM_REF" \
+        || git fetch origin
+    git checkout "$LANGFUSE_UPSTREAM_REF"
+)
 
-  langfuse-web:
-    image: ghcr.io/langfuse/langfuse:3
-    container_name: langfuse-web
-    restart: unless-stopped
-    depends_on:
-      - langfuse-db
-    ports:
-      - "3001:3000"
-    environment:
-      DATABASE_URL: postgresql://langfuse:\${POSTGRES_PASSWORD}@langfuse-db:5432/langfuse
-      NEXTAUTH_URL: \${LANGFUSE_PUBLIC_HOST}
-      NEXTAUTH_SECRET: \${LANGFUSE_SECRET}
-      SALT: \${LANGFUSE_SALT}
-      ENCRYPTION_KEY: \${LANGFUSE_ENCRYPTION_KEY}
-      TELEMETRY_ENABLED: "false"
-      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
-
-  langfuse-worker:
-    image: ghcr.io/langfuse/langfuse-worker:3
-    container_name: langfuse-worker
-    restart: unless-stopped
-    depends_on:
-      - langfuse-db
-    environment:
-      DATABASE_URL: postgresql://langfuse:\${POSTGRES_PASSWORD}@langfuse-db:5432/langfuse
-      SALT: \${LANGFUSE_SALT}
-      ENCRYPTION_KEY: \${LANGFUSE_ENCRYPTION_KEY}
-      TELEMETRY_ENABLED: "false"
-
-volumes:
-  langfuse_db:
-YAML
-
+# ---------------------------------------------------------------------------
+# Write ``.env`` used by upstream's compose. Variables keep the names
+# the upstream compose expects (see langfuse/langfuse docker-compose.yml).
+# ---------------------------------------------------------------------------
 cat > "$LANGFUSE_HOME/.env" <<ENV
-POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+LANGFUSE_UPSTREAM_REF=$LANGFUSE_UPSTREAM_REF
 LANGFUSE_PUBLIC_HOST=$LANGFUSE_PUBLIC_HOST
+NEXTAUTH_URL=$LANGFUSE_PUBLIC_HOST
+NEXTAUTH_SECRET=$LANGFUSE_SECRET
+SALT=$LANGFUSE_SALT
+ENCRYPTION_KEY=$LANGFUSE_ENCRYPTION_KEY
+POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+CLICKHOUSE_PASSWORD=$CLICKHOUSE_PASSWORD
+REDIS_AUTH=$REDIS_AUTH
+MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD
+LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
+LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
+LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY=$MINIO_ROOT_PASSWORD
+TELEMETRY_ENABLED=false
+# Keep the legacy aliases so callers of older bootstrap versions can
+# still source ``.env`` and get the same three variables they expect.
 LANGFUSE_SECRET=$LANGFUSE_SECRET
 LANGFUSE_SALT=$LANGFUSE_SALT
 LANGFUSE_ENCRYPTION_KEY=$LANGFUSE_ENCRYPTION_KEY
@@ -155,18 +185,18 @@ chmod 600 "$LANGFUSE_HOME/.env"
 # ---------------------------------------------------------------------------
 echo "=== Pulling images ==="
 docker compose --env-file "$LANGFUSE_HOME/.env" \
-    -f "$LANGFUSE_HOME/docker-compose.yml" pull
+    -f "$LANGFUSE_UPSTREAM_DIR/docker-compose.yml" pull
 
 echo "=== Starting stack ==="
 docker compose --env-file "$LANGFUSE_HOME/.env" \
-    -f "$LANGFUSE_HOME/docker-compose.yml" up -d
+    -f "$LANGFUSE_UPSTREAM_DIR/docker-compose.yml" up -d
 
 # ---------------------------------------------------------------------------
 # Wait for readiness (web returns 200 on /api/public/health)
 # ---------------------------------------------------------------------------
 echo "=== Waiting for Langfuse web to become ready ==="
-for _ in $(seq 1 60); do
-    if curl -fsS "http://localhost:3001/api/public/health" >/dev/null 2>&1; then
+for _ in $(seq 1 120); do
+    if curl -fsS "http://localhost:3000/api/public/health" >/dev/null 2>&1; then
         echo "Langfuse web is healthy."
         break
     fi
