@@ -17,7 +17,9 @@ import type {
   EvaluateResponse,
   HealthResponse,
   RunResponse,
+  RunState,
   SaveUserCaseResponse,
+  StartRunResponse,
 } from "./types";
 
 /** Playground catalog root — every request starts here. */
@@ -157,4 +159,30 @@ export async function saveUserCase(
     `/components/${componentId}/user-cases`,
     body
   );
+}
+
+/**
+ * Allocate a run_id and kick off a dispatch on the server. The
+ * response is returned immediately; progress is observed via the
+ * SSE stream at ``events_url`` and terminal state is polled from
+ * ``state_url`` as a fallback.
+ */
+export async function startRun(
+  componentId: string,
+  body: { case_name?: string; custom_input?: unknown }
+): Promise<StartRunResponse> {
+  return postJson<StartRunResponse>(
+    `/components/${componentId}/runs`,
+    body
+  );
+}
+
+/** Polling fallback for a run that the SSE stream cannot reach. */
+export async function getRunState(runId: string): Promise<RunState> {
+  return getJson<RunState>(`/runs/${runId}`);
+}
+
+/** Absolute URL of the SSE event stream for one run. */
+export function runEventsUrl(runId: string): string {
+  return `${PLAYGROUND_BASE}/runs/${runId}/events`;
 }

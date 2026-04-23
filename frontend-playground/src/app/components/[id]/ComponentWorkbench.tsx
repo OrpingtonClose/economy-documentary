@@ -22,15 +22,18 @@ import type {
   EvaluateResponse,
   HealthResponse,
   ReachabilityEntry,
+  RunEvent,
   RunResponse,
+  RunTerminal,
   SaveUserCasePreview,
 } from "@/lib/types";
 import {
   evaluateCase,
   getComponentHealth,
-  runCase,
   saveUserCase,
+  startRun,
 } from "@/lib/api";
+import { useRunStream, type RunStreamState } from "@/lib/useRunStream";
 import {
   evaluateStatusClass,
   formatScore,
@@ -81,6 +84,10 @@ export function ComponentWorkbench({ detail }: Props) {
   const [runResult, setRunResult] = useState<RunResponse | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  // runId is non-null once the dispatch POST returns; the SSE hook
+  // uses it to subscribe. Resets to null on each fresh Run click.
+  const [runId, setRunId] = useState<string | null>(null);
+  const stream: RunStreamState = useRunStream(runId);
   const [evalResult, setEvalResult] = useState<EvaluateResponse | null>(null);
   const [evalError, setEvalError] = useState<string | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -132,6 +139,7 @@ export function ComponentWorkbench({ detail }: Props) {
     setRunError(null);
     setEvalResult(null);
     setEvalError(null);
+    setRunId(null);
     const parsed = parseJsonSafe(inputText);
     if (!parsed.ok) {
       setRunError(`Input is not valid JSON: ${parsed.error}`);
@@ -139,14 +147,14 @@ export function ComponentWorkbench({ detail }: Props) {
     }
     setIsRunning(true);
     try {
-      // The server accepts either ``case_name`` (replay) or
-      // ``custom_input`` (arbitrary payload). When the user has
-      // edited the textarea we send ``custom_input`` so the
-      // on-the-wire payload reflects what they see. ``case_name``
-      // is only sent when the selected case is named — the backend
-      // has no way to address an unnamed case by key. User cases
-      // are resolved server-side through the same ``case_name``
-      // lookup path as canonical cases.
+      // Same case_name / custom_input disambiguation as before, but
+      // we now dispatch through the event-driven endpoint. The
+      // ``POST /components/{id}/runs`` call returns immediately with
+      // a ``run_id``; live progress flows through the SSE stream
+      // subscribed by ``useRunStream``. Terminal state is folded
+      // back into ``runResult`` so the rest of the UI (Evaluate
+      // button, output / trajectory panes) keeps its existing
+      // contract.
       const selected = caseAt(allCases, selectedCaseIndex);
       const selectedInputMatchesTextarea =
         selected !== null &&
@@ -157,14 +165,39 @@ export function ComponentWorkbench({ detail }: Props) {
         selected.name !== null
           ? { case_name: selected.name }
           : { custom_input: parsed.value };
-      const response = await runCase(detail.id, body);
-      setRunResult(response);
+      const response = await startRun(detail.id, body);
+      setRunId(response.run_id);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
-    } finally {
       setIsRunning(false);
     }
   }, [allCases, detail.id, inputText, selectedCaseIndex]);
+
+  // Fold the SSE terminal payload back into the existing
+  // ``runResult`` / ``isRunning`` contract so the Evaluate button
+  // and output panes keep working without further refactor.
+  useEffect(() => {
+    if (stream.terminal === null) return;
+    const folded = terminalToRunResponse(detail.id, stream.terminal);
+    setRunResult(folded);
+    setIsRunning(false);
+    if (
+      folded.status !== "OK" &&
+      folded.error !== undefined &&
+      folded.error.trim().length > 0
+    ) {
+      setRunError(folded.error);
+    }
+  }, [detail.id, stream.terminal]);
+
+  // A lost SSE connection is treated exactly like a run error —
+  // post-initiation silence is loud, not silent.
+  useEffect(() => {
+    if (stream.connection === "lost" && runId !== null) {
+      setRunError(stream.error ?? "lost connection to backend");
+      setIsRunning(false);
+    }
+  }, [stream.connection, stream.error, runId]);
 
   const onEvaluate = useCallback(async () => {
     if (runResult === null) {
@@ -232,7 +265,16 @@ export function ComponentWorkbench({ detail }: Props) {
             isRunning={isRunning}
             isEvaluating={isEvaluating}
           />
+          <LiveStatusLine stream={stream} runId={runId} />
           <RunResultPanel result={runResult} error={runError} />
+          {stream.terminal?.interpretation !== undefined &&
+            stream.terminal.interpretation.trim().length > 0 && (
+              <InterpretationCard
+                interpretation={stream.terminal.interpretation}
+                status={stream.terminal.status}
+              />
+            )}
+          <RawEventLog events={stream.events} />
           <EvaluateResultPanel result={evalResult} error={evalError} />
         </div>
       </div>
@@ -268,6 +310,163 @@ function caseAt(
     return null;
   }
   return cases[index] ?? null;
+}
+
+/**
+ * Project an SSE-terminal payload back into the legacy
+ * ``RunResponse`` envelope so the Evaluate button and the output /
+ * trajectory panels don't need to know the stream exists.
+ *
+ * A run that ends with ``status: "CANCELLED"`` (backend ran out of
+ * time, user navigated away, etc.) is surfaced as a ``TASK_ERROR``
+ * — the evaluate path will skip itself and the user sees the
+ * cancellation reason in the run-result banner.
+ */
+function terminalToRunResponse(
+  componentId: string,
+  terminal: RunTerminal,
+): RunResponse {
+  if (terminal.status === "CANCELLED") {
+    return {
+      status: "TASK_ERROR",
+      component_id: componentId,
+      case_name: terminal.case_name ?? null,
+      error: terminal.error ?? "run cancelled",
+    };
+  }
+  return {
+    status: terminal.status,
+    component_id: componentId,
+    case_name: terminal.case_name ?? null,
+    output: terminal.output,
+    trajectory: terminal.trajectory,
+    error: terminal.error,
+    unreachable_models: terminal.unreachable_models,
+  };
+}
+
+/**
+ * Single live-status line under the Run button.
+ *
+ * Priorities, from most salient to least:
+ *   1. A backend error while dispatching the run.
+ *   2. ``connection === "lost"`` — SSE channel died.
+ *   3. The narrator's most recent one-sentence update, or the
+ *      raw last-event summary if the narrator hasn't caught up.
+ *   4. The stall indicator, once the last event's budget has
+ *      elapsed. Post-initiation silence must be loud.
+ *
+ * Idle state (no ``runId``) renders nothing — silence when nothing
+ * has been asked of the system is the point.
+ */
+function LiveStatusLine({
+  stream,
+  runId,
+}: {
+  readonly stream: RunStreamState;
+  readonly runId: string | null;
+}) {
+  if (runId === null) return null;
+  const isStalled = stream.stall !== null;
+  const isLost = stream.connection === "lost";
+  const isTerminal = stream.terminal !== null;
+  const line =
+    stream.liveLine ?? (stream.connection === "connecting" ? "dispatching…" : null);
+  const wrapperClass = isLost
+    ? "border-pg-red/40 bg-pg-red/10 text-pg-red"
+    : isStalled
+      ? "border-pg-amber/40 bg-pg-amber/10 text-pg-amber"
+      : isTerminal
+        ? "border-pg-border bg-pg-surface text-pg-muted"
+        : "border-pg-accent/40 bg-pg-accent/5 text-pg-text";
+  return (
+    <section
+      aria-live="polite"
+      className={`flex items-center gap-3 rounded border px-3 py-2 text-xs ${wrapperClass}`}
+    >
+      <span
+        className={`pg-dot ${
+          isLost
+            ? "pg-dot-red"
+            : isStalled
+              ? "pg-dot-amber"
+              : isTerminal
+                ? "pg-dot-green"
+                : "pg-dot-green"
+        }`}
+      />
+      <span className="flex-1 truncate font-mono">
+        {isLost
+          ? "lost connection to backend"
+          : line ?? "waiting for first event…"}
+      </span>
+      {stream.lastEvent !== null && (
+        <span className="font-mono text-[10px] uppercase tracking-widest text-pg-muted">
+          #{stream.lastEvent.seq} · {stream.lastEvent.kind}
+        </span>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One-paragraph LLM interpretation of the run, written by the
+ * post-run interpreter. Contract-honest: if the run failed, this
+ * paragraph will say what failed and where.
+ */
+function InterpretationCard({
+  interpretation,
+  status,
+}: {
+  readonly interpretation: string;
+  readonly status: RunTerminal["status"];
+}) {
+  return (
+    <section
+      aria-label="Run interpretation"
+      className="rounded border border-pg-accent/40 bg-pg-accent/5 p-4"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-pg-accent">
+          Interpretation
+        </h2>
+        <span
+          className={`rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${runStatusClass(
+            status === "CANCELLED" ? "TASK_ERROR" : status,
+          )}`}
+        >
+          {status}
+        </span>
+      </div>
+      <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-pg-text">
+        {interpretation}
+      </p>
+    </section>
+  );
+}
+
+/** Full event log, collapsed by default — for when you want detail. */
+function RawEventLog({ events }: { readonly events: readonly RunEvent[] }) {
+  if (events.length === 0) return null;
+  return (
+    <details className="rounded border border-pg-border bg-pg-surface p-3">
+      <summary className="cursor-pointer text-xs text-pg-muted">
+        Raw event log ({events.length})
+      </summary>
+      <ul className="mt-2 flex max-h-80 flex-col gap-1 overflow-auto">
+        {events.map((e) => (
+          <li
+            key={e.seq}
+            className="grid grid-cols-[4rem_8rem_1fr] gap-2 font-mono text-[11px]"
+          >
+            <span className="text-pg-muted">#{e.seq}</span>
+            <span className="truncate text-pg-accent">{e.kind}</span>
+            <span className="truncate text-pg-text">{e.summary}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function Header({ detail }: { readonly detail: ComponentDetail }) {

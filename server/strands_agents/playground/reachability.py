@@ -161,6 +161,29 @@ class CredentialsProber:
         )
 
 
+#: Env override for :class:`LiteLLMPingProber` per-probe timeout in
+#: seconds. Thinking-style models (Gemini 3 Pro preview) can easily
+#: spend 20-40 s on a cold call — the default is generous enough to
+#: not flag them red on the first hit of the day, but not so long
+#: that a truly dead endpoint stalls the catalog UI for a minute.
+PLAYGROUND_PING_TIMEOUT_ENV: str = "PLAYGROUND_REACHABILITY_PING_TIMEOUT"
+
+_DEFAULT_PING_TIMEOUT_SECONDS: float = 45.0
+
+
+def _resolve_ping_timeout() -> float:
+    raw = os.environ.get(PLAYGROUND_PING_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_PING_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_PING_TIMEOUT_SECONDS
+    if value <= 0:
+        return _DEFAULT_PING_TIMEOUT_SECONDS
+    return value
+
+
 class LiteLLMPingProber:
     """Live prober: fires a one-token completion at the declared model.
 
@@ -175,8 +198,10 @@ class LiteLLMPingProber:
     trips through the provider's actual routing, which is the point.
 
     Args:
-        timeout_seconds: Per-probe upper bound. Short by default so a
-            slow provider can't stall the catalog UI.
+        timeout_seconds: Per-probe upper bound. Defaults to 45 s so
+            thinking-mode models (Gemini 3 Pro preview) don't get
+            flagged red on a slow cold call. Overridable via
+            ``PLAYGROUND_REACHABILITY_PING_TIMEOUT``.
         complete: Injectable hook for tests. Defaults to
             :func:`litellm.completion`.
     """
@@ -184,10 +209,12 @@ class LiteLLMPingProber:
     def __init__(
         self,
         *,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float | None = None,
         complete: Callable[..., object] | None = None,
     ) -> None:
-        self._timeout_seconds = timeout_seconds
+        self._timeout_seconds = (
+            timeout_seconds if timeout_seconds is not None else _resolve_ping_timeout()
+        )
         self._complete = complete
 
     def _resolve_complete(self) -> Callable[..., object]:
@@ -311,10 +338,17 @@ def get_default_cache() -> ReachabilityCache:
     return _default_cache
 
 
-def set_default_cache(cache: ReachabilityCache) -> None:
-    """Install ``cache`` as the default. Intended for tests."""
+def set_default_cache(cache: ReachabilityCache) -> ReachabilityCache:
+    """Install ``cache`` as the default and return the previous cache.
+
+    Returning the prior cache lets callers (mostly tests) restore the
+    original in a ``try/finally`` so the module-level singleton is
+    never left mutated after a test run.
+    """
     global _default_cache
+    previous = _default_cache
     _default_cache = cache
+    return previous
 
 
 def probe_models(

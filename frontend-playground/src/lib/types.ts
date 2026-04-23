@@ -192,3 +192,56 @@ export interface EvaluateResponse {
   readonly results: readonly EvaluatorResultRow[];
   readonly overall_passed: boolean;
 }
+
+// --------------------------------------------------------------------------
+// Event stream (for the live status line + interpretation card)
+//
+// Mirrors ``Event.to_dict`` in ``server/strands_agents/playground/events.py``
+// and the start-run / run-state envelopes in ``server/playground.py``.
+// --------------------------------------------------------------------------
+
+/**
+ * One structured step in a run's timeline. The ``kind`` vocabulary is
+ * shared with the narrator prompt — keep it in sync with the list
+ * in ``events.py``'s docstring.
+ */
+export interface RunEvent {
+  readonly seq: number;
+  readonly ts: number;
+  readonly kind: string;
+  readonly summary: string;
+  readonly detail: Record<string, unknown>;
+}
+
+/** Mirror of ``_serialise_run_state`` in ``server/playground.py``. */
+export interface RunState {
+  readonly run_id: string;
+  readonly component_id: ComponentId;
+  readonly case_name: string | null;
+  readonly created_at: number;
+  readonly closed: boolean;
+  readonly events: readonly RunEvent[];
+  readonly terminal: RunTerminal | null;
+}
+
+/** Terminal payload shape written into ``RunStream.terminal``. */
+export interface RunTerminal {
+  readonly status: RunStatus | "CANCELLED";
+  readonly component_id: ComponentId;
+  readonly case_name?: string | null;
+  readonly output?: unknown;
+  readonly trajectory?: unknown;
+  readonly error?: string;
+  readonly error_class?: string;
+  readonly unreachable_models?: readonly ReachabilityEntry[];
+  readonly interpretation?: string;
+}
+
+/** Mirror of the ``start_run`` response envelope. */
+export interface StartRunResponse {
+  readonly run_id: string;
+  readonly component_id: ComponentId;
+  readonly case_name: string;
+  readonly events_url: string;
+  readonly state_url: string;
+}
