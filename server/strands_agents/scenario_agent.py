@@ -26,6 +26,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from typing import Any, Callable
@@ -81,16 +82,48 @@ Stop only after create_timeline returns successfully.
 # ---------------------------------------------------------------------------
 
 
-_GENERATOR: Callable[[str, int, str, str], dict[str, Any]] | None = None
-_REFINER: Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None = None
+#: Per-call helper bindings. ContextVar (not plain module globals) so
+#: concurrent ``scenario_task`` calls — FastAPI runs sync endpoints in a
+#: thread pool, so two simultaneous playground ``/run`` requests really
+#: do execute this code in parallel — each get their own isolated
+#: generator/refiner without stomping each other. ``set_scenario_helpers``
+#: returns the :class:`contextvars.Token`s its caller must pass back to
+#: ``clear_scenario_helpers`` to restore the prior binding.
+_GENERATOR: contextvars.ContextVar[
+    Callable[[str, int, str, str], dict[str, Any]] | None
+] = contextvars.ContextVar("scenario_generator", default=None)
+_REFINER: contextvars.ContextVar[
+    Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None
+] = contextvars.ContextVar("scenario_refiner", default=None)
+
+
+class ScenarioHelperTokens(tuple):
+    """Pair of ContextVar reset tokens returned by :func:`set_scenario_helpers`."""
+
+    __slots__ = ()
+
+    def __new__(
+        cls,
+        generator_token: contextvars.Token,
+        refiner_token: contextvars.Token,
+    ) -> "ScenarioHelperTokens":
+        return super().__new__(cls, (generator_token, refiner_token))
+
+    @property
+    def generator(self) -> contextvars.Token:
+        return self[0]
+
+    @property
+    def refiner(self) -> contextvars.Token:
+        return self[1]
 
 
 def set_scenario_helpers(
     *,
     generator: Callable[[str, int, str, str], dict[str, Any]] | None = None,
     refiner: Callable[[list[dict[str, Any]], dict[str, Any]], dict[str, Any]] | None = None,
-) -> None:
-    """Register test-time or production helpers for the LLM-backed tools.
+) -> ScenarioHelperTokens:
+    """Register helpers for the LLM-backed tools within the current context.
 
     When no helper is registered the corresponding tool raises
     :class:`ScenarioHelperNotConfigured` so missing wiring shows up
@@ -99,20 +132,33 @@ def set_scenario_helpers(
     Args:
         generator: Callable implementing ``(topic, num_scenes, style, language)
             -> {"scenes": [...], "visual_style": {...}, "style_lock": {...}}``.
-            Pass ``None`` to clear the registry.
+            Pass ``None`` to clear within this context.
         refiner: Callable implementing ``(scenes, feedback) -> {"scenes": [...]}``.
-            Pass ``None`` to clear the registry.
+            Pass ``None`` to clear within this context.
+
+    Returns:
+        :class:`ScenarioHelperTokens` pair for restoring the prior binding
+        via :func:`clear_scenario_helpers`.
     """
-    global _GENERATOR, _REFINER
-    _GENERATOR = generator
-    _REFINER = refiner
+    return ScenarioHelperTokens(
+        _GENERATOR.set(generator),
+        _REFINER.set(refiner),
+    )
 
 
-def clear_scenario_helpers() -> None:
-    """Reset injected helpers. Primarily for test isolation."""
-    global _GENERATOR, _REFINER
-    _GENERATOR = None
-    _REFINER = None
+def clear_scenario_helpers(tokens: ScenarioHelperTokens | None = None) -> None:
+    """Restore the prior helper binding for the current context.
+
+    When ``tokens`` is ``None`` the helpers are cleared unconditionally
+    (legacy behaviour, kept for tests that don't care about the prior
+    binding).
+    """
+    if tokens is None:
+        _GENERATOR.set(None)
+        _REFINER.set(None)
+        return
+    _GENERATOR.reset(tokens.generator)
+    _REFINER.reset(tokens.refiner)
 
 
 class ScenarioHelperNotConfigured(RuntimeError):
@@ -150,7 +196,8 @@ def generate_scenario(
     Raises:
         ScenarioHelperNotConfigured: When no generator helper is wired.
     """
-    if _GENERATOR is None:
+    generator = _GENERATOR.get()
+    if generator is None:
         raise ScenarioHelperNotConfigured(
             "generator helper not configured; call set_scenario_helpers"
         )
@@ -161,7 +208,7 @@ def generate_scenario(
         style,
         language,
     )
-    return _GENERATOR(topic, num_scenes, style, language)
+    return generator(topic, num_scenes, style, language)
 
 
 @tool
@@ -227,7 +274,8 @@ def refine_scenario(
     Raises:
         ScenarioHelperNotConfigured: When no refiner helper is wired.
     """
-    if _REFINER is None:
+    refiner = _REFINER.get()
+    if refiner is None:
         raise ScenarioHelperNotConfigured(
             "refiner helper not configured; call set_scenario_helpers"
         )
@@ -236,7 +284,7 @@ def refine_scenario(
         len(scenes),
         len(feedback.get("issues", [])),
     )
-    return _REFINER(scenes, feedback)
+    return refiner(scenes, feedback)
 
 
 @tool

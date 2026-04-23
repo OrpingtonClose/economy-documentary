@@ -409,7 +409,7 @@ def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
         f"Plan for roughly {num_scenes_hint} scenes."
     )
 
-    set_scenario_helpers(
+    tokens = set_scenario_helpers(
         generator=make_generator(model_id=model_id),
         refiner=make_refiner(model_id=model_id),
     )
@@ -418,7 +418,7 @@ def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
         agent(prompt)
         messages = list(agent.messages or [])
     finally:
-        clear_scenario_helpers()
+        clear_scenario_helpers(tokens)
 
     output, trajectory = _extract_output_and_trajectory(messages)
     return {

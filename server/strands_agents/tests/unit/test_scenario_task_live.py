@@ -332,7 +332,9 @@ def test_scenario_task_runs_live_agent_against_stubbed_litellm(
                 captured["prompt"] = prompt
                 # Invoke the real helpers so this test also exercises
                 # the scenario_llm → litellm path.
-                gen_out = agent_mod._GENERATOR("inflation", 3, "cinematic", "en-US")
+                gen_out = agent_mod._GENERATOR.get()(
+                    "inflation", 3, "cinematic", "en-US"
+                )
                 self.messages = [
                     {"role": "user", "content": [{"text": prompt}]},
                     {
@@ -424,7 +426,7 @@ def test_scenario_task_surfaces_llm_parse_errors(monkeypatch: pytest.MonkeyPatch
         messages: list[dict[str, Any]] = []
 
         def __call__(self, prompt: str) -> None:  # pragma: no cover - triggers raise
-            agent_mod._GENERATOR("topic", 3, "cinematic", "en-US")
+            agent_mod._GENERATOR.get()("topic", 3, "cinematic", "en-US")
 
     monkeypatch.setattr(agent_mod, "build_scenario_agent", lambda **_: _FakeAgent())
 
