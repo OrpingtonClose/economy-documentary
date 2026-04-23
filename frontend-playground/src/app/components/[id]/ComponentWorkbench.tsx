@@ -15,7 +15,7 @@
  * sidecar under ``server/strands_agents/playground/user_cases/``.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CaseSummary,
   ComponentDetail,
@@ -267,13 +267,15 @@ export function ComponentWorkbench({ detail }: Props) {
           />
           <LiveStatusLine stream={stream} runId={runId} />
           <RunResultPanel result={runResult} error={runError} />
-          {stream.terminal?.interpretation !== undefined &&
-            stream.terminal.interpretation.trim().length > 0 && (
-              <InterpretationCard
-                interpretation={stream.terminal.interpretation}
-                status={stream.terminal.status}
-              />
-            )}
+          <InterpretationCard
+            interpretation={
+              stream.terminal?.interpretation?.trim().length
+                ? stream.terminal.interpretation
+                : null
+            }
+            status={stream.terminal?.status ?? null}
+            isRunning={isRunning}
+          />
           <RawEventLog events={stream.events} />
           <EvaluateResultPanel result={evalResult} error={evalError} />
         </div>
@@ -359,6 +361,59 @@ function terminalToRunResponse(
  * Idle state (no ``runId``) renders nothing — silence when nothing
  * has been asked of the system is the point.
  */
+/**
+ * Reveal ``target`` character-by-character, one ``stepMs`` apart.
+ *
+ * Returns the currently-visible prefix. When ``target`` changes the
+ * typewriter resets from the longest common prefix so swapping
+ * narrations feels like a continuation, not a cut-and-restart.
+ *
+ * A null target clears the display without a cut so fading states
+ * (terminal → idle) stay smooth.
+ */
+function useTypewriter(
+  target: string | null,
+  stepMs: number = 12,
+): string {
+  const [shown, setShown] = useState<string>(target ?? "");
+  const shownRef = useRef<string>(shown);
+  useEffect(() => {
+    shownRef.current = shown;
+  }, [shown]);
+  useEffect(() => {
+    if (target === null) {
+      setShown("");
+      return;
+    }
+    // Trim the current reveal back to the longest common prefix
+    // with the new target, then let the ticker walk forward.
+    let common = 0;
+    const prev = shownRef.current;
+    while (
+      common < prev.length &&
+      common < target.length &&
+      prev.charCodeAt(common) === target.charCodeAt(common)
+    ) {
+      common += 1;
+    }
+    if (common !== prev.length) {
+      setShown(target.slice(0, common));
+    }
+    if (common === target.length) return;
+    const id = window.setInterval(() => {
+      setShown((current) => {
+        if (current.length >= target.length) {
+          window.clearInterval(id);
+          return current;
+        }
+        return target.slice(0, current.length + 1);
+      });
+    }, stepMs);
+    return () => window.clearInterval(id);
+  }, [target, stepMs]);
+  return shown;
+}
+
 function LiveStatusLine({
   stream,
   runId,
@@ -366,45 +421,59 @@ function LiveStatusLine({
   readonly stream: RunStreamState;
   readonly runId: string | null;
 }) {
-  if (runId === null) return null;
   const isStalled = stream.stall !== null;
   const isLost = stream.connection === "lost";
   const isTerminal = stream.terminal !== null;
-  const line =
-    stream.liveLine ?? (stream.connection === "connecting" ? "dispatching…" : null);
+  const rawLine = isLost
+    ? "lost connection to backend"
+    : runId === null
+      ? null
+      : stream.liveLine ??
+        (stream.connection === "connecting" ? "dispatching…" : null);
+  const typed = useTypewriter(rawLine ?? null);
   const wrapperClass = isLost
     ? "border-pg-red/40 bg-pg-red/10 text-pg-red"
     : isStalled
       ? "border-pg-amber/40 bg-pg-amber/10 text-pg-amber"
       : isTerminal
         ? "border-pg-border bg-pg-surface text-pg-muted"
-        : "border-pg-accent/40 bg-pg-accent/5 text-pg-text";
+        : runId === null
+          ? "border-pg-border bg-pg-surface text-pg-muted"
+          : "border-pg-accent/40 bg-pg-accent/5 text-pg-text";
+  const dotClass = isLost
+    ? "pg-dot-red"
+    : isStalled
+      ? "pg-dot-amber"
+      : runId === null
+        ? "pg-dot-muted"
+        : "pg-dot-green";
+  // Fixed-height rail. The inner text is single-line + truncated,
+  // so a 90-char narration never pushes neighbouring panels down.
   return (
     <section
       aria-live="polite"
-      className={`flex items-center gap-3 rounded border px-3 py-2 text-xs ${wrapperClass}`}
+      className={`flex h-11 items-center gap-3 rounded border px-3 text-xs transition-colors duration-300 ${wrapperClass}`}
     >
       <span
-        className={`pg-dot ${
-          isLost
-            ? "pg-dot-red"
-            : isStalled
-              ? "pg-dot-amber"
-              : isTerminal
-                ? "pg-dot-green"
-                : "pg-dot-green"
-        }`}
+        className={`pg-dot transition-colors duration-300 ${dotClass}`}
       />
-      <span className="flex-1 truncate font-mono">
-        {isLost
-          ? "lost connection to backend"
-          : line ?? "waiting for first event…"}
-      </span>
-      {stream.lastEvent !== null && (
-        <span className="font-mono text-[10px] uppercase tracking-widest text-pg-muted">
-          #{stream.lastEvent.seq} · {stream.lastEvent.kind}
+      <span className="flex-1 overflow-hidden whitespace-nowrap font-mono">
+        <span className="inline-block min-w-0 max-w-full truncate align-middle">
+          {typed || (runId === null ? "" : " ")}
+          {runId !== null && (
+            <span
+              aria-hidden="true"
+              className="ml-0.5 inline-block w-[1px] animate-pulse bg-current align-middle"
+              style={{ height: "0.8em" }}
+            />
+          )}
         </span>
-      )}
+      </span>
+      <span className="hidden w-40 justify-end font-mono text-[10px] uppercase tracking-widest text-pg-muted md:inline-flex">
+        {stream.lastEvent !== null
+          ? `#${stream.lastEvent.seq} · ${stream.lastEvent.kind}`
+          : ""}
+      </span>
     </section>
   );
 }
@@ -417,29 +486,52 @@ function LiveStatusLine({
 function InterpretationCard({
   interpretation,
   status,
+  isRunning,
 }: {
-  readonly interpretation: string;
-  readonly status: RunTerminal["status"];
+  readonly interpretation: string | null;
+  readonly status: RunTerminal["status"] | null;
+  readonly isRunning: boolean;
 }) {
+  const typed = useTypewriter(interpretation ?? null, 6);
+  const hasInterpretation = interpretation !== null;
+  // Always render — with a fixed minimum height — so the card
+  // landing after a run does not shunt the raw event log and
+  // evaluator panel down the page.
+  const placeholder = hasInterpretation
+    ? null
+    : isRunning
+      ? "awaiting interpretation — will land once the run terminates"
+      : "run a case to see a one-paragraph interpretation here";
+  const wrapperClass = hasInterpretation
+    ? "border-pg-accent/40 bg-pg-accent/5"
+    : "border-dashed border-pg-border bg-transparent";
   return (
     <section
       aria-label="Run interpretation"
-      className="rounded border border-pg-accent/40 bg-pg-accent/5 p-4"
+      className={`min-h-[128px] rounded border p-4 transition-colors duration-300 ${wrapperClass}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-pg-accent">
+        <h2
+          className={`text-sm font-semibold ${
+            hasInterpretation ? "text-pg-accent" : "text-pg-muted"
+          }`}
+        >
           Interpretation
         </h2>
-        <span
-          className={`rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${runStatusClass(
-            status === "CANCELLED" ? "TASK_ERROR" : status,
-          )}`}
-        >
-          {status}
-        </span>
+        {status !== null && (
+          <span
+            className={`rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${runStatusClass(
+              status === "CANCELLED" ? "TASK_ERROR" : status,
+            )}`}
+          >
+            {status}
+          </span>
+        )}
       </div>
       <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-pg-text">
-        {interpretation}
+        {hasInterpretation ? typed : (
+          <span className="italic text-pg-muted">{placeholder}</span>
+        )}
       </p>
     </section>
   );
@@ -738,7 +830,7 @@ function RunResultPanel({
     return (
       <section
         role="alert"
-        className="rounded border border-pg-red/40 bg-pg-red/10 p-4"
+        className="pg-stable-surface rounded border border-pg-red/40 bg-pg-red/10 p-4 transition-colors duration-300"
       >
         <h2 className="text-sm font-semibold text-pg-red">Run failed</h2>
         <p className="mt-2 font-mono text-xs text-pg-red">{error}</p>
@@ -747,14 +839,14 @@ function RunResultPanel({
   }
   if (result === null) {
     return (
-      <section className="rounded border border-dashed border-pg-border bg-transparent p-4 text-xs text-pg-muted">
-        Click <span className="font-mono">Run</span> to dispatch the
+      <section className="pg-stable-surface flex items-center rounded border border-dashed border-pg-border bg-transparent p-4 text-xs text-pg-muted transition-colors duration-300">
+        Click <span className="mx-1 font-mono">Run</span> to dispatch the
         current input against this component.
       </section>
     );
   }
   return (
-    <section className="rounded border border-pg-border bg-pg-surface p-4">
+    <section className="pg-stable-surface rounded border border-pg-border bg-pg-surface p-4 transition-colors duration-300">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-pg-text">Run result</h2>
         <span
@@ -809,7 +901,7 @@ function EvaluateResultPanel({
     return (
       <section
         role="alert"
-        className="rounded border border-pg-red/40 bg-pg-red/10 p-4"
+        className="rounded border border-pg-red/40 bg-pg-red/10 p-4 transition-colors duration-300"
       >
         <h2 className="text-sm font-semibold text-pg-red">Evaluate failed</h2>
         <p className="mt-2 font-mono text-xs text-pg-red">{error}</p>

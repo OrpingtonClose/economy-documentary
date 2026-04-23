@@ -41,7 +41,8 @@ from strands_agents.playground.events import Event, RunStream
 
 logger = logging.getLogger(__name__)
 
-_NARRATE_INTERVAL_SECONDS: float = 2.5
+_NARRATE_INTERVAL_SECONDS: float = 1.5
+_SILENT_REPORT_SECONDS: float = 3.0
 _MAX_TAIL_EVENTS: int = 12
 _DEFAULT_NARRATOR_MODEL: str = "openai/gpt-4o-mini"
 _NARRATOR_MODEL_ENV: str = "PLAYGROUND_NARRATOR_MODEL"
@@ -74,9 +75,17 @@ def _resolve_complete(
     return litellm.completion
 
 
-def _tail_to_prompt(events: list[Event]) -> str:
-    """Compact the tail into an LLM-friendly bullet list."""
+def _tail_to_prompt(events: list[Event], *, now: float | None = None) -> str:
+    """Compact the tail into an LLM-friendly bullet list.
+
+    If ``now`` is provided, each line is suffixed with an elapsed-age
+    hint (e.g. ``(4.2s ago)``) so the narrator can keep talking about
+    an in-flight step even when no new backend event has arrived.
+    """
     lines: list[str] = []
+    import time as _time
+
+    reference = now if now is not None else _time.time()
     for event in events[-_MAX_TAIL_EVENTS:]:
         detail = event.detail or {}
         detail_parts: list[str] = []
@@ -84,28 +93,37 @@ def _tail_to_prompt(events: list[Event]) -> str:
                     "latency_ms", "reason", "error", "score"):
             if key in detail:
                 detail_parts.append(f"{key}={detail[key]}")
+        age_s = max(0.0, reference - event.ts)
+        age = f" ({age_s:.1f}s ago)"
         tail = (" " + " ".join(detail_parts)) if detail_parts else ""
-        lines.append(f"- [{event.kind}] {event.summary}{tail}")
+        lines.append(f"- [{event.kind}] {event.summary}{tail}{age}")
     return "\n".join(lines)
 
 
 _NARRATE_SYSTEM = """You narrate a single in-flight software task to a developer.
 
 Ground rules:
-- Pick exactly the most salient unreported step from the last events.
 - Write one sentence. <= 90 characters. No preamble.
 - Terse, technical, no marketing voice. The reader is not a layperson.
-- Never invent steps. If nothing new has happened, return the word NONE.
-- Prefer concrete facts: model id, elapsed ms, provider, tool name.
+- Prefer concrete facts: model id, elapsed ms, provider, tool name, tool count.
 - Never reassure ("we're working on it"); state the step.
+- Never invent steps that aren't in the event list.
 - If the last event is an error, repeat its error class and short message verbatim.
+- If the latest event is old (the age in parentheses is several seconds),
+  keep talking about that same step but frame it with the elapsed time —
+  users need to know the task is still on the same thing, not silent.
+- Only return the word NONE if the event list is empty.
+- Do not repeat the previous narration verbatim; advance it (newer facts,
+  higher elapsed, different framing) even when the underlying step hasn't
+  changed.
 
 Examples of good lines:
 - probing gemini/gemini-3-pro-preview (3.8s elapsed)
+- still probing gemini — 12s, preview models often cold-start this slow
 - scenario_agent selected openai/gpt-4o, 11 trajectory steps so far
+- scenario_agent still on step 11 (tool.called write_scenes) — 7s
 - evaluator ContractEnforcer scored 0.83 (hard gate)
 - task raised Timeout after 41.2s
-- stalled at tool.called write_scenes (7s since last event)
 """
 
 
@@ -129,14 +147,27 @@ async def narrator_loop(
     stream: RunStream,
     *,
     interval_seconds: float = _NARRATE_INTERVAL_SECONDS,
+    silent_report_seconds: float = _SILENT_REPORT_SECONDS,
     complete: LLMCompleter | None = None,
 ) -> None:
     """Pump narration events into ``stream`` until it closes.
+
+    Emits a fresh ``narrate`` event on two triggers:
+
+    * **New backend activity** — whenever the tail grows beyond the
+      highest ``seq`` we've already narrated.
+    * **Silence** — if no new events land but the last narration is
+      more than ``silent_report_seconds`` old, re-narrate anyway so
+      the UI isn't frozen staring at "still probing gemini" from
+      eight seconds ago. The prompt carries each event's elapsed age
+      so the LLM can advance the framing (e.g. "still probing — 12s").
 
     Safe to cancel — cancellation unwinds with a single CancelledError
     and does not emit a terminal event (the run endpoint owns the
     terminal event).
     """
+    import time as _time
+
     if _is_disabled():
         return
     completer = _resolve_complete(complete)
@@ -145,6 +176,7 @@ async def narrator_loop(
     model = _narrator_model()
     last_reported_seq = 0
     last_line: str | None = None
+    last_emit_ts: float = 0.0
     try:
         while not stream.closed:
             await asyncio.sleep(interval_seconds)
@@ -152,18 +184,31 @@ async def narrator_loop(
             if not tail:
                 continue
             newest_seq = tail[-1].seq
-            if newest_seq <= last_reported_seq:
+            now = _time.time()
+            has_new = newest_seq > last_reported_seq
+            silent_for = now - last_emit_ts if last_emit_ts else float("inf")
+            if not has_new and silent_for < silent_report_seconds:
                 continue
             line = await _narrate_once(
                 completer=completer,
                 model=model,
                 tail=tail,
                 previous=last_line,
+                now=now,
             )
-            if line is None or line.strip().upper() == "NONE":
+            if line is None:
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.upper() == "NONE":
+                continue
+            if stripped == (last_line or "").strip():
+                # LLM parroted the previous line; don't re-emit — the
+                # frontend keeps the previous narration visible and
+                # updating the stall counter is handled client-side.
                 continue
             last_reported_seq = newest_seq
             last_line = line
+            last_emit_ts = now
             await stream.emit(
                 "narrate",
                 line,
@@ -181,8 +226,9 @@ async def _narrate_once(
     model: str,
     tail: list[Event],
     previous: str | None,
+    now: float | None = None,
 ) -> str | None:
-    user_prompt = _tail_to_prompt(tail)
+    user_prompt = _tail_to_prompt(tail, now=now)
     if previous:
         user_prompt += f"\n\nLast narration: {previous}"
 
