@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
 
     stop_event.set()
     tick_thread.join(timeout=10)
-    return 0 if destroy_triggered.is_set() else 0
+    return 0 if destroy_triggered.is_set() else 1
 
 
 if __name__ == "__main__":
