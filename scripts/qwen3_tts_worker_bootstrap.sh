@@ -21,9 +21,10 @@
 #   WORKER_VOICE_ID          Pinned voice id (e.g. alex)
 #   VAST_INSTANCE_ID         From Vast.ai. Injected by provisioner.
 #   VAST_AI_API_KEY          For the guardian's self-destroy call.
-#   PLAYGROUND_BACKEND_URL   e.g. https://playground.example
 #
 # Optional env:
+#   PLAYGROUND_BACKEND_URL      Registry backend. If unset, worker runs
+#                               unregistered (smoke-test / dev mode).
 #   WORKER_VRAM_GB              Defaults to `nvidia-smi` probe.
 #   GUARDIAN_IDLE_SECONDS       Defaults to 900 (see infra_agent).
 #   GUARDIAN_MAX_LIFETIME_SECONDS Defaults to 14400.
@@ -39,7 +40,7 @@ set -euo pipefail
 : "${WORKER_VOICE_ID:?WORKER_VOICE_ID must be set (one voice per VM)}"
 : "${VAST_INSTANCE_ID:?VAST_INSTANCE_ID must be set (guardian cannot self-destroy without it)}"
 : "${VAST_AI_API_KEY:?VAST_AI_API_KEY must be set}"
-: "${PLAYGROUND_BACKEND_URL:?PLAYGROUND_BACKEND_URL must be set}"
+PLAYGROUND_BACKEND_URL="${PLAYGROUND_BACKEND_URL:-}"
 
 REPO_URL="${REPO_URL:-https://github.com/OrpingtonClose/economy-documentary.git}"
 REPO_REF="${REPO_REF:-main}"
