@@ -11,6 +11,22 @@ show consistent headroom.
 ## Observations
 
 <!-- NEW ENTRIES APPENDED BELOW -->
+### Slice 4b smoke test: qwen3-tts-worker on RTX 3090
+
+```yaml
+observed: 2026-04-24
+source: slice-4b / vast instance 35516824
+severity: info
+tags: [qwen3-tts, rtx-3090, vast-ai, stub-engine, smoke-test]
+```
+
+- **VM class**: RTX 3090 / 24 GB VRAM, 32 GB RAM, 50 GB disk (requested), Xeon E5-2695 v4, reliability 99.47%, $0.113/hr base + $0.006/hr storage = $0.167/hr total.
+- **Workload**: qwen3-tts-worker stub engine (no real Qwen3-TTS weights yet) + infra-agent guardian. One `/tts/render` request yielded a 162 KB WAV.
+- **Peak observations**: VRAM used 1 MiB (stub engine is CPU-only — real Qwen3-TTS TBD), disk filled well under 10 GB for repo + venv + ffmpeg + base packages. 50 GB allocation is comfortable; could safely downshift to 25 GB for TTS worker.
+- **Smoke test duration**: ≈12 minutes boot → idle destroy. Cost: ≈$0.033.
+- **Destroy path**: manual shortening of `GUARDIAN_IDLE_SECONDS` to 60s; guardian fired in under 90s of no-bump traffic. `vastai destroy instance` call succeeded — SSH refused + instance gone from account listing within seconds.
+- **Recommendation for qwen3-tts-worker (prod)**: RTX 3090 class (or A10/L4) is ample for a stub worker; revisit once real Qwen3-TTS weights load and VRAM numbers are observable. Budget 30 GB disk once we're past stub.
+
 
 <!-- Example (delete when first real entry lands):
 
