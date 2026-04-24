@@ -67,6 +67,7 @@ INFRA_COMPONENT_IDS: tuple[str, ...] = (
     "infra_qwen3_tts_worker",
     "infra_ltx_video_worker",
     "infra_b2_checkpoint",
+    "infra_pipeline_adapter",
 )
 
 
@@ -575,9 +576,7 @@ _COMPONENTS: tuple[Component, ...] = (
             "cost-control invariant the orchestrator trusts to keep "
             "unattended workers from burning budget."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_guardian"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_guardian"),
         cases_factory="infra_guardian_cases",
         thresholds_attr="INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_infra_guardian_experiment",
@@ -594,16 +593,10 @@ _COMPONENTS: tuple[Component, ...] = (
             "one-voice-per-VM invariant and refuses VRAM-underprovisioned "
             "workers at registration."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_worker_registry"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_worker_registry"),
         cases_factory="infra_worker_registry_cases",
-        thresholds_attr=(
-            "INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS"
-        ),
-        experiment_builder_attr=(
-            "build_infra_worker_registry_experiment"
-        ),
+        thresholds_attr=("INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_worker_registry_experiment"),
         declared_models=(),
         task_attr="infra_worker_registry_task",
     ),
@@ -617,9 +610,7 @@ _COMPONENTS: tuple[Component, ...] = (
             "/infra/destroy. Bumped by worker request middleware, "
             "latches manual-destroy, reports VRAM + disk peaks."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_agent"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_agent"),
         cases_factory="infra_agent_cases",
         thresholds_attr="INFRA_AGENT_EVALUATOR_THRESHOLDS",
         experiment_builder_attr="build_infra_agent_experiment",
@@ -636,16 +627,10 @@ _COMPONENTS: tuple[Component, ...] = (
             "WAV for the VM's pinned voice; /health/vram surfaces "
             "peak VRAM. One voice per VM, deterministic for seed."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_qwen3_tts_worker"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_qwen3_tts_worker"),
         cases_factory="infra_qwen3_tts_worker_cases",
-        thresholds_attr=(
-            "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS"
-        ),
-        experiment_builder_attr=(
-            "build_infra_qwen3_tts_worker_experiment"
-        ),
+        thresholds_attr=("INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_qwen3_tts_worker_experiment"),
         declared_models=(),
         task_attr="infra_qwen3_tts_worker_task",
     ),
@@ -659,16 +644,10 @@ _COMPONENTS: tuple[Component, ...] = (
             "MP4 (ftyp + mdat), duration clamped to engine bounds, "
             "deterministic for seed. /health/vram surfaces peak VRAM."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_ltx_video_worker"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_ltx_video_worker"),
         cases_factory="infra_ltx_video_worker_cases",
-        thresholds_attr=(
-            "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS"
-        ),
-        experiment_builder_attr=(
-            "build_infra_ltx_video_worker_experiment"
-        ),
+        thresholds_attr=("INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_ltx_video_worker_experiment"),
         declared_models=(),
         task_attr="infra_ltx_video_worker_task",
     ),
@@ -683,18 +662,30 @@ _COMPONENTS: tuple[Component, ...] = (
             "on checksum mismatch. The invariant the orchestrator "
             "leans on to make any run resumable."
         ),
-        experiment_module=(
-            "strands_agents.evals.experiments.infra_b2_checkpoint"
-        ),
+        experiment_module=("strands_agents.evals.experiments.infra_b2_checkpoint"),
         cases_factory="infra_b2_checkpoint_cases",
-        thresholds_attr=(
-            "INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS"
-        ),
-        experiment_builder_attr=(
-            "build_infra_b2_checkpoint_experiment"
-        ),
+        thresholds_attr=("INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_b2_checkpoint_experiment"),
         declared_models=(),
         task_attr="infra_b2_checkpoint_task",
+    ),
+    Component(
+        id="infra_pipeline_adapter",
+        title="Pipeline playground adapter",
+        kind="infra",
+        row=4,
+        summary=(
+            "Pure translator from orchestrator AG-UI events onto the "
+            "playground RunStream. Guarantees stable kind vocabulary, "
+            "stage-bracket integrity, and the 'never drop' invariant "
+            "for unknown event types."
+        ),
+        experiment_module=("strands_agents.evals.experiments.infra_pipeline_adapter"),
+        cases_factory="infra_pipeline_adapter_cases",
+        thresholds_attr=("INFRA_PIPELINE_ADAPTER_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_pipeline_adapter_experiment"),
+        declared_models=(),
+        task_attr="infra_pipeline_adapter_task",
     ),
 )
 
