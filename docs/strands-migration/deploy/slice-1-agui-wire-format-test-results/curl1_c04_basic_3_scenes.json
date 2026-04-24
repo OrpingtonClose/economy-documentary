@@ -1,0 +1,178 @@
+{
+  "run_id": "run_bde70d276efa",
+  "component_id": "c04",
+  "case_name": "basic_3_scenes",
+  "created_at": 1776963118.7839024,
+  "closed": true,
+  "events": [
+    {
+      "seq": 1,
+      "ts": 1776963118.7839317,
+      "kind": "run.dispatched",
+      "summary": "queued c04 / basic_3_scenes",
+      "detail": {
+        "component_id": "c04",
+        "case": "basic_3_scenes"
+      },
+      "type": "RUN_STARTED"
+    },
+    {
+      "seq": 2,
+      "ts": 1776963118.7844894,
+      "kind": "probe.start",
+      "summary": "probing 0 declared model(s)",
+      "detail": {
+        "count": 0
+      },
+      "type": "STEP_STARTED",
+      "step_name": "probe"
+    },
+    {
+      "seq": 3,
+      "ts": 1776963118.7850466,
+      "kind": "task.start",
+      "summary": "dispatching c04",
+      "detail": {
+        "component_id": "c04",
+        "case": "basic_3_scenes"
+      },
+      "type": "STEP_STARTED",
+      "step_name": "task"
+    },
+    {
+      "seq": 4,
+      "ts": 1776963118.7853384,
+      "kind": "task.done",
+      "summary": "c04 completed in 0ms",
+      "detail": {
+        "elapsed_ms": 0,
+        "trajectory_len": 0
+      },
+      "type": "STEP_FINISHED",
+      "step_name": "task"
+    },
+    {
+      "seq": 5,
+      "ts": 1776963118.785353,
+      "kind": "run.ok",
+      "summary": "run completed",
+      "detail": {
+        "elapsed_ms": 0
+      },
+      "type": "RUN_FINISHED"
+    },
+    {
+      "seq": 6,
+      "ts": 1776963121.662514,
+      "kind": "interpret",
+      "summary": "The component c04 processed the input case basic_3_scenes, generating audio scenes with specified target durations and corresponding text for voice V1. The output appears contract-honest, as it aligns with the expected structure and content for the given input. No evaluators were run, so there are no scores to report. The execution was notably quick, completing in 0ms, which may indicate an issue with the processing time or a lack of substantial computation, but the output itself is valid and well-formed.",
+      "detail": {
+        "model_id": "openai/gpt-4o-mini",
+        "post_run": true
+      },
+      "type": "TEXT_MESSAGE_CONTENT",
+      "source": "interpreter"
+    }
+  ],
+  "terminal": {
+    "status": "OK",
+    "component_id": "c04",
+    "case_name": "basic_3_scenes",
+    "output": {
+      "scenes": [
+        {
+          "id": 1,
+          "target_duration_sec": 18.0,
+          "voices": [
+            {
+              "voice_id": "V1",
+              "text": "Inflation erodes the purchasing power of money.",
+              "pronunciation_hints": {}
+            }
+          ],
+          "pronunciation_hints": {}
+        },
+        {
+          "id": 2,
+          "target_duration_sec": 19.0,
+          "voices": [
+            {
+              "voice_id": "V1",
+              "text": "Central banks target a small positive inflation rate.",
+              "pronunciation_hints": {}
+            }
+          ],
+          "pronunciation_hints": {}
+        },
+        {
+          "id": 3,
+          "target_duration_sec": 17.0,
+          "voices": [
+            {
+              "voice_id": "V1",
+              "text": "But runaway inflation destroys savings and trust.",
+              "pronunciation_hints": {}
+            }
+          ],
+          "pronunciation_hints": {}
+        }
+      ],
+      "whisperx_alignment": {
+        "total_duration_sec": 53.8,
+        "per_clip": {
+          "scene_001_V1": {
+            "total_duration": 18.1,
+            "word_count": 8,
+            "words": []
+          },
+          "scene_002_V1": {
+            "total_duration": 18.9,
+            "word_count": 8,
+            "words": []
+          },
+          "scene_003_V1": {
+            "total_duration": 16.8,
+            "word_count": 8,
+            "words": []
+          }
+        },
+        "language": "en"
+      },
+      "narration_blocks": [
+        {
+          "block_id": "scene_001_V1",
+          "wav_path": "/tmp/documentary-pipeline/audio/scene_001_V1.wav",
+          "scene_num": 1,
+          "voice_role": "V1",
+          "language": "en",
+          "voice_id": "V1",
+          "b2_url": "https://b2.example.com/audio/scene_001_V1.wav",
+          "duration_sec": 18.1
+        },
+        {
+          "block_id": "scene_002_V1",
+          "wav_path": "/tmp/documentary-pipeline/audio/scene_002_V1.wav",
+          "scene_num": 2,
+          "voice_role": "V1",
+          "language": "en",
+          "voice_id": "V1",
+          "b2_url": "https://b2.example.com/audio/scene_002_V1.wav",
+          "duration_sec": 18.9
+        },
+        {
+          "block_id": "scene_003_V1",
+          "wav_path": "/tmp/documentary-pipeline/audio/scene_003_V1.wav",
+          "scene_num": 3,
+          "voice_role": "V1",
+          "language": "en",
+          "voice_id": "V1",
+          "b2_url": "https://b2.example.com/audio/scene_003_V1.wav",
+          "duration_sec": 16.8
+        }
+      ],
+      "label": "success"
+    },
+    "trajectory": [],
+    "interpretation": "The component c04 processed the input case basic_3_scenes, generating audio scenes with specified target durations and corresponding text for voice V1. The output appears contract-honest, as it aligns with the expected structure and content for the given input. No evaluators were run, so there are no scores to report. The execution was notably quick, completing in 0ms, which may indicate an issue with the processing time or a lack of substantial computation, but the output itself is valid and well-formed."
+  }
+}

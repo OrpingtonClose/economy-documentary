@@ -1,0 +1,65 @@
+[
+  {
+    "label": "curl1_c04_basic_3_scenes",
+    "fails": [],
+    "kinds": [
+      "interpret",
+      "probe.start",
+      "run.dispatched",
+      "run.ok",
+      "task.done",
+      "task.start"
+    ],
+    "types": [
+      "RUN_FINISHED",
+      "RUN_STARTED",
+      "STEP_FINISHED",
+      "STEP_STARTED",
+      "TEXT_MESSAGE_CONTENT"
+    ]
+  },
+  {
+    "label": "curl2_c03_timing_passed_noop",
+    "fails": [],
+    "kinds": [
+      "interpret",
+      "narrate",
+      "probe.done",
+      "probe.start",
+      "run.dispatched",
+      "run.ok",
+      "task.done",
+      "task.start"
+    ],
+    "types": [
+      "RUN_FINISHED",
+      "RUN_STARTED",
+      "STEP_FINISHED",
+      "STEP_STARTED",
+      "TEXT_MESSAGE_CONTENT"
+    ]
+  },
+  {
+    "label": "curl3_c01_economics_basics",
+    "fails": [],
+    "kinds": [
+      "narrate",
+      "probe.done",
+      "probe.start",
+      "run.dispatched",
+      "run.error",
+      "task.start",
+      "tool.called",
+      "tool.returned"
+    ],
+    "types": [
+      "RUN_ERROR",
+      "RUN_STARTED",
+      "STEP_FINISHED",
+      "STEP_STARTED",
+      "TEXT_MESSAGE_CONTENT",
+      "TOOL_CALL_END",
+      "TOOL_CALL_START"
+    ]
+  }
+]

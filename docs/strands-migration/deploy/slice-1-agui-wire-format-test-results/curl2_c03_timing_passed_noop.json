@@ -1,0 +1,127 @@
+{
+  "run_id": "run_f075d2681d1d",
+  "component_id": "c03",
+  "case_name": "timing_passed_noop",
+  "created_at": 1776963122.7022042,
+  "closed": true,
+  "events": [
+    {
+      "seq": 1,
+      "ts": 1776963122.7022266,
+      "kind": "run.dispatched",
+      "summary": "queued c03 / timing_passed_noop",
+      "detail": {
+        "component_id": "c03",
+        "case": "timing_passed_noop"
+      },
+      "type": "RUN_STARTED"
+    },
+    {
+      "seq": 2,
+      "ts": 1776963122.7026937,
+      "kind": "probe.start",
+      "summary": "probing 2 declared model(s)",
+      "detail": {
+        "count": 2
+      },
+      "type": "STEP_STARTED",
+      "step_name": "probe"
+    },
+    {
+      "seq": 3,
+      "ts": 1776963125.4706402,
+      "kind": "probe.done",
+      "summary": "unreachable: gemini/gemini-3-pro-preview (probe_error:RateLimitError: litellm.RateLimitError: litellm.RateLimitError: geminiException - {)",
+      "detail": {
+        "model_id": "gemini/gemini-3-pro-preview",
+        "provider": "gemini",
+        "reachable": false,
+        "reason": "probe_error:RateLimitError: litellm.RateLimitError: litellm.RateLimitError: geminiException - {",
+        "latency_ms": 1193.6518619768322
+      },
+      "type": "STEP_FINISHED",
+      "step_name": "probe"
+    },
+    {
+      "seq": 4,
+      "ts": 1776963125.4706962,
+      "kind": "probe.done",
+      "summary": "reachable: openai/gpt-4o (ok)",
+      "detail": {
+        "model_id": "openai/gpt-4o",
+        "provider": "openai",
+        "reachable": true,
+        "reason": "ok",
+        "latency_ms": 1572.0194259774871
+      },
+      "type": "STEP_FINISHED",
+      "step_name": "probe"
+    },
+    {
+      "seq": 5,
+      "ts": 1776963125.4707856,
+      "kind": "task.start",
+      "summary": "dispatching c03",
+      "detail": {
+        "component_id": "c03",
+        "case": "timing_passed_noop"
+      },
+      "type": "STEP_STARTED",
+      "step_name": "task"
+    },
+    {
+      "seq": 6,
+      "ts": 1776963125.4711735,
+      "kind": "task.done",
+      "summary": "c03 completed in 0ms",
+      "detail": {
+        "elapsed_ms": 0,
+        "trajectory_len": 0
+      },
+      "type": "STEP_FINISHED",
+      "step_name": "task"
+    },
+    {
+      "seq": 7,
+      "ts": 1776963125.4711866,
+      "kind": "run.ok",
+      "summary": "run completed",
+      "detail": {
+        "elapsed_ms": 0
+      },
+      "type": "RUN_FINISHED"
+    },
+    {
+      "seq": 8,
+      "ts": 1776963125.7798986,
+      "kind": "narrate",
+      "summary": "no new signal, still on probe.start \u2014 1.5s",
+      "detail": {
+        "model_id": "openai/gpt-4o-mini",
+        "upto_seq": 2
+      },
+      "type": "TEXT_MESSAGE_CONTENT",
+      "source": "narrator"
+    },
+    {
+      "seq": 9,
+      "ts": 1776963128.2781577,
+      "kind": "interpret",
+      "summary": "The component c03 executed against the model openai/gpt-4o and returned an empty output, which appears contract-honest given the input case timing_passed_noop. Since no evaluators were declared or executed, there are no scores to assess, but the absence of output may warrant further investigation into the expected behavior for this case. Notably, the probing phase encountered a RateLimitError with the gemini/gemini-3-pro-preview model, which could indicate potential issues with model availability or rate limits that may affect future runs. The overall execution time was minimal, with the task completing almost instantaneously after the probing phase.",
+      "detail": {
+        "model_id": "openai/gpt-4o-mini",
+        "post_run": true
+      },
+      "type": "TEXT_MESSAGE_CONTENT",
+      "source": "interpreter"
+    }
+  ],
+  "terminal": {
+    "status": "OK",
+    "component_id": "c03",
+    "case_name": "timing_passed_noop",
+    "output": {},
+    "trajectory": [],
+    "interpretation": "The component c03 executed against the model openai/gpt-4o and returned an empty output, which appears contract-honest given the input case timing_passed_noop. Since no evaluators were declared or executed, there are no scores to assess, but the absence of output may warrant further investigation into the expected behavior for this case. Notably, the probing phase encountered a RateLimitError with the gemini/gemini-3-pro-preview model, which could indicate potential issues with model availability or rate limits that may affect future runs. The overall execution time was minimal, with the task completing almost instantaneously after the probing phase."
+  }
+}
