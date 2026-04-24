@@ -108,7 +108,11 @@ def _resolve_config(args: argparse.Namespace) -> WorkerConfig:
         args.playground_base_url or os.environ.get("PLAYGROUND_BACKEND_URL")
     )
 
-    vram_gb = args.vram_gb or _env_int("WORKER_VRAM_GB", DEFAULT_LOCAL_VRAM_GB)
+    vram_gb = (
+        args.vram_gb
+        if args.vram_gb is not None
+        else _env_int("WORKER_VRAM_GB", DEFAULT_LOCAL_VRAM_GB)
+    )
     bump_url = args.bump_url or os.environ.get(
         "INFRA_AGENT_BUMP_URL", "http://127.0.0.1:29230/infra/bump"
     )

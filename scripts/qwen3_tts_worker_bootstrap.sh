@@ -71,13 +71,16 @@ mkdir -p "$STATE_DIR" "$LOG_DIR"
 
 # ---------------------------------------------------------------------------
 # Checkout repo
+#
+# `git clone --branch` does not accept commit SHAs, so we always go through
+# the fetch+checkout FETCH_HEAD path which does. Keeps REPO_REF uniformly
+# "branch, tag, or SHA".
 # ---------------------------------------------------------------------------
 if [ ! -d "$WORK_DIR/.git" ]; then
-    git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$WORK_DIR"
-else
-    git -C "$WORK_DIR" fetch --depth 1 origin "$REPO_REF"
-    git -C "$WORK_DIR" checkout FETCH_HEAD
+    git clone --no-checkout "$REPO_URL" "$WORK_DIR"
 fi
+git -C "$WORK_DIR" fetch --depth 1 origin "$REPO_REF"
+git -C "$WORK_DIR" checkout FETCH_HEAD
 
 # ---------------------------------------------------------------------------
 # Python venv + server deps
