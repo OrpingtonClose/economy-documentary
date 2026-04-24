@@ -66,6 +66,7 @@ INFRA_COMPONENT_IDS: tuple[str, ...] = (
     "infra_agent",
     "infra_qwen3_tts_worker",
     "infra_ltx_video_worker",
+    "infra_b2_checkpoint",
 )
 
 
@@ -670,6 +671,30 @@ _COMPONENTS: tuple[Component, ...] = (
         ),
         declared_models=(),
         task_attr="infra_ltx_video_worker_task",
+    ),
+    Component(
+        id="infra_b2_checkpoint",
+        title="B2 checkpoint store",
+        kind="infra",
+        row=4,
+        summary=(
+            "Per-run artifact ledger + resume. Content-addressed, "
+            "idempotent uploads; monotonic revision tags; fail-closed "
+            "on checksum mismatch. The invariant the orchestrator "
+            "leans on to make any run resumable."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_b2_checkpoint"
+        ),
+        cases_factory="infra_b2_checkpoint_cases",
+        thresholds_attr=(
+            "INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS"
+        ),
+        experiment_builder_attr=(
+            "build_infra_b2_checkpoint_experiment"
+        ),
+        declared_models=(),
+        task_attr="infra_b2_checkpoint_task",
     ),
 )
 
