@@ -203,6 +203,50 @@ def test_heartbeat_loop_swallows_registry_error() -> None:
     assert done.is_set()
 
 
+def test_heartbeat_loop_swallows_telemetry_sample_error() -> None:
+    """A probe failure must not kill the heartbeat thread silently.
+
+    Regression: an unhandled exception from ``telemetry.sample()`` used to
+    propagate up and terminate the daemon thread, leaving the worker alive
+    but stale in the registry.
+    """
+
+    client = _FakeRegistryClient()
+
+    def _raising_disk_prober(_p: str) -> tuple[int, int]:
+        raise OSError("disk probe failed")
+
+    telemetry = ResourceTelemetry(
+        vram_prober=lambda: (24, 6),
+        disk_prober=_raising_disk_prober,
+        disk_path="/",
+    )
+    clock = _StepClock()
+    stop = threading.Event()
+    done = threading.Event()
+
+    def _drive() -> None:
+        runner.heartbeat_loop(
+            worker_id="w1",
+            registry_client=client,  # type: ignore[arg-type]
+            telemetry=telemetry,
+            stop_event=stop,
+            interval_s=30.0,
+            clock=clock,
+        )
+        done.set()
+
+    thread = threading.Thread(target=_drive, daemon=True)
+    thread.start()
+    # Heartbeat must still fire despite the telemetry exception.
+    _wait_until(lambda: len(client.heartbeat_calls) >= 1, timeout=2.0)
+    stop.set()
+    done.wait(timeout=2.0)
+    assert done.is_set()
+    # No free_vram because telemetry.sample() blew up before vram was read.
+    assert client.heartbeat_calls[0]["free_vram_gb"] is None
+
+
 def test_heartbeat_loop_omits_free_vram_when_probe_missing() -> None:
     client = _FakeRegistryClient()
     telemetry = ResourceTelemetry(

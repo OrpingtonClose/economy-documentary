@@ -165,13 +165,23 @@ def heartbeat_loop(
     while not stop_event.is_set():
         now = clock()
         if now >= next_deadline:
-            snapshot = telemetry.sample()
-            free_gb = None
-            if (
-                snapshot.vram_total_gb is not None
-                and snapshot.vram_used_gb is not None
-            ):
-                free_gb = max(snapshot.vram_total_gb - snapshot.vram_used_gb, 0)
+            free_gb: int | None = None
+            try:
+                snapshot = telemetry.sample()
+            except Exception as exc:
+                logger.warning(
+                    "worker_id=<%s>, error=<%s> | telemetry sample failed (continuing)",
+                    worker_id,
+                    exc,
+                )
+            else:
+                if (
+                    snapshot.vram_total_gb is not None
+                    and snapshot.vram_used_gb is not None
+                ):
+                    free_gb = max(
+                        snapshot.vram_total_gb - snapshot.vram_used_gb, 0
+                    )
             try:
                 registry_client.heartbeat(
                     worker_id=worker_id, free_vram_gb=free_gb

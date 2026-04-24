@@ -229,15 +229,22 @@ else
     mkdir -p /var/run
     SUPERVISOR_LOG="$LOG_DIR/supervisor.log"
 
+    # Values may contain shell metacharacters (quotes, $, &, etc.). Each
+    # KEY=VALUE is shell-escaped via printf %q so the generated supervisor
+    # script survives arbitrary secret contents.
     INFRA_CMD=""
     for kv in "${INFRA_AGENT_ENV[@]}"; do
-        INFRA_CMD+="export $kv; "
+        key="${kv%%=*}"
+        value="${kv#*=}"
+        INFRA_CMD+="export ${key}=$(printf '%q' "$value"); "
     done
     INFRA_CMD+="exec $VENV_DIR/bin/python -m strands_agents.infra_agent.runner"
 
     WORKER_CMD=""
     for kv in "${WORKER_ENV[@]}"; do
-        WORKER_CMD+="export $kv; "
+        key="${kv%%=*}"
+        value="${kv#*=}"
+        WORKER_CMD+="export ${key}=$(printf '%q' "$value"); "
     done
     WORKER_CMD+="exec $VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner"
 
