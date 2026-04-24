@@ -11,9 +11,15 @@
  * citation too.
  */
 
-export type ComponentId = string; // "c01".."c15"
+export type ComponentId = string; // "c01".."c15", plus "infra_*" units
 
-export type ComponentKind = "leaf" | "tool" | "loop" | "gate" | "graph";
+export type ComponentKind =
+  | "leaf"
+  | "tool"
+  | "loop"
+  | "gate"
+  | "graph"
+  | "infra";
 
 /**
  * Mirror of ``_serialise_model`` in ``server/playground.py``:
@@ -66,7 +72,7 @@ export interface ComponentSummary {
   readonly id: ComponentId;
   readonly title: string;
   readonly kind: ComponentKind;
-  readonly row: 1 | 2 | 3;
+  readonly row: 1 | 2 | 3 | 4;
   readonly summary: string;
   readonly declared_models: readonly DeclaredModel[];
   readonly evaluators: readonly EvaluatorDeclaration[];

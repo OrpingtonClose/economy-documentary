@@ -30,7 +30,8 @@ from typing import Any
 from strands_evals.case import Case
 
 
-#: Well-known identifiers. Ordering mirrors the test-case atlas rows.
+#: Well-known pipeline-component identifiers. Ordering mirrors the
+#: test-case atlas rows.
 COMPONENT_IDS: tuple[str, ...] = (
     # Row 1
     "c01",
@@ -50,6 +51,21 @@ COMPONENT_IDS: tuple[str, ...] = (
     "c13",
     "c14",
     "c15",
+)
+
+#: Infrastructure-unit identifiers — the worker VMs, the cost
+#: guardian, the worker registry, the per-VM infra agent. Surfaced
+#: in the same playground as the pipeline components so every unit
+#: the orchestrator depends on is user-auditable from the UI. These
+#: are NOT members of :data:`COMPONENT_IDS` because they do not
+#: occupy an atlas row — they sit beneath the pipeline rather than
+#: alongside it.
+INFRA_COMPONENT_IDS: tuple[str, ...] = (
+    "infra_guardian",
+    "infra_worker_registry",
+    "infra_agent",
+    "infra_qwen3_tts_worker",
+    "infra_ltx_video_worker",
 )
 
 
@@ -544,6 +560,117 @@ _COMPONENTS: tuple[Component, ...] = (
         declared_models=(),
         task_attr="approval_task",
     ),
+    # Infrastructure units — occupy row 4 in the UI (rendered under a
+    # separate ``kind=infra`` filter chip). These are the VM-level
+    # services the orchestrator composes the pipeline on top of.
+    Component(
+        id="infra_guardian",
+        title="Guardian (cost control)",
+        kind="infra",
+        row=4,
+        summary=(
+            "Pure decision core for per-VM self-destruct: idle "
+            "timeout, lifetime cap, manual-destroy flag. Pins the "
+            "cost-control invariant the orchestrator trusts to keep "
+            "unattended workers from burning budget."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_guardian"
+        ),
+        cases_factory="infra_guardian_cases",
+        thresholds_attr="INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_infra_guardian_experiment",
+        declared_models=(),
+        task_attr="infra_guardian_task",
+    ),
+    Component(
+        id="infra_worker_registry",
+        title="Worker registry",
+        kind="infra",
+        row=4,
+        summary=(
+            "Fleet registry + voice pinning. Enforces the "
+            "one-voice-per-VM invariant and refuses VRAM-underprovisioned "
+            "workers at registration."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_worker_registry"
+        ),
+        cases_factory="infra_worker_registry_cases",
+        thresholds_attr=(
+            "INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS"
+        ),
+        experiment_builder_attr=(
+            "build_infra_worker_registry_experiment"
+        ),
+        declared_models=(),
+        task_attr="infra_worker_registry_task",
+    ),
+    Component(
+        id="infra_agent",
+        title="Infra agent (per-VM control plane)",
+        kind="infra",
+        row=4,
+        summary=(
+            "FastAPI on every worker VM — /infra/status, /infra/bump, "
+            "/infra/destroy. Bumped by worker request middleware, "
+            "latches manual-destroy, reports VRAM + disk peaks."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_agent"
+        ),
+        cases_factory="infra_agent_cases",
+        thresholds_attr="INFRA_AGENT_EVALUATOR_THRESHOLDS",
+        experiment_builder_attr="build_infra_agent_experiment",
+        declared_models=(),
+        task_attr="infra_agent_task",
+    ),
+    Component(
+        id="infra_qwen3_tts_worker",
+        title="Qwen3-TTS worker",
+        kind="infra",
+        row=4,
+        summary=(
+            "Per-VM TTS worker. /tts/render returns a 16-bit mono PCM "
+            "WAV for the VM's pinned voice; /health/vram surfaces "
+            "peak VRAM. One voice per VM, deterministic for seed."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_qwen3_tts_worker"
+        ),
+        cases_factory="infra_qwen3_tts_worker_cases",
+        thresholds_attr=(
+            "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS"
+        ),
+        experiment_builder_attr=(
+            "build_infra_qwen3_tts_worker_experiment"
+        ),
+        declared_models=(),
+        task_attr="infra_qwen3_tts_worker_task",
+    ),
+    Component(
+        id="infra_ltx_video_worker",
+        title="LTX-Video worker",
+        kind="infra",
+        row=4,
+        summary=(
+            "Per-VM video worker. /video/render returns an ISO-BMFF "
+            "MP4 (ftyp + mdat), duration clamped to engine bounds, "
+            "deterministic for seed. /health/vram surfaces peak VRAM."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_ltx_video_worker"
+        ),
+        cases_factory="infra_ltx_video_worker_cases",
+        thresholds_attr=(
+            "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS"
+        ),
+        experiment_builder_attr=(
+            "build_infra_ltx_video_worker_experiment"
+        ),
+        declared_models=(),
+        task_attr="infra_ltx_video_worker_task",
+    ),
 )
 
 
@@ -562,6 +689,7 @@ def get_component(component_id: str) -> Component | None:
 
 __all__ = [
     "COMPONENT_IDS",
+    "INFRA_COMPONENT_IDS",
     "Component",
     "DeclaredModel",
     "EvaluatorDeclaration",

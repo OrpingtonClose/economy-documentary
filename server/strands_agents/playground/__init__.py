@@ -25,6 +25,7 @@ from strands_agents.playground.reachability import (
 )
 from strands_agents.playground.registry import (
     COMPONENT_IDS,
+    INFRA_COMPONENT_IDS,
     Component,
     DeclaredModel,
     EvaluatorDeclaration,
@@ -68,6 +69,7 @@ from strands_agents.playground.worker_registry import (
 
 __all__ = [
     "COMPONENT_IDS",
+    "INFRA_COMPONENT_IDS",
     "Component",
     "CredentialsProber",
     "DEFAULT_USER_CASES_DIR",

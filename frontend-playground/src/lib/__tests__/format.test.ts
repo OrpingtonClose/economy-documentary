@@ -18,7 +18,7 @@ import {
 } from "@/lib/format";
 
 describe("kindLabel", () => {
-  it.each(["leaf", "loop", "gate", "graph"] as const)(
+  it.each(["leaf", "loop", "gate", "graph", "infra"] as const)(
     "returns the literal kind token for %s",
     (kind) => {
       expect(kindLabel(kind)).toBe(kind);
@@ -32,7 +32,14 @@ describe("kindChipClass", () => {
     const loop = kindChipClass("loop");
     const gate = kindChipClass("gate");
     const graph = kindChipClass("graph");
-    expect(new Set([leaf, loop, gate, graph]).size).toBe(4);
+    const infra = kindChipClass("infra");
+    expect(new Set([leaf, loop, gate, graph, infra]).size).toBe(5);
+  });
+  it("uses a distinct colour for infra so Row 4 reads apart from pipeline rows", () => {
+    // Row 4 infrastructure units need to be visually separable from
+    // the pipeline components — reusing an existing colour would make
+    // the Row 4 cards read as just another pipeline row.
+    expect(kindChipClass("infra")).toContain("pg-infra");
   });
 });
 
