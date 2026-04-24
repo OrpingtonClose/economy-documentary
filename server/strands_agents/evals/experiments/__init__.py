@@ -44,6 +44,12 @@ from strands_agents.evals.experiments.infra_agent import (
     infra_agent_cases,
     infra_agent_task,
 )
+from strands_agents.evals.experiments.infra_b2_checkpoint import (
+    INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS,
+    build_infra_b2_checkpoint_experiment,
+    infra_b2_checkpoint_cases,
+    infra_b2_checkpoint_task,
+)
 from strands_agents.evals.experiments.infra_guardian import (
     INFRA_GUARDIAN_EVALUATOR_THRESHOLDS,
     build_infra_guardian_experiment,
@@ -134,6 +140,7 @@ __all__ = [
     "COHERENCE_EVALUATOR_THRESHOLDS",
     "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
     "INFRA_AGENT_EVALUATOR_THRESHOLDS",
+    "INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS",
     "INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
     "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS",
     "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS",
@@ -160,6 +167,7 @@ __all__ = [
     "build_escalation_experiment",
     "build_escalation_judge_experiment",
     "build_infra_agent_experiment",
+    "build_infra_b2_checkpoint_experiment",
     "build_infra_guardian_experiment",
     "build_infra_ltx_video_worker_experiment",
     "build_infra_qwen3_tts_worker_experiment",
@@ -184,6 +192,8 @@ __all__ = [
     "escalation_task",
     "infra_agent_cases",
     "infra_agent_task",
+    "infra_b2_checkpoint_cases",
+    "infra_b2_checkpoint_task",
     "infra_guardian_cases",
     "infra_guardian_task",
     "infra_ltx_video_worker_cases",
