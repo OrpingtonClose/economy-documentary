@@ -85,6 +85,12 @@ git -C "$WORK_DIR" checkout FETCH_HEAD
 
 # ---------------------------------------------------------------------------
 # Python venv + server deps
+#
+# The worker + guardian only need a narrow slice of server/ (strands_agents
+# subpackages). Rather than install the whole `server` package (which would
+# pull in google-adk, litellm, agentops, etc. that we do not use here), we
+# install the runtime deps directly and point PYTHONPATH at server/. This
+# keeps the VM boot fast and keeps the dep surface minimal.
 # ---------------------------------------------------------------------------
 if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
@@ -92,10 +98,7 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
-
-# Install the server package (editable, so the unit of deploy is the repo).
-pip install -e "$WORK_DIR/server"
-pip install fastapi uvicorn requests
+pip install fastapi uvicorn requests soundfile numpy opentimelineio
 
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM
@@ -119,9 +122,67 @@ echo "WORKER_ENDPOINT_URL=$WORKER_ENDPOINT_URL"
 echo "WORKER_VRAM_GB=$WORKER_VRAM_GB"
 
 # ---------------------------------------------------------------------------
-# Systemd units
+# Process supervision
+#
+# Two paths, detected at runtime:
+#
+#   * systemd-capable VM  — write units, `systemctl enable --now` them.
+#     Survives reboots, restarts on failure automatically.
+#
+#   * plain Docker container (Vast.ai default `nvidia/cuda` image runs
+#     with an SSH wrapper as PID 1, not systemd) — fall back to a
+#     small supervisor loop. Each service is launched under `nohup`
+#     with its PID written to /var/run/*.pid and stdout/stderr tee'd
+#     to the same log files the systemd path uses. A companion watchdog
+#     process re-launches either service if its PID disappears.
+#
+# The on-disk shape (log paths, env, ExecStart args) is identical
+# across the two paths so debugging commands work the same.
 # ---------------------------------------------------------------------------
-cat > /etc/systemd/system/infra-agent.service <<UNIT
+
+INFRA_AGENT_ENV=(
+    "PYTHONUNBUFFERED=1"
+    "PYTHONPATH=$WORK_DIR/server"
+    "WORKER_ID=$WORKER_ID"
+    "VAST_INSTANCE_ID=$VAST_INSTANCE_ID"
+    "VAST_AI_API_KEY=$VAST_AI_API_KEY"
+    "PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL"
+    "GUARDIAN_IDLE_SECONDS=${GUARDIAN_IDLE_SECONDS:-900}"
+    "GUARDIAN_MAX_LIFETIME_SECONDS=${GUARDIAN_MAX_LIFETIME_SECONDS:-14400}"
+)
+
+WORKER_ENV=(
+    "PYTHONUNBUFFERED=1"
+    "PYTHONPATH=$WORK_DIR/server"
+    "WORKER_ID=$WORKER_ID"
+    "WORKER_VOICE_ID=$WORKER_VOICE_ID"
+    "WORKER_ENDPOINT_URL=$WORKER_ENDPOINT_URL"
+    "WORKER_VRAM_GB=$WORKER_VRAM_GB"
+    "PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL"
+    "INFRA_AGENT_BUMP_URL=http://127.0.0.1:29230/infra/bump"
+    "PUBLIC_IPADDR=$PUBLIC_IPADDR"
+)
+
+HAS_SYSTEMD=0
+if command -v systemctl >/dev/null 2>&1 \
+   && [ -d /run/systemd/system ] \
+   && systemctl is-system-running --quiet 2>/dev/null; then
+    HAS_SYSTEMD=1
+fi
+
+if [ "$HAS_SYSTEMD" = "1" ]; then
+    echo "systemd detected — installing unit files"
+
+    infra_env_lines=""
+    for kv in "${INFRA_AGENT_ENV[@]}"; do
+        infra_env_lines+="Environment=$kv"$'\n'
+    done
+    worker_env_lines=""
+    for kv in "${WORKER_ENV[@]}"; do
+        worker_env_lines+="Environment=$kv"$'\n'
+    done
+
+    cat > /etc/systemd/system/infra-agent.service <<UNIT
 [Unit]
 Description=Per-VM infrastructure guardian (idle/lifetime watchdog)
 After=network-online.target
@@ -130,14 +191,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$WORK_DIR
-Environment=PYTHONUNBUFFERED=1
-Environment=WORKER_ID=$WORKER_ID
-Environment=VAST_INSTANCE_ID=$VAST_INSTANCE_ID
-Environment=VAST_AI_API_KEY=$VAST_AI_API_KEY
-Environment=PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL
-Environment=GUARDIAN_IDLE_SECONDS=${GUARDIAN_IDLE_SECONDS:-900}
-Environment=GUARDIAN_MAX_LIFETIME_SECONDS=${GUARDIAN_MAX_LIFETIME_SECONDS:-14400}
-ExecStart=$VENV_DIR/bin/python -m strands_agents.infra_agent.runner
+${infra_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.infra_agent.runner
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:$LOG_DIR/infra-agent.log
@@ -147,7 +201,7 @@ StandardError=append:$LOG_DIR/infra-agent.log
 WantedBy=multi-user.target
 UNIT
 
-cat > /etc/systemd/system/qwen3-tts-worker.service <<UNIT
+    cat > /etc/systemd/system/qwen3-tts-worker.service <<UNIT
 [Unit]
 Description=Qwen3-TTS worker (one voice per VM)
 After=infra-agent.service
@@ -156,15 +210,7 @@ Requires=infra-agent.service
 [Service]
 Type=simple
 WorkingDirectory=$WORK_DIR
-Environment=PYTHONUNBUFFERED=1
-Environment=WORKER_ID=$WORKER_ID
-Environment=WORKER_VOICE_ID=$WORKER_VOICE_ID
-Environment=WORKER_ENDPOINT_URL=$WORKER_ENDPOINT_URL
-Environment=WORKER_VRAM_GB=$WORKER_VRAM_GB
-Environment=PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL
-Environment=INFRA_AGENT_BUMP_URL=http://127.0.0.1:29230/infra/bump
-Environment=PUBLIC_IPADDR=$PUBLIC_IPADDR
-ExecStart=$VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner
+${worker_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:$LOG_DIR/qwen3-tts-worker.log
@@ -174,9 +220,83 @@ StandardError=append:$LOG_DIR/qwen3-tts-worker.log
 WantedBy=multi-user.target
 UNIT
 
-systemctl daemon-reload
-systemctl enable --now infra-agent.service
-systemctl enable --now qwen3-tts-worker.service
+    systemctl daemon-reload
+    systemctl enable --now infra-agent.service
+    systemctl enable --now qwen3-tts-worker.service
+else
+    echo "systemd not available — falling back to nohup supervisor"
+
+    mkdir -p /var/run
+    SUPERVISOR_LOG="$LOG_DIR/supervisor.log"
+
+    INFRA_CMD=""
+    for kv in "${INFRA_AGENT_ENV[@]}"; do
+        INFRA_CMD+="export $kv; "
+    done
+    INFRA_CMD+="exec $VENV_DIR/bin/python -m strands_agents.infra_agent.runner"
+
+    WORKER_CMD=""
+    for kv in "${WORKER_ENV[@]}"; do
+        WORKER_CMD+="export $kv; "
+    done
+    WORKER_CMD+="exec $VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner"
+
+    cat > /usr/local/bin/qwen3-tts-supervisor.sh <<SUP
+#!/usr/bin/env bash
+# Minimal non-systemd supervisor for infra-agent + qwen3-tts-worker.
+# Restarts either service if its PID disappears. Logs supervision events
+# to $SUPERVISOR_LOG.
+set -u
+
+WORK_DIR="$WORK_DIR"
+LOG_DIR="$LOG_DIR"
+INFRA_PID=/var/run/infra-agent.pid
+WORKER_PID=/var/run/qwen3-tts-worker.pid
+
+start_infra() {
+    cd "\$WORK_DIR"
+    nohup bash -c '$INFRA_CMD' \\
+        >> "\$LOG_DIR/infra-agent.log" 2>&1 &
+    echo \$! > "\$INFRA_PID"
+    echo "[\$(date -u +%FT%TZ)] started infra-agent pid=\$(cat \$INFRA_PID)" \\
+        >> "$SUPERVISOR_LOG"
+}
+
+start_worker() {
+    cd "\$WORK_DIR"
+    nohup bash -c '$WORKER_CMD' \\
+        >> "\$LOG_DIR/qwen3-tts-worker.log" 2>&1 &
+    echo \$! > "\$WORKER_PID"
+    echo "[\$(date -u +%FT%TZ)] started qwen3-tts-worker pid=\$(cat \$WORKER_PID)" \\
+        >> "$SUPERVISOR_LOG"
+}
+
+is_alive() {
+    local pid_file="\$1"
+    [ -f "\$pid_file" ] || return 1
+    local pid
+    pid="\$(cat "\$pid_file" 2>/dev/null || true)"
+    [ -n "\$pid" ] || return 1
+    kill -0 "\$pid" 2>/dev/null
+}
+
+start_infra
+# Give the guardian a moment to bind :29230 before the worker tries to bump it
+sleep 2
+start_worker
+
+while true; do
+    is_alive "\$INFRA_PID" || start_infra
+    is_alive "\$WORKER_PID" || start_worker
+    sleep 5
+done
+SUP
+    chmod +x /usr/local/bin/qwen3-tts-supervisor.sh
+
+    nohup /usr/local/bin/qwen3-tts-supervisor.sh >> "$SUPERVISOR_LOG" 2>&1 &
+    echo $! > /var/run/qwen3-tts-supervisor.pid
+    echo "supervisor pid=$(cat /var/run/qwen3-tts-supervisor.pid)"
+fi
 
 # ---------------------------------------------------------------------------
 # Quick readiness probe

@@ -1,3 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "strands_agents*",
+    "api*",
+    "fleet*",
+    "agents*",
+    "plugins*",
+    "adk_eval*",
+    "critique*",
+    "previews*",
+    "callbacks*",
+    "dashboard*",
+    "orchestrator*",
+    "testing*",
+    "tools*",
+]
+
 [project]
 name = "documentary-pipeline"
 version = "0.1.0"
