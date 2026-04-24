@@ -1,24 +1,23 @@
 #!/usr/bin/env bash
-# Qwen3-TTS Worker Bootstrap for Vast.ai VMs.
+# LTX-Video Worker Bootstrap for Vast.ai VMs.
 #
-# Provisions a single Vast.ai GPU VM as a Qwen3-TTS worker pinned to
-# one voice. Installs two supervised services:
+# Provisions a single Vast.ai GPU VM as an LTX-Video render worker.
+# Installs two supervised services:
 #
 #   1. infra-agent  (:29230) — guardian, destroys the VM on idle/lifetime
-#   2. qwen3-tts-worker (:29231) — /tts/render + /health/vram
+#   2. ltx-video-worker (:29232) — /video/render + /health/vram
 #
-# Runs infra-agent via `strands_agents.infra_agent.runner` and the TTS
-# worker via `strands_agents.qwen3_tts_worker.runner`. Both services
+# Runs infra-agent via `strands_agents.infra_agent.runner` and the video
+# worker via `strands_agents.ltx_video_worker.runner`. Both services
 # live in the same Python venv so they share the telemetry module.
 #
-# One voice per VM is a hard invariant: WORKER_VOICE_ID is set at boot
-# time here and never changes. Running this script again with a
-# different WORKER_VOICE_ID on the same VM is an operator error — the
-# playground registry will reject the re-registration.
+# Sizing policy (see docs/strands-migration/lessons/gpu-sizing.md):
+# first VMs overprovision — H200 / ~500 GB disk. Optimise downward
+# after observing real peak VRAM / disk usage across a handful of
+# successful runs.
 #
 # Required env:
-#   WORKER_ID                Registry worker id (e.g. tts-alex-01)
-#   WORKER_VOICE_ID          Pinned voice id (e.g. alex)
+#   WORKER_ID                Registry worker id (e.g. video-h200-01)
 #   VAST_INSTANCE_ID         From Vast.ai. Injected by provisioner.
 #   VAST_AI_API_KEY          For the guardian's self-destroy call.
 #
@@ -36,8 +35,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Required env sanity
 # ---------------------------------------------------------------------------
-: "${WORKER_ID:?WORKER_ID must be set (e.g. tts-alex-01)}"
-: "${WORKER_VOICE_ID:?WORKER_VOICE_ID must be set (one voice per VM)}"
+: "${WORKER_ID:?WORKER_ID must be set (e.g. video-h200-01)}"
 : "${VAST_INSTANCE_ID:?VAST_INSTANCE_ID must be set (guardian cannot self-destroy without it)}"
 : "${VAST_AI_API_KEY:?VAST_AI_API_KEY must be set}"
 PLAYGROUND_BACKEND_URL="${PLAYGROUND_BACKEND_URL:-}"
@@ -47,10 +45,10 @@ REPO_REF="${REPO_REF:-main}"
 
 WORK_DIR="/opt/economy-documentary"
 VENV_DIR="/opt/economy-documentary-venv"
-STATE_DIR="/var/lib/qwen3-tts-worker"
-LOG_DIR="/var/log/qwen3-tts-worker"
+STATE_DIR="/var/lib/ltx-video-worker"
+LOG_DIR="/var/log/ltx-video-worker"
 
-echo "=== Qwen3-TTS worker bootstrap: WORKER_ID=$WORKER_ID VOICE=$WORKER_VOICE_ID ==="
+echo "=== LTX-Video worker bootstrap: WORKER_ID=$WORKER_ID ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # ---------------------------------------------------------------------------
@@ -63,7 +61,6 @@ apt-get install -y --no-install-recommends \
     python3-pip \
     python3-venv \
     ffmpeg \
-    libsndfile1 \
     curl \
     ca-certificates
 rm -rf /var/lib/apt/lists/*
@@ -84,13 +81,12 @@ git -C "$WORK_DIR" fetch --depth 1 origin "$REPO_REF"
 git -C "$WORK_DIR" checkout FETCH_HEAD
 
 # ---------------------------------------------------------------------------
-# Python venv + server deps
+# Python venv + runtime deps
 #
-# The worker + guardian only need a narrow slice of server/ (strands_agents
-# subpackages). Rather than install the whole `server` package (which would
-# pull in google-adk, litellm, agentops, etc. that we do not use here), we
-# install the runtime deps directly and point PYTHONPATH at server/. This
-# keeps the VM boot fast and keeps the dep surface minimal.
+# Narrow install — only what strands_agents.{infra_agent,ltx_video_worker}
+# actually import. The real LTX-Video backend (diffusers + torch) is
+# deferred to a future slice; the stub engine is exercised by the smoke
+# test until then.
 # ---------------------------------------------------------------------------
 if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
@@ -98,7 +94,7 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
-pip install fastapi uvicorn requests soundfile numpy opentimelineio
+pip install fastapi uvicorn requests numpy
 
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM
@@ -108,7 +104,7 @@ if [ -z "$PUBLIC_IPADDR" ]; then
     PUBLIC_IPADDR="$(curl -fsS https://api.ipify.org || echo 127.0.0.1)"
 fi
 export PUBLIC_IPADDR
-WORKER_ENDPOINT_URL="${WORKER_ENDPOINT_URL:-http://${PUBLIC_IPADDR}:29231}"
+WORKER_ENDPOINT_URL="${WORKER_ENDPOINT_URL:-http://${PUBLIC_IPADDR}:29232}"
 
 if [ -z "${WORKER_VRAM_GB:-}" ]; then
     if command -v nvidia-smi >/dev/null 2>&1; then
@@ -124,20 +120,11 @@ echo "WORKER_VRAM_GB=$WORKER_VRAM_GB"
 # ---------------------------------------------------------------------------
 # Process supervision
 #
-# Two paths, detected at runtime:
-#
-#   * systemd-capable VM  — write units, `systemctl enable --now` them.
-#     Survives reboots, restarts on failure automatically.
-#
-#   * plain Docker container (Vast.ai default `nvidia/cuda` image runs
-#     with an SSH wrapper as PID 1, not systemd) — fall back to a
-#     small supervisor loop. Each service is launched under `nohup`
-#     with its PID written to /var/run/*.pid and stdout/stderr tee'd
-#     to the same log files the systemd path uses. A companion watchdog
-#     process re-launches either service if its PID disappears.
-#
-# The on-disk shape (log paths, env, ExecStart args) is identical
-# across the two paths so debugging commands work the same.
+# Identical shape to scripts/qwen3_tts_worker_bootstrap.sh — systemd
+# when the VM has it, nohup supervisor fallback for plain Docker
+# containers (Vast.ai nvidia/cuda images). Log paths, env shape, and
+# module entry-points are the only things that differ between the two
+# worker bootstraps.
 # ---------------------------------------------------------------------------
 
 INFRA_AGENT_ENV=(
@@ -155,7 +142,6 @@ WORKER_ENV=(
     "PYTHONUNBUFFERED=1"
     "PYTHONPATH=$WORK_DIR/server"
     "WORKER_ID=$WORKER_ID"
-    "WORKER_VOICE_ID=$WORKER_VOICE_ID"
     "WORKER_ENDPOINT_URL=$WORKER_ENDPOINT_URL"
     "WORKER_VRAM_GB=$WORKER_VRAM_GB"
     "PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL"
@@ -204,20 +190,20 @@ StandardError=append:$LOG_DIR/infra-agent.log
 WantedBy=multi-user.target
 UNIT
 
-    cat > /etc/systemd/system/qwen3-tts-worker.service <<UNIT
+    cat > /etc/systemd/system/ltx-video-worker.service <<UNIT
 [Unit]
-Description=Qwen3-TTS worker (one voice per VM)
+Description=LTX-Video worker (per-scene render)
 After=infra-agent.service
 Requires=infra-agent.service
 
 [Service]
 Type=simple
 WorkingDirectory=$WORK_DIR
-${worker_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner
+${worker_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.ltx_video_worker.runner
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:$LOG_DIR/qwen3-tts-worker.log
-StandardError=append:$LOG_DIR/qwen3-tts-worker.log
+StandardOutput=append:$LOG_DIR/ltx-video-worker.log
+StandardError=append:$LOG_DIR/ltx-video-worker.log
 
 [Install]
 WantedBy=multi-user.target
@@ -225,7 +211,7 @@ UNIT
 
     systemctl daemon-reload
     systemctl enable --now infra-agent.service
-    systemctl enable --now qwen3-tts-worker.service
+    systemctl enable --now ltx-video-worker.service
 else
     echo "systemd not available — falling back to nohup supervisor"
 
@@ -249,11 +235,11 @@ else
         value="${kv#*=}"
         WORKER_CMD+="export ${key}=$(printf '%q' "$value"); "
     done
-    WORKER_CMD+="exec $VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner"
+    WORKER_CMD+="exec $VENV_DIR/bin/python -m strands_agents.ltx_video_worker.runner"
 
-    cat > /usr/local/bin/qwen3-tts-supervisor.sh <<SUP
+    cat > /usr/local/bin/ltx-video-supervisor.sh <<SUP
 #!/usr/bin/env bash
-# Minimal non-systemd supervisor for infra-agent + qwen3-tts-worker.
+# Minimal non-systemd supervisor for infra-agent + ltx-video-worker.
 # Restarts either service if its PID disappears. Logs supervision events
 # to $SUPERVISOR_LOG.
 set -u
@@ -261,7 +247,7 @@ set -u
 WORK_DIR="$WORK_DIR"
 LOG_DIR="$LOG_DIR"
 INFRA_PID=/var/run/infra-agent.pid
-WORKER_PID=/var/run/qwen3-tts-worker.pid
+WORKER_PID=/var/run/ltx-video-worker.pid
 
 start_infra() {
     cd "\$WORK_DIR"
@@ -275,9 +261,9 @@ start_infra() {
 start_worker() {
     cd "\$WORK_DIR"
     nohup bash -c '$WORKER_CMD' \\
-        >> "\$LOG_DIR/qwen3-tts-worker.log" 2>&1 &
+        >> "\$LOG_DIR/ltx-video-worker.log" 2>&1 &
     echo \$! > "\$WORKER_PID"
-    echo "[\$(date -u +%FT%TZ)] started qwen3-tts-worker pid=\$(cat \$WORKER_PID)" \\
+    echo "[\$(date -u +%FT%TZ)] started ltx-video-worker pid=\$(cat \$WORKER_PID)" \\
         >> "$SUPERVISOR_LOG"
 }
 
@@ -301,11 +287,11 @@ while true; do
     sleep 5
 done
 SUP
-    chmod +x /usr/local/bin/qwen3-tts-supervisor.sh
+    chmod +x /usr/local/bin/ltx-video-supervisor.sh
 
-    nohup /usr/local/bin/qwen3-tts-supervisor.sh >> "$SUPERVISOR_LOG" 2>&1 &
-    echo $! > /var/run/qwen3-tts-supervisor.pid
-    echo "supervisor pid=$(cat /var/run/qwen3-tts-supervisor.pid)"
+    nohup /usr/local/bin/ltx-video-supervisor.sh >> "$SUPERVISOR_LOG" 2>&1 &
+    echo $! > /var/run/ltx-video-supervisor.pid
+    echo "supervisor pid=$(cat /var/run/ltx-video-supervisor.pid)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -320,10 +306,10 @@ for _ in $(seq 1 30); do
     sleep 1
 done
 
-echo "Waiting for qwen3-tts-worker health..."
+echo "Waiting for ltx-video-worker health..."
 for _ in $(seq 1 60); do
-    if curl -fsS "http://127.0.0.1:29231/health" >/dev/null 2>&1; then
-        echo "qwen3-tts-worker healthy"
+    if curl -fsS "http://127.0.0.1:29232/health" >/dev/null 2>&1; then
+        echo "ltx-video-worker healthy"
         break
     fi
     sleep 1

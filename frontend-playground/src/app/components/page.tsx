@@ -14,7 +14,7 @@ import { fetchComponents } from "@/lib/server-fetch";
 import { kindChipClass, kindLabel } from "@/lib/format";
 
 interface RowBucket {
-  readonly row: 1 | 2 | 3;
+  readonly row: 1 | 2 | 3 | 4;
   readonly title: string;
   readonly subtitle: string;
   readonly components: readonly ComponentSummary[];
@@ -23,17 +23,23 @@ interface RowBucket {
 function bucketByRow(
   components: readonly ComponentSummary[],
 ): readonly RowBucket[] {
-  const groups: Record<1 | 2 | 3, ComponentSummary[]> = {
+  const groups: Record<1 | 2 | 3 | 4, ComponentSummary[]> = {
     1: [],
     2: [],
     3: [],
+    4: [],
   };
   for (const component of components) {
-    if (component.row === 1 || component.row === 2 || component.row === 3) {
+    if (
+      component.row === 1 ||
+      component.row === 2 ||
+      component.row === 3 ||
+      component.row === 4
+    ) {
       groups[component.row].push(component);
     }
   }
-  for (const row of [1, 2, 3] as const) {
+  for (const row of [1, 2, 3, 4] as const) {
     groups[row].sort((a, b) => a.id.localeCompare(b.id));
   }
   return [
@@ -54,6 +60,13 @@ function bucketByRow(
       title: "Row 3 · Production & escalation",
       subtitle: "GPU production → assembly → escalation routing.",
       components: groups[3],
+    },
+    {
+      row: 4,
+      title: "Row 4 · Infrastructure",
+      subtitle:
+        "Per-VM services the pipeline rides on: guardian, worker registry, infra agent, worker VMs.",
+      components: groups[4],
     },
   ];
 }

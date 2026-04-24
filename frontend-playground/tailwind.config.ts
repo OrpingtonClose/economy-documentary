@@ -21,6 +21,7 @@ const config: Config = {
         "pg-amber": "#eab308",
         "pg-red": "#ef4444",
         "pg-accent": "#38bdf8",
+        "pg-infra": "#a78bfa",
       },
       fontFamily: {
         mono: [

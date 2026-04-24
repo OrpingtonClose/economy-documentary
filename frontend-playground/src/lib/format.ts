@@ -28,6 +28,8 @@ export function kindLabel(kind: ComponentKind): string {
       return "gate";
     case "graph":
       return "graph";
+    case "infra":
+      return "infra";
     default:
       return kind;
   }
@@ -50,6 +52,8 @@ export function kindChipClass(kind: ComponentKind): string {
       return "bg-pg-amber/20 text-pg-amber";
     case "graph":
       return "bg-pg-green/20 text-pg-green";
+    case "infra":
+      return "bg-pg-infra/20 text-pg-infra";
     default:
       return "bg-pg-surface text-pg-muted";
   }

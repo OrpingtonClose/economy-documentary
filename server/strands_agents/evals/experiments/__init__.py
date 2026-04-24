@@ -38,6 +38,36 @@ from strands_agents.evals.experiments.content_analyst import (
     build_content_analyst_experiment,
     content_analyst_cases,
 )
+from strands_agents.evals.experiments.infra_agent import (
+    INFRA_AGENT_EVALUATOR_THRESHOLDS,
+    build_infra_agent_experiment,
+    infra_agent_cases,
+    infra_agent_task,
+)
+from strands_agents.evals.experiments.infra_guardian import (
+    INFRA_GUARDIAN_EVALUATOR_THRESHOLDS,
+    build_infra_guardian_experiment,
+    infra_guardian_cases,
+    infra_guardian_task,
+)
+from strands_agents.evals.experiments.infra_ltx_video_worker import (
+    INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS,
+    build_infra_ltx_video_worker_experiment,
+    infra_ltx_video_worker_cases,
+    infra_ltx_video_worker_task,
+)
+from strands_agents.evals.experiments.infra_qwen3_tts_worker import (
+    INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS,
+    build_infra_qwen3_tts_worker_experiment,
+    infra_qwen3_tts_worker_cases,
+    infra_qwen3_tts_worker_task,
+)
+from strands_agents.evals.experiments.infra_worker_registry import (
+    INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS,
+    build_infra_worker_registry_experiment,
+    infra_worker_registry_cases,
+    infra_worker_registry_task,
+)
 from strands_agents.evals.experiments.escalation import (
     ActionEqualsEvaluator,
     HumanSummaryRequiredEvaluator,
@@ -103,6 +133,11 @@ __all__ = [
     "AUDIO_EVALUATOR_THRESHOLDS",
     "COHERENCE_EVALUATOR_THRESHOLDS",
     "CONTENT_ANALYST_EVALUATOR_THRESHOLDS",
+    "INFRA_AGENT_EVALUATOR_THRESHOLDS",
+    "INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
+    "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS",
+    "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS",
+    "INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS",
     "PRODUCTION_EVALUATOR_THRESHOLDS",
     "RECOVERY_EXPERIMENT_NAME",
     "SCENARIO_EVALUATOR_THRESHOLDS",
@@ -124,6 +159,11 @@ __all__ = [
     "build_escalation_contract_experiment",
     "build_escalation_experiment",
     "build_escalation_judge_experiment",
+    "build_infra_agent_experiment",
+    "build_infra_guardian_experiment",
+    "build_infra_ltx_video_worker_experiment",
+    "build_infra_qwen3_tts_worker_experiment",
+    "build_infra_worker_registry_experiment",
     "build_pipeline_experiment",
     "build_production_experiment",
     "build_recovery_classifier_contract_experiment",
@@ -142,6 +182,16 @@ __all__ = [
     "escalation_contract_task",
     "escalation_judge_task",
     "escalation_task",
+    "infra_agent_cases",
+    "infra_agent_task",
+    "infra_guardian_cases",
+    "infra_guardian_task",
+    "infra_ltx_video_worker_cases",
+    "infra_ltx_video_worker_task",
+    "infra_qwen3_tts_worker_cases",
+    "infra_qwen3_tts_worker_task",
+    "infra_worker_registry_cases",
+    "infra_worker_registry_task",
     "pipeline_task",
     "production_cases",
     "recovery_task",

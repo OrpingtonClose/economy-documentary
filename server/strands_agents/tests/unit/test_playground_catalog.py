@@ -21,7 +21,18 @@ from strands_agents.evals.experiments.playground_catalog import (
     build_playground_catalog_experiment,
     playground_catalog_task,
 )
-from strands_agents.playground import COMPONENT_IDS, iter_components
+from strands_agents.playground import (
+    COMPONENT_IDS,
+    INFRA_COMPONENT_IDS,
+    iter_components,
+)
+
+
+# All components surfaced to the playground UI: pipeline units (the
+# 15-row atlas) followed by infrastructure units (guardian, worker
+# registry, per-VM infra agent, worker VMs). The test suite asserts
+# the ordering because the UI groups by row in this order.
+ALL_COMPONENT_IDS: tuple[str, ...] = COMPONENT_IDS + INFRA_COMPONENT_IDS
 
 
 def test_subset_match_list_allows_trailing_actual_entries() -> None:
@@ -39,16 +50,36 @@ def test_subset_match_list_rejects_missing_expected_prefix() -> None:
     assert "length" in reason
 
 
-def test_registry_enumerates_all_fifteen_components_in_atlas_order() -> None:
+def test_registry_enumerates_pipeline_components_in_atlas_order() -> None:
     ids = tuple(c.id for c in iter_components())
-    assert ids == COMPONENT_IDS
-    assert len(ids) == 15
+    pipeline_ids = tuple(i for i in ids if not i.startswith("infra_"))
+    assert pipeline_ids == COMPONENT_IDS
+    assert len(pipeline_ids) == 15
+
+
+def test_registry_enumerates_infra_components_after_pipeline() -> None:
+    ids = tuple(c.id for c in iter_components())
+    infra_ids = tuple(i for i in ids if i.startswith("infra_"))
+    assert infra_ids == INFRA_COMPONENT_IDS
+    # Pipeline rows land first so the UI can group by row without
+    # re-sorting.
+    assert ids == ALL_COMPONENT_IDS
 
 
 def test_every_component_declares_kind_and_row() -> None:
     for component in iter_components():
-        assert component.kind in {"leaf", "tool", "loop", "graph", "gate"}
-        assert component.row in {1, 2, 3}
+        assert component.kind in {
+            "leaf",
+            "tool",
+            "loop",
+            "graph",
+            "gate",
+            "infra",
+        }
+        if component.kind == "infra":
+            assert component.row == 4
+        else:
+            assert component.row in {1, 2, 3}
         assert component.title
         assert component.summary
 
@@ -56,11 +87,11 @@ def test_every_component_declares_kind_and_row() -> None:
 def test_catalog_experiment_cases_cover_every_component() -> None:
     exp = build_playground_catalog_experiment()
     # 1 list-endpoint case + 2 per component (detail + cases) + 1
-    # 404 case = 1 + 30 + 1 = 32.
-    assert len(exp.cases) == 32
+    # 404 case. 20 components (15 pipeline + 5 infra) → 1 + 40 + 1 = 42.
+    assert len(exp.cases) == 42
     detail_cases = {c.name for c in exp.cases if c.name.startswith("detail_")}
     cases_cases = {c.name for c in exp.cases if c.name.startswith("cases_")}
-    for component_id in COMPONENT_IDS:
+    for component_id in ALL_COMPONENT_IDS:
         assert f"detail_{component_id}" in detail_cases
         assert f"cases_{component_id}" in cases_cases
 
