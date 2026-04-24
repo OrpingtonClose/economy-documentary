@@ -227,6 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     cfg = _resolve_config(args)
 
+    try:
+        import uvicorn  # noqa: PLC0415
+    except ImportError as exc:
+        logger.error("error=<%s> | uvicorn not installed, refusing to boot", exc)
+        return 1
+
     telemetry = ResourceTelemetry(
         vram_prober=nvidia_smi_prober,
         disk_prober=shutil_disk_prober,
@@ -284,12 +290,6 @@ def main(argv: list[str] | None = None) -> int:
         telemetry=telemetry,
         bump_client=bump_client,
     )
-
-    try:
-        import uvicorn  # noqa: PLC0415
-    except ImportError as exc:
-        logger.error("error=<%s> | uvicorn not installed, refusing to boot", exc)
-        return 1
 
     try:
         uvicorn.run(app, host="0.0.0.0", port=WORKER_PORT, log_level="info")
