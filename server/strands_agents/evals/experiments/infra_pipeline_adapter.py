@@ -400,10 +400,12 @@ def infra_pipeline_adapter_task(
         details.append(translated.detail)
         summaries.append(translated.summary)
     return {
-        "kinds": kinds,
-        "details": details,
-        "summaries": summaries,
-        "event_count": len(events),
+        "output": {
+            "kinds": kinds,
+            "details": details,
+            "summaries": summaries,
+            "event_count": len(events),
+        },
     }
 
 
