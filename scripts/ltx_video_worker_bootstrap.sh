@@ -43,10 +43,11 @@ PLAYGROUND_BACKEND_URL="${PLAYGROUND_BACKEND_URL:-}"
 REPO_URL="${REPO_URL:-https://github.com/OrpingtonClose/economy-documentary.git}"
 REPO_REF="${REPO_REF:-main}"
 
-# Lightricks/LTX-2 monorepo: where the official ltx_pipelines.distilled
-# CLI lives. Pinned to a specific commit so the engine subprocess
-# wrapper sees a known argv shape. Override LTX2_REPO_REF if a security
-# patch ships and we need to bump.
+# Lightricks/LTX-2 monorepo: where the official
+# ``ltx_pipelines.ti2vid_one_stage`` BASIC CLI lives. Pinned to a
+# specific commit so the engine subprocess wrapper sees a known argv
+# shape. Override LTX2_REPO_REF if a security patch ships and we need
+# to bump.
 LTX2_REPO_URL="${LTX2_REPO_URL:-https://github.com/Lightricks/LTX-2.git}"
 LTX2_REPO_REF="${LTX2_REPO_REF:-41d924371612b692c0fd1e4d9d94c3dfb3c02cb3}"
 LTX2_REPO_DIR="${LTX_VIDEO_LTX2_ROOT:-/opt/ltx-2-repo}"
@@ -67,8 +68,11 @@ LTX2_PYTHON_VERSION="${LTX2_PYTHON_VERSION:-3.12}"
 # and refuses to render on a hash mismatch.
 LTX_VIDEO_HF_REPO="${LTX_VIDEO_HF_REPO:-Lightricks/LTX-2.3}"
 LTX_VIDEO_HF_REVISION="${LTX_VIDEO_HF_REVISION:-76730e634e70a28f4e8d51f5e29c08e40e2d8e74}"
-LTX_VIDEO_GEMMA_HF_REPO="${LTX_VIDEO_GEMMA_HF_REPO:-google/gemma-3-12b-it-qat-q4_0-unquantized}"
-LTX_VIDEO_GEMMA_HF_REVISION="${LTX_VIDEO_GEMMA_HF_REVISION:-68f7ee4fbd59087436ada77ed2d62f373fdd4482}"
+# The official ``google/gemma-3-12b-it-qat-q4_0-unquantized`` repo is
+# gated. Lightricks publishes a byte-identical, non-gated mirror under
+# their own org — used here so the bootstrap doesn't need an HF token.
+LTX_VIDEO_GEMMA_HF_REPO="${LTX_VIDEO_GEMMA_HF_REPO:-Lightricks/gemma-3-12b-it-qat-q4_0-unquantized}"
+LTX_VIDEO_GEMMA_HF_REVISION="${LTX_VIDEO_GEMMA_HF_REVISION:-d62fe4f1995ade703b49a0f3c0d0f161237ef437}"
 
 echo "=== LTX-Video worker bootstrap: WORKER_ID=$WORKER_ID ==="
 echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -120,7 +124,7 @@ pip install fastapi uvicorn requests numpy "huggingface_hub>=0.24"
 # uv (Python package manager) + Lightricks/LTX-2 monorepo
 #
 # LTX-2.3 ships only via the Lightricks/LTX-2 monorepo's
-# ``ltx_pipelines.distilled`` two-stage pipeline. ``uv sync`` resolves
+# ``ltx_pipelines.ti2vid_one_stage`` BASIC pipeline. ``uv sync`` resolves
 # the workspace's pyproject.toml, including PyTorch 2.7 / cu129
 # wheels, into a self-contained venv at ``$LTX2_REPO_DIR/.venv``.
 # The worker subprocess invokes that interpreter via
@@ -156,8 +160,8 @@ if [ ! -x "$LTX_VIDEO_LTX2_PYTHON" ]; then
 fi
 
 echo "ltx-2 venv interpreter: $LTX_VIDEO_LTX2_PYTHON"
-"$LTX_VIDEO_LTX2_PYTHON" -c "import ltx_pipelines.distilled; print('ltx_pipelines.distilled importable')" || {
-    echo "ERROR: ltx_pipelines.distilled not importable from $LTX_VIDEO_LTX2_PYTHON" >&2
+"$LTX_VIDEO_LTX2_PYTHON" -c "import ltx_pipelines.ti2vid_one_stage; print('ltx_pipelines.ti2vid_one_stage importable')" || {
+    echo "ERROR: ltx_pipelines.ti2vid_one_stage not importable from $LTX_VIDEO_LTX2_PYTHON" >&2
     exit 1
 }
 
@@ -166,8 +170,9 @@ echo "ltx-2 venv interpreter: $LTX_VIDEO_LTX2_PYTHON"
 #
 # ``HF_ENDPOINT`` defaults to hf-mirror.com because some Vast.ai
 # datacenter IP blocks have no TCP egress to huggingface.co. The mirror
-# serves identical bytes for these manifests. ``HF_TOKEN`` (if set in
-# env) lets us pull the gated Gemma-3 license-accepted weights.
+# serves identical bytes for these manifests. Both repos are public /
+# non-gated (LTX-2.3 + Lightricks' Gemma-3 mirror), so no HF_TOKEN is
+# required — but we forward it if the operator chooses to set one.
 # ---------------------------------------------------------------------------
 HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
@@ -180,12 +185,14 @@ echo "Pre-downloading $LTX_VIDEO_HF_REPO at $LTX_VIDEO_HF_REVISION ..."
 "$VENV_DIR/bin/python" - <<PY
 import os
 from huggingface_hub import snapshot_download
+# BASIC pipeline reads the full base checkpoint only; distilled
+# checkpoints / spatial-temporal upscalers / distilled LoRAs are not
+# loaded by ``ti2vid_one_stage`` so we skip downloading them.
 snapshot_download(
     repo_id="$LTX_VIDEO_HF_REPO",
     revision="$LTX_VIDEO_HF_REVISION",
     allow_patterns=[
-        "ltx-2.3-22b-distilled-1.1.safetensors",
-        "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+        "ltx-2.3-22b-dev.safetensors",
     ],
     token=os.environ.get("HF_TOKEN"),
 )

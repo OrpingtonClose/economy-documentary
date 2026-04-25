@@ -1,25 +1,27 @@
 """Real LTX-Video engine wrapper for LTX-2.3.
 
 Production engine for the LTX-Video worker. Drives Lightricks' own
-``ltx_pipelines.distilled`` two-stage CLI from
-https://github.com/Lightricks/LTX-2 — the only supported entrypoint
-for the LTX-2.3 22B-distilled model.
+``ltx_pipelines.ti2vid_one_stage`` BASIC single-stage CLI from
+https://github.com/Lightricks/LTX-2 — the simplest supported
+entrypoint for the LTX-2.3 22B base (``-dev``) model. Per the user's
+standing rule, this BASIC variant is the mandatory path: one
+checkpoint, one denoising stage, no manual upscaler chaining.
 
 Why the subprocess shape
 ------------------------
 
 LTX-2.3 is **not** a drop-in for ``diffusers``' ``LTXPipeline`` —
-the official ``ltx_pipelines.distilled`` pipeline is a two-stage
+the official ``ltx_pipelines.ti2vid_one_stage`` pipeline is a custom
 class wired against the ``ltx-core`` building blocks (Gemma-3 prompt
-encoder, image conditioner, video upsampler, audio decoder, …). It
-expects an explicit ``--gemma-root`` directory and reads the
-distilled checkpoint and spatial upscaler safetensors from explicit
-file paths — not from a Hugging Face repo id.
+encoder, image conditioner, video / audio decoders, …). It expects
+an explicit ``--gemma-root`` directory and reads the base checkpoint
+safetensors from an explicit file path — not from a Hugging Face
+repo id.
 
 Rather than fork/import the pipeline class into our worker process
 (which would lock us to a specific monorepo commit and pollute the
 worker's import graph), we shell out to ``python -m
-ltx_pipelines.distilled`` as a subprocess. The bootstrap script
+ltx_pipelines.ti2vid_one_stage`` as a subprocess. The bootstrap script
 (:mod:`scripts.ltx_video_worker_bootstrap`) is responsible for
 ``uv sync``-ing the Lightricks/LTX-2 monorepo into ``LTX_VIDEO_LTX2_ROOT``
 so the module is importable in that subprocess.
@@ -29,16 +31,16 @@ Anti-drift hashing
 
 ``verify_pin`` is called on **both** :data:`LTX_VIDEO_PIN` (the
 LTX-2.3 weights) and :data:`LTX_VIDEO_GEMMA_PIN` (the Gemma-3-12B
-text encoder weights) before every render. Mismatch on either side
-raises :class:`ModelPinMismatchError` and the render fails closed —
-no fallback, no warning-only.
+text encoder weights, served by Lightricks' own non-gated re-host)
+before every render. Mismatch on either side raises
+:class:`ModelPinMismatchError` and the render fails closed — no
+fallback, no warning-only.
 
 Sizing notes
 ------------
 
-LTX-2.3 22B-distilled at H200 default settings (5 distilled sigmas,
-704×512 stage-1 → 1408×1024 stage-2, 121 frames @ 24 fps) renders a
-~5 s clip in roughly 30–60 s of wall clock. With ``--quantization
+LTX-2.3 22B-dev at LTX-2 defaults renders a multi-second clip in
+roughly 60–120 s of wall clock on H200. With ``--quantization
 fp8-cast`` and ``--offload cpu`` the same clip fits in ~24 GB of
 VRAM on a single H100/A100; on H200 we leave both off for speed.
 
@@ -79,10 +81,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_ID = LTX_VIDEO_PIN.model_id
 ENGINE_ID = "ltx-video"
 
-# Filenames inside the LTX-2.3 snapshot dir that the distilled CLI
-# expects on ``--distilled-checkpoint-path`` / ``--spatial-upsampler-path``.
-_DISTILLED_CHECKPOINT_FILE = "ltx-2.3-22b-distilled-1.1.safetensors"
-_SPATIAL_UPSAMPLER_FILE = "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+# Filename inside the LTX-2.3 snapshot dir that ``ti2vid_one_stage``
+# expects on ``--checkpoint-path``. The BASIC pipeline loads a single
+# full base checkpoint — no distilled checkpoint, no spatial upscaler.
+_BASE_CHECKPOINT_FILE = "ltx-2.3-22b-dev.safetensors"
 
 
 def _round_to_multiple(value: int, multiple: int) -> int:
@@ -147,7 +149,7 @@ def _read_video_duration_s(path: Path) -> float | None:
 
 
 class LTXVideoEngine:
-    """Production engine driving ``ltx_pipelines.distilled`` via subprocess.
+    """Production engine driving ``ltx_pipelines.ti2vid_one_stage`` via subprocess.
 
     The model identity (``model_id`` and HF revision) is **not**
     configurable — it is locked by :data:`LTX_VIDEO_PIN`. Only
@@ -236,16 +238,14 @@ class LTXVideoEngine:
         fps: int,
         seed: int | None,
     ) -> list[str]:
-        """Assemble the ``python -m ltx_pipelines.distilled`` argv."""
+        """Assemble the ``python -m ltx_pipelines.ti2vid_one_stage`` argv."""
         python_bin = os.environ.get("LTX_VIDEO_LTX2_PYTHON", sys.executable)
         argv: list[str] = [
             python_bin,
             "-m",
-            "ltx_pipelines.distilled",
-            "--distilled-checkpoint-path",
-            str(ltx_dir / _DISTILLED_CHECKPOINT_FILE),
-            "--spatial-upsampler-path",
-            str(ltx_dir / _SPATIAL_UPSAMPLER_FILE),
+            "ltx_pipelines.ti2vid_one_stage",
+            "--checkpoint-path",
+            str(ltx_dir / _BASE_CHECKPOINT_FILE),
             "--gemma-root",
             str(gemma_dir),
             "--prompt",
@@ -281,7 +281,7 @@ class LTXVideoEngine:
         return argv
 
     def render(self, request: RenderRequest) -> RenderResult:
-        """Render one clip with the real LTX-2.3 distilled pipeline."""
+        """Render one clip with the real LTX-2.3 BASIC one-stage pipeline."""
         if not request.prompt.strip():
             raise VideoEngineError("prompt must be non-empty")
         if request.duration_s <= 0:
@@ -333,7 +333,7 @@ class LTXVideoEngine:
             )
             logger.info(
                 "prompt_chars=<%d>, width=<%d>, height=<%d>, num_frames=<%d>, "
-                "fps=<%d>, cwd=<%s>, argv_head=<%s> | ltx-2.3 distilled subprocess begin",
+                "fps=<%d>, cwd=<%s>, argv_head=<%s> | ltx-2.3 ti2vid_one_stage subprocess begin",
                 len(request.prompt),
                 width,
                 height,
@@ -352,19 +352,19 @@ class LTXVideoEngine:
                 )
             except OSError as exc:
                 raise VideoEngineError(
-                    f"failed to launch ltx-2.3 distilled subprocess: {exc}"
+                    f"failed to launch ltx-2.3 ti2vid_one_stage subprocess: {exc}"
                 ) from exc
             if proc.returncode != 0:
                 # Truncate stderr so a multi-MB python traceback doesn't
                 # blow up the worker log line.
                 stderr_tail = proc.stderr[-4000:] if proc.stderr else ""
                 raise VideoEngineError(
-                    "ltx-2.3 distilled subprocess failed: "
+                    "ltx-2.3 ti2vid_one_stage subprocess failed: "
                     f"returncode={proc.returncode}, stderr_tail={stderr_tail!r}"
                 )
             if not output_path.is_file():
                 raise VideoEngineError(
-                    "ltx-2.3 distilled subprocess returned 0 but produced no "
+                    "ltx-2.3 ti2vid_one_stage subprocess returned 0 but produced no "
                     f"output mp4 at {output_path!s}"
                 )
             mp4_bytes = _read_mp4_bytes(output_path)

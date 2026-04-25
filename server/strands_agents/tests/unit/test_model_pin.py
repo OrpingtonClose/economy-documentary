@@ -258,29 +258,33 @@ def test_ltx_video_pin_targets_ltx_2_3() -> None:
     """The video pin MUST point at LTX-2.3 (mandatory per user rule).
 
     Required-files set is restricted to the safetensors that the
-    ``ltx_pipelines.distilled`` two-stage pipeline actually loads.
-    Other LTX-2.3 assets exist in the repo but are not read by the
-    distilled pipeline, so verifying them every startup would burn
-    ~70 GB of disk reads for no integrity gain.
+    ``ltx_pipelines.ti2vid_one_stage`` BASIC pipeline actually loads:
+    a single base checkpoint. Other LTX-2.3 assets (distilled
+    checkpoints, spatial / temporal upscalers, distilled LoRAs)
+    exist in the repo but are not read by the BASIC pipeline, so
+    verifying them every startup would burn ~70 GB of disk reads
+    for no integrity gain.
     """
     assert LTX_VIDEO_PIN.model_id == "Lightricks/LTX-2.3"
     expected_files = {
-        "ltx-2.3-22b-distilled-1.1.safetensors",
-        "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+        "ltx-2.3-22b-dev.safetensors",
     }
     assert set(LTX_VIDEO_PIN.required_files) == expected_files
 
 
 def test_ltx_video_gemma_pin_targets_unquantized_gemma_3_12b() -> None:
-    """The Gemma pin MUST point at the unquantized Gemma-3-12B weights.
+    """The Gemma pin MUST point at Lightricks' non-gated Gemma-3-12B mirror.
 
     LTX-2.3's ``PromptEncoder`` requires Gemma-3-12B as its text
-    encoder. The Lightricks/LTX-2 monorepo's ``DistilledPipeline``
-    receives this via ``--gemma-root``; the worker passes the
-    snapshot dir verified by this pin.
+    encoder. The official ``google/gemma-3-12b-it-qat-q4_0-unquantized``
+    repo is gated, but Lightricks publishes a byte-identical re-host
+    at ``Lightricks/gemma-3-12b-it-qat-q4_0-unquantized`` that is
+    pullable without a license-acceptance token. The BASIC
+    ``ti2vid_one_stage`` pipeline receives the snapshot dir verified
+    by this pin via ``--gemma-root``.
     """
     assert LTX_VIDEO_GEMMA_PIN.model_id == (
-        "google/gemma-3-12b-it-qat-q4_0-unquantized"
+        "Lightricks/gemma-3-12b-it-qat-q4_0-unquantized"
     )
     # Gemma-3-12B ships as 5 sharded safetensors files.
     expected_files = {

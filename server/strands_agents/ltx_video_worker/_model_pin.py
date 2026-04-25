@@ -1,15 +1,19 @@
 """Frozen model pins for the LTX-Video worker.
 
 Locks two production models to specific Hugging Face commits, with
-SHA256s for every safetensors file the LTX-2.3 distilled two-stage
-pipeline reads at inference time:
+SHA256s for every safetensors file the LTX-2.3 BASIC one-stage
+pipeline (``ltx_pipelines.ti2vid_one_stage`` from the
+Lightricks/LTX-2 monorepo) reads at inference time:
 
-* :data:`LTX_VIDEO_PIN` — ``Lightricks/LTX-2.3`` weights (the
-  22B-distilled checkpoint and the spatial x2 upscaler).
-* :data:`LTX_VIDEO_GEMMA_PIN` — ``google/gemma-3-12b-it-qat-q4_0-unquantized``
-  text encoder weights (5 sharded safetensors). LTX-2.3's
-  ``PromptEncoder`` loads these via ``--gemma-root`` per the
-  Lightricks/LTX-2 monorepo's ``ltx_pipelines.distilled`` CLI.
+* :data:`LTX_VIDEO_PIN` — ``Lightricks/LTX-2.3`` weights, the full
+  ``ltx-2.3-22b-dev.safetensors`` base checkpoint that the BASIC
+  single-stage pipeline loads via ``--checkpoint-path``.
+* :data:`LTX_VIDEO_GEMMA_PIN` — the Lightricks-hosted, non-gated
+  re-publish ``Lightricks/gemma-3-12b-it-qat-q4_0-unquantized`` text
+  encoder weights (5 sharded safetensors, byte-identical to
+  ``google/gemma-3-12b-it-qat-q4_0-unquantized`` but pullable
+  without an HF license token). LTX-2.3's ``PromptEncoder`` loads
+  these via ``--gemma-root``.
 
 Per the user's standing rule (``docs/strands-migration/AGENTS.md`` and
 slice 9d):
@@ -22,20 +26,20 @@ slice 9d):
 * The hash check runs **always**, before any inference. There is no
   ``--skip-pin-check`` flag and no env-var override.
 
-Required-files set is restricted to the bytes the
-``ltx_pipelines.distilled`` two-stage pipeline actually reads (one
-distilled checkpoint + one spatial upscaler + the Gemma text encoder
-shards). Other LTX-2.3 assets — the non-distilled ``dev``
-checkpoint, the ``distilled-lora-384`` LoRA, the temporal upscaler —
-exist in the HF repo but are not loaded by ``DistilledPipeline``, so
-verifying them every startup would burn ~70 GB of disk reads for no
-integrity gain. Future pipeline swaps (e.g. to ``ti2vid_two_stages``)
-should add the new files to this map.
+Required-files set is restricted to the bytes the BASIC one-stage
+pipeline actually reads (one base checkpoint + the Gemma text encoder
+shards). Other LTX-2.3 assets — the distilled / distilled-1.1
+checkpoints, the spatial / temporal upscalers, the distilled LoRAs —
+exist in the HF repo but are not loaded by
+``TI2VidOneStagePipeline``, so verifying them every startup would
+burn ~70 GB of disk reads for no integrity gain. Future pipeline
+swaps (e.g. to ``ti2vid_two_stages``) should add the new files to
+this map.
 
 Hashes were sourced from the LFS ``oid sha256`` field returned by
 
 * ``GET https://huggingface.co/api/models/Lightricks/LTX-2.3/tree/<rev>``
-* ``GET https://huggingface.co/api/models/google/gemma-3-12b-it-qat-q4_0-unquantized/tree/<rev>``
+* ``GET https://huggingface.co/api/models/Lightricks/gemma-3-12b-it-qat-q4_0-unquantized/tree/<rev>``
 
 at the pinned commits below.
 """
@@ -51,11 +55,8 @@ LTX_VIDEO_PIN: ModelPin = ModelPin(
     revision="76730e634e70a28f4e8d51f5e29c08e40e2d8e74",
     required_files=MappingProxyType(
         {
-            "ltx-2.3-22b-distilled-1.1.safetensors": (
-                "b33b7fe4bbfe084f484be4aaf90b0f1d95dca20d403ac4c0e037eb8c4f0af7cc"
-            ),
-            "ltx-2.3-spatial-upscaler-x2-1.1.safetensors": (
-                "5f416311fa8172b65af67530758964708d29a317b830d689a51143b7f91913ed"
+            "ltx-2.3-22b-dev.safetensors": (
+                "7ab7225325bc403448ea84b6db2269811a880e5118cd2ee2b6282a93d585016f"
             ),
         }
     ),
@@ -64,8 +65,8 @@ LTX_VIDEO_PIN: ModelPin = ModelPin(
 
 
 LTX_VIDEO_GEMMA_PIN: ModelPin = ModelPin(
-    model_id="google/gemma-3-12b-it-qat-q4_0-unquantized",
-    revision="68f7ee4fbd59087436ada77ed2d62f373fdd4482",
+    model_id="Lightricks/gemma-3-12b-it-qat-q4_0-unquantized",
+    revision="d62fe4f1995ade703b49a0f3c0d0f161237ef437",
     required_files=MappingProxyType(
         {
             "model-00001-of-00005.safetensors": (
