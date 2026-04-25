@@ -230,6 +230,28 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
         #: receive ``name`` in its kwargs (langchain version skew),
         #: so we cache it at start.
         self._tool_names: dict[str, str] = {}
+        #: Monotonic count of every ``on_tool_start`` observed across
+        #: the run, including those that later errored. This is the
+        #: number reported as ``tool_call_count`` in the terminal
+        #: payload — it is the total tools observed, not the
+        #: still-in-flight count (which is exposed separately via
+        #: :attr:`inflight_tool_count`).
+        self._total_calls: int = 0
+
+    @property
+    def total_calls(self) -> int:
+        """Total tool-start callbacks observed during this run."""
+        return self._total_calls
+
+    @property
+    def inflight_tool_count(self) -> int:
+        """Tools still open at the moment of inspection.
+
+        Healthy runs settle this at 0 by the time :meth:`run`
+        returns; a non-zero value indicates a callback leak (start
+        without a matching end / error).
+        """
+        return len(self._starts)
 
     async def on_tool_start(
         self,
@@ -248,6 +270,7 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
             tool_name = str(serialized.get("name") or "unknown")
             self._starts[str(run_id)] = time.perf_counter()
             self._tool_names[str(run_id)] = tool_name
+            self._total_calls += 1
             await self._stage.transition_to(_stage_for_tool(tool_name))
             await _emit_translated(
                 self._stream,
@@ -465,7 +488,7 @@ class LivePipelineRun:
                 state = await self.agent.ainvoke(command, config=config)
 
             await tracker.close_open()
-            tool_count = handler_call_count(handler)
+            tool_count = handler.total_calls
             final_mp4_b2_url = _scrape_final_mp4_url(state)
             await _emit_translated(
                 stream,
@@ -507,6 +530,8 @@ class LivePipelineRun:
             "stage_count": len(PIPELINE_STAGES),
             "approval_gate_count": gate_count,
             "tool_call_count": tool_count,
+            "inflight_tool_count": handler.inflight_tool_count,
+            "event_count": len(stream.snapshot()),
             "elapsed_ms": elapsed_ms,
             "final_mp4_b2_url": final_mp4_b2_url,
             "run_dir": str(self.run_dir),
@@ -696,15 +721,13 @@ def _placeholder_mp4_url(topic: str) -> str:
 
 
 def handler_call_count(handler: _PipelineCallbackHandler) -> int:
-    """Best-effort tool-call count drawn from the callback handler.
+    """Total tool-start callbacks observed during the run.
 
-    The handler tracks one entry per in-flight call; once tools
-    finish the entry pops, so this number reflects "open at the
-    moment of close" — almost always zero for a healthy run. The
-    runner reports the value primarily so a leak (open tools at
-    terminal) is visible in the terminal payload.
+    Thin alias over :attr:`_PipelineCallbackHandler.total_calls`,
+    kept so external test helpers that imported the function name
+    keep working. Use the attribute directly inside the runner.
     """
-    return len(handler._starts)
+    return handler.total_calls
 
 
 __all__ = [
