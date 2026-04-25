@@ -1466,4 +1466,242 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
     )
 
 
+# --------------------------------------------------------------------------
+# Pipeline runs (slice 8) — drives the documentary pipeline end-to-end
+# from the same RunStream surface that powers /components.
+#
+# Until slice 9 attaches the real orchestrator, the dispatcher uses
+# the deterministic ``SimulatedPipelineRun`` from slice 7 so the
+# wire (form → backend → SSE → stage ribbon → terminal MP4) can be
+# exercised without GPUs.
+# --------------------------------------------------------------------------
+
+
+# Minimum / maximum target durations the simulator accepts. Real
+# documentaries fall in roughly the 30s..600s window; clamping at the
+# API surface stops a 1-second probe or a 10-hour typo from reaching
+# the stream.
+_PIPELINE_MIN_DURATION_SEC: int = 30
+_PIPELINE_MAX_DURATION_SEC: int = 600
+_PIPELINE_TOPIC_MAX_LEN: int = 200
+_PIPELINE_LANGUAGE_MAX_LEN: int = 16
+
+#: Component id used for pipeline runs in the run registry. Distinct
+#: from the per-component ids so ``GET /runs/<id>`` can disambiguate
+#: a pipeline run from a c01..c15 / infra component run.
+PIPELINE_RUN_COMPONENT_ID: str = "pipeline"
+
+
+class StartPipelineRunRequest(BaseModel):
+    """Body for ``POST /playground/pipeline/runs``.
+
+    Mirrors the documentary pipeline's user-prompt surface: topic,
+    target duration, and language. Defaults match the orchestrator's
+    own defaults so a frontend can submit an empty form and still
+    get a sensible run.
+    """
+
+    topic: str = Field(default="The Federal Reserve")
+    target_duration_sec: int = Field(default=60)
+    language: str = Field(default="en")
+
+
+def _normalise_pipeline_request(
+    request: StartPipelineRunRequest,
+) -> tuple[str, int, str]:
+    """Validate + clamp pipeline-run inputs, raising HTTPException on bad input.
+
+    Returns the cleaned ``(topic, target_duration_sec, language)``
+    triple ready to pass to :class:`SimulatedPipelineRun`.
+    """
+    topic = (request.topic or "").strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="topic is required")
+    if len(topic) > _PIPELINE_TOPIC_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"topic too long: {len(topic)} chars "
+                f"(max {_PIPELINE_TOPIC_MAX_LEN})"
+            ),
+        )
+    duration = int(request.target_duration_sec)
+    if (
+        duration < _PIPELINE_MIN_DURATION_SEC
+        or duration > _PIPELINE_MAX_DURATION_SEC
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"target_duration_sec out of range: {duration} "
+                f"(allowed {_PIPELINE_MIN_DURATION_SEC}.."
+                f"{_PIPELINE_MAX_DURATION_SEC})"
+            ),
+        )
+    language = (request.language or "en").strip() or "en"
+    if len(language) > _PIPELINE_LANGUAGE_MAX_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"language tag too long: {len(language)} chars "
+                f"(max {_PIPELINE_LANGUAGE_MAX_LEN})"
+            ),
+        )
+    return topic, duration, language
+
+
+async def _dispatch_pipeline_run(
+    *,
+    stream: RunStream,
+    topic: str,
+    target_duration_sec: int,
+    language: str,
+) -> None:
+    """Drive a SimulatedPipelineRun against ``stream`` and close it.
+
+    Uses the slice-7 :class:`SimulatedPipelineRun` so events match the
+    real orchestrator's shape. Slice 9 will swap this in for the
+    real driver — the route surface stays the same.
+    """
+    from strands_agents.playground.pipeline_adapter import (
+        SimulatedPipelineRun,
+    )
+
+    loop = asyncio.get_running_loop()
+    stream.attach_loop(loop)
+
+    run_span_cm = _start_run_root_span(stream)
+
+    terminal: dict[str, Any] = {
+        "status": RUN_STATUS_TASK_ERROR,
+        "component_id": stream.component_id,
+        "case_name": stream.case_name,
+        "error": "pipeline run failed with an unexpected internal error",
+        "error_class": "UnexpectedError",
+        "output": None,
+        "trajectory": None,
+    }
+    try:
+        run_started = time.perf_counter()
+        runner = SimulatedPipelineRun(
+            topic=topic,
+            target_duration_sec=target_duration_sec,
+            language=language,
+            # Small per-event delay so the UI sees a progress-shaped
+            # timeline rather than a wall of events in one frame.
+            per_event_delay_s=0.15,
+        )
+        result = await runner.run(stream)
+        elapsed_ms = int((time.perf_counter() - run_started) * 1000)
+        await stream.emit(
+            "run.ok",
+            "pipeline run completed",
+            detail={
+                "elapsed_ms": elapsed_ms,
+                "stage_count": result.get("stage_count"),
+                "event_count": result.get("event_count"),
+                "final_mp4_b2_url": result.get("final_mp4_b2_url"),
+            },
+        )
+        terminal = {
+            "status": RUN_STATUS_OK,
+            "component_id": stream.component_id,
+            "case_name": stream.case_name,
+            "output": result,
+            "trajectory": None,
+        }
+    except asyncio.CancelledError:
+        await stream.emit("run.cancelled", "pipeline run cancelled")
+        terminal = {
+            "status": "CANCELLED",
+            "component_id": stream.component_id,
+            "case_name": stream.case_name,
+            "output": None,
+            "trajectory": None,
+        }
+        raise
+    except Exception as exc:  # noqa: BLE001 — surface to UI
+        logger.exception(
+            "pipeline run failed: topic=%s duration=%d", topic, target_duration_sec
+        )
+        await stream.emit(
+            "run.error",
+            f"{type(exc).__name__}: {exc}",
+            detail={
+                "status": RUN_STATUS_TASK_ERROR,
+                "error_class": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+        terminal = {
+            "status": RUN_STATUS_TASK_ERROR,
+            "component_id": stream.component_id,
+            "case_name": stream.case_name,
+            "error": str(exc),
+            "error_class": type(exc).__name__,
+            "output": None,
+            "trajectory": None,
+        }
+    finally:
+        if run_span_cm is not None:
+            try:
+                run_span_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 — telemetry must never crash the run
+                logger.debug("pipeline run span close failed", exc_info=True)
+        await stream.close(terminal=terminal)
+
+
+@router.post("/pipeline/runs", response_class=JSONResponse)
+async def start_pipeline_run(
+    request: StartPipelineRunRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    """Allocate a pipeline run, kick off the simulator, return immediately.
+
+    The frontend ``/pipeline`` page submits a topic / duration /
+    language form here, then subscribes to the same SSE surface as
+    ``/components`` runs:
+
+    * ``GET /playground/runs/<run_id>/events`` — live event stream.
+    * ``GET /playground/runs/<run_id>``        — polling fallback.
+
+    Until slice 9, the dispatcher runs :class:`SimulatedPipelineRun`
+    so the wire stays exercised end-to-end without GPU spend.
+    """
+    topic, duration, language = _normalise_pipeline_request(request)
+    case_name = "simulated_run"
+
+    registry = get_registry()
+    stream = registry.new_run(
+        component_id=PIPELINE_RUN_COMPONENT_ID, case_name=case_name
+    )
+    await stream.emit(
+        "run.dispatched",
+        f"queued pipeline run: {topic!r} ({duration}s, {language})",
+        detail={
+            "component_id": PIPELINE_RUN_COMPONENT_ID,
+            "topic": topic,
+            "target_duration_sec": duration,
+            "language": language,
+        },
+    )
+    background_tasks.add_task(
+        _dispatch_pipeline_run,
+        stream=stream,
+        topic=topic,
+        target_duration_sec=duration,
+        language=language,
+    )
+    return {
+        "run_id": stream.run_id,
+        "component_id": PIPELINE_RUN_COMPONENT_ID,
+        "case_name": case_name,
+        "topic": topic,
+        "target_duration_sec": duration,
+        "language": language,
+        "events_url": f"/playground/runs/{stream.run_id}/events",
+        "state_url": f"/playground/runs/{stream.run_id}",
+    }
+
+
 __all__ = ["router"]

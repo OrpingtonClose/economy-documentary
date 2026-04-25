@@ -317,3 +317,26 @@ export interface StartRunResponse {
   readonly events_url: string;
   readonly state_url: string;
 }
+
+/**
+ * Body for ``POST /playground/pipeline/runs`` — the entry point for
+ * the documentary pipeline orchestration page. Mirrors
+ * :class:`StartPipelineRunRequest` in ``server/playground.py``.
+ */
+export interface StartPipelineRunBody {
+  readonly topic: string;
+  readonly target_duration_sec: number;
+  readonly language: string;
+}
+
+/** Mirror of the ``start_pipeline_run`` response envelope. */
+export interface StartPipelineRunResponse {
+  readonly run_id: string;
+  readonly component_id: ComponentId;
+  readonly case_name: string;
+  readonly topic: string;
+  readonly target_duration_sec: number;
+  readonly language: string;
+  readonly events_url: string;
+  readonly state_url: string;
+}
