@@ -123,10 +123,18 @@ def _hash_file_sha256(path: Path) -> str:
 def _materialize_snapshot(pin: ModelPin) -> Path:
     """Resolve the local snapshot directory for the pin.
 
-    Calls ``huggingface_hub.snapshot_download`` with the pinned
-    revision and the pin's required files as the allow-list. If the
-    files are already in the local HF cache at that revision, no
-    network round trip happens.
+    Calls ``huggingface_hub.snapshot_download`` for the **whole**
+    pinned revision — not just the required-files set — because the
+    snapshot dir is handed to ``from_pretrained(snapshot_dir)`` as a
+    local path. ``from_pretrained`` does not auto-download missing
+    siblings (config.json, model_index.json, tokenizer/, scheduler/,
+    etc.) when given a local path, so all of them need to be on disk
+    too. ``verify_pin`` still hashes only the integrity-critical
+    files in ``pin.required_files``; the unhashed configs are
+    downloaded but not part of the integrity contract.
+
+    If the snapshot is already in the local HF cache at the pinned
+    revision, no network round trip happens.
 
     The import of ``huggingface_hub`` is local so the rest of this
     module remains importable in environments that don't have it
@@ -138,7 +146,6 @@ def _materialize_snapshot(pin: ModelPin) -> Path:
     snapshot_dir = snapshot_download(
         repo_id=pin.model_id,
         revision=pin.revision,
-        allow_patterns=list(pin.required_files.keys()),
     )
     return Path(snapshot_dir)
 
