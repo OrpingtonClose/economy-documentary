@@ -41,6 +41,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from strands_agents._model_pin import verify_pin
+
+from ._model_pin import LTX_VIDEO_PIN
 from .engine import (
     DEFAULT_FPS,
     MAX_DURATION_S,
@@ -53,7 +56,10 @@ from .engine import (
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_MODEL_ID = "Lightricks/LTX-Video"
+# Production model is pinned via :data:`LTX_VIDEO_PIN`. The model id
+# below mirrors that pin; it is exposed only for log lines and
+# legacy callers and is never read for the actual load.
+DEFAULT_MODEL_ID = LTX_VIDEO_PIN.model_id
 ENGINE_ID = "ltx-video"
 
 
@@ -90,11 +96,10 @@ class LTXVideoEngine:
     importing this module on a CPU-only box doesn't trigger CUDA init
     or weight downloads.
 
-    Attributes are read from environment variables so the bootstrap
-    script can pin them without code changes:
+    The model identity (``model_id`` and HF revision) is **not**
+    configurable — it is locked by :data:`LTX_VIDEO_PIN`. Only
+    operational knobs are read from the environment:
 
-    * ``LTX_VIDEO_MODEL_ID`` — Hugging Face model id or local
-      directory path. Defaults to ``Lightricks/LTX-Video``.
     * ``LTX_VIDEO_DTYPE`` — ``"bfloat16"`` (default) or ``"float16"``.
     * ``LTX_VIDEO_DEVICE`` — CUDA device for the pipeline (``cuda:0``
       by default).
@@ -118,9 +123,12 @@ class LTXVideoEngine:
         offload_mode: str | None = None,
         num_inference_steps: int | None = None,
     ) -> None:
-        self._model_id = model_id or os.environ.get(
-            "LTX_VIDEO_MODEL_ID", DEFAULT_MODEL_ID
-        )
+        if model_id is not None and model_id != LTX_VIDEO_PIN.model_id:
+            raise VideoEngineError(
+                f"model_id override is forbidden: requested={model_id!r}, "
+                f"pinned={LTX_VIDEO_PIN.model_id!r} (see strands_agents._model_pin)"
+            )
+        self._model_id = LTX_VIDEO_PIN.model_id
         self._dtype_name = (
             dtype_name or os.environ.get("LTX_VIDEO_DTYPE", "bfloat16")
         ).lower()
@@ -167,17 +175,30 @@ class LTXVideoEngine:
         from diffusers import AutoModel, LTXPipeline  # noqa: PLC0415
 
         dtype = self._resolve_torch_dtype()
+
+        # Verify the pinned model bytes BEFORE touching the pipeline.
+        # ``verify_pin`` materializes the locked HF revision into the
+        # local cache and SHA256s every required safetensors file. On
+        # mismatch it raises ``ModelPinMismatchError`` and the worker
+        # startup bails out before any inference is attempted.
+        snapshot_dir = verify_pin(LTX_VIDEO_PIN)
+
         logger.info(
-            "model_id=<%s>, dtype=<%s>, offload_mode=<%s>, device=<%s> | loading ltx-video pipeline",
-            self._model_id,
+            "model_id=<%s>, revision=<%s>, snapshot_dir=<%s>, dtype=<%s>, "
+            "offload_mode=<%s>, device=<%s> | loading ltx-video pipeline",
+            LTX_VIDEO_PIN.model_id,
+            LTX_VIDEO_PIN.revision,
+            snapshot_dir,
             self._dtype_name,
             self._offload_mode,
             self._device,
         )
 
+        snapshot_path = str(snapshot_dir)
+
         if self._offload_mode == "fp8_group":
             transformer = AutoModel.from_pretrained(
-                self._model_id,
+                snapshot_path,
                 subfolder="transformer",
                 torch_dtype=dtype,
             )
@@ -187,7 +208,7 @@ class LTXVideoEngine:
                     compute_dtype=dtype,
                 )
             pipeline = LTXPipeline.from_pretrained(
-                self._model_id,
+                snapshot_path,
                 transformer=transformer,
                 torch_dtype=dtype,
             )
@@ -217,14 +238,14 @@ class LTXVideoEngine:
                 )
         elif self._offload_mode == "cpu":
             pipeline = LTXPipeline.from_pretrained(
-                self._model_id,
+                snapshot_path,
                 torch_dtype=dtype,
             )
             with contextlib.suppress(Exception):
                 pipeline.enable_model_cpu_offload()
         elif self._offload_mode == "none":
             pipeline = LTXPipeline.from_pretrained(
-                self._model_id,
+                snapshot_path,
                 torch_dtype=dtype,
             )
             pipeline = pipeline.to(self._device)
