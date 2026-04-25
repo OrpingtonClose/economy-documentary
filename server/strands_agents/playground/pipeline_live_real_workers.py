@@ -1,0 +1,333 @@
+"""Real-worker dispatch tools for the live pipeline demo (slice 9d-wire).
+
+The slice 9a/9b ``build_demo_live_agent`` wires the real DeepAgent
+orchestrator end-to-end against placeholder tools. Those placeholders
+return ``{"status": "placeholder", ...}`` envelopes — the orchestrator
+believes it dispatched audio + video renders, but no real bytes are
+produced. That kept slice 9a's runner cost-free, but it also means
+``/pipeline?mode=live`` does **not** exercise the LTX-2.3 BASIC
+engine (slice 9d-wire) end-to-end.
+
+This module supplies real-dispatch sibling tools for
+``launch_audio_render`` and ``launch_visual_production`` that:
+
+* POST to the live worker URL (``QWEN3_TTS_WORKER_URL`` /
+  ``LTX_VIDEO_WORKER_URL``) with the orchestrator's args translated
+  into the worker's request schema.
+* Decode the worker's base64 audio/video payload and persist it under
+  the orchestrator's ``run_dir`` so the per-run filesystem audit (the
+  proof the user actually cares about) can find real WAV / MP4 bytes
+  there.
+* Return the same ``{"status", "tool", "args"}`` envelope shape the
+  orchestrator's placeholder ledger uses, so the rest of the
+  scripted-LLM live runner observes the same state shape it always
+  did. The scripted brain ignores tool returns; only the side-effect
+  matters.
+
+The dispatcher is environment-gated: if ``LTX_VIDEO_WORKER_URL`` is
+unset, ``build_real_worker_tools`` returns the placeholder set
+unchanged so CI and offline test runs keep working. Audio dispatch
+falls back to the placeholder per-tool so a missing TTS URL doesn't
+block visual proof.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import httpx
+from langchain_core.tools import tool
+
+from strands_agents import _placeholders
+
+logger = logging.getLogger(__name__)
+
+
+_DEFAULT_TIMEOUT_S = 30 * 60.0
+_DEFAULT_AUDIO_DURATION_S = 5.0
+_DEFAULT_VIDEO_DURATION_S = 4.0
+_DEFAULT_FPS = 24
+_DEFAULT_SEED = 7
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _envelope(name: str, **args: Any) -> dict[str, Any]:
+    """Match the placeholder envelope shape so downstream observers stay stable."""
+    return {"status": "real-worker-dispatched", "tool": name, "args": args}
+
+
+def _persist_artifact(
+    run_dir: Path, scene_id: str, suffix: str, payload: bytes
+) -> Path:
+    """Write ``payload`` to ``run_dir/scene_<scene_id>-<token>.<suffix>``.
+
+    Returns the absolute path. The token suffix is a short random
+    hex so concurrent renders for the same scene do not clobber each
+    other (e.g. on retries).
+    """
+    artifacts = run_dir / "artifacts"
+    artifacts.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex[:8]
+    path = artifacts / f"{scene_id}-{token}.{suffix}"
+    path.write_bytes(payload)
+    return path
+
+
+def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
+    """Return a ``@tool``-decorated callable that POSTs to the live TTS."""
+
+    @tool
+    def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
+        """Real Qwen3-TTS dispatch (slice 9d-wire).
+
+        Sends a /tts/render request to the live worker, decodes the
+        base64 WAV, persists it under ``run_dir/artifacts/``, and
+        returns a placeholder-shaped envelope so the orchestrator's
+        scripted brain stays compatible with slice 9a.
+        """
+        body = {
+            "scene_id": scene_id,
+            "voice_id": voice_id,
+            "text": (
+                f"Documentary narration for scene {scene_id}. "
+                "Live dispatched via the real Qwen3-TTS worker."
+            ),
+            "duration_s": _DEFAULT_AUDIO_DURATION_S,
+            "seed": _DEFAULT_SEED,
+        }
+        started_ms = _now_ms()
+        try:
+            with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
+                resp = client.post(f"{worker_url}/tts/render", json=body)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "scene_id=<%s>, error=<%r> | tts dispatch failed", scene_id, exc
+            )
+            return _envelope(
+                "launch_audio_render",
+                scene_id=scene_id,
+                voice_id=voice_id,
+                error=repr(exc),
+            )
+
+        elapsed_ms = _now_ms() - started_ms
+        try:
+            payload = resp.json() if resp.content else {}
+        except ValueError:
+            payload = {"_text": resp.text}
+
+        wav_path: Path | None = None
+        wav_len = 0
+        if isinstance(payload, dict) and "wav_base64" in payload:
+            try:
+                wav_bytes = base64.b64decode(payload["wav_base64"])
+                wav_len = len(wav_bytes)
+                wav_path = _persist_artifact(
+                    run_dir, scene_id, "wav", wav_bytes
+                )
+                logger.info(
+                    "scene_id=<%s>, bytes=<%d>, path=<%s> | wav persisted",
+                    scene_id,
+                    wav_len,
+                    wav_path,
+                )
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "scene_id=<%s>, error=<%r> | wav decode failed",
+                    scene_id,
+                    exc,
+                )
+
+        return _envelope(
+            "launch_audio_render",
+            scene_id=scene_id,
+            voice_id=voice_id,
+            status_code=resp.status_code,
+            wav_bytes_len=wav_len,
+            wav_path=str(wav_path) if wav_path else None,
+            elapsed_ms=elapsed_ms,
+            engine=payload.get("engine") if isinstance(payload, dict) else None,
+        )
+
+    return launch_audio_render
+
+
+def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
+    """Return a ``@tool``-decorated callable that POSTs to the live LTX worker."""
+
+    @tool
+    def launch_visual_production(
+        scene_id: str,
+        visual_concept: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Real LTX-2.3 BASIC dispatch (slice 9d-wire).
+
+        Sends a /video/render request to the live worker, decodes the
+        base64 MP4, persists it under ``run_dir/artifacts/``, and
+        returns a placeholder-shaped envelope. The visual_concept
+        ``phrases`` (if any) become the LTX prompt; the duration
+        defaults to ``_DEFAULT_VIDEO_DURATION_S`` so a single render
+        is bounded for cost.
+        """
+        prompt = ""
+        if isinstance(visual_concept, dict):
+            phrases = visual_concept.get("phrases")
+            if isinstance(phrases, list) and phrases:
+                prompt = " ".join(str(p) for p in phrases)
+        if not prompt:
+            prompt = (
+                "Documentary establishing shot, slow zoom, "
+                "cinematic lighting"
+            )
+
+        body = {
+            "prompt": prompt,
+            "duration_s": _DEFAULT_VIDEO_DURATION_S,
+            "fps": _DEFAULT_FPS,
+            "seed": _DEFAULT_SEED,
+        }
+        started_ms = _now_ms()
+        try:
+            with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
+                resp = client.post(f"{worker_url}/video/render", json=body)
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "scene_id=<%s>, error=<%r> | ltx dispatch failed",
+                scene_id,
+                exc,
+            )
+            return _envelope(
+                "launch_visual_production",
+                scene_id=scene_id,
+                visual_concept=visual_concept,
+                error=repr(exc),
+            )
+
+        elapsed_ms = _now_ms() - started_ms
+        try:
+            payload = resp.json() if resp.content else {}
+        except ValueError:
+            payload = {"_text": resp.text}
+
+        mp4_path: Path | None = None
+        mp4_len = 0
+        if isinstance(payload, dict) and "mp4_base64" in payload:
+            try:
+                mp4_bytes = base64.b64decode(payload["mp4_base64"])
+                mp4_len = len(mp4_bytes)
+                mp4_path = _persist_artifact(
+                    run_dir, scene_id, "mp4", mp4_bytes
+                )
+                logger.info(
+                    "scene_id=<%s>, bytes=<%d>, path=<%s> | mp4 persisted",
+                    scene_id,
+                    mp4_len,
+                    mp4_path,
+                )
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "scene_id=<%s>, error=<%r> | mp4 decode failed",
+                    scene_id,
+                    exc,
+                )
+
+        return _envelope(
+            "launch_visual_production",
+            scene_id=scene_id,
+            visual_concept=visual_concept,
+            prompt=prompt,
+            status_code=resp.status_code,
+            mp4_bytes_len=mp4_len,
+            mp4_path=str(mp4_path) if mp4_path else None,
+            elapsed_ms=elapsed_ms,
+            engine=payload.get("engine") if isinstance(payload, dict) else None,
+        )
+
+    return launch_visual_production
+
+
+def build_real_worker_tools(
+    run_dir: Path,
+    *,
+    audio_worker_url: str | None = None,
+    video_worker_url: str | None = None,
+) -> dict[str, Any]:
+    """Return ``{tool_name: tool}`` overrides for the live demo.
+
+    Args:
+        run_dir: The orchestrator's run-dir; artifact files persist
+            under ``run_dir/artifacts/``.
+        audio_worker_url: ``http(s)://host:port`` base URL for the
+            Qwen3-TTS worker. ``None`` disables real audio dispatch
+            (placeholder used).
+        video_worker_url: Base URL for the LTX-Video worker. ``None``
+            disables real video dispatch.
+
+    Returns:
+        A possibly-empty dict mapping tool names to ``@tool``-decorated
+        callables. Empty when both URLs are missing — caller falls
+        back to the placeholder set.
+    """
+    overrides: dict[str, Any] = {}
+    audio = (audio_worker_url or os.environ.get("QWEN3_TTS_WORKER_URL", "")).rstrip("/")
+    video = (video_worker_url or os.environ.get("LTX_VIDEO_WORKER_URL", "")).rstrip("/")
+    if audio:
+        overrides["launch_audio_render"] = _build_audio_tool(
+            run_dir=run_dir, worker_url=audio
+        )
+    if video:
+        overrides["launch_visual_production"] = _build_visual_tool(
+            run_dir=run_dir, worker_url=video
+        )
+    if not overrides:
+        return overrides
+    logger.info(
+        "audio=<%s>, video=<%s>, overrides=<%s> | real-worker tools built",
+        bool(audio),
+        bool(video),
+        sorted(overrides.keys()),
+    )
+    return overrides
+
+
+def apply_real_worker_overrides(
+    base_tools: list[Any],
+    overrides: dict[str, Any],
+) -> list[Any]:
+    """Replace placeholder tools in ``base_tools`` with overrides by name.
+
+    A real-worker tool replaces the placeholder iff their ``.name``
+    attributes match. Tools without a matching override pass through
+    unchanged. The list order is preserved so the orchestrator's
+    tool-picking heuristics see a stable surface.
+    """
+    if not overrides:
+        return list(base_tools)
+    out: list[Any] = []
+    for tool_obj in base_tools:
+        name = getattr(tool_obj, "name", None)
+        if name in overrides:
+            out.append(overrides[name])
+        else:
+            out.append(tool_obj)
+    return out
+
+
+__all__ = [
+    "apply_real_worker_overrides",
+    "build_real_worker_tools",
+]
+
+
+# Module-level reference so static analyzers don't drop the
+# placeholder import (used downstream as a fallback target).
+_ = _placeholders

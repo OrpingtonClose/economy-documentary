@@ -66,6 +66,7 @@ INFRA_COMPONENT_IDS: tuple[str, ...] = (
     "infra_agent",
     "infra_qwen3_tts_worker",
     "infra_ltx_video_worker",
+    "infra_ltx_video_worker_live",
     "infra_b2_checkpoint",
     "infra_pipeline_adapter",
     "infra_pipeline_live_orchestrator",
@@ -651,6 +652,29 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_builder_attr=("build_infra_ltx_video_worker_experiment"),
         declared_models=(),
         task_attr="infra_ltx_video_worker_task",
+    ),
+    Component(
+        id="infra_ltx_video_worker_live",
+        title="LTX-Video worker (LIVE H200)",
+        kind="infra",
+        row=4,
+        summary=(
+            "Live passthrough to the LTX-2.3 BASIC engine on a real "
+            "H200. POSTs /video/render at $LTX_VIDEO_WORKER_URL and "
+            "asserts the response carries an ISO-BMFF mp4_base64 "
+            "payload above the real-render byte floor (50 KB). Fails "
+            "closed if the response engine field is 'stub'."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_ltx_video_worker_live"
+        ),
+        cases_factory="infra_ltx_video_worker_live_cases",
+        thresholds_attr=("INFRA_LTX_VIDEO_WORKER_LIVE_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=(
+            "build_infra_ltx_video_worker_live_experiment"
+        ),
+        declared_models=(),
+        task_attr="infra_ltx_video_worker_live_task",
     ),
     Component(
         id="infra_b2_checkpoint",
