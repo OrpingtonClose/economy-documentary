@@ -38,6 +38,9 @@ from typing import Any
 
 import numpy as np
 
+from strands_agents._model_pin import verify_pin
+
+from ._model_pin import QWEN3_TTS_PIN
 from .engine import (
     DEFAULT_SAMPLE_RATE_HZ,
     SynthesisRequest,
@@ -48,7 +51,10 @@ from .engine import (
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+# Production model is pinned via :data:`QWEN3_TTS_PIN`. The model id
+# below mirrors that pin and is exposed only for log lines and
+# legacy callers; the engine never reads it for the actual load.
+DEFAULT_MODEL_ID = QWEN3_TTS_PIN.model_id
 ENGINE_ID = "qwen3-tts-12hz-1.7b-customvoice"
 
 
@@ -182,12 +188,10 @@ class Qwen3TTSEngine:
     importing this module on a CPU-only box (e.g., for a worker
     bootstrap dry-run) doesn't trigger a CUDA init or weight download.
 
-    Attributes are read from environment variables so the bootstrap
-    script can pin them without code changes:
+    The model identity (``model_id`` and HF revision) is **not**
+    configurable — it is locked by :data:`QWEN3_TTS_PIN`. Only
+    operational knobs are read from the environment:
 
-    * ``QWEN3_TTS_MODEL_ID`` — Hugging Face model id or local
-      directory path. Defaults to
-      ``Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice``.
     * ``QWEN3_TTS_DEVICE_MAP`` — ``device_map`` arg for
       ``from_pretrained``. Defaults to ``cuda:0``.
     * ``QWEN3_TTS_DTYPE`` — ``"bfloat16"`` (default) or ``"float16"``.
@@ -195,6 +199,12 @@ class Qwen3TTSEngine:
       ``eager`` to skip flash-attn. The bootstrap installs flash-attn
       best-effort; we fall back to ``eager`` automatically if the
       flash-attn import fails.
+
+    The constructor still accepts ``model_id`` for legacy callers,
+    but if it differs from :data:`QWEN3_TTS_PIN.model_id` the engine
+    raises :class:`TTSEngineError` immediately. There is no env-var
+    override for the protected fields. See
+    :mod:`strands_agents._model_pin` for the rationale.
     """
 
     def __init__(
@@ -205,9 +215,12 @@ class Qwen3TTSEngine:
         dtype_name: str | None = None,
         attn_implementation: str | None = None,
     ) -> None:
-        self._model_id = model_id or os.environ.get(
-            "QWEN3_TTS_MODEL_ID", DEFAULT_MODEL_ID
-        )
+        if model_id is not None and model_id != QWEN3_TTS_PIN.model_id:
+            raise TTSEngineError(
+                f"model_id override is forbidden: requested={model_id!r}, "
+                f"pinned={QWEN3_TTS_PIN.model_id!r} (see strands_agents._model_pin)"
+            )
+        self._model_id = QWEN3_TTS_PIN.model_id
         self._device_map = device_map or os.environ.get(
             "QWEN3_TTS_DEVICE_MAP", "cuda:0"
         )
@@ -256,15 +269,25 @@ class Qwen3TTSEngine:
                 )
                 attn_impl = "eager"
 
+        # Verify the pinned model bytes BEFORE loading the model.
+        # ``verify_pin`` materializes the locked HF revision into the
+        # local cache and SHA256s every required file. On mismatch it
+        # raises ``ModelPinMismatchError`` and the worker startup
+        # bails out before the TTS model can synthesize anything.
+        snapshot_dir = verify_pin(QWEN3_TTS_PIN)
+
         logger.info(
-            "model_id=<%s>, device_map=<%s>, dtype=<%s>, attn=<%s> | loading qwen3-tts model",
-            self._model_id,
+            "model_id=<%s>, revision=<%s>, snapshot_dir=<%s>, "
+            "device_map=<%s>, dtype=<%s>, attn=<%s> | loading qwen3-tts model",
+            QWEN3_TTS_PIN.model_id,
+            QWEN3_TTS_PIN.revision,
+            snapshot_dir,
             self._device_map,
             self._dtype_name,
             attn_impl,
         )
         model = Qwen3TTSModel.from_pretrained(
-            self._model_id,
+            str(snapshot_dir),
             device_map=self._device_map,
             dtype=dtype,
             attn_implementation=attn_impl,
