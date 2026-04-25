@@ -609,6 +609,18 @@ export function deriveStageStates(
         elapsedMs,
         sceneCount: prev?.sceneCount ?? null,
       });
+    } else if (event.kind === "pipeline.stage_failed") {
+      const detail = event.detail ?? {};
+      const stage = typeof detail.stage === "string" ? detail.stage : null;
+      if (stage && isPipelineStageName(stage)) {
+        const prev = byName.get(stage);
+        byName.set(stage, {
+          name: stage,
+          status: "failed",
+          elapsedMs: prev?.elapsedMs ?? null,
+          sceneCount: prev?.sceneCount ?? null,
+        });
+      }
     } else if (event.kind === "run.error") {
       for (const [name, state] of byName.entries()) {
         if (state.status === "running") {
@@ -628,9 +640,11 @@ function matchStageEvent(kind: string, suffix: string): StageName | null {
     return null;
   }
   const name = kind.slice(prefix.length, kind.length - suffix.length);
-  return PIPELINE_STAGES.includes(name as StageName)
-    ? (name as StageName)
-    : null;
+  return isPipelineStageName(name) ? name : null;
+}
+
+function isPipelineStageName(name: string): name is StageName {
+  return (PIPELINE_STAGES as readonly string[]).includes(name);
 }
 
 /**
