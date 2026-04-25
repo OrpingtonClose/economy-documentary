@@ -501,12 +501,18 @@ class LivePipelineRun:
             )
         except Exception as exc:
             status = "error"
+            #: Capture the open stage *before* ``close_open`` clears it
+            #: so the ``stage_failed`` envelope carries the real stage
+            #: name. The frontend only highlights stages whose name is
+            #: in :data:`PIPELINE_STAGES`; emitting ``"unknown"`` would
+            #: make the failure invisible in the ribbon.
+            failed_stage = tracker.current or "unknown"
             await tracker.close_open()
             await _emit_translated(
                 stream,
                 "pipeline.stage_failed",
                 {
-                    "stage": "unknown",
+                    "stage": failed_stage,
                     "reason": f"{type(exc).__name__}: {exc}",
                 },
             )
