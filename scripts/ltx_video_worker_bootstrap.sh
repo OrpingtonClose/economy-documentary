@@ -96,6 +96,17 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
 pip install fastapi uvicorn requests numpy
 
+# Real LTX-Video deps. ``diffusers`` ships ``LTXPipeline``;
+# ``transformers`` provides the text encoder; ``accelerate`` is required
+# for ``device_map`` and group-offload; ``imageio`` + ``imageio-ffmpeg``
+# back ``diffusers.utils.export_to_video``. ``torch`` is installed
+# first with a CUDA-12.1 wheel.
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio || \
+    pip install torch torchvision torchaudio
+pip install "diffusers>=0.32.0" transformers accelerate sentencepiece protobuf
+pip install imageio imageio-ffmpeg pillow
+
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM
 # ---------------------------------------------------------------------------

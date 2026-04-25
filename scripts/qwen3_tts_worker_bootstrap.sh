@@ -100,6 +100,19 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
 pip install fastapi uvicorn requests soundfile numpy opentimelineio
 
+# Real Qwen3-TTS deps. ``qwen-tts`` pulls in transformers and the
+# Qwen3-TTS-Tokenizer-12Hz model loader. ``torch`` is installed first
+# with a CUDA-12.1 wheel (the index URL works on every Vast.ai NVIDIA
+# image we've tested). ``flash-attn`` is best-effort — if the build
+# wheel is unavailable for the running torch/CUDA combo, the engine
+# falls back to ``attn_implementation=eager`` automatically.
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio || \
+    pip install torch torchvision torchaudio
+pip install qwen-tts transformers accelerate
+pip install --no-build-isolation flash-attn || \
+    echo "warning: flash-attn install failed, falling back to eager attention"
+
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM
 # ---------------------------------------------------------------------------
