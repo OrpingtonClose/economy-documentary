@@ -20,6 +20,8 @@ import type {
   RunResponse,
   RunState,
   SaveUserCaseResponse,
+  StartPipelineRunBody,
+  StartPipelineRunResponse,
   StartRunResponse,
 } from "./types";
 
@@ -176,6 +178,18 @@ export async function startRun(
     `/components/${componentId}/runs`,
     body
   );
+}
+
+/**
+ * Allocate a pipeline run on the server. The response carries the
+ * run_id used to subscribe to the same SSE surface as a single-
+ * component run, plus the topic / duration / language echoed back
+ * (so the page can render the run header without re-reading state).
+ */
+export async function startPipelineRun(
+  body: StartPipelineRunBody,
+): Promise<StartPipelineRunResponse> {
+  return postJson<StartPipelineRunResponse>("/pipeline/runs", body);
 }
 
 /** Polling fallback for a run that the SSE stream cannot reach. */

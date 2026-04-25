@@ -30,12 +30,20 @@ export default function PlaygroundLanding() {
       </header>
 
       <section className="flex flex-col gap-4">
-        <Link
-          href="/components"
-          className="inline-flex w-fit items-center gap-2 rounded bg-pg-accent px-4 py-2 text-sm font-semibold text-pg-bg transition hover:bg-pg-accent/80"
-        >
-          Browse the 15 components →
-        </Link>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href="/components"
+            className="inline-flex w-fit items-center gap-2 rounded bg-pg-accent px-4 py-2 text-sm font-semibold text-pg-bg transition hover:bg-pg-accent/80"
+          >
+            Browse the 15 components →
+          </Link>
+          <Link
+            href="/pipeline"
+            className="inline-flex w-fit items-center gap-2 rounded border border-pg-accent px-4 py-2 text-sm font-semibold text-pg-accent transition hover:bg-pg-accent/10"
+          >
+            Run the pipeline →
+          </Link>
+        </div>
         <ul className="flex flex-col gap-2 text-sm text-pg-muted">
           <li>
             <span className="pg-dot pg-dot-green mr-2 align-middle" />
