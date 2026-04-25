@@ -29,6 +29,7 @@ from deepagents import SubAgent, create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from . import _placeholders
 from .approval import INTERRUPT_GATE_CONFIG, request_human_approval
@@ -210,6 +211,8 @@ def build_orchestrator(
     memory: Sequence[str] | None = None,
     system_prompt: str = ORCHESTRATOR_PROMPT,
     interrupt_tool_names: Sequence[str] = INTERRUPT_TOOL_NAMES,
+    interrupt_on: dict[str, bool | dict[str, Any]] | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> Any:
     """Build the documentary pipeline DeepAgent.
 
@@ -261,6 +264,12 @@ def build_orchestrator(
         len(resolved_memory),
     )
 
+    resolved_interrupt_on = (
+        interrupt_on
+        if interrupt_on is not None
+        else _build_interrupt_on(interrupt_tool_names)
+    )
+
     return create_deep_agent(
         model=resolved_model,
         tools=resolved_tools,
@@ -268,7 +277,8 @@ def build_orchestrator(
         subagents=resolved_subagents,
         memory=resolved_memory,
         backend=FilesystemBackend(root_dir=str(run_dir)),
-        interrupt_on=_build_interrupt_on(interrupt_tool_names),
+        interrupt_on=resolved_interrupt_on,
+        checkpointer=checkpointer,
     )
 
 

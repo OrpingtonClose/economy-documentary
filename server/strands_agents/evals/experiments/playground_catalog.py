@@ -160,7 +160,7 @@ def _component_count_case() -> Case[dict[str, Any], dict[str, Any]]:
         input={"method": "GET", "path": "/playground/components"},
         expected_output={
             "status": 200,
-            "body": {"total": 22},
+            "body": {"total": 23},
         },
     )
 

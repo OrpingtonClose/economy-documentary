@@ -19,6 +19,8 @@ import contextvars
 import json
 import logging
 import os
+import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -180,7 +182,9 @@ async def get_component_detail(component_id: str) -> dict[str, Any]:
     """
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
     detail = _component_summary(component)
     detail["cases"] = [_serialise_case(c) for c in component.cases()]
     detail["user_cases"] = _user_case_payloads(component_id)
@@ -192,7 +196,9 @@ async def list_component_cases(component_id: str) -> dict[str, Any]:
     """Return just the case list for a component."""
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
     cases = [_serialise_case(c) for c in component.cases()]
     return {
         "component_id": component.id,
@@ -212,9 +218,7 @@ def _serialise_reachability(status: ReachabilityStatus) -> dict[str, Any]:
     }
 
 
-@router.get(
-    "/components/{component_id}/models/health", response_class=JSONResponse
-)
+@router.get("/components/{component_id}/models/health", response_class=JSONResponse)
 async def component_models_health(component_id: str) -> dict[str, Any]:
     """Return reachability for every model the component declares.
 
@@ -227,7 +231,9 @@ async def component_models_health(component_id: str) -> dict[str, Any]:
     """
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
     statuses = probe_models(component.declared_models)
     return {
         "component_id": component.id,
@@ -266,7 +272,9 @@ async def component_schema(component_id: str) -> dict[str, Any]:
     """Return an inferred input schema for the component."""
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
     return {
         "component_id": component.id,
         "schema": _infer_schema(component.cases()),
@@ -333,7 +341,9 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
     """
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
 
     # A run drives ONE model at a time (picked from the declared set
     # by the component's task adapter). MODEL_UNREACHABLE fires only
@@ -500,9 +510,7 @@ def _build_evaluation_data(
 
 
 @router.post("/components/{component_id}/evaluate", response_class=JSONResponse)
-def evaluate_component(
-    component_id: str, request: EvaluateRequest
-) -> dict[str, Any]:
+def evaluate_component(component_id: str, request: EvaluateRequest) -> dict[str, Any]:
     """Score a component output against its declared evaluator stack.
 
     Intentionally synchronous: LLM-as-judge evaluators may make
@@ -517,7 +525,9 @@ def evaluate_component(
     """
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
 
     if request.custom_input is not None:
         case_name = request.case_name or "custom_input"
@@ -632,9 +642,7 @@ def _user_cases_base_dir() -> Path | None:
     return Path(override) if override else None
 
 
-def _lookup_case_by_name(
-    component: Component, name: str
-) -> Case[Any, Any] | None:
+def _lookup_case_by_name(component: Component, name: str) -> Case[Any, Any] | None:
     """Look ``name`` up across canonical cases and user cases.
 
     Canonical cases win on collision — but the POST handler rejects
@@ -717,14 +725,14 @@ class SaveUserCaseRequest(BaseModel):
     )
 
 
-@router.get(
-    "/components/{component_id}/user-cases", response_class=JSONResponse
-)
+@router.get("/components/{component_id}/user-cases", response_class=JSONResponse)
 async def list_user_cases(component_id: str) -> dict[str, Any]:
     """Return just the user-authored cases for a component."""
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
     payloads = _user_case_payloads(component.id)
     return {
         "component_id": component.id,
@@ -733,12 +741,8 @@ async def list_user_cases(component_id: str) -> dict[str, Any]:
     }
 
 
-@router.post(
-    "/components/{component_id}/user-cases", response_class=JSONResponse
-)
-def save_user_case(
-    component_id: str, request: SaveUserCaseRequest
-) -> dict[str, Any]:
+@router.post("/components/{component_id}/user-cases", response_class=JSONResponse)
+def save_user_case(component_id: str, request: SaveUserCaseRequest) -> dict[str, Any]:
     """Preview or commit a user-authored case.
 
     The endpoint enforces two disjoint pre-conditions:
@@ -756,7 +760,9 @@ def save_user_case(
     """
     component = get_component(component_id)
     if component is None:
-        raise HTTPException(status_code=404, detail=f"unknown component: {component_id}")
+        raise HTTPException(
+            status_code=404, detail=f"unknown component: {component_id}"
+        )
 
     canonical_names = {c.name for c in component.cases() if c.name}
     if request.name in canonical_names:
@@ -882,9 +888,13 @@ def _workers_registry_error_response(err: WorkerRegistryError) -> HTTPException:
     """Map registry-raised errors to HTTP status codes with stable reason codes."""
 
     if isinstance(err, WorkerNotFoundError):
-        return HTTPException(status_code=404, detail={"reason": "worker_not_found", "message": str(err)})
+        return HTTPException(
+            status_code=404, detail={"reason": "worker_not_found", "message": str(err)}
+        )
     if isinstance(err, DuplicateWorkerError):
-        return HTTPException(status_code=409, detail={"reason": "duplicate_worker", "message": str(err)})
+        return HTTPException(
+            status_code=409, detail={"reason": "duplicate_worker", "message": str(err)}
+        )
     if isinstance(err, VoiceAlreadyPinnedError):
         return HTTPException(
             status_code=409,
@@ -914,7 +924,9 @@ def _workers_registry_error_response(err: WorkerRegistryError) -> HTTPException:
                 "message": str(err),
             },
         )
-    return HTTPException(status_code=400, detail={"reason": "registry_error", "message": str(err)})
+    return HTTPException(
+        status_code=400, detail={"reason": "registry_error", "message": str(err)}
+    )
 
 
 @router.get("/workers", response_class=JSONResponse)
@@ -995,9 +1007,7 @@ async def heartbeat_worker(
 
 
 @router.post("/workers/{worker_id}/voice", response_class=JSONResponse)
-async def pin_worker_voice(
-    worker_id: str, request: _PinVoiceRequest
-) -> dict[str, Any]:
+async def pin_worker_voice(worker_id: str, request: _PinVoiceRequest) -> dict[str, Any]:
     registry = get_default_registry()
     try:
         registry.pin_voice(worker_id, request.voice_id)
@@ -1057,9 +1067,7 @@ def _serialise_event(event: Event) -> dict[str, Any]:
 
 def _serialise_run_state(stream: RunStream) -> dict[str, Any]:
     trace_url = (
-        langfuse_trace_url(stream.trace_id)
-        if stream.trace_id is not None
-        else None
+        langfuse_trace_url(stream.trace_id) if stream.trace_id is not None else None
     )
     return {
         "run_id": stream.run_id,
@@ -1148,9 +1156,7 @@ async def _dispatch_run(
             detail={"count": len(component.declared_models)},
         )
         probe_start = time.perf_counter()
-        reachability = await asyncio.to_thread(
-            probe_models, component.declared_models
-        )
+        reachability = await asyncio.to_thread(probe_models, component.declared_models)
         probe_elapsed_ms = int((time.perf_counter() - probe_start) * 1000)
         for status in reachability:
             await stream.emit(
@@ -1233,9 +1239,7 @@ async def _dispatch_run(
             result = await asyncio.to_thread(ctx.run, _run_task_with_stream)
         except Exception as exc:  # noqa: BLE001 — surface to UI
             elapsed_ms = int((time.perf_counter() - task_start) * 1000)
-            logger.exception(
-                "component run failed: %s/%s", component.id, case.name
-            )
+            logger.exception("component run failed: %s/%s", component.id, case.name)
             await stream.emit(
                 "run.error",
                 f"{type(exc).__name__}: {exc}",
@@ -1269,7 +1273,9 @@ async def _dispatch_run(
             f"{component.id} completed in {elapsed_ms}ms",
             detail={
                 "elapsed_ms": elapsed_ms,
-                "trajectory_len": len(trajectory) if isinstance(trajectory, list) else 0,
+                "trajectory_len": len(trajectory)
+                if isinstance(trajectory, list)
+                else 0,
             },
         )
         await stream.emit(
@@ -1378,9 +1384,7 @@ async def start_run(
         )
 
     registry = get_registry()
-    stream = registry.new_run(
-        component_id=component.id, case_name=case.name
-    )
+    stream = registry.new_run(component_id=component.id, case_name=case.name)
     await stream.emit(
         "run.dispatched",
         f"queued {component.id} / {case.name}",
@@ -1492,6 +1496,20 @@ _PIPELINE_LANGUAGE_MAX_LEN: int = 16
 PIPELINE_RUN_COMPONENT_ID: str = "pipeline"
 
 
+#: Allowed values for :attr:`StartPipelineRunRequest.mode`.
+#:
+#: * ``"simulator"`` — the slice-7 :class:`SimulatedPipelineRun`
+#:   replays a hand-rolled event sequence so the UI stays exercisable
+#:   with zero LLM tokens and zero GPU cost. Default for backward
+#:   compatibility.
+#: * ``"live"`` — slice-9a's :class:`LivePipelineRun` drives the real
+#:   ``create_deep_agent`` orchestrator end-to-end against scripted
+#:   placeholder tools and a scripted chat model. Real LangGraph
+#:   events, real interrupt resolution, real tool callbacks; no real
+#:   GPU spend.
+PIPELINE_RUN_MODES: tuple[str, ...] = ("simulator", "live")
+
+
 class StartPipelineRunRequest(BaseModel):
     """Body for ``POST /playground/pipeline/runs``.
 
@@ -1499,20 +1517,26 @@ class StartPipelineRunRequest(BaseModel):
     target duration, and language. Defaults match the orchestrator's
     own defaults so a frontend can submit an empty form and still
     get a sensible run.
+
+    Slice 9a adds ``mode``: ``"simulator"`` (default, canned events)
+    or ``"live"`` (real ``create_deep_agent`` orchestrator with a
+    scripted LLM + placeholder tools — no GPU spend).
     """
 
     topic: str = Field(default="The Federal Reserve")
     target_duration_sec: int = Field(default=60)
     language: str = Field(default="en")
+    mode: str = Field(default="simulator")
 
 
 def _normalise_pipeline_request(
     request: StartPipelineRunRequest,
-) -> tuple[str, int, str]:
+) -> tuple[str, int, str, str]:
     """Validate + clamp pipeline-run inputs, raising HTTPException on bad input.
 
-    Returns the cleaned ``(topic, target_duration_sec, language)``
-    triple ready to pass to :class:`SimulatedPipelineRun`.
+    Returns the cleaned ``(topic, target_duration_sec, language, mode)``
+    quadruple ready to pass to :class:`SimulatedPipelineRun` or
+    :class:`LivePipelineRun`.
     """
     topic = (request.topic or "").strip()
     if not topic:
@@ -1521,15 +1545,11 @@ def _normalise_pipeline_request(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"topic too long: {len(topic)} chars "
-                f"(max {_PIPELINE_TOPIC_MAX_LEN})"
+                f"topic too long: {len(topic)} chars (max {_PIPELINE_TOPIC_MAX_LEN})"
             ),
         )
     duration = int(request.target_duration_sec)
-    if (
-        duration < _PIPELINE_MIN_DURATION_SEC
-        or duration > _PIPELINE_MAX_DURATION_SEC
-    ):
+    if duration < _PIPELINE_MIN_DURATION_SEC or duration > _PIPELINE_MAX_DURATION_SEC:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -1547,7 +1567,16 @@ def _normalise_pipeline_request(
                 f"(max {_PIPELINE_LANGUAGE_MAX_LEN})"
             ),
         )
-    return topic, duration, language
+    mode = (request.mode or "simulator").strip().lower() or "simulator"
+    if mode not in PIPELINE_RUN_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"unknown pipeline run mode: {mode!r} "
+                f"(allowed: {sorted(PIPELINE_RUN_MODES)!r})"
+            ),
+        )
+    return topic, duration, language, mode
 
 
 async def _dispatch_pipeline_run(
@@ -1556,15 +1585,26 @@ async def _dispatch_pipeline_run(
     topic: str,
     target_duration_sec: int,
     language: str,
+    mode: str = "simulator",
 ) -> None:
-    """Drive a SimulatedPipelineRun against ``stream`` and close it.
+    """Drive a pipeline run against ``stream`` and close it.
 
-    Uses the slice-7 :class:`SimulatedPipelineRun` so events match the
-    real orchestrator's shape. Slice 9 will swap this in for the
-    real driver — the route surface stays the same.
+    ``mode="simulator"`` (default) replays the slice-7
+    :class:`SimulatedPipelineRun` event sequence. ``mode="live"``
+    drives the real :func:`build_orchestrator` agent through the
+    slice-9a :class:`LivePipelineRun` runner, observing every tool
+    call + interrupt the orchestrator emits and translating them
+    onto ``stream``. Both paths land on the same ``run.ok`` /
+    ``run.error`` terminal so the UI stays mode-agnostic.
     """
     from strands_agents.playground.pipeline_adapter import (
         SimulatedPipelineRun,
+    )
+    from strands_agents.playground.pipeline_live_demo import (
+        build_demo_live_agent,
+    )
+    from strands_agents.playground.pipeline_live_runner import (
+        LivePipelineRun,
     )
 
     loop = asyncio.get_running_loop()
@@ -1581,17 +1621,36 @@ async def _dispatch_pipeline_run(
         "output": None,
         "trajectory": None,
     }
+    run_dir: Path | None = None
     try:
         run_started = time.perf_counter()
-        runner = SimulatedPipelineRun(
-            topic=topic,
-            target_duration_sec=target_duration_sec,
-            language=language,
-            # Small per-event delay so the UI sees a progress-shaped
-            # timeline rather than a wall of events in one frame.
-            per_event_delay_s=0.15,
-        )
-        result = await runner.run(stream)
+        if mode == "live":
+            run_dir = Path(tempfile.mkdtemp(prefix="pipeline_live_"))
+            agent = build_demo_live_agent(
+                run_dir,
+                topic=topic,
+                target_duration_sec=target_duration_sec,
+                language=language,
+            )
+            live_runner = LivePipelineRun(
+                topic=topic,
+                target_duration_sec=target_duration_sec,
+                language=language,
+                agent=agent,
+                run_dir=run_dir,
+                # Small per-event delay so the UI sees a progress-shaped
+                # timeline rather than a wall of events in one frame.
+                per_event_delay_s=0.15,
+            )
+            result = await live_runner.run(stream)
+        else:
+            runner = SimulatedPipelineRun(
+                topic=topic,
+                target_duration_sec=target_duration_sec,
+                language=language,
+                per_event_delay_s=0.15,
+            )
+            result = await runner.run(stream)
         elapsed_ms = int((time.perf_counter() - run_started) * 1000)
         await stream.emit(
             "run.ok",
@@ -1649,6 +1708,8 @@ async def _dispatch_pipeline_run(
             except Exception:  # noqa: BLE001 — telemetry must never crash the run
                 logger.debug("pipeline run span close failed", exc_info=True)
         await stream.close(terminal=terminal)
+        if run_dir is not None:
+            shutil.rmtree(run_dir, ignore_errors=True)
 
 
 @router.post("/pipeline/runs", response_class=JSONResponse)
@@ -1668,8 +1729,8 @@ async def start_pipeline_run(
     Until slice 9, the dispatcher runs :class:`SimulatedPipelineRun`
     so the wire stays exercised end-to-end without GPU spend.
     """
-    topic, duration, language = _normalise_pipeline_request(request)
-    case_name = "simulated_run"
+    topic, duration, language, mode = _normalise_pipeline_request(request)
+    case_name = "live_run" if mode == "live" else "simulated_run"
 
     registry = get_registry()
     stream = registry.new_run(
@@ -1677,12 +1738,13 @@ async def start_pipeline_run(
     )
     await stream.emit(
         "run.dispatched",
-        f"queued pipeline run: {topic!r} ({duration}s, {language})",
+        f"queued pipeline run: {topic!r} ({duration}s, {language}, {mode})",
         detail={
             "component_id": PIPELINE_RUN_COMPONENT_ID,
             "topic": topic,
             "target_duration_sec": duration,
             "language": language,
+            "mode": mode,
         },
     )
     background_tasks.add_task(
@@ -1691,6 +1753,7 @@ async def start_pipeline_run(
         topic=topic,
         target_duration_sec=duration,
         language=language,
+        mode=mode,
     )
     return {
         "run_id": stream.run_id,
@@ -1699,6 +1762,7 @@ async def start_pipeline_run(
         "topic": topic,
         "target_duration_sec": duration,
         "language": language,
+        "mode": mode,
         "events_url": f"/playground/runs/{stream.run_id}/events",
         "state_url": f"/playground/runs/{stream.run_id}",
     }
