@@ -34,7 +34,10 @@ from strands_agents._model_pin import (
     ModelPinMismatchError,
     verify_pin,
 )
-from strands_agents.ltx_video_worker._model_pin import LTX_VIDEO_PIN
+from strands_agents.ltx_video_worker._model_pin import (
+    LTX_VIDEO_GEMMA_PIN,
+    LTX_VIDEO_PIN,
+)
 from strands_agents.qwen3_tts_worker._model_pin import QWEN3_TTS_PIN
 
 
@@ -215,6 +218,7 @@ def _is_hex(s: str, length: int) -> bool:
     [
         pytest.param(QWEN3_TTS_PIN, id="qwen3-tts"),
         pytest.param(LTX_VIDEO_PIN, id="ltx-video"),
+        pytest.param(LTX_VIDEO_GEMMA_PIN, id="ltx-video-gemma"),
     ],
 )
 def test_production_pin_revision_is_full_commit_sha(pin: ModelPin) -> None:
@@ -230,6 +234,7 @@ def test_production_pin_revision_is_full_commit_sha(pin: ModelPin) -> None:
     [
         pytest.param(QWEN3_TTS_PIN, id="qwen3-tts"),
         pytest.param(LTX_VIDEO_PIN, id="ltx-video"),
+        pytest.param(LTX_VIDEO_GEMMA_PIN, id="ltx-video-gemma"),
     ],
 )
 def test_production_pin_required_files_use_full_sha256(pin: ModelPin) -> None:
@@ -250,21 +255,48 @@ def test_qwen3_tts_pin_targets_customvoice_checkpoint() -> None:
 
 
 def test_ltx_video_pin_targets_ltx_2_3() -> None:
-    """The video pin MUST point at LTX-2.3 (mandatory per user rule)."""
+    """The video pin MUST point at LTX-2.3 (mandatory per user rule).
+
+    Required-files set is restricted to the safetensors that the
+    ``ltx_pipelines.distilled`` two-stage pipeline actually loads.
+    Other LTX-2.3 assets exist in the repo but are not read by the
+    distilled pipeline, so verifying them every startup would burn
+    ~70 GB of disk reads for no integrity gain.
+    """
     assert LTX_VIDEO_PIN.model_id == "Lightricks/LTX-2.3"
     expected_files = {
-        "ltx-2.3-22b-dev.safetensors",
         "ltx-2.3-22b-distilled-1.1.safetensors",
-        "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
         "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
-        "ltx-2.3-temporal-upscaler-x2-1.0.safetensors",
     }
     assert set(LTX_VIDEO_PIN.required_files) == expected_files
 
 
+def test_ltx_video_gemma_pin_targets_unquantized_gemma_3_12b() -> None:
+    """The Gemma pin MUST point at the unquantized Gemma-3-12B weights.
+
+    LTX-2.3's ``PromptEncoder`` requires Gemma-3-12B as its text
+    encoder. The Lightricks/LTX-2 monorepo's ``DistilledPipeline``
+    receives this via ``--gemma-root``; the worker passes the
+    snapshot dir verified by this pin.
+    """
+    assert LTX_VIDEO_GEMMA_PIN.model_id == (
+        "google/gemma-3-12b-it-qat-q4_0-unquantized"
+    )
+    # Gemma-3-12B ships as 5 sharded safetensors files.
+    expected_files = {
+        f"model-0000{i}-of-00005.safetensors" for i in range(1, 6)
+    }
+    assert set(LTX_VIDEO_GEMMA_PIN.required_files) == expected_files
+
+
 def test_pins_have_unique_purposes() -> None:
     """Purposes are used in error messages — each worker needs its own."""
-    purposes = {QWEN3_TTS_PIN.purpose, LTX_VIDEO_PIN.purpose}
-    assert len(purposes) == 2
+    purposes = {
+        QWEN3_TTS_PIN.purpose,
+        LTX_VIDEO_PIN.purpose,
+        LTX_VIDEO_GEMMA_PIN.purpose,
+    }
+    assert len(purposes) == 3
     assert "qwen3-tts" in purposes
     assert "ltx-video" in purposes
+    assert "ltx-video-gemma" in purposes
