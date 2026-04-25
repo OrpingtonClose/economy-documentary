@@ -68,6 +68,7 @@ INFRA_COMPONENT_IDS: tuple[str, ...] = (
     "infra_ltx_video_worker",
     "infra_b2_checkpoint",
     "infra_pipeline_adapter",
+    "infra_pipeline_live_orchestrator",
 )
 
 
@@ -686,6 +687,27 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_builder_attr=("build_infra_pipeline_adapter_experiment"),
         declared_models=(),
         task_attr="infra_pipeline_adapter_task",
+    ),
+    Component(
+        id="infra_pipeline_live_orchestrator",
+        title="Pipeline live orchestrator (scripted LLM)",
+        kind="infra",
+        row=4,
+        summary=(
+            "Drives the real DeepAgent orchestrator end-to-end with a "
+            "scripted LLM (no GPU, no token spend). Proves every "
+            "approval gate fires, every stage brackets, and the final "
+            "MP4 URL is recoverable. The wiring proof for the live "
+            "/pipeline form."
+        ),
+        experiment_module=(
+            "strands_agents.evals.experiments.infra_pipeline_live_orchestrator"
+        ),
+        cases_factory="infra_pipeline_live_orchestrator_cases",
+        thresholds_attr=("INFRA_PIPELINE_LIVE_ORCHESTRATOR_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_infra_pipeline_live_orchestrator_experiment"),
+        declared_models=(),
+        task_attr="infra_pipeline_live_orchestrator_task",
     ),
 )
 
