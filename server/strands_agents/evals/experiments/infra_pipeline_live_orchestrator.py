@@ -39,6 +39,7 @@ will add error / refusal / escalation cases when real tools land.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -89,6 +90,7 @@ def _happy_path_case() -> Case[dict[str, Any], dict[str, Any]]:
                 "scenario",
                 "audio",
                 "visual",
+                "production",
                 "assembly",
             ],
             "min_approval_gates": 2,
@@ -129,36 +131,39 @@ def infra_pipeline_live_orchestrator_task(
 
     async def _run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         run_dir = Path(tempfile.mkdtemp(prefix="pipeline-live-eval-"))
-        agent = build_demo_live_agent(
-            run_dir,
-            topic=topic,
-            target_duration_sec=duration,
-            language=language,
-        )
-        stream = RunStream(
-            run_id=f"eval-{case.name}",
-            component_id="infra_pipeline_live_orchestrator",
-            case_name=case.name,
-        )
-        stream.attach_loop(asyncio.get_running_loop())
-        runner = LivePipelineRun(
-            topic=topic,
-            target_duration_sec=duration,
-            language=language,
-            agent=agent,
-            run_dir=run_dir,
-            per_event_delay_s=0.0,
-        )
-        result = await runner.run(stream)
-        events = [
-            {
-                "kind": e.kind,
-                "summary": e.summary,
-                "detail": dict(getattr(e, "detail", {}) or {}),
-            }
-            for e in stream.snapshot()
-        ]
-        return result, events
+        try:
+            agent = build_demo_live_agent(
+                run_dir,
+                topic=topic,
+                target_duration_sec=duration,
+                language=language,
+            )
+            stream = RunStream(
+                run_id=f"eval-{case.name}",
+                component_id="infra_pipeline_live_orchestrator",
+                case_name=case.name,
+            )
+            stream.attach_loop(asyncio.get_running_loop())
+            runner = LivePipelineRun(
+                topic=topic,
+                target_duration_sec=duration,
+                language=language,
+                agent=agent,
+                run_dir=run_dir,
+                per_event_delay_s=0.0,
+            )
+            result = await runner.run(stream)
+            events = [
+                {
+                    "kind": e.kind,
+                    "summary": e.summary,
+                    "detail": dict(getattr(e, "detail", {}) or {}),
+                }
+                for e in stream.snapshot()
+            ]
+            return result, events
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
 
     result, events = asyncio.run(_run())
     output: dict[str, Any] = {

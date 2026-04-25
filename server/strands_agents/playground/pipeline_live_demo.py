@@ -56,6 +56,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import Runnable
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from strands_agents import _placeholders
@@ -63,6 +64,51 @@ from strands_agents.approval import request_human_approval
 from strands_agents.pipeline import build_orchestrator
 
 logger = logging.getLogger(__name__)
+
+
+@tool
+def content_analyst(
+    scene_id: str,
+    timeline_excerpt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Demo-only stub for the visual SubAgent's content_analyst tool.
+
+    Real production runs delegate visual analysis to an internal
+    SubAgent and never expose ``content_analyst`` at the orchestrator
+    tool layer. The demo flattens that delegation so the live runner
+    can observe the ``visual`` stage from a top-level tool call,
+    proving the stage ribbon walks scenario → audio → visual →
+    production → assembly without spinning up the real SubAgent.
+    """
+    return {
+        "tool": "content_analyst",
+        "scene_id": scene_id,
+        "phrases_per_scene": {scene_id: ["documentary establishing shot"]},
+        "timeline_excerpt": timeline_excerpt or {},
+    }
+
+
+@tool
+def visual_concepter(
+    scene_id: str,
+    phrases: list[str] | None = None,
+) -> dict[str, Any]:
+    """Demo-only stub for the visual SubAgent's visual_concepter tool.
+
+    Same rationale as :func:`content_analyst`: flattens the visual
+    SubAgent so the live runner sees a ``visual`` stage bracket.
+    """
+    return {
+        "tool": "visual_concepter",
+        "scene_id": scene_id,
+        "concepts": [
+            {
+                "shot_count": 1,
+                "style": "documentary",
+                "phrases": phrases or ["documentary establishing shot"],
+            }
+        ],
+    }
 
 
 class _ScriptedToolCallingModel(FakeMessagesListChatModel):
@@ -173,6 +219,17 @@ def _demo_chat_script(
             },
         ),
         _ai_tool_call(
+            "content_analyst",
+            {"scene_id": scene_id, "timeline_excerpt": timeline_payload},
+        ),
+        _ai_tool_call(
+            "visual_concepter",
+            {
+                "scene_id": scene_id,
+                "phrases": ["documentary establishing shot"],
+            },
+        ),
+        _ai_tool_call(
             "launch_visual_production",
             {"scene_id": scene_id, "visual_concept": visual_concept},
         ),
@@ -200,6 +257,8 @@ def _demo_tools() -> list[Any]:
         _placeholders.refine_scenario,
         _placeholders.evaluate_timing,
         _placeholders.launch_audio_render,
+        content_analyst,
+        visual_concepter,
         _placeholders.launch_visual_production,
         _placeholders.launch_assembly,
         _placeholders.launch_b2_sync,

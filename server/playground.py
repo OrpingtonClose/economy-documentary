@@ -19,6 +19,7 @@ import contextvars
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -1620,6 +1621,7 @@ async def _dispatch_pipeline_run(
         "output": None,
         "trajectory": None,
     }
+    run_dir: Path | None = None
     try:
         run_started = time.perf_counter()
         if mode == "live":
@@ -1706,6 +1708,8 @@ async def _dispatch_pipeline_run(
             except Exception:  # noqa: BLE001 — telemetry must never crash the run
                 logger.debug("pipeline run span close failed", exc_info=True)
         await stream.close(terminal=terminal)
+        if run_dir is not None:
+            shutil.rmtree(run_dir, ignore_errors=True)
 
 
 @router.post("/pipeline/runs", response_class=JSONResponse)
