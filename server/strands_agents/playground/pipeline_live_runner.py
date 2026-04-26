@@ -94,6 +94,7 @@ _TOOL_TO_STAGE: dict[str, str | None] = {
     "launch_audio_render": "audio",
     "content_analyst": "visual",
     "visual_concepter": "visual",
+    "propose_visual_concept": "visual",
     "launch_visual_production": "production",
     "launch_assembly": "assembly",
     "launch_b2_sync": "assembly",
