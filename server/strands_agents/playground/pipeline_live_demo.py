@@ -66,9 +66,54 @@ from strands_agents.playground.pipeline_live_real_workers import (
     apply_real_worker_overrides,
     build_real_worker_tools,
 )
-from strands_agents.timing_tool import evaluate_timing as real_evaluate_timing
+from strands_agents.timing_tool import compute_timing_report
 
 logger = logging.getLogger(__name__)
+
+
+# Slice 9f-timing-real: ``timing_tool.evaluate_timing`` is decorated with
+# the **Strands** ``@tool`` (see ``server/strands_agents/timing_tool.py``),
+# which produces a ``DecoratedFunctionTool`` incompatible with the
+# LangChain ``BaseTool`` interface that ``deepagents.create_deep_agent``
+# expects. We re-wrap the pure-Python core (``compute_timing_report``)
+# in a LangChain ``@tool`` so the demo's tool list stays homogeneous —
+# same pattern as :mod:`strands_agents._real_scenario_tools`.
+@tool
+def evaluate_timing(
+    scenes: list[dict[str, Any]],
+    whisperx_alignment: dict[str, Any],
+    target_duration_sec: float,
+    intent_target_sec: float | None = None,
+) -> dict[str, Any]:
+    """Compare narration durations against the documentary target.
+
+    Thin LangChain wrapper around
+    :func:`strands_agents.timing_tool.compute_timing_report` — kept in
+    lock-step with the Strands-decorated tool of the same name so the
+    orchestrator's timing loop sees identical semantics regardless of
+    which dispatch path it goes through. See ``timing_tool``'s module
+    docstring for the dual-tolerance schema.
+
+    Args:
+        scenes: Scene objects carrying ``voices[].text`` and per-scene
+            targets (``target_duration_sec`` / ``duration_sec``).
+        whisperx_alignment: WhisperX output with ``total_duration_sec``
+            and ``per_scene``.
+        target_duration_sec: Legacy target (from brief / blackboard).
+        intent_target_sec: Typed ``BriefIntent.duration_sec`` if
+            available; switches to the ±2 s absolute tolerance path
+            when set and positive.
+
+    Returns:
+        ``{"timing_passed": bool, "timing_report": {...}}`` — see
+        :func:`compute_timing_report` for the full report shape.
+    """
+    return compute_timing_report(
+        scenes=scenes,
+        whisperx_alignment=whisperx_alignment,
+        target_duration_sec=target_duration_sec,
+        intent_target_sec=intent_target_sec,
+    )
 
 
 @tool
@@ -476,7 +521,7 @@ def _demo_tools() -> list[Any]:
         # ``timing_passed`` against the scene-sum / intent target with
         # the dual-tolerance schema documented there. The placeholder
         # the demo previously bound just echoed args.
-        real_evaluate_timing,
+        evaluate_timing,
         _placeholders.launch_audio_render,
         content_analyst,
         visual_concepter,

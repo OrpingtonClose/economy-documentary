@@ -40,7 +40,7 @@ from strands_agents.playground.pipeline_live_real_workers import (
 )
 from strands_agents.timing_tool import (
     compute_timing_report,
-    evaluate_timing as real_evaluate_timing,
+    evaluate_timing as strands_evaluate_timing,
 )
 
 
@@ -50,25 +50,32 @@ from strands_agents.timing_tool import (
 
 
 class TestDemoBindsRealEvaluateTiming:
-    """The demo's tool list must use ``timing_tool.evaluate_timing``."""
+    """The demo's tool list must use the LangChain-wrapped real timing tool.
 
-    @staticmethod
-    def _tool_name(tool: Any) -> str | None:
-        """Resolve a name from either LangChain or Strands tool wrappers.
+    The Strands-decorated ``timing_tool.evaluate_timing`` is
+    incompatible with the LangChain ``BaseTool`` interface that
+    ``deepagents.create_deep_agent`` expects (see
+    :mod:`strands_agents._real_scenario_tools` for the same
+    constraint). The demo therefore binds
+    :func:`pipeline_live_demo.evaluate_timing` — a LangChain
+    ``StructuredTool`` that delegates to
+    :func:`strands_agents.timing_tool.compute_timing_report` — so the
+    semantics stay in lock-step with the Strands tool while the
+    interface stays homogeneous with the rest of the LangChain tool
+    list.
+    """
 
-        LangChain ``StructuredTool`` exposes ``.name``; Strands
-        ``DecoratedFunctionTool`` exposes ``.tool_name``.
-        """
-        return getattr(tool, "name", None) or getattr(tool, "tool_name", None)
-
-    def test_real_evaluate_timing_is_in_demo_tools(self) -> None:
+    def test_demo_evaluate_timing_is_in_demo_tools(self) -> None:
         tools = demo._demo_tools()
-        names = [self._tool_name(t) for t in tools]
+        names = [getattr(t, "name", None) for t in tools]
         assert names.count("evaluate_timing") == 1
-        # Identity check: bound tool must be the import from ``timing_tool``,
-        # not the placeholder echo from ``_placeholders``.
-        assert real_evaluate_timing in tools
+        # Identity check: bound tool must be the LangChain wrapper from
+        # ``pipeline_live_demo``, not the placeholder echo and not the
+        # Strands-decorated tool (which would silently fail at dispatch
+        # time inside LangGraph's ``ToolNode``).
+        assert demo.evaluate_timing in tools
         assert _placeholders.evaluate_timing not in tools
+        assert strands_evaluate_timing not in tools
 
     def test_placeholder_evaluate_timing_is_not_in_demo_tools(self) -> None:
         """Anti-drift: a future revert to placeholder must fail CI."""
@@ -78,20 +85,64 @@ class TestDemoBindsRealEvaluateTiming:
                 f"placeholder evaluate_timing leaked into demo tool list: {t}"
             )
 
-    def test_real_tool_signature_matches_timing_tool(self) -> None:
+    def test_strands_decorated_evaluate_timing_is_not_in_demo_tools(self) -> None:
+        """Anti-drift: the Strands ``DecoratedFunctionTool`` must NOT leak in.
+
+        LangGraph's ``ToolNode`` matches scripted tool calls by
+        ``.name``; Strands tools expose ``.tool_name`` instead, so a
+        Strands tool here would silently never dispatch.
+        """
+        tools = demo._demo_tools()
+        for t in tools:
+            assert t is not strands_evaluate_timing, (
+                "Strands-decorated evaluate_timing leaked into demo tool "
+                f"list (incompatible with LangChain BaseTool interface): {t}"
+            )
+
+    def test_demo_evaluate_timing_signature_matches_timing_tool(self) -> None:
         """The bound tool must accept the timing_tool argument keys."""
-        # ``DecoratedFunctionTool._tool_spec`` carries the JSON schema.
-        spec = real_evaluate_timing._tool_spec
-        schema = spec["inputSchema"]["json"]
+        # LangChain ``StructuredTool.args_schema`` exposes the pydantic
+        # model derived from the wrapped function's annotations.
+        schema = demo.evaluate_timing.args_schema.model_json_schema()
         required = set(schema.get("required", []))
+        properties = schema.get("properties", {})
         # The placeholder takes ``timeline`` / ``alignment``; the real
         # tool takes ``scenes`` / ``whisperx_alignment``. This pins the
         # expected shape.
         assert "scenes" in required
         assert "whisperx_alignment" in required
         assert "target_duration_sec" in required
-        assert "timeline" not in schema.get("properties", {})
-        assert "alignment" not in schema.get("properties", {})
+        assert "timeline" not in properties
+        assert "alignment" not in properties
+        # Optional ``intent_target_sec`` must be present so the
+        # orchestrator can switch into intent-mode tolerance.
+        assert "intent_target_sec" in properties
+
+    def test_demo_evaluate_timing_delegates_to_compute_timing_report(self) -> None:
+        """The wrapper must produce the same payload as the pure core.
+
+        Pins that ``demo.evaluate_timing`` is a thin pass-through, not a
+        re-implementation that could drift away from
+        :func:`compute_timing_report`'s contract.
+        """
+        scenes = [{"scene_id": "s1", "duration_sec": 30.0, "voices": []}]
+        whisperx_alignment = {
+            "total_duration_sec": 30.0,
+            "per_scene": [{"scene_id": "s1", "duration_sec": 30.0}],
+        }
+        wrapper_out = demo.evaluate_timing.invoke(
+            {
+                "scenes": scenes,
+                "whisperx_alignment": whisperx_alignment,
+                "target_duration_sec": 30.0,
+            }
+        )
+        core_out = compute_timing_report(
+            scenes=scenes,
+            whisperx_alignment=whisperx_alignment,
+            target_duration_sec=30.0,
+        )
+        assert wrapper_out == core_out
 
 
 # ---------------------------------------------------------------------------
