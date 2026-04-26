@@ -444,7 +444,14 @@ class TestDemoChatScriptMultiScene:
         assert ids == ["scene_001", "scene_002", "scene_003", "scene_004"]
 
     def test_timeline_payload_carries_all_scene_ids(self) -> None:
-        """``evaluate_timing`` + ``launch_assembly`` see every scene_id."""
+        """``evaluate_timing`` + ``launch_assembly`` see every scene_id.
+
+        Slice 9f-timing-real reshapes the ``evaluate_timing`` args from
+        ``timeline`` / ``alignment`` to ``scenes`` /
+        ``whisperx_alignment`` to match
+        :func:`strands_agents.timing_tool.evaluate_timing`. Both keys
+        must enumerate every scene in order.
+        """
         script = demo._demo_chat_script(
             topic="topic", target_duration_sec=60, language="en", num_scenes=3
         )
@@ -454,7 +461,14 @@ class TestDemoChatScriptMultiScene:
             for call in _tool_calls(msg)
             if call["name"] == "evaluate_timing"
         )
-        assert timing_call["args"]["timeline"]["scenes"] == [
+        scenes = timing_call["args"]["scenes"]
+        assert [s["scene_id"] for s in scenes] == [
+            "scene_001",
+            "scene_002",
+            "scene_003",
+        ]
+        per_scene = timing_call["args"]["whisperx_alignment"]["per_scene"]
+        assert [s["scene_id"] for s in per_scene] == [
             "scene_001",
             "scene_002",
             "scene_003",

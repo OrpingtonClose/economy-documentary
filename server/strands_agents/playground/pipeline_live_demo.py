@@ -66,6 +66,7 @@ from strands_agents.playground.pipeline_live_real_workers import (
     apply_real_worker_overrides,
     build_real_worker_tools,
 )
+from strands_agents.timing_tool import evaluate_timing as real_evaluate_timing
 
 logger = logging.getLogger(__name__)
 
@@ -324,6 +325,35 @@ def _demo_chat_script(
     scenes_payload = [
         {"id": s["scene_id"], "duration_sec": s["duration_sec"]} for s in scenes
     ]
+    # Slice 9f-timing-real: scenes_for_timing matches the shape
+    # ``timing_tool.evaluate_timing`` (component 02) consumes — every
+    # scene carries ``scene_id`` + ``duration_sec`` + an empty
+    # ``voices`` list (no inter-voice gap overhead in scripted demo).
+    # whisperx_alignment_payload mirrors what a real
+    # ``launch_audio_render`` dispatch surfaces: the actual rendered
+    # narration duration per scene plus the movie-wide
+    # ``total_duration_sec`` sum. The scripted demo seeds these from
+    # ``target_duration_sec`` so the timing loop short-circuits to
+    # ``timing_passed=True`` on the first pass — a real run swaps in
+    # the per-scene alignment from the TTS engine.
+    scenes_for_timing = [
+        {
+            "scene_id": s["scene_id"],
+            "duration_sec": s["duration_sec"],
+            "voices": [],
+        }
+        for s in scenes
+    ]
+    whisperx_alignment_payload = {
+        "total_duration_sec": float(sum(s["duration_sec"] for s in scenes)),
+        "per_scene": [
+            {
+                "scene_id": s["scene_id"],
+                "duration_sec": s["duration_sec"],
+            }
+            for s in scenes
+        ],
+    }
 
     script: list[AIMessage] = [
         _ai_tool_call(
@@ -360,8 +390,15 @@ def _demo_chat_script(
         _ai_tool_call(
             "evaluate_timing",
             {
-                "timeline": timeline_payload,
-                "alignment": {},
+                # Slice 9f-timing-real: pass the real ``scenes`` /
+                # ``whisperx_alignment`` shape the production timing
+                # tool consumes. The scripted demo doesn't render
+                # actual audio, so per-scene durations are seeded from
+                # ``target_duration_sec`` — the alignment is the
+                # ground truth a real run would carry forward from
+                # ``launch_audio_render``'s ``alignment`` envelope.
+                "scenes": scenes_for_timing,
+                "whisperx_alignment": whisperx_alignment_payload,
                 "target_duration_sec": float(target_duration_sec),
             },
         ),
@@ -433,7 +470,13 @@ def _demo_tools() -> list[Any]:
         _placeholders.generate_scenario,
         _placeholders.evaluate_scenario,
         _placeholders.refine_scenario,
-        _placeholders.evaluate_timing,
+        # Slice 9f-timing-real: real ``evaluate_timing`` from
+        # :mod:`strands_agents.timing_tool` (component 02). Consumes a
+        # WhisperX-shaped ``whisperx_alignment`` payload and computes
+        # ``timing_passed`` against the scene-sum / intent target with
+        # the dual-tolerance schema documented there. The placeholder
+        # the demo previously bound just echoed args.
+        real_evaluate_timing,
         _placeholders.launch_audio_render,
         content_analyst,
         visual_concepter,
