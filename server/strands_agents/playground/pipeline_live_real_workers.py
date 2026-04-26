@@ -45,6 +45,7 @@ import httpx
 from langchain_core.tools import tool
 
 from strands_agents import _placeholders
+from strands_agents._real_assembly_tools import build_real_assembly_tools
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,7 @@ def build_real_worker_tools(
     *,
     audio_worker_url: str | None = None,
     video_worker_url: str | None = None,
+    enable_real_assembly: bool | None = None,
 ) -> dict[str, Any]:
     """Return ``{tool_name: tool}`` overrides for the live demo.
 
@@ -343,11 +345,14 @@ def build_real_worker_tools(
             (placeholder used).
         video_worker_url: Base URL for the LTX-Video worker. ``None``
             disables real video dispatch.
+        enable_real_assembly: Optional explicit toggle for the slice
+            9g real assembly overlay. ``None`` falls through to the
+            ``ENABLE_REAL_ASSEMBLY`` env var.
 
     Returns:
         A possibly-empty dict mapping tool names to ``@tool``-decorated
-        callables. Empty when both URLs are missing — caller falls
-        back to the placeholder set.
+        callables. Empty when no overlay is active — caller falls back
+        to the placeholder set.
     """
     overrides: dict[str, Any] = {}
     audio = (audio_worker_url or os.environ.get("QWEN3_TTS_WORKER_URL", "")).rstrip("/")
@@ -360,6 +365,9 @@ def build_real_worker_tools(
         overrides["launch_visual_production"] = _build_visual_tool(
             run_dir=run_dir, worker_url=video
         )
+    overrides.update(
+        build_real_assembly_tools(run_dir=run_dir, enabled=enable_real_assembly)
+    )
     if not overrides:
         return overrides
     logger.info(

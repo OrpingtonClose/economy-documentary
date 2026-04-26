@@ -489,11 +489,31 @@ def _demo_chat_script(
         )
     )
 
+    # Slice 9g-assembly: pass per-scene ``clip_artifacts`` so the real
+    # assembly overlay (env-gated on ``ENABLE_REAL_ASSEMBLY=1``) can
+    # locate the per-scene mp4/wav files the audio/video dispatchers
+    # persisted under ``run_dir/artifacts/``. Each entry carries the
+    # ``scene_id`` and the scripted ``duration_sec`` so the envelope
+    # carries a movie-wide duration estimate forward. ``timeline`` /
+    # ``output_path`` stay on the call for backward compat with the
+    # placeholder echo.
+    clip_artifacts_payload = [
+        {
+            "scene_id": s["scene_id"],
+            "duration_sec": s["duration_sec"],
+        }
+        for s in scenes
+    ]
     script.extend(
         [
             _ai_tool_call(
                 "launch_assembly",
-                {"timeline": timeline_payload, "output_path": final_mp4_url},
+                {
+                    "timeline": timeline_payload,
+                    "output_path": final_mp4_url,
+                    "clip_artifacts": clip_artifacts_payload,
+                    "target_duration_sec": float(target_duration_sec),
+                },
             ),
             _ai_tool_call("launch_b2_sync", {"artifact_path": final_mp4_url}),
             _ai_final(f"Final master MP4: {final_mp4_url}"),
