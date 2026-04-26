@@ -43,6 +43,7 @@ from strands_agents.pipeline import (
     _build_interrupt_on,
     build_default_subagents,
     build_default_tools,
+    build_documentary_orchestrator,
     build_orchestrator,
 )
 from strands_agents.run import (
@@ -129,6 +130,250 @@ class TestDefaultTools:
     def test_tool_count(self) -> None:
         # 10 leaves + request_human_approval = 11
         assert len(build_default_tools()) == 11
+
+
+class TestRealWorkerOverlay:
+    """``build_documentary_orchestrator`` must wire real-worker
+    HTTP dispatchers into the production tool list when the worker
+    URL env vars are set, and pass placeholders through unchanged
+    when they are not. Slice 9e — closes the gap between the demo
+    route ``/pipeline?mode=live`` and the production ``run_documentary``.
+    """
+
+    def test_no_overlay_when_env_unset(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("QWEN3_TTS_WORKER_URL", raising=False)
+        monkeypatch.delenv("LTX_VIDEO_WORKER_URL", raising=False)
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+
+        audio = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_audio_render"
+        )
+        video = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_visual_production"
+        )
+        # Both should still be the placeholder objects from
+        # _placeholders, not the real-worker dispatch closures.
+        assert audio is _placeholders.launch_audio_render
+        assert video is _placeholders.launch_visual_production
+
+    def test_video_overlay_when_video_env_set(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("QWEN3_TTS_WORKER_URL", raising=False)
+        monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+
+        audio = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_audio_render"
+        )
+        video = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_visual_production"
+        )
+        # Audio still placeholder (TTS URL unset), video swapped.
+        assert audio is _placeholders.launch_audio_render
+        assert video is not _placeholders.launch_visual_production
+        assert getattr(video, "name", None) == "launch_visual_production"
+
+    def test_audio_overlay_when_audio_env_set(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
+        monkeypatch.delenv("LTX_VIDEO_WORKER_URL", raising=False)
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+
+        audio = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_audio_render"
+        )
+        video = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_visual_production"
+        )
+        assert audio is not _placeholders.launch_audio_render
+        assert getattr(audio, "name", None) == "launch_audio_render"
+        assert video is _placeholders.launch_visual_production
+
+    def test_both_overlays_when_both_env_set(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
+        monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+
+        names = [
+            getattr(t, "name", None) for t in captured["tools"]
+        ]
+        # Both names still present exactly once.
+        assert names.count("launch_audio_render") == 1
+        assert names.count("launch_visual_production") == 1
+
+        audio = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_audio_render"
+        )
+        video = next(
+            t for t in captured["tools"]
+            if getattr(t, "name", None) == "launch_visual_production"
+        )
+        assert audio is not _placeholders.launch_audio_render
+        assert video is not _placeholders.launch_visual_production
+
+    def test_other_tools_pass_through_unchanged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Tools that are not part of the worker overlay must keep
+        # their identity and ordering — overlays only target
+        # ``launch_audio_render`` and ``launch_visual_production``.
+        monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
+        monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+
+        # Non-overlaid tools should still be the canonical objects.
+        names_to_canonical = {
+            "generate_scenario": _placeholders.generate_scenario,
+            "evaluate_scenario": _placeholders.evaluate_scenario,
+            "refine_scenario": _placeholders.refine_scenario,
+            "evaluate_timing": _placeholders.evaluate_timing,
+            "launch_assembly": _placeholders.launch_assembly,
+            "launch_b2_sync": _placeholders.launch_b2_sync,
+            "check_tasks": _placeholders.check_tasks,
+            "await_tasks": _placeholders.await_tasks,
+            "request_human_approval": request_human_approval,
+        }
+        by_name = {
+            getattr(t, "name", None): t for t in captured["tools"]
+        }
+        for name, canonical in names_to_canonical.items():
+            assert by_name[name] is canonical, name
+
+    def test_tool_count_stable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Overlays must not add or drop tools — count stays at 11.
+        monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
+        monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
+        captured: dict[str, Any] = {}
+
+        def _capture(
+            run_dir: Path,
+            *,
+            model: Any = None,
+            tools: Any = None,
+            subagents: Any = None,
+            **_: Any,
+        ) -> str:
+            captured["tools"] = list(tools or [])
+            return "stub"
+
+        monkeypatch.setattr(
+            "strands_agents.pipeline.build_orchestrator",
+            _capture,
+        )
+        build_documentary_orchestrator(tmp_path, model=_fake_model())
+        assert len(captured["tools"]) == 11
 
 
 class TestDefaultSubagents:

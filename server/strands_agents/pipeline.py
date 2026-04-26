@@ -293,12 +293,27 @@ def build_documentary_orchestrator(
     ``tools=build_default_tools()`` and
     ``subagents=build_default_subagents()``. Placeholders fill in
     wherever a per-component PR has not yet merged.
-    """
 
+    When ``QWEN3_TTS_WORKER_URL`` and/or ``LTX_VIDEO_WORKER_URL``
+    are set in the environment, the corresponding placeholder tools
+    (``launch_audio_render`` / ``launch_visual_production``) are
+    swapped for real-worker HTTP dispatchers that POST to the live
+    workers and persist returned bytes under
+    ``run_dir/artifacts/``. Both URLs unset → all placeholders
+    pass through, matching pre-slice-9e behaviour exactly.
+    """
+    from .playground.pipeline_live_real_workers import (
+        apply_real_worker_overrides,
+        build_real_worker_tools,
+    )
+
+    base_tools = build_default_tools()
+    real_overrides = build_real_worker_tools(run_dir)
+    tools = apply_real_worker_overrides(base_tools, real_overrides)
     return build_orchestrator(
         run_dir,
         model=model,
-        tools=build_default_tools(),
+        tools=tools,
         subagents=build_default_subagents(),
     )
 
