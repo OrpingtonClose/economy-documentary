@@ -21,6 +21,7 @@ import {
   getComponentHealth,
   listComponents,
   listUserCases,
+  resolvePipelineApproval,
   runCase,
   saveUserCase,
 } from "@/lib/api";
@@ -235,6 +236,84 @@ describe("saveUserCase", () => {
     await expect(
       saveUserCase("c02", { name: "intent_exact", input: {}, confirm: true }),
     ).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe("resolvePipelineApproval", () => {
+  it("POSTs to /playground/approval/resume/{run}/{interrupt} with decision body", async () => {
+    const mock = installFetch(
+      jsonResponse({ status: "ok", decision_type: "approve" }),
+    );
+
+    const result = await resolvePipelineApproval("run-abc", "int-789", {
+      type: "approve",
+    });
+
+    const [url, init] = mock.mock.calls[0];
+    expect(url).toBe(
+      `${PLAYGROUND_BASE}/approval/resume/run-abc/int-789`,
+    );
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body ?? ""))).toEqual({ type: "approve" });
+    expect(result).toEqual({ status: "ok", decision_type: "approve" });
+  });
+
+  it("URL-encodes ids that contain reserved characters", async () => {
+    const mock = installFetch(
+      jsonResponse({ status: "ok", decision_type: "edit" }),
+    );
+
+    await resolvePipelineApproval("run/abc", "int 1", {
+      type: "edit",
+      edits: { scene_id: "s1" },
+    });
+
+    const [url] = mock.mock.calls[0];
+    expect(url).toBe(
+      `${PLAYGROUND_BASE}/approval/resume/run%2Fabc/int%201`,
+    );
+  });
+
+  it("propagates the full decision body including edits and feedback", async () => {
+    const mock = installFetch(
+      jsonResponse({ status: "ok", decision_type: "edit" }),
+    );
+
+    await resolvePipelineApproval("run-1", "int-1", {
+      type: "edit",
+      edits: { scene_id: "s1", prompt: "wide shot" },
+      feedback: "tighten the framing",
+    });
+
+    const [, init] = mock.mock.calls[0];
+    expect(JSON.parse(String(init?.body ?? ""))).toEqual({
+      type: "edit",
+      edits: { scene_id: "s1", prompt: "wide shot" },
+      feedback: "tighten the framing",
+    });
+  });
+
+  it("raises PlaygroundApiError on 404 (gate not pending)", async () => {
+    installFetch(
+      new Response("not pending", { status: 404, statusText: "Not Found" }),
+    );
+
+    await expect(
+      resolvePipelineApproval("run-x", "int-y", { type: "approve" }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("raises PlaygroundApiError on 400 (invalid decision)", async () => {
+    installFetch(
+      new Response("edit decision requires args", {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    await expect(
+      resolvePipelineApproval("run-x", "int-y", { type: "edit" }),
+    ).rejects.toBeInstanceOf(PlaygroundApiError);
   });
 });
 

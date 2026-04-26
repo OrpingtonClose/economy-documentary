@@ -490,6 +490,14 @@ class LivePipelineRun:
     operator_decision: "OperatorDecision | None" = None
     max_interrupt_rounds: int = 32
     per_event_delay_s: float = 0.0
+    run_id: str | None = None
+    """Playground :class:`RunStream` id surfaced on
+    ``pipeline.approval_gate`` events so the frontend can post the
+    operator decision to the right
+    ``/playground/approval/resume/{run_id}/{interrupt_id}`` URL.
+    Optional; ``None`` falls back to the in-event ``stream.run_id``
+    so the legacy auto-accept demo path stays untouched.
+    """
 
     async def run(self, stream: RunStream) -> dict[str, Any]:
         """Drive the orchestrator to completion and return a terminal dict.
@@ -543,6 +551,7 @@ class LivePipelineRun:
                     )
                 interrupt_id, tool_name, payload = _extract_hitl_interrupt(state)
                 gate_count += 1
+                resume_run_id = self.run_id or stream.run_id
                 await _emit_translated(
                     stream,
                     "pipeline.approval_gate",
@@ -551,6 +560,8 @@ class LivePipelineRun:
                         "allowed_decisions": payload.get("allowed_decisions")
                         or _default_allowed_for(tool_name),
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
+                        "args": payload.get("args"),
                     },
                 )
                 command = await operator(state)
@@ -562,6 +573,7 @@ class LivePipelineRun:
                         "gate_name": tool_name,
                         "decision": decision,
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
                     },
                 )
                 if self.per_event_delay_s > 0:

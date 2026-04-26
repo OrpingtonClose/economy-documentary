@@ -203,6 +203,53 @@ export function runEventsUrl(runId: string): string {
 }
 
 /**
+ * Operator decision payload accepted by ``POST /playground/approval/
+ * resume/{run_id}/{interrupt_id}``.
+ *
+ * Mirrors :class:`server.strands_agents.approval.ApprovalDecision`.
+ * The ``type`` field is the operator's verdict; ``edits`` carries
+ * mutated tool args for ``"edit"`` (orchestrator re-plans against
+ * them); ``feedback`` is a human-readable explanation surfaced on
+ * the audit record for ``"reject"`` and ``"respond"``.
+ */
+export interface ApprovalDecisionBody {
+  readonly type: "approve" | "edit" | "reject" | "respond";
+  readonly edits?: Record<string, unknown>;
+  readonly feedback?: string;
+}
+
+/** Response shape of ``/playground/approval/resume/...``. */
+export interface ResolveApprovalResponse {
+  readonly status: string;
+  readonly decision_type: string;
+}
+
+/**
+ * Submit an operator decision for a pending pipeline gate.
+ *
+ * The frontend extracts ``run_id`` + ``interrupt_id`` from the
+ * ``pipeline.approval.waiting`` SSE event surfaced on the run
+ * stream. The pipeline orchestrator awaits the same future this
+ * call resolves; once it returns the run resumes with the
+ * decision applied.
+ *
+ * @throws PlaygroundApiError when the gate is not pending (404),
+ *   the decision is malformed (400), or any non-2xx response.
+ */
+export async function resolvePipelineApproval(
+  runId: string,
+  interruptId: string,
+  decision: ApprovalDecisionBody,
+): Promise<ResolveApprovalResponse> {
+  return postJson<ResolveApprovalResponse>(
+    `/approval/resume/${encodeURIComponent(runId)}/${encodeURIComponent(
+      interruptId,
+    )}`,
+    decision,
+  );
+}
+
+/**
  * Fetch the Langfuse observability config.
  *
  * Called once per workbench mount so the "View Trace" button can

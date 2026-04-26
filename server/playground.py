@@ -74,6 +74,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/playground", tags=["playground"])
 
+# Slice 9i: mount the operator-console approval router under
+# ``/playground/approval/...`` so the same-origin frontend can post
+# operator decisions without crossing the playground prefix
+# boundary. ``api.approval`` exports ``router()`` returning a router
+# pre-bound to the process-wide ``PendingInterruptQueue`` singleton.
+# Tests build their own queue via :func:`api.approval.build_router`.
+try:
+    from api.approval import router as _approval_router_factory
+
+    router.include_router(_approval_router_factory())
+except ImportError:  # pragma: no cover - defensive; always installed in this repo
+    logger.warning("api.approval router unavailable; HITL endpoints disabled")
+
 
 def _serialise_model(model: DeclaredModel) -> dict[str, str]:
     return {"id": model.id, "provider": model.provider, "role": model.role}
@@ -1633,6 +1646,9 @@ async def _dispatch_pipeline_run(
     from strands_agents.playground.pipeline_live_demo import (
         build_demo_live_agent,
     )
+    from strands_agents.playground.pipeline_live_hitl import (
+        maybe_build_pipeline_hitl_operator,
+    )
     from strands_agents.playground.pipeline_live_runner import (
         LivePipelineRun,
     )
@@ -1663,6 +1679,16 @@ async def _dispatch_pipeline_run(
                 language=language,
                 num_scenes=num_scenes,
             )
+            # Slice 9i: when ``ENABLE_PIPELINE_HITL`` is set, swap the
+            # default ``auto_accept_interrupt`` for a queue-backed
+            # operator handler so the playground gates pause until
+            # the operator console (``POST /playground/approval/
+            # resume/{run_id}/{interrupt_id}``) submits a real
+            # decision. Unset env keeps the legacy auto-accept demo.
+            operator_decision = maybe_build_pipeline_hitl_operator(
+                run_id=stream.run_id,
+                run_dir=run_dir,
+            )
             live_runner = LivePipelineRun(
                 topic=topic,
                 target_duration_sec=target_duration_sec,
@@ -1672,6 +1698,8 @@ async def _dispatch_pipeline_run(
                 # Small per-event delay so the UI sees a progress-shaped
                 # timeline rather than a wall of events in one frame.
                 per_event_delay_s=0.15,
+                run_id=stream.run_id,
+                operator_decision=operator_decision,
             )
             result = await live_runner.run(stream)
         else:
