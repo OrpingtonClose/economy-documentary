@@ -23,11 +23,16 @@ At engine startup, :func:`verify_pin` is called *before* any model is
 loaded. It
 
 1. Calls ``huggingface_hub.snapshot_download`` with ``revision`` set to
-   the pinned commit SHA and ``allow_patterns`` set to the required
-   files. This either pulls the exact bytes from HF (or
-   ``HF_ENDPOINT`` mirror) into the local cache, or — if the cache
-   already has a snapshot at that revision — returns the local
-   snapshot dir without a network round trip.
+   the pinned commit SHA. By default the *whole* revision is pulled
+   so ``from_pretrained(snapshot_dir)`` can find sibling configs and
+   tokenizers; pins that target a CLI taking a single safetensors path
+   may set :attr:`ModelPin.download_allow_patterns` to restrict the
+   download to that pattern set, matching the bootstrap's intent and
+   avoiding ~70+ GB of unused-asset re-downloads on first render.
+   The call either pulls the exact bytes from HF (or ``HF_ENDPOINT``
+   mirror) into the local cache, or — if the cache already has a
+   snapshot at that revision — returns the local snapshot dir without
+   a network round trip.
 2. Computes SHA256 of every required file on disk.
 3. Compares each hash to the pinned ``required_files`` value.
 4. Raises :class:`ModelPinMismatchError` on the *first* mismatch.
@@ -96,12 +101,23 @@ class ModelPin:
             this map is verified at startup.
         purpose: Short human-readable label used in log lines and
             error messages — e.g. ``"qwen3-tts"`` or ``"ltx-video"``.
+        download_allow_patterns: Optional tuple of glob patterns
+            (matching the bootstrap's ``allow_patterns`` set) to pass
+            through to ``snapshot_download`` when materializing this
+            pin's snapshot. ``None`` (default) downloads the whole
+            revision — required for pins handed to ``from_pretrained``
+            because it needs sibling configs / tokenizers. Set to a
+            tight pattern set (e.g. ``("ltx-2.3-22b-dev.safetensors",)``)
+            for pins consumed by CLIs that take a single safetensors
+            path, so first-render does not silently re-download the
+            unused assets in the rest of the repo.
     """
 
     model_id: str
     revision: str
     required_files: Mapping[str, str]
     purpose: str
+    download_allow_patterns: tuple[str, ...] | None = None
 
 
 def _hash_file_sha256(path: Path) -> str:
@@ -123,15 +139,26 @@ def _hash_file_sha256(path: Path) -> str:
 def _materialize_snapshot(pin: ModelPin) -> Path:
     """Resolve the local snapshot directory for the pin.
 
-    Calls ``huggingface_hub.snapshot_download`` for the **whole**
-    pinned revision — not just the required-files set — because the
-    snapshot dir is handed to ``from_pretrained(snapshot_dir)`` as a
-    local path. ``from_pretrained`` does not auto-download missing
-    siblings (config.json, model_index.json, tokenizer/, scheduler/,
-    etc.) when given a local path, so all of them need to be on disk
-    too. ``verify_pin`` still hashes only the integrity-critical
-    files in ``pin.required_files``; the unhashed configs are
-    downloaded but not part of the integrity contract.
+    By default calls ``huggingface_hub.snapshot_download`` for the
+    **whole** pinned revision — not just the required-files set —
+    because the snapshot dir is typically handed to
+    ``from_pretrained(snapshot_dir)`` as a local path, and
+    ``from_pretrained`` does not auto-download missing siblings
+    (config.json, model_index.json, tokenizer/, scheduler/, etc.)
+    when given a local path.
+
+    Pins that target a CLI taking a single safetensors path can opt
+    into a tighter download by setting
+    :attr:`ModelPin.download_allow_patterns`; the patterns are
+    forwarded verbatim to ``snapshot_download``. This matches the
+    bootstrap's ``allow_patterns`` set and prevents first-render from
+    silently completing the rest of the repo (~70+ GB of unused
+    distilled checkpoints / upscalers / LoRAs for LTX-2.3, for
+    example).
+
+    ``verify_pin`` still hashes only the integrity-critical files in
+    ``pin.required_files``; the unhashed configs are downloaded but
+    not part of the integrity contract.
 
     If the snapshot is already in the local HF cache at the pinned
     revision, no network round trip happens.
@@ -143,10 +170,13 @@ def _materialize_snapshot(pin: ModelPin) -> Path:
     """
     from huggingface_hub import snapshot_download  # noqa: PLC0415
 
-    snapshot_dir = snapshot_download(
-        repo_id=pin.model_id,
-        revision=pin.revision,
-    )
+    kwargs: dict[str, object] = {
+        "repo_id": pin.model_id,
+        "revision": pin.revision,
+    }
+    if pin.download_allow_patterns is not None:
+        kwargs["allow_patterns"] = list(pin.download_allow_patterns)
+    snapshot_dir = snapshot_download(**kwargs)
     return Path(snapshot_dir)
 
 

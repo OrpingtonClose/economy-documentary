@@ -59,6 +59,7 @@ Design contract (versus :class:`SimulatedPipelineRun`):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -199,6 +200,81 @@ async def _emit_translated(
     )
 
 
+#: Whitelisted dispatcher-envelope fields lifted from a real-worker
+#: tool's return value into the ``pipeline.tool.X.end`` detail. Kept
+#: small and explicit so an arbitrary tool return cannot leak large
+#: payloads (e.g. base64 audio/video) into the SSE wire.
+_ENVELOPE_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    "engine",
+    "wav_bytes_len",
+    "mp4_bytes_len",
+    "status_code",
+    "wav_path",
+    "mp4_path",
+)
+
+
+def _extract_envelope_fields(output: Any) -> dict[str, Any]:
+    """Pull whitelisted envelope fields out of a tool's return value.
+
+    The real-worker dispatch tools in
+    :mod:`strands_agents.playground.pipeline_live_real_workers`
+    return a placeholder-shaped envelope::
+
+        {"status": ..., "tool": ..., "args": {"engine": ..., "wav_bytes_len": ..., ...}}
+
+    LangChain's tool-end callback may pass that return value through
+    as the dict itself, as a :class:`ToolMessage` whose ``content`` is
+    the dict, or as a JSON-serialised string (the
+    ``ToolNode`` path stringifies non-string returns). This helper
+    handles all three shapes and extracts the whitelisted keys from
+    the ``args`` map (or the top-level dict, for placeholder-shaped
+    tools that don't nest their fields).
+
+    Defensive: returns an empty dict when ``output`` is malformed or
+    when no whitelisted keys are present. Never raises.
+    """
+    try:
+        normalised: Any = output
+
+        if not isinstance(normalised, dict):
+            content = getattr(normalised, "content", None)
+            if content is not None:
+                normalised = content
+
+        if isinstance(normalised, str):
+            stripped = normalised.strip()
+            if stripped.startswith("{"):
+                try:
+                    normalised = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return {}
+            else:
+                return {}
+
+        if not isinstance(normalised, dict):
+            return {}
+
+        candidates: list[dict[str, Any]] = []
+        args = normalised.get("args")
+        if isinstance(args, dict):
+            candidates.append(args)
+        candidates.append(normalised)
+
+        extracted: dict[str, Any] = {}
+        for source in candidates:
+            for key in _ENVELOPE_PASSTHROUGH_KEYS:
+                if key in extracted:
+                    continue
+                value = source.get(key)
+                if value is None:
+                    continue
+                extracted[key] = value
+        return extracted
+    except Exception:  # noqa: BLE001 — never break the run on extraction
+        return {}
+
+
 class _PipelineCallbackHandler(AsyncCallbackHandler):
     """LangChain async callback that forwards tool events to the stream.
 
@@ -300,15 +376,19 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
             elapsed_ms = (
                 int((time.perf_counter() - start) * 1000) if start is not None else -1
             )
+            payload: dict[str, Any] = {
+                "tool": tool_name,
+                "agent": "orchestrator",
+                "elapsed_ms": elapsed_ms,
+                "ok": True,
+            }
+            envelope = _extract_envelope_fields(output)
+            if envelope:
+                payload["envelope"] = envelope
             await _emit_translated(
                 self._stream,
                 "pipeline.tool_call_finished",
-                {
-                    "tool": tool_name,
-                    "agent": "orchestrator",
-                    "elapsed_ms": elapsed_ms,
-                    "ok": True,
-                },
+                payload,
             )
         except Exception:  # noqa: BLE001 — emit must never break the run
             logger.debug("on_tool_end emit failed", exc_info=True)

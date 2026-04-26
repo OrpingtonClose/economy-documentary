@@ -87,8 +87,8 @@ def test_every_component_declares_kind_and_row() -> None:
 def test_catalog_experiment_cases_cover_every_component() -> None:
     exp = build_playground_catalog_experiment()
     # 1 list-endpoint case + 2 per component (detail + cases) + 1
-    # 404 case. 23 components (15 pipeline + 8 infra) → 1 + 46 + 1 = 48.
-    assert len(exp.cases) == 48
+    # 404 case. 24 components (15 pipeline + 9 infra) → 1 + 48 + 1 = 50.
+    assert len(exp.cases) == 50
     detail_cases = {c.name for c in exp.cases if c.name.startswith("detail_")}
     cases_cases = {c.name for c in exp.cases if c.name.startswith("cases_")}
     for component_id in ALL_COMPONENT_IDS:

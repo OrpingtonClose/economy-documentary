@@ -62,6 +62,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from strands_agents import _placeholders
 from strands_agents.approval import request_human_approval
 from strands_agents.pipeline import build_orchestrator
+from strands_agents.playground.pipeline_live_real_workers import (
+    apply_real_worker_overrides,
+    build_real_worker_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +212,7 @@ def _demo_chat_script(
         ),
         _ai_tool_call(
             "launch_audio_render",
-            {"scene_id": scene_id, "voice_id": "default"},
+            {"scene_id": scene_id, "voice_id": "Ryan"},
         ),
         _ai_tool_call(
             "evaluate_timing",
@@ -299,6 +303,9 @@ def build_demo_live_agent(
     chat_model = _ScriptedToolCallingModel(
         responses=_demo_chat_script(topic, target_duration_sec, language),
     )
+    base_tools = _demo_tools()
+    real_overrides = build_real_worker_tools(run_dir)
+    tools = apply_real_worker_overrides(base_tools, real_overrides)
     # langchain HITL middleware vocabulary: ``approve`` / ``edit`` /
     # ``reject``. The project's operator-console vocabulary
     # (``accept`` / ``respond`` / …) is translated at the queue
@@ -319,7 +326,7 @@ def build_demo_live_agent(
     return build_orchestrator(
         run_dir,
         model=chat_model,
-        tools=_demo_tools(),
+        tools=tools,
         # The demo skips SubAgent delegation — the visual / production
         # SubAgents add a layer of indirection that is exercised
         # separately. The demo chat script calls

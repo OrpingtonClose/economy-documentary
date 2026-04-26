@@ -29,12 +29,16 @@ from types import MappingProxyType
 
 import pytest
 
+from strands_agents import _model_pin as model_pin_module
 from strands_agents._model_pin import (
     ModelPin,
     ModelPinMismatchError,
     verify_pin,
 )
-from strands_agents.ltx_video_worker._model_pin import LTX_VIDEO_PIN
+from strands_agents.ltx_video_worker._model_pin import (
+    LTX_VIDEO_GEMMA_PIN,
+    LTX_VIDEO_PIN,
+)
 from strands_agents.qwen3_tts_worker._model_pin import QWEN3_TTS_PIN
 
 
@@ -215,6 +219,7 @@ def _is_hex(s: str, length: int) -> bool:
     [
         pytest.param(QWEN3_TTS_PIN, id="qwen3-tts"),
         pytest.param(LTX_VIDEO_PIN, id="ltx-video"),
+        pytest.param(LTX_VIDEO_GEMMA_PIN, id="ltx-video-gemma"),
     ],
 )
 def test_production_pin_revision_is_full_commit_sha(pin: ModelPin) -> None:
@@ -230,6 +235,7 @@ def test_production_pin_revision_is_full_commit_sha(pin: ModelPin) -> None:
     [
         pytest.param(QWEN3_TTS_PIN, id="qwen3-tts"),
         pytest.param(LTX_VIDEO_PIN, id="ltx-video"),
+        pytest.param(LTX_VIDEO_GEMMA_PIN, id="ltx-video-gemma"),
     ],
 )
 def test_production_pin_required_files_use_full_sha256(pin: ModelPin) -> None:
@@ -249,22 +255,134 @@ def test_qwen3_tts_pin_targets_customvoice_checkpoint() -> None:
     assert "speech_tokenizer/model.safetensors" in QWEN3_TTS_PIN.required_files
 
 
+# ---------------------------------------------------------------------
+# download_allow_patterns — first-render download must respect bootstrap intent
+# ---------------------------------------------------------------------
+
+
+def test_materialize_snapshot_forwards_allow_patterns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pin with ``download_allow_patterns`` must forward them verbatim."""
+    captured: dict[str, object] = {}
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return str(tmp_path)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    pin = ModelPin(
+        model_id="acme/foo",
+        revision="0" * 40,
+        required_files=MappingProxyType({"weights.safetensors": "0" * 64}),
+        purpose="test",
+        download_allow_patterns=("weights.safetensors",),
+    )
+    out = model_pin_module._materialize_snapshot(pin)  # noqa: SLF001
+    assert out == tmp_path
+    assert captured["repo_id"] == "acme/foo"
+    assert captured["revision"] == "0" * 40
+    assert captured["allow_patterns"] == ["weights.safetensors"]
+
+
+def test_materialize_snapshot_omits_allow_patterns_when_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pin without ``download_allow_patterns`` must not pass the kwarg."""
+    captured: dict[str, object] = {}
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return str(tmp_path)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    pin = ModelPin(
+        model_id="acme/foo",
+        revision="0" * 40,
+        required_files=MappingProxyType({"weights.safetensors": "0" * 64}),
+        purpose="test",
+    )
+    model_pin_module._materialize_snapshot(pin)  # noqa: SLF001
+    assert "allow_patterns" not in captured
+
+
+def test_ltx_video_pin_download_pattern_matches_bootstrap() -> None:
+    """LTX-2.3 must restrict its on-demand download to the BASIC checkpoint.
+
+    The bootstrap (``scripts/ltx_video_worker_bootstrap.sh``) already
+    pre-downloads only ``ltx-2.3-22b-dev.safetensors`` via
+    ``allow_patterns``. The pin's ``download_allow_patterns`` field
+    must mirror that so the engine's on-first-render
+    ``snapshot_download`` call does not silently complete the rest of
+    the ~70+ GB repo (distilled checkpoints, upscalers, LoRAs that
+    the BASIC pipeline never reads).
+    """
+    assert LTX_VIDEO_PIN.download_allow_patterns == (
+        "ltx-2.3-22b-dev.safetensors",
+    )
+
+
+def test_gemma_pin_download_patterns_unset() -> None:
+    """Gemma must download its full repo so the encoder can find configs."""
+    assert LTX_VIDEO_GEMMA_PIN.download_allow_patterns is None
+
+
+def test_qwen3_tts_pin_download_patterns_unset() -> None:
+    """Qwen3-TTS uses ``from_pretrained`` and needs its full repo."""
+    assert QWEN3_TTS_PIN.download_allow_patterns is None
+
+
 def test_ltx_video_pin_targets_ltx_2_3() -> None:
-    """The video pin MUST point at LTX-2.3 (mandatory per user rule)."""
+    """The video pin MUST point at LTX-2.3 (mandatory per user rule).
+
+    Required-files set is restricted to the safetensors that the
+    ``ltx_pipelines.ti2vid_one_stage`` BASIC pipeline actually loads:
+    a single base checkpoint. Other LTX-2.3 assets (distilled
+    checkpoints, spatial / temporal upscalers, distilled LoRAs)
+    exist in the repo but are not read by the BASIC pipeline, so
+    verifying them every startup would burn ~70 GB of disk reads
+    for no integrity gain.
+    """
     assert LTX_VIDEO_PIN.model_id == "Lightricks/LTX-2.3"
     expected_files = {
         "ltx-2.3-22b-dev.safetensors",
-        "ltx-2.3-22b-distilled-1.1.safetensors",
-        "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
-        "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
-        "ltx-2.3-temporal-upscaler-x2-1.0.safetensors",
     }
     assert set(LTX_VIDEO_PIN.required_files) == expected_files
 
 
+def test_ltx_video_gemma_pin_targets_unquantized_gemma_3_12b() -> None:
+    """The Gemma pin MUST point at Lightricks' non-gated Gemma-3-12B mirror.
+
+    LTX-2.3's ``PromptEncoder`` requires Gemma-3-12B as its text
+    encoder. The official ``google/gemma-3-12b-it-qat-q4_0-unquantized``
+    repo is gated, but Lightricks publishes a byte-identical re-host
+    at ``Lightricks/gemma-3-12b-it-qat-q4_0-unquantized`` that is
+    pullable without a license-acceptance token. The BASIC
+    ``ti2vid_one_stage`` pipeline receives the snapshot dir verified
+    by this pin via ``--gemma-root``.
+    """
+    assert LTX_VIDEO_GEMMA_PIN.model_id == (
+        "Lightricks/gemma-3-12b-it-qat-q4_0-unquantized"
+    )
+    # Gemma-3-12B ships as 5 sharded safetensors files.
+    expected_files = {
+        f"model-0000{i}-of-00005.safetensors" for i in range(1, 6)
+    }
+    assert set(LTX_VIDEO_GEMMA_PIN.required_files) == expected_files
+
+
 def test_pins_have_unique_purposes() -> None:
     """Purposes are used in error messages — each worker needs its own."""
-    purposes = {QWEN3_TTS_PIN.purpose, LTX_VIDEO_PIN.purpose}
-    assert len(purposes) == 2
+    purposes = {
+        QWEN3_TTS_PIN.purpose,
+        LTX_VIDEO_PIN.purpose,
+        LTX_VIDEO_GEMMA_PIN.purpose,
+    }
+    assert len(purposes) == 3
     assert "qwen3-tts" in purposes
     assert "ltx-video" in purposes
+    assert "ltx-video-gemma" in purposes
