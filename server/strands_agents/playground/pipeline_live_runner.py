@@ -77,7 +77,7 @@ from strands_agents.playground.pipeline_adapter import (
     PIPELINE_STAGES,
     translate_pipeline_event,
 )
-from strands_agents.run import _extract_interrupt_metadata
+from strands_agents.run import _ensure_interrupt_id, _extract_interrupt_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -728,11 +728,12 @@ def _extract_hitl_interrupt(
     if not isinstance(value, dict):
         value = {}
 
-    interrupt_id: str | None = (
-        interrupt.get("id")
-        if isinstance(interrupt, dict)
-        else getattr(interrupt, "id", None)
-    )
+    # Mutate the interrupt to carry a stable id even when the
+    # middleware shape doesn't ship one. The queue-backed
+    # :func:`queue_operator_decision` handler re-extracts metadata
+    # from the same interrupt object and must return the identical
+    # id, otherwise the frontend POSTs to a 404.
+    interrupt_id = _ensure_interrupt_id(interrupt)
 
     action_requests = value.get("action_requests")
     if isinstance(action_requests, list) and action_requests:
@@ -750,7 +751,7 @@ def _extract_hitl_interrupt(
                             allowed = [str(d) for d in ad]
                             break
             return (
-                str(interrupt_id) if interrupt_id else "",
+                interrupt_id,
                 tool_name,
                 {
                     "args": args if isinstance(args, dict) else {},

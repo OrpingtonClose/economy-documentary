@@ -316,10 +316,130 @@ class TestApprovalRouterRoundTrip:
         assert response.status_code == 400
 
 
+# ---------------------------------------------------------------------------
+# Interrupt-id stability between SSE event and queue handler
+# ---------------------------------------------------------------------------
+
+
+class TestInterruptIdStability:
+    """Pin the invariant that the SSE event and the queue handler
+    derive the *same* ``interrupt_id`` for a single interrupt round.
+
+    The frontend resumes via
+    ``POST /approval/resume/{run_id}/{interrupt_id}``. If the
+    pipeline runner emits one id on
+    ``pipeline.approval_gate`` while
+    :func:`queue_operator_decision` registers a different id on the
+    queue, every operator decision lands as a 404 and the gate hangs
+    forever.
+    """
+
+    def _interrupt_state(
+        self,
+        *,
+        with_id: bool,
+        action_requests: bool,
+    ) -> dict[str, Any]:
+        if action_requests:
+            value: dict[str, Any] = {
+                "action_requests": [
+                    {
+                        "name": "launch_visual_production",
+                        "args": {"scene_id": "s1"},
+                        "description": "render scene 1",
+                    }
+                ],
+                "review_configs": [
+                    {
+                        "action_name": "launch_visual_production",
+                        "allowed_decisions": ["accept", "edit", "reject"],
+                    }
+                ],
+            }
+        else:
+            value = {
+                "tool_name": "launch_visual_production",
+                "tool_input": {"scene_id": "s1"},
+                "allowed_decisions": ["accept", "edit", "reject"],
+            }
+        interrupt: dict[str, Any] = {"value": value}
+        if with_id:
+            interrupt["id"] = "int-preset-42"
+        return {"__interrupt__": [interrupt]}
+
+    def test_action_requests_path_without_id_is_stable(self) -> None:
+        from strands_agents.playground.pipeline_live_runner import (
+            _extract_hitl_interrupt,
+        )
+        from strands_agents.run import _extract_interrupt_metadata
+
+        state = self._interrupt_state(with_id=False, action_requests=True)
+        runner_id, runner_tool, _runner_payload = _extract_hitl_interrupt(state)
+        queue_id, _queue_tool, _queue_payload = _extract_interrupt_metadata(state)
+
+        assert runner_id == queue_id
+        assert runner_id != ""
+        assert runner_tool == "launch_visual_production"
+
+    def test_legacy_path_without_id_is_stable(self) -> None:
+        from strands_agents.playground.pipeline_live_runner import (
+            _extract_hitl_interrupt,
+        )
+        from strands_agents.run import _extract_interrupt_metadata
+
+        state = self._interrupt_state(with_id=False, action_requests=False)
+        runner_id, runner_tool, _ = _extract_hitl_interrupt(state)
+        queue_id, queue_tool, _ = _extract_interrupt_metadata(state)
+
+        assert runner_id == queue_id
+        assert runner_id != ""
+        assert runner_tool == queue_tool == "launch_visual_production"
+
+    def test_preset_id_is_preserved(self) -> None:
+        from strands_agents.playground.pipeline_live_runner import (
+            _extract_hitl_interrupt,
+        )
+        from strands_agents.run import _extract_interrupt_metadata
+
+        state = self._interrupt_state(with_id=True, action_requests=True)
+        runner_id, _, _ = _extract_hitl_interrupt(state)
+        queue_id, _, _ = _extract_interrupt_metadata(state)
+
+        assert runner_id == queue_id == "int-preset-42"
+
+    def test_object_interrupt_without_id_is_stable(self) -> None:
+        """Real LangGraph hands us dataclass-like objects, not dicts."""
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _extract_hitl_interrupt,
+        )
+        from strands_agents.run import _extract_interrupt_metadata
+
+        class _Interrupt:
+            def __init__(self) -> None:
+                self.value = {
+                    "tool_name": "launch_assembly",
+                    "tool_input": {},
+                    "allowed_decisions": ["accept", "reject"],
+                }
+                self.id: str | None = None
+
+        interrupt = _Interrupt()
+        state: dict[str, Any] = {"__interrupt__": [interrupt]}
+
+        runner_id, _, _ = _extract_hitl_interrupt(state)
+        queue_id, _, _ = _extract_interrupt_metadata(state)
+
+        assert runner_id == queue_id
+        assert runner_id != ""
+        assert interrupt.id == runner_id
+
+
 __all__ = [
     "TestApprovalRouterRoundTrip",
     "TestBuildPipelineHitlOperator",
     "TestHitlRunIdHeader",
+    "TestInterruptIdStability",
     "TestIsPipelineHitlEnabled",
     "TestLivePipelineRunIdSurface",
     "TestMaybeBuildPipelineHitlOperator",

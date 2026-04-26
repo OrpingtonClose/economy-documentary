@@ -86,6 +86,46 @@ async def _auto_reject_interrupt(state: dict[str, Any]) -> Command:
     )
 
 
+def _ensure_interrupt_id(interrupt: Any) -> str:
+    """Read or assign a stable id on the first pending interrupt.
+
+    Both the SSE-event extractor in :mod:`pipeline_live_runner` and
+    the queue-backed handler in :func:`queue_operator_decision`
+    derive the resume coordinates from ``state["__interrupt__"][0]``.
+    LangGraph interrupts normally carry an ``id`` field, but the
+    project-native escalation path (``request_human_approval``) and
+    a few middleware shapes do not. If each extractor minted its own
+    UUID, the SSE event and the queue registration would disagree
+    and the frontend ``POST /approval/resume/{run_id}/{interrupt_id}``
+    would 404 forever.
+
+    Mutate the interrupt in-place so every subsequent extraction in
+    this round resolves to the same id.
+    """
+
+    if isinstance(interrupt, dict):
+        existing = interrupt.get("id")
+        if existing:
+            return str(existing)
+        new_id = new_interrupt_id()
+        interrupt["id"] = new_id
+        return new_id
+
+    existing = getattr(interrupt, "id", None)
+    if existing:
+        return str(existing)
+    new_id = new_interrupt_id()
+    try:
+        setattr(interrupt, "id", new_id)
+    except (AttributeError, TypeError):
+        # Frozen dataclasses / Pydantic ``model_config={"frozen": True}``
+        # reject attribute assignment. The id is still stable per call
+        # site for objects without ``id`` mutation, since both
+        # extractors call this helper on the same interrupt instance.
+        pass
+    return new_id
+
+
 def _extract_interrupt_metadata(
     state: dict[str, Any],
 ) -> tuple[str, str, dict[str, Any]]:
@@ -110,13 +150,7 @@ def _extract_interrupt_metadata(
     if not isinstance(value, dict):
         value = {}
 
-    interrupt_id: str | None = (
-        interrupt.get("id")
-        if isinstance(interrupt, dict)
-        else getattr(interrupt, "id", None)
-    )
-    if not interrupt_id:
-        interrupt_id = new_interrupt_id()
+    interrupt_id = _ensure_interrupt_id(interrupt)
 
     tool_name = (
         value.get("tool_name")
