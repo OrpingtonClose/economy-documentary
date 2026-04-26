@@ -46,6 +46,7 @@ from langchain_core.tools import tool
 
 from strands_agents import _placeholders
 from strands_agents._real_assembly_tools import build_real_assembly_tools
+from strands_agents._real_b2_tools import build_real_b2_tools
 
 logger = logging.getLogger(__name__)
 
@@ -334,6 +335,7 @@ def build_real_worker_tools(
     audio_worker_url: str | None = None,
     video_worker_url: str | None = None,
     enable_real_assembly: bool | None = None,
+    enable_real_b2: bool | None = None,
 ) -> dict[str, Any]:
     """Return ``{tool_name: tool}`` overrides for the live demo.
 
@@ -348,6 +350,9 @@ def build_real_worker_tools(
         enable_real_assembly: Optional explicit toggle for the slice
             9g real assembly overlay. ``None`` falls through to the
             ``ENABLE_REAL_ASSEMBLY`` env var.
+        enable_real_b2: Optional explicit toggle for the slice 9h
+            real B2 sync overlay. ``None`` falls through to the
+            ``ENABLE_REAL_B2`` env var.
 
     Returns:
         A possibly-empty dict mapping tool names to ``@tool``-decorated
@@ -368,6 +373,7 @@ def build_real_worker_tools(
     overrides.update(
         build_real_assembly_tools(run_dir=run_dir, enabled=enable_real_assembly)
     )
+    overrides.update(build_real_b2_tools(run_dir=run_dir, enabled=enable_real_b2))
     if not overrides:
         return overrides
     logger.info(

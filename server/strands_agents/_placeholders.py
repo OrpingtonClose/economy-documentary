@@ -162,10 +162,34 @@ def launch_assembly(
 
 
 @tool
-def launch_b2_sync(artifact_path: str) -> dict[str, Any]:
-    """B2 sync placeholder (infrastructure leaf; no per-component PR)."""
+def launch_b2_sync(
+    artifact_path: str | None = None,
+    master_mp4_path: str | None = None,
+    clip_artifacts: list[dict[str, Any]] | None = None,
+    scenario_path: str | None = None,
+    run_id: str | None = None,
+    revision_tag: str | None = None,
+) -> dict[str, Any]:
+    """B2 sync placeholder (infrastructure leaf; real impl: slice 9h).
 
-    return _envelope("launch_b2_sync", artifact_path=artifact_path)
+    Slice 9h-b2-publish added the optional ``master_mp4_path`` /
+    ``clip_artifacts`` / ``scenario_path`` / ``run_id`` /
+    ``revision_tag`` arguments so the real-worker overlay can upload
+    every artifact in the run-dir to B2 and return a manifest. The
+    legacy ``artifact_path`` argument is preserved (and defaults to
+    ``None``) so pre-9h callers still work — both shapes echo through
+    the placeholder unchanged.
+    """
+
+    return _envelope(
+        "launch_b2_sync",
+        artifact_path=artifact_path or "",
+        master_mp4_path=master_mp4_path,
+        clip_artifacts=clip_artifacts or [],
+        scenario_path=scenario_path,
+        run_id=run_id,
+        revision_tag=revision_tag,
+    )
 
 
 @tool

@@ -504,6 +504,13 @@ def _demo_chat_script(
         }
         for s in scenes
     ]
+    # Slice 9h-b2-publish: pass the same ``clip_artifacts`` plus the
+    # master mp4 path into ``launch_b2_sync`` so the real-worker
+    # overlay (env-gated on ``ENABLE_REAL_B2=1``) can checkpoint every
+    # artifact — scenario JSON, per-scene wav + mp4, master mp4 —
+    # to B2 and return a manifest. ``artifact_path`` stays on the
+    # call for backward compat with the placeholder echo (pre-9h
+    # callers only had this single string).
     script.extend(
         [
             _ai_tool_call(
@@ -515,7 +522,15 @@ def _demo_chat_script(
                     "target_duration_sec": float(target_duration_sec),
                 },
             ),
-            _ai_tool_call("launch_b2_sync", {"artifact_path": final_mp4_url}),
+            _ai_tool_call(
+                "launch_b2_sync",
+                {
+                    "artifact_path": final_mp4_url,
+                    "master_mp4_path": final_mp4_url,
+                    "clip_artifacts": clip_artifacts_payload,
+                    "revision_tag": "r0001",
+                },
+            ),
             _ai_final(f"Final master MP4: {final_mp4_url}"),
         ]
     )
