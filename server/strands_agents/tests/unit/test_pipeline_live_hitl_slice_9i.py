@@ -434,6 +434,53 @@ class TestInterruptIdStability:
         assert runner_id != ""
         assert interrupt.id == runner_id
 
+    def test_frozen_interrupt_without_id_is_stable_via_state_cache(
+        self,
+    ) -> None:
+        """Frozen dataclass / NamedTuple variants reject ``setattr``.
+
+        The id-stability invariant must hold anyway, since the SSE
+        event and the queue handler resolve from the same ``state``
+        dict. The fallback is the per-state cache.
+        """
+
+        from dataclasses import dataclass
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _extract_hitl_interrupt,
+        )
+        from strands_agents.run import (
+            _INTERRUPT_ID_CACHE_KEY,
+            _extract_interrupt_metadata,
+        )
+
+        @dataclass(frozen=True)
+        class _FrozenInterrupt:
+            value: dict[str, Any]
+
+        interrupt = _FrozenInterrupt(
+            value={
+                "tool_name": "launch_visual_production",
+                "tool_input": {"scene_id": "s1"},
+                "allowed_decisions": ["accept", "edit", "reject"],
+            }
+        )
+        state: dict[str, Any] = {"__interrupt__": [interrupt]}
+
+        runner_id, _, _ = _extract_hitl_interrupt(state)
+        queue_id, _, _ = _extract_interrupt_metadata(state)
+
+        assert runner_id == queue_id
+        assert runner_id != ""
+        # State cache is the canonical fallback when setattr fails.
+        cache = state[_INTERRUPT_ID_CACHE_KEY]
+        assert cache[id(interrupt)] == runner_id
+
+        # And a third extraction round resolves to the same id, proving
+        # the cache is what holds the invariant (not the object).
+        third_id, _, _ = _extract_interrupt_metadata(state)
+        assert third_id == runner_id
+
 
 __all__ = [
     "TestApprovalRouterRoundTrip",

@@ -733,7 +733,7 @@ def _extract_hitl_interrupt(
     # :func:`queue_operator_decision` handler re-extracts metadata
     # from the same interrupt object and must return the identical
     # id, otherwise the frontend POSTs to a 404.
-    interrupt_id = _ensure_interrupt_id(interrupt)
+    interrupt_id = _ensure_interrupt_id(interrupt, state)
 
     action_requests = value.get("action_requests")
     if isinstance(action_requests, list) and action_requests:
