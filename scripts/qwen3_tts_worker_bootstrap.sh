@@ -100,6 +100,19 @@ source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
 pip install fastapi uvicorn requests soundfile numpy opentimelineio
 
+# Real Qwen3-TTS deps. ``qwen-tts`` pulls in transformers and the
+# Qwen3-TTS-Tokenizer-12Hz model loader. ``torch`` is installed first
+# with a CUDA-12.1 wheel (the index URL works on every Vast.ai NVIDIA
+# image we've tested). ``flash-attn`` is best-effort — if the build
+# wheel is unavailable for the running torch/CUDA combo, the engine
+# falls back to ``attn_implementation=eager`` automatically.
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
+pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio || \
+    pip install torch torchvision torchaudio
+pip install qwen-tts transformers accelerate
+pip install --no-build-isolation flash-attn || \
+    echo "warning: flash-attn install failed, falling back to eager attention"
+
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM
 # ---------------------------------------------------------------------------
@@ -140,6 +153,15 @@ echo "WORKER_VRAM_GB=$WORKER_VRAM_GB"
 # across the two paths so debugging commands work the same.
 # ---------------------------------------------------------------------------
 
+# HF_ENDPOINT defaults to hf-mirror.com because some Vast.ai datacenter
+# IP blocks have no TCP egress to huggingface.co (verified on instance
+# 35564211 in slice 9b). The mirror serves identical bytes for the model
+# manifests we use. Operator can override by setting HF_ENDPOINT in env.
+# HF_HUB_ENABLE_HF_TRANSFER=0 disables the parallel transfer mechanism
+# which sometimes hangs against the mirror.
+HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
+HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
+
 INFRA_AGENT_ENV=(
     "PYTHONUNBUFFERED=1"
     "PYTHONPATH=$WORK_DIR/server"
@@ -149,6 +171,8 @@ INFRA_AGENT_ENV=(
     "PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL"
     "GUARDIAN_IDLE_SECONDS=${GUARDIAN_IDLE_SECONDS:-900}"
     "GUARDIAN_MAX_LIFETIME_SECONDS=${GUARDIAN_MAX_LIFETIME_SECONDS:-14400}"
+    "HF_ENDPOINT=$HF_ENDPOINT"
+    "HF_HUB_ENABLE_HF_TRANSFER=$HF_HUB_ENABLE_HF_TRANSFER"
 )
 
 WORKER_ENV=(
@@ -161,6 +185,8 @@ WORKER_ENV=(
     "PLAYGROUND_BACKEND_URL=$PLAYGROUND_BACKEND_URL"
     "INFRA_AGENT_BUMP_URL=http://127.0.0.1:29230/infra/bump"
     "PUBLIC_IPADDR=$PUBLIC_IPADDR"
+    "HF_ENDPOINT=$HF_ENDPOINT"
+    "HF_HUB_ENABLE_HF_TRANSFER=$HF_HUB_ENABLE_HF_TRANSFER"
 )
 
 # Detect systemd-as-PID-1. The canonical signal is the /run/systemd/system
