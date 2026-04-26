@@ -192,7 +192,30 @@ def _demo_chat_script(
     )
     scene_payload = {"id": scene_id, "duration_sec": float(target_duration_sec)}
     timeline_payload = {"scenes": [scene_id]}
-    visual_concept = {"shot_count": 1, "style": "documentary"}
+    visual_concept = {
+        "shot_count": 1,
+        "style": "documentary",
+        "shot_type": "establishing wide",
+        "camera_movement": "slow dolly in",
+        "mood": "grounded, authoritative",
+        "palette": "muted earth tones",
+        "phrases": [
+            f"Cinematic documentary establishing shot exploring {topic}",
+            "soft natural light, archival texture, restrained colour grading",
+        ],
+    }
+    narration_text = (
+        f"In this opening scene we examine {topic}. "
+        "Across the next sixty seconds we trace how it shapes everyday "
+        "life, why it matters now, and what it tells us about the road "
+        "ahead."
+    )
+    visual_prompt = (
+        f"Cinematic documentary establishing shot exploring {topic}. "
+        "Slow dolly in on a grounded subject, soft natural light, "
+        "muted earth-tone palette, archival texture, restrained "
+        "colour grading. 24fps, 1280x704."
+    )
     return [
         _ai_tool_call(
             "generate_scenario",
@@ -212,7 +235,11 @@ def _demo_chat_script(
         ),
         _ai_tool_call(
             "launch_audio_render",
-            {"scene_id": scene_id, "voice_id": "Ryan"},
+            {
+                "scene_id": scene_id,
+                "voice_id": "Ryan",
+                "text": narration_text,
+            },
         ),
         _ai_tool_call(
             "evaluate_timing",
@@ -235,7 +262,11 @@ def _demo_chat_script(
         ),
         _ai_tool_call(
             "launch_visual_production",
-            {"scene_id": scene_id, "visual_concept": visual_concept},
+            {
+                "scene_id": scene_id,
+                "visual_concept": visual_concept,
+                "prompt": visual_prompt,
+            },
         ),
         _ai_tool_call(
             "launch_assembly",

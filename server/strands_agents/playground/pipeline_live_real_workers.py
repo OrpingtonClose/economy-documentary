@@ -82,25 +82,50 @@ def _persist_artifact(
     return path
 
 
+def _resolve_audio_text(
+    scene_id: str,
+    text: str | None,
+) -> str:
+    """Pick the TTS narration string for ``scene_id``.
+
+    Slice 9c contract: the orchestrator passes the scene's narration
+    through ``text`` so the real-worker dispatcher renders the actual
+    script. When ``text`` is missing or whitespace, fall back to the
+    pre-9c placeholder line so a misconfigured caller does not silently
+    render an empty WAV.
+    """
+    if isinstance(text, str) and text.strip():
+        return text.strip()
+    return (
+        f"Documentary narration for scene {scene_id}. "
+        "Live dispatched via the real Qwen3-TTS worker."
+    )
+
+
 def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
     """Return a ``@tool``-decorated callable that POSTs to the live TTS."""
 
     @tool
-    def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
-        """Real Qwen3-TTS dispatch (slice 9d-wire).
+    def launch_audio_render(
+        scene_id: str,
+        voice_id: str,
+        text: str | None = None,
+    ) -> dict[str, Any]:
+        """Real Qwen3-TTS dispatch (slice 9d-wire / 9c).
 
         Sends a /tts/render request to the live worker, decodes the
         base64 WAV, persists it under ``run_dir/artifacts/``, and
         returns a placeholder-shaped envelope so the orchestrator's
-        scripted brain stays compatible with slice 9a.
+        scripted brain stays compatible with slice 9a. The optional
+        ``text`` argument carries the scene's actual narration so the
+        TTS renders the script the scenario agent produced, not a
+        hard-coded placeholder line (slice 9c).
         """
+        resolved_text = _resolve_audio_text(scene_id, text)
         body = {
             "scene_id": scene_id,
             "voice_id": voice_id,
-            "text": (
-                f"Documentary narration for scene {scene_id}. "
-                "Live dispatched via the real Qwen3-TTS worker."
-            ),
+            "text": resolved_text,
             "duration_s": _DEFAULT_AUDIO_DURATION_S,
             "seed": _DEFAULT_SEED,
         }
@@ -151,6 +176,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             "launch_audio_render",
             scene_id=scene_id,
             voice_id=voice_id,
+            text=resolved_text,
             status_code=resp.status_code,
             wav_bytes_len=wav_len,
             wav_path=str(wav_path) if wav_path else None,
@@ -161,6 +187,45 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
     return launch_audio_render
 
 
+def _resolve_visual_prompt(
+    visual_concept: Any,
+    prompt: str | None,
+) -> str:
+    """Pick the LTX prompt string for a scene render.
+
+    Slice 9c contract: the orchestrator either supplies a fully-formed
+    ``prompt`` string (preferred) or — when only the structured
+    ``visual_concept`` is available — a richer string is synthesised
+    from the concept's known fields (phrases, shot_type, camera
+    movement, mood, palette). Falls back to the pre-9c placeholder
+    line only when both inputs are empty.
+    """
+    if isinstance(prompt, str) and prompt.strip():
+        return prompt.strip()
+
+    if isinstance(visual_concept, dict):
+        parts: list[str] = []
+        phrases = visual_concept.get("phrases")
+        if isinstance(phrases, list) and phrases:
+            parts.append(" ".join(str(p).strip() for p in phrases if str(p).strip()))
+        for key in ("shot_type", "camera_movement", "mood", "palette", "style"):
+            value = visual_concept.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(f"{key.replace('_', ' ')}: {value.strip()}")
+            elif isinstance(value, list):
+                joined = ", ".join(str(v).strip() for v in value if str(v).strip())
+                if joined:
+                    parts.append(f"{key.replace('_', ' ')}: {joined}")
+        synthesised = ". ".join(p for p in parts if p)
+        if synthesised.strip():
+            return synthesised.strip()
+
+    return (
+        "Documentary establishing shot, slow zoom, "
+        "cinematic lighting"
+    )
+
+
 def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
     """Return a ``@tool``-decorated callable that POSTs to the live LTX worker."""
 
@@ -168,29 +233,23 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
     def launch_visual_production(
         scene_id: str,
         visual_concept: dict[str, Any],
+        prompt: str | None = None,
     ) -> dict[str, Any]:
-        """Real LTX-2.3 BASIC dispatch (slice 9d-wire).
+        """Real LTX-2.3 BASIC dispatch (slice 9d-wire / 9c).
 
         Sends a /video/render request to the live worker, decodes the
         base64 MP4, persists it under ``run_dir/artifacts/``, and
-        returns a placeholder-shaped envelope. The visual_concept
-        ``phrases`` (if any) become the LTX prompt; the duration
-        defaults to ``_DEFAULT_VIDEO_DURATION_S`` so a single render
-        is bounded for cost.
+        returns a placeholder-shaped envelope. The optional ``prompt``
+        argument (slice 9c) carries a fully-formed style-locked LTX
+        prompt so the orchestrator can drive video quality from real
+        scenario content; falls back to a string synthesised from the
+        ``visual_concept`` dict, then to a generic establishing-shot
+        line.
         """
-        prompt = ""
-        if isinstance(visual_concept, dict):
-            phrases = visual_concept.get("phrases")
-            if isinstance(phrases, list) and phrases:
-                prompt = " ".join(str(p) for p in phrases)
-        if not prompt:
-            prompt = (
-                "Documentary establishing shot, slow zoom, "
-                "cinematic lighting"
-            )
+        resolved_prompt = _resolve_visual_prompt(visual_concept, prompt)
 
         body = {
-            "prompt": prompt,
+            "prompt": resolved_prompt,
             "duration_s": _DEFAULT_VIDEO_DURATION_S,
             "fps": _DEFAULT_FPS,
             "seed": _DEFAULT_SEED,
@@ -244,7 +303,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             "launch_visual_production",
             scene_id=scene_id,
             visual_concept=visual_concept,
-            prompt=prompt,
+            prompt=resolved_prompt,
             status_code=resp.status_code,
             mp4_bytes_len=mp4_len,
             mp4_path=str(mp4_path) if mp4_path else None,

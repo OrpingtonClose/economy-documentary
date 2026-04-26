@@ -90,13 +90,25 @@ def evaluate_timing(
 
 
 @tool
-def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
-    """Audio render launch placeholder (real impl: component 04)."""
+def launch_audio_render(
+    scene_id: str,
+    voice_id: str,
+    text: str | None = None,
+) -> dict[str, Any]:
+    """Audio render launch placeholder (real impl: component 04).
+
+    The optional ``text`` argument carries the scene's narration so a
+    real-worker overlay (slice 9d-wire / 9c) can dispatch a non-trivial
+    TTS prompt instead of a hard-coded "Documentary narration for scene
+    X" line. The placeholder simply echoes it in the envelope so unit
+    tests can assert the orchestrator passed real content through.
+    """
 
     return _envelope(
         "launch_audio_render",
         scene_id=scene_id,
         voice_id=voice_id,
+        text=text,
     )
 
 
@@ -104,13 +116,22 @@ def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
 def launch_visual_production(
     scene_id: str,
     visual_concept: dict[str, Any],
+    prompt: str | None = None,
 ) -> dict[str, Any]:
-    """Visual production launch placeholder (real impl: component 10)."""
+    """Visual production launch placeholder (real impl: component 10).
+
+    The optional ``prompt`` argument carries a fully-formed LTX
+    prompt so the real-worker overlay can dispatch a rich,
+    style-locked description instead of synthesising one from the
+    sparse ``visual_concept`` dict. Mirrors ``launch_audio_render``'s
+    ``text`` argument (slice 9c).
+    """
 
     return _envelope(
         "launch_visual_production",
         scene_id=scene_id,
         visual_concept=visual_concept,
+        prompt=prompt,
     )
 
 

@@ -45,10 +45,16 @@ brief into a final video, going through five stages:
    refine_scenario until the scenario passes structural checks.
 2. Audio + timing — launch_audio_render in parallel per scene, await,
    evaluate_timing, and loop back to refine_scenario when timing fails
-   (see AGENTS.md "Timing stage").
+   (see AGENTS.md "Timing stage"). Always pass the scene's narration
+   string from the approved scenario as the ``text`` argument to
+   launch_audio_render so the TTS renders the actual script (slice 9c).
 3. Visual — delegate to the `visual` SubAgent via the task tool.
 4. Production — delegate to the `production` SubAgent via the task
-   tool.
+   tool. When calling launch_visual_production, pass a fully-formed
+   style-locked ``prompt`` string built from the scene's
+   visual_concept (shot type, camera movement, mood, palette,
+   phrases) so the video model receives a rich description, not a
+   one-line caption (slice 9c).
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,
