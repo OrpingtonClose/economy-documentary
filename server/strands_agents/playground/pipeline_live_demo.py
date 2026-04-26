@@ -229,21 +229,26 @@ def _build_scene_payload(
     scene_index: int,
     topic: str,
     duration_sec: float,
+    num_scenes: int,
 ) -> dict[str, Any]:
     """Per-scene fixture: id, narration, visual concept, LTX prompt.
 
-    All fields are deterministic functions of ``scene_index`` so the
-    scripted run is reproducible across CI runs and the per-scene
-    dispatch shape is easy to assert in tests.
+    All fields are deterministic functions of ``scene_index`` /
+    ``num_scenes`` so the scripted run is reproducible across CI runs
+    and the per-scene dispatch shape is easy to assert in tests.
+
+    The 1-based ``scene_index`` is labelled ``opening`` for the first
+    scene, ``closing`` for the last (when ``num_scenes >= 2``), and
+    ``beat N`` for everything in between. A single-scene run keeps the
+    ``opening`` label so n=1 stays a single coherent beat.
     """
     scene_id = f"scene_{scene_index:03d}"
-    beat_label = (
-        "opening"
-        if scene_index == 1
-        else "closing"
-        if scene_index == 0
-        else f"beat {scene_index}"
-    )
+    if scene_index == 1:
+        beat_label = "opening"
+    elif scene_index == num_scenes:
+        beat_label = "closing"
+    else:
+        beat_label = f"beat {scene_index}"
     narration_text = (
         f"In {beat_label} we examine {topic}. "
         f"Across roughly {duration_sec:.0f} seconds we trace how it "
@@ -306,7 +311,10 @@ def _demo_chat_script(
     """
     n = _resolve_num_scenes(target_duration_sec, num_scenes)
     per_scene_duration = float(target_duration_sec) / float(n)
-    scenes = [_build_scene_payload(i + 1, topic, per_scene_duration) for i in range(n)]
+    scenes = [
+        _build_scene_payload(i + 1, topic, per_scene_duration, num_scenes=n)
+        for i in range(n)
+    ]
     scene_ids = [s["scene_id"] for s in scenes]
     final_mp4_url = (
         f"b2://documentary/{topic.replace(' ', '_') or 'documentary'}/"

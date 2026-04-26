@@ -96,13 +96,13 @@ class TestBuildScenePayload:
     """Per-scene fixture is deterministic and includes all dispatch fields."""
 
     def test_scene_id_zero_padded(self) -> None:
-        s1 = demo._build_scene_payload(1, "topic", 12.0)
-        s12 = demo._build_scene_payload(12, "topic", 12.0)
+        s1 = demo._build_scene_payload(1, "topic", 12.0, num_scenes=3)
+        s12 = demo._build_scene_payload(12, "topic", 12.0, num_scenes=12)
         assert s1["scene_id"] == "scene_001"
         assert s12["scene_id"] == "scene_012"
 
     def test_required_keys_present(self) -> None:
-        scene = demo._build_scene_payload(1, "The Federal Reserve", 12.0)
+        scene = demo._build_scene_payload(1, "The Federal Reserve", 12.0, num_scenes=1)
         for key in (
             "scene_id",
             "narration_text",
@@ -113,15 +113,17 @@ class TestBuildScenePayload:
             assert key in scene, f"missing {key} in scene payload"
 
     def test_narration_text_includes_topic(self) -> None:
-        scene = demo._build_scene_payload(1, "The Federal Reserve", 12.0)
+        scene = demo._build_scene_payload(1, "The Federal Reserve", 12.0, num_scenes=1)
         assert "The Federal Reserve" in scene["narration_text"]
 
     def test_visual_prompt_includes_topic(self) -> None:
-        scene = demo._build_scene_payload(2, "Climate Tipping Points", 15.0)
+        scene = demo._build_scene_payload(
+            2, "Climate Tipping Points", 15.0, num_scenes=3
+        )
         assert "Climate Tipping Points" in scene["visual_prompt"]
 
     def test_visual_concept_carries_style_lock_fields(self) -> None:
-        scene = demo._build_scene_payload(3, "topic", 20.0)
+        scene = demo._build_scene_payload(3, "topic", 20.0, num_scenes=5)
         concept = scene["visual_concept"]
         for key in (
             "shot_count",
@@ -135,18 +137,44 @@ class TestBuildScenePayload:
             assert key in concept, f"missing {key} in visual_concept"
 
     def test_duration_passes_through(self) -> None:
-        scene = demo._build_scene_payload(1, "topic", 17.5)
+        scene = demo._build_scene_payload(1, "topic", 17.5, num_scenes=1)
         assert scene["duration_sec"] == 17.5
 
     def test_distinct_scenes_get_distinct_narration(self) -> None:
-        s1 = demo._build_scene_payload(1, "topic", 12.0)
-        s2 = demo._build_scene_payload(2, "topic", 12.0)
+        s1 = demo._build_scene_payload(1, "topic", 12.0, num_scenes=3)
+        s2 = demo._build_scene_payload(2, "topic", 12.0, num_scenes=3)
         assert s1["narration_text"] != s2["narration_text"]
 
     def test_distinct_scenes_get_distinct_visual_prompts(self) -> None:
-        s1 = demo._build_scene_payload(1, "topic", 12.0)
-        s2 = demo._build_scene_payload(2, "topic", 12.0)
+        s1 = demo._build_scene_payload(1, "topic", 12.0, num_scenes=3)
+        s2 = demo._build_scene_payload(2, "topic", 12.0, num_scenes=3)
         assert s1["visual_prompt"] != s2["visual_prompt"]
+
+    def test_first_scene_labelled_opening(self) -> None:
+        scene = demo._build_scene_payload(1, "topic", 12.0, num_scenes=3)
+        assert "opening" in scene["narration_text"]
+        assert "opening" in scene["visual_prompt"]
+
+    def test_last_scene_labelled_closing_for_multi_scene_runs(self) -> None:
+        scene = demo._build_scene_payload(3, "topic", 12.0, num_scenes=3)
+        assert "closing" in scene["narration_text"]
+        assert "closing" in scene["visual_prompt"]
+
+    def test_middle_scene_labelled_beat(self) -> None:
+        scene = demo._build_scene_payload(2, "topic", 12.0, num_scenes=4)
+        assert "beat 2" in scene["narration_text"]
+        assert "beat 2" in scene["visual_prompt"]
+
+    def test_single_scene_run_keeps_opening_label(self) -> None:
+        scene = demo._build_scene_payload(1, "topic", 12.0, num_scenes=1)
+        assert "opening" in scene["narration_text"]
+        assert "closing" not in scene["narration_text"]
+
+    def test_two_scene_run_labels_first_opening_and_second_closing(self) -> None:
+        s1 = demo._build_scene_payload(1, "topic", 12.0, num_scenes=2)
+        s2 = demo._build_scene_payload(2, "topic", 12.0, num_scenes=2)
+        assert "opening" in s1["narration_text"]
+        assert "closing" in s2["narration_text"]
 
 
 # ---------------------------------------------------------------------------
