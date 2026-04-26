@@ -86,6 +86,32 @@ ENGINE_ID = "ltx-video"
 # full base checkpoint — no distilled checkpoint, no spatial upscaler.
 _BASE_CHECKPOINT_FILE = "ltx-2.3-22b-dev.safetensors"
 
+# Hard ceiling for the ti2vid_one_stage subprocess. A hung GPU process
+# (driver crash, OOM, infinite loop) would otherwise wedge the worker
+# request thread until the cost guardian kills the VM. The default of
+# 30 minutes matches the HTTP client's bound (``_DEFAULT_TIMEOUT_S``)
+# and is comfortably above any observed render time (~3min on H200).
+# Override via ``LTX_VIDEO_LTX2_RENDER_TIMEOUT_S`` (seconds, integer).
+_DEFAULT_LTX2_RENDER_TIMEOUT_S = 30 * 60
+
+
+def _ltx2_render_timeout_s() -> int:
+    """Resolve the subprocess timeout, honouring the env override.
+
+    Returns a strictly positive integer. Falls back to the default on
+    any parse error or non-positive value.
+    """
+    raw = os.environ.get("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S")
+    if not raw:
+        return _DEFAULT_LTX2_RENDER_TIMEOUT_S
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return _DEFAULT_LTX2_RENDER_TIMEOUT_S
+    if parsed <= 0:
+        return _DEFAULT_LTX2_RENDER_TIMEOUT_S
+    return parsed
+
 
 def _round_to_multiple(value: int, multiple: int) -> int:
     """Round ``value`` down to the nearest multiple of ``multiple``.
@@ -346,6 +372,7 @@ class LTXVideoEngine:
                 cwd,
                 " ".join(argv[:4]),
             )
+            timeout_s = _ltx2_render_timeout_s()
             try:
                 proc = subprocess.run(
                     argv,
@@ -353,7 +380,16 @@ class LTXVideoEngine:
                     capture_output=True,
                     text=True,
                     check=False,
+                    timeout=timeout_s,
                 )
+            except subprocess.TimeoutExpired as exc:
+                stderr_tail = (
+                    exc.stderr[-2000:] if isinstance(exc.stderr, str) else ""
+                )
+                raise VideoEngineError(
+                    "ltx-2.3 ti2vid_one_stage subprocess timed out after "
+                    f"{timeout_s}s; stderr_tail={stderr_tail!r}"
+                ) from exc
             except OSError as exc:
                 raise VideoEngineError(
                     f"failed to launch ltx-2.3 ti2vid_one_stage subprocess: {exc}"

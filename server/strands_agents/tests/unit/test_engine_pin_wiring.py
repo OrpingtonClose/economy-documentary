@@ -135,3 +135,30 @@ def test_build_argv_omits_negative_prompt_when_blank() -> None:
     """Whitespace-only is treated as absent — keeps the CLI's own default."""
     argv = _build_argv(negative_prompt="   ")
     assert "--negative-prompt" not in argv
+
+
+# ---------------------------------------------------------------------
+# Subprocess timeout — bounds the blast radius of a hung GPU process
+# ---------------------------------------------------------------------
+
+
+def test_render_timeout_default_is_30_minutes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S", raising=False)
+    assert ltx_engine._ltx2_render_timeout_s() == 30 * 60  # noqa: SLF001
+
+
+def test_render_timeout_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S", "120")
+    assert ltx_engine._ltx2_render_timeout_s() == 120  # noqa: SLF001
+
+
+def test_render_timeout_env_garbage_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S", "not-a-number")
+    assert ltx_engine._ltx2_render_timeout_s() == 30 * 60  # noqa: SLF001
+
+
+def test_render_timeout_env_non_positive_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S", "0")
+    assert ltx_engine._ltx2_render_timeout_s() == 30 * 60  # noqa: SLF001
+    monkeypatch.setenv("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S", "-7")
+    assert ltx_engine._ltx2_render_timeout_s() == 30 * 60  # noqa: SLF001
