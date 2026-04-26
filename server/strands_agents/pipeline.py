@@ -307,15 +307,31 @@ def build_documentary_orchestrator(
     workers and persist returned bytes under
     ``run_dir/artifacts/``. Both URLs unset → all placeholders
     pass through, matching pre-slice-9e behaviour exactly.
+
+    When ``model`` is a string id (or ``STRANDS_MODEL`` /
+    ``SCENARIO_LLM_MODEL_ID`` is set), the scenario placeholders
+    (``generate_scenario`` / ``evaluate_scenario`` / ``refine_scenario``)
+    are swapped for real LLM-backed tools that delegate to
+    :mod:`scenario_llm` for narration generation and
+    :mod:`tools.scenario_evaluator_checks` for structural checks
+    (slice 9c-LLM-scenario). Without a model id resolution all
+    scenario placeholders pass through.
     """
+    from ._real_scenario_tools import (
+        apply_real_scenario_overrides,
+        build_real_scenario_tools,
+    )
     from .playground.pipeline_live_real_workers import (
         apply_real_worker_overrides,
         build_real_worker_tools,
     )
 
     base_tools = build_default_tools()
+    scenario_model_id = model if isinstance(model, str) else None
+    scenario_overrides = build_real_scenario_tools(model_id=scenario_model_id)
+    tools = apply_real_scenario_overrides(base_tools, scenario_overrides)
     real_overrides = build_real_worker_tools(run_dir)
-    tools = apply_real_worker_overrides(base_tools, real_overrides)
+    tools = apply_real_worker_overrides(tools, real_overrides)
     return build_orchestrator(
         run_dir,
         model=model,
