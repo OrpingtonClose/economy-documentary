@@ -248,17 +248,27 @@ def translate_pipeline_event(
         agent = str(data.get("agent") or "unknown")
         elapsed_ms = int(data.get("elapsed_ms") or 0)
         ok = bool(data.get("ok", True))
+        detail: dict[str, Any] = {
+            "tool": tool,
+            "agent": agent,
+            "elapsed_ms": elapsed_ms,
+            "ok": ok,
+        }
+        envelope = data.get("envelope")
+        if isinstance(envelope, dict) and envelope:
+            detail["envelope"] = dict(envelope)
+        error_class = data.get("error_class")
+        if error_class:
+            detail["error_class"] = str(error_class)
+        error = data.get("error")
+        if error:
+            detail["error"] = str(error)
         return TranslatedEvent(
             kind=_tool_kind(tool, "end"),
             summary=(
                 f"{agent} finished {tool} in {elapsed_ms}ms{'' if ok else ' (failed)'}"
             ),
-            detail={
-                "tool": tool,
-                "agent": agent,
-                "elapsed_ms": elapsed_ms,
-                "ok": ok,
-            },
+            detail=detail,
         )
 
     if event_type == "pipeline.approval_gate":
