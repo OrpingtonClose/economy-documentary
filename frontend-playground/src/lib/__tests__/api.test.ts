@@ -242,11 +242,11 @@ describe("saveUserCase", () => {
 describe("resolvePipelineApproval", () => {
   it("POSTs to /playground/approval/resume/{run}/{interrupt} with decision body", async () => {
     const mock = installFetch(
-      jsonResponse({ status: "ok", decision_type: "approve" }),
+      jsonResponse({ status: "ok", decision_type: "accept" }),
     );
 
     const result = await resolvePipelineApproval("run-abc", "int-789", {
-      type: "approve",
+      type: "accept",
     });
 
     const [url, init] = mock.mock.calls[0];
@@ -254,8 +254,8 @@ describe("resolvePipelineApproval", () => {
       `${PLAYGROUND_BASE}/approval/resume/run-abc/int-789`,
     );
     expect(init?.method).toBe("POST");
-    expect(JSON.parse(String(init?.body ?? ""))).toEqual({ type: "approve" });
-    expect(result).toEqual({ status: "ok", decision_type: "approve" });
+    expect(JSON.parse(String(init?.body ?? ""))).toEqual({ type: "accept" });
+    expect(result).toEqual({ status: "ok", decision_type: "accept" });
   });
 
   it("URL-encodes ids that contain reserved characters", async () => {
@@ -265,7 +265,7 @@ describe("resolvePipelineApproval", () => {
 
     await resolvePipelineApproval("run/abc", "int 1", {
       type: "edit",
-      edits: { scene_id: "s1" },
+      args: { scene_id: "s1" },
     });
 
     const [url] = mock.mock.calls[0];
@@ -274,22 +274,22 @@ describe("resolvePipelineApproval", () => {
     );
   });
 
-  it("propagates the full decision body including edits and feedback", async () => {
+  it("propagates the full decision body including args and reason", async () => {
     const mock = installFetch(
       jsonResponse({ status: "ok", decision_type: "edit" }),
     );
 
     await resolvePipelineApproval("run-1", "int-1", {
       type: "edit",
-      edits: { scene_id: "s1", prompt: "wide shot" },
-      feedback: "tighten the framing",
+      args: { scene_id: "s1", prompt: "wide shot" },
+      reason: "tighten the framing",
     });
 
     const [, init] = mock.mock.calls[0];
     expect(JSON.parse(String(init?.body ?? ""))).toEqual({
       type: "edit",
-      edits: { scene_id: "s1", prompt: "wide shot" },
-      feedback: "tighten the framing",
+      args: { scene_id: "s1", prompt: "wide shot" },
+      reason: "tighten the framing",
     });
   });
 
@@ -299,7 +299,7 @@ describe("resolvePipelineApproval", () => {
     );
 
     await expect(
-      resolvePipelineApproval("run-x", "int-y", { type: "approve" }),
+      resolvePipelineApproval("run-x", "int-y", { type: "accept" }),
     ).rejects.toMatchObject({ status: 404 });
   });
 

@@ -114,13 +114,13 @@ export function PipelineApprovalCard({
   );
 
   const onApprove = useCallback(() => {
-    void dispatchDecision({ type: "approve" });
+    void dispatchDecision({ type: "accept" });
   }, [dispatchDecision]);
 
   const onReject = useCallback(() => {
     void dispatchDecision({
       type: "reject",
-      feedback: feedbackText.trim() || "Rejected by operator",
+      reason: feedbackText.trim() || "Rejected by operator",
     });
   }, [dispatchDecision, feedbackText]);
 
@@ -130,7 +130,7 @@ export function PipelineApprovalCard({
   }, []);
 
   const onEditSubmit = useCallback(() => {
-    let edits: Record<string, unknown>;
+    let args: Record<string, unknown>;
     try {
       const parsed = JSON.parse(editsText) as unknown;
       if (
@@ -144,7 +144,7 @@ export function PipelineApprovalCard({
         });
         return;
       }
-      edits = parsed as Record<string, unknown>;
+      args = parsed as Record<string, unknown>;
     } catch (caught) {
       const message =
         caught instanceof Error ? caught.message : String(caught);
@@ -154,10 +154,11 @@ export function PipelineApprovalCard({
       });
       return;
     }
+    const trimmedReason = feedbackText.trim();
     void dispatchDecision({
       type: "edit",
-      edits,
-      feedback: feedbackText.trim() || undefined,
+      args,
+      ...(trimmedReason ? { reason: trimmedReason } : {}),
     });
   }, [dispatchDecision, editsText, feedbackText]);
 
@@ -174,7 +175,7 @@ export function PipelineApprovalCard({
             className="rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green"
             data-testid="pipeline-approval-status-resolved"
           >
-            resumed: {approval.decision ?? "approve"}
+            resumed: {approval.decision ?? "accept"}
           </span>
         ) : (
           <span

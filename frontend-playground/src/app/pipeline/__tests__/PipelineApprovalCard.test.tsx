@@ -8,14 +8,17 @@
  * The card is the only UI surface that turns a pending gate event
  * into an HTTP decision. These tests pin down:
  *
- *  1. Approve dispatches ``{ type: "approve" }`` to
+ *  1. Approve dispatches ``{ type: "accept" }`` to
  *     :func:`resolvePipelineApproval` with the run/interrupt ids
- *     from the parent.
- *  2. Reject dispatches ``{ type: "reject", feedback: ... }``,
- *     defaulting the feedback string when none is typed.
+ *     from the parent. Field names mirror the backend
+ *     ``ApprovalDecision`` TypedDict exactly — the SDK term is
+ *     ``accept``, not ``approve``.
+ *  2. Reject dispatches ``{ type: "reject", reason: ... }``,
+ *     defaulting the reason string when none is typed.
  *  3. Edit toggles the inline JSON editor, validates the textarea
- *     contents, and dispatches ``{ type: "edit", edits, feedback }``
- *     on submit.
+ *     contents, and dispatches ``{ type: "edit", args, reason? }``
+ *     on submit (``args`` is the backend field name; ``reason`` is
+ *     omitted when blank).
  *  4. Invalid JSON in the edits textarea surfaces an error and
  *     does NOT dispatch.
  *  5. A gate received without resume coordinates renders disabled
@@ -83,10 +86,10 @@ describe("PipelineApprovalCard — pending gate", () => {
     ).toHaveTextContent("waiting");
   });
 
-  it("Approve button posts { type: 'approve' } with run/interrupt ids", async () => {
+  it("Approve button posts { type: 'accept' } with run/interrupt ids", async () => {
     mockResolve.mockResolvedValueOnce({
       status: "ok",
-      decision_type: "approve",
+      decision_type: "accept",
     });
     const onResolved = jest.fn();
     renderCard(pendingApproval(), onResolved);
@@ -97,12 +100,12 @@ describe("PipelineApprovalCard — pending gate", () => {
       expect(mockResolve).toHaveBeenCalledTimes(1);
     });
     expect(mockResolve).toHaveBeenCalledWith("run-abc", "int-789", {
-      type: "approve",
+      type: "accept",
     });
-    expect(onResolved).toHaveBeenCalledWith("approve");
+    expect(onResolved).toHaveBeenCalledWith("accept");
   });
 
-  it("Reject button posts { type: 'reject', feedback } with default feedback", async () => {
+  it("Reject button posts { type: 'reject', reason } with default reason", async () => {
     mockResolve.mockResolvedValueOnce({
       status: "ok",
       decision_type: "reject",
@@ -116,7 +119,7 @@ describe("PipelineApprovalCard — pending gate", () => {
     });
     expect(mockResolve).toHaveBeenCalledWith("run-abc", "int-789", {
       type: "reject",
-      feedback: "Rejected by operator",
+      reason: "Rejected by operator",
     });
   });
 
@@ -132,7 +135,7 @@ describe("PipelineApprovalCard — pending gate", () => {
     expect(parsed).toEqual({ scene_id: "s1", prompt: "wide shot" });
   });
 
-  it("Edit submit posts { type: 'edit', edits, feedback } with mutated JSON", async () => {
+  it("Edit submit posts { type: 'edit', args, reason } with mutated JSON", async () => {
     mockResolve.mockResolvedValueOnce({
       status: "ok",
       decision_type: "edit",
@@ -155,8 +158,32 @@ describe("PipelineApprovalCard — pending gate", () => {
     });
     expect(mockResolve).toHaveBeenCalledWith("run-abc", "int-789", {
       type: "edit",
-      edits: { scene_id: "s1", prompt: "tighter framing" },
-      feedback: "trim by 5s",
+      args: { scene_id: "s1", prompt: "tighter framing" },
+      reason: "trim by 5s",
+    });
+  });
+
+  it("Edit submit omits 'reason' when feedback input is blank", async () => {
+    mockResolve.mockResolvedValueOnce({
+      status: "ok",
+      decision_type: "edit",
+    });
+    renderCard(pendingApproval());
+
+    fireEvent.click(screen.getByTestId("pipeline-approval-edit-toggle"));
+    fireEvent.change(screen.getByTestId("pipeline-approval-edits-textarea"), {
+      target: {
+        value: JSON.stringify({ scene_id: "s1", prompt: "tighter framing" }),
+      },
+    });
+    fireEvent.click(screen.getByTestId("pipeline-approval-edit-submit"));
+
+    await waitFor(() => {
+      expect(mockResolve).toHaveBeenCalledTimes(1);
+    });
+    expect(mockResolve).toHaveBeenCalledWith("run-abc", "int-789", {
+      type: "edit",
+      args: { scene_id: "s1", prompt: "tighter framing" },
     });
   });
 
@@ -227,7 +254,7 @@ describe("PipelineApprovalCard — resolved gate", () => {
       gate: "launch_assembly",
       waitingSeq: 11,
       resolved: true,
-      decision: "approve",
+      decision: "accept",
       runId: "run-abc",
       interruptId: "int-555",
       args: null,
@@ -235,7 +262,7 @@ describe("PipelineApprovalCard — resolved gate", () => {
 
     expect(
       screen.getByTestId("pipeline-approval-status-resolved"),
-    ).toHaveTextContent(/resumed: approve/);
+    ).toHaveTextContent(/resumed: accept/);
     expect(
       screen.queryByTestId("pipeline-approval-approve"),
     ).not.toBeInTheDocument();
@@ -247,7 +274,7 @@ describe("PipelineApprovalCard — resolved gate", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("falls back to 'approve' label when decision is null", () => {
+  it("falls back to 'accept' label when decision is null", () => {
     renderCard({
       gate: "launch_assembly",
       waitingSeq: 12,
@@ -260,6 +287,6 @@ describe("PipelineApprovalCard — resolved gate", () => {
 
     expect(
       screen.getByTestId("pipeline-approval-status-resolved"),
-    ).toHaveTextContent(/resumed: approve/);
+    ).toHaveTextContent(/resumed: accept/);
   });
 });

@@ -206,16 +206,21 @@ export function runEventsUrl(runId: string): string {
  * Operator decision payload accepted by ``POST /playground/approval/
  * resume/{run_id}/{interrupt_id}``.
  *
- * Mirrors :class:`server.strands_agents.approval.ApprovalDecision`.
- * The ``type`` field is the operator's verdict; ``edits`` carries
- * mutated tool args for ``"edit"`` (orchestrator re-plans against
- * them); ``feedback`` is a human-readable explanation surfaced on
- * the audit record for ``"reject"`` and ``"respond"``.
+ * Mirrors :class:`server.strands_agents.approval.ApprovalDecision`
+ * exactly — field names must match the backend ``TypedDict`` and
+ * ``validate_decision`` keys, otherwise the queue rejects the
+ * payload with HTTP 400. The ``type`` field is the operator's
+ * verdict (``accept`` is the SDK term for "approve"); ``args``
+ * carries mutated tool args for ``"edit"`` and the orchestrator
+ * re-plans against them; ``reason`` is a non-empty explanation
+ * required on ``"reject"``; ``content`` is the operator response
+ * payload for ``"respond"``.
  */
 export interface ApprovalDecisionBody {
-  readonly type: "approve" | "edit" | "reject" | "respond";
-  readonly edits?: Record<string, unknown>;
-  readonly feedback?: string;
+  readonly type: "accept" | "edit" | "reject" | "respond";
+  readonly args?: Record<string, unknown>;
+  readonly reason?: string;
+  readonly content?: unknown;
 }
 
 /** Response shape of ``/playground/approval/resume/...``. */
