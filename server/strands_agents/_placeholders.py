@@ -137,15 +137,27 @@ def launch_visual_production(
 
 @tool
 def launch_assembly(
-    timeline: dict[str, Any],
-    output_path: str,
+    timeline: dict[str, Any] | None = None,
+    output_path: str | None = None,
+    clip_artifacts: list[dict[str, Any]] | None = None,
+    target_duration_sec: float | None = None,
 ) -> dict[str, Any]:
-    """Assembly launch placeholder (real impl: component 11)."""
+    """Assembly launch placeholder (real impl: component 11).
+
+    Slice 9g-assembly added the optional ``clip_artifacts`` argument so
+    the real-worker overlay can compose a master MP4 from the per-scene
+    artifacts persisted by the audio/video dispatchers. ``timeline`` /
+    ``output_path`` stay accepted (and default to ``None``) for
+    backward compatibility with the pre-9g demo script and any
+    downstream caller still emitting the legacy shape.
+    """
 
     return _envelope(
         "launch_assembly",
-        timeline=timeline,
-        output_path=output_path,
+        timeline=timeline or {},
+        output_path=output_path or "",
+        clip_artifacts=clip_artifacts or [],
+        target_duration_sec=target_duration_sec,
     )
 
 
