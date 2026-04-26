@@ -156,9 +156,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             try:
                 wav_bytes = base64.b64decode(payload["wav_base64"])
                 wav_len = len(wav_bytes)
-                wav_path = _persist_artifact(
-                    run_dir, scene_id, "wav", wav_bytes
-                )
+                wav_path = _persist_artifact(run_dir, scene_id, "wav", wav_bytes)
                 logger.info(
                     "scene_id=<%s>, bytes=<%d>, path=<%s> | wav persisted",
                     scene_id,
@@ -172,6 +170,25 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
                     exc,
                 )
 
+        duration_sec = (
+            float(payload["duration_s"])
+            if isinstance(payload, dict)
+            and isinstance(payload.get("duration_s"), int | float)
+            else None
+        )
+        alignment: dict[str, Any] | None = None
+        if duration_sec is not None and duration_sec > 0:
+            alignment = {
+                "scene_id": scene_id,
+                "duration_sec": duration_sec,
+                "source": "qwen3-tts-engine-duration",
+            }
+            logger.info(
+                "scene_id=<%s>, duration_sec=<%.3f> | tts alignment captured",
+                scene_id,
+                duration_sec,
+            )
+
         return _envelope(
             "launch_audio_render",
             scene_id=scene_id,
@@ -182,6 +199,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             wav_path=str(wav_path) if wav_path else None,
             elapsed_ms=elapsed_ms,
             engine=payload.get("engine") if isinstance(payload, dict) else None,
+            alignment=alignment,
         )
 
     return launch_audio_render
@@ -220,10 +238,7 @@ def _resolve_visual_prompt(
         if synthesised.strip():
             return synthesised.strip()
 
-    return (
-        "Documentary establishing shot, slow zoom, "
-        "cinematic lighting"
-    )
+    return "Documentary establishing shot, slow zoom, cinematic lighting"
 
 
 def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
@@ -283,9 +298,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             try:
                 mp4_bytes = base64.b64decode(payload["mp4_base64"])
                 mp4_len = len(mp4_bytes)
-                mp4_path = _persist_artifact(
-                    run_dir, scene_id, "mp4", mp4_bytes
-                )
+                mp4_path = _persist_artifact(run_dir, scene_id, "mp4", mp4_bytes)
                 logger.info(
                     "scene_id=<%s>, bytes=<%d>, path=<%s> | mp4 persisted",
                     scene_id,
