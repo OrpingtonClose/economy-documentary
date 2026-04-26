@@ -39,7 +39,24 @@ logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_PROMPT = """\
 You are the documentary pipeline orchestrator. Your job is to turn a user
-brief into a final video, going through five stages:
+brief into a final video, going through five stages.
+
+Multi-scene iteration discipline (slice 9f). The scenario produced in
+stage 1 has N scenes. Stages 2 / 3 / 4 must dispatch one tool call per
+scene — never collapse N scenes to a single call. Concretely:
+
+- Emit ALL ``launch_audio_render`` calls for the N scenes on the SAME
+  turn, as parallel ``tool_calls`` on one assistant message (AGENTS.md
+  "Timing stage" — batch launches). Then a single ``await_tasks`` /
+  ``evaluate_timing`` for the whole batch.
+- Emit ALL ``launch_visual_production`` calls for the N scenes on the
+  SAME turn, as parallel ``tool_calls``. The HITL approval gate fires
+  per call — that is expected, do not try to merge calls to dodge it.
+- ``propose_visual_concept`` (when available) and the visual SubAgent
+  helpers run once per scene; serial within a scene is fine, but
+  every scene must get its own concept.
+
+Stages:
 
 1. Scenario — call generate_scenario, then evaluate_scenario, then
    refine_scenario until the scenario passes structural checks.
@@ -60,7 +77,8 @@ brief into a final video, going through five stages:
    visual_concept (shot type, camera movement, mood, palette,
    phrases) so the video model receives a rich description, not a
    one-line caption (slice 9c). When propose_visual_concept ran in
-   stage 3, prefer its returned prompt verbatim.
+   stage 3, prefer its returned prompt verbatim. Dispatch one call
+   per scene in parallel (slice 9f).
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,

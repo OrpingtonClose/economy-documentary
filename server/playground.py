@@ -1490,6 +1490,11 @@ _PIPELINE_MAX_DURATION_SEC: int = 600
 _PIPELINE_TOPIC_MAX_LEN: int = 200
 _PIPELINE_LANGUAGE_MAX_LEN: int = 16
 
+# Slice 9f: scene-count clamp. Matches
+# ``pipeline_live_demo._DEMO_MIN_SCENES`` / ``_DEMO_MAX_SCENES``.
+_PIPELINE_MIN_NUM_SCENES: int = 1
+_PIPELINE_MAX_NUM_SCENES: int = 6
+
 #: Component id used for pipeline runs in the run registry. Distinct
 #: from the per-component ids so ``GET /runs/<id>`` can disambiguate
 #: a pipeline run from a c01..c15 / infra component run.
@@ -1527,16 +1532,23 @@ class StartPipelineRunRequest(BaseModel):
     target_duration_sec: int = Field(default=60)
     language: str = Field(default="en")
     mode: str = Field(default="simulator")
+    # Slice 9f: optional override for scripted-demo scene count. When
+    # ``None``, the demo derives N from ``target_duration_sec``
+    # (~12s/scene, clamped to ``[1, 6]``).
+    num_scenes: int | None = Field(default=None)
 
 
 def _normalise_pipeline_request(
     request: StartPipelineRunRequest,
-) -> tuple[str, int, str, str]:
+) -> tuple[str, int, str, str, int | None]:
     """Validate + clamp pipeline-run inputs, raising HTTPException on bad input.
 
-    Returns the cleaned ``(topic, target_duration_sec, language, mode)``
-    quadruple ready to pass to :class:`SimulatedPipelineRun` or
-    :class:`LivePipelineRun`.
+    Returns the cleaned
+    ``(topic, target_duration_sec, language, mode, num_scenes)`` tuple
+    ready to pass to :class:`SimulatedPipelineRun` or
+    :class:`LivePipelineRun`. ``num_scenes`` is ``None`` when the
+    caller didn't override it; the live demo derives N from duration
+    in that case.
     """
     topic = (request.topic or "").strip()
     if not topic:
@@ -1576,7 +1588,24 @@ def _normalise_pipeline_request(
                 f"(allowed: {sorted(PIPELINE_RUN_MODES)!r})"
             ),
         )
-    return topic, duration, language, mode
+    num_scenes: int | None
+    if request.num_scenes is None:
+        num_scenes = None
+    else:
+        num_scenes = int(request.num_scenes)
+        if (
+            num_scenes < _PIPELINE_MIN_NUM_SCENES
+            or num_scenes > _PIPELINE_MAX_NUM_SCENES
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"num_scenes out of range: {num_scenes} "
+                    f"(allowed {_PIPELINE_MIN_NUM_SCENES}.."
+                    f"{_PIPELINE_MAX_NUM_SCENES})"
+                ),
+            )
+    return topic, duration, language, mode, num_scenes
 
 
 async def _dispatch_pipeline_run(
@@ -1586,6 +1615,7 @@ async def _dispatch_pipeline_run(
     target_duration_sec: int,
     language: str,
     mode: str = "simulator",
+    num_scenes: int | None = None,
 ) -> None:
     """Drive a pipeline run against ``stream`` and close it.
 
@@ -1631,6 +1661,7 @@ async def _dispatch_pipeline_run(
                 topic=topic,
                 target_duration_sec=target_duration_sec,
                 language=language,
+                num_scenes=num_scenes,
             )
             live_runner = LivePipelineRun(
                 topic=topic,
@@ -1729,7 +1760,7 @@ async def start_pipeline_run(
     Until slice 9, the dispatcher runs :class:`SimulatedPipelineRun`
     so the wire stays exercised end-to-end without GPU spend.
     """
-    topic, duration, language, mode = _normalise_pipeline_request(request)
+    topic, duration, language, mode, num_scenes = _normalise_pipeline_request(request)
     case_name = "live_run" if mode == "live" else "simulated_run"
 
     registry = get_registry()
@@ -1745,6 +1776,7 @@ async def start_pipeline_run(
             "target_duration_sec": duration,
             "language": language,
             "mode": mode,
+            "num_scenes": num_scenes,
         },
     )
     background_tasks.add_task(
@@ -1754,6 +1786,7 @@ async def start_pipeline_run(
         target_duration_sec=duration,
         language=language,
         mode=mode,
+        num_scenes=num_scenes,
     )
     return {
         "run_id": stream.run_id,
@@ -1763,6 +1796,7 @@ async def start_pipeline_run(
         "target_duration_sec": duration,
         "language": language,
         "mode": mode,
+        "num_scenes": num_scenes,
         "events_url": f"/playground/runs/{stream.run_id}/events",
         "state_url": f"/playground/runs/{stream.run_id}",
     }

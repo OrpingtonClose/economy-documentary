@@ -166,32 +166,90 @@ def _ai_tool_call(name: str, args: dict[str, Any]) -> AIMessage:
     )
 
 
+def _ai_tool_calls_batch(
+    items: Sequence[tuple[str, dict[str, Any]]],
+) -> AIMessage:
+    """One AIMessage carrying ``len(items)`` parallel ``tool_calls``.
+
+    LangGraph's ``ToolNode`` dispatches every entry in ``tool_calls``
+    concurrently, so this is the scripted-LLM equivalent of an
+    orchestrator that emits all per-scene launches on a single turn
+    (the shape AGENTS.md "Timing stage" requires for
+    ``launch_audio_render`` / ``launch_visual_production``).
+    """
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": name,
+                "args": args,
+                "id": f"call_{uuid4().hex[:12]}",
+                "type": "tool_call",
+            }
+            for name, args in items
+        ],
+    )
+
+
 def _ai_final(content: str) -> AIMessage:
     """Stop-the-loop AIMessage. No ``tool_calls`` → agent terminates."""
     return AIMessage(content=content)
 
 
-def _demo_chat_script(
-    topic: str,
-    target_duration_sec: int,
-    language: str,
-) -> list[AIMessage]:
-    """Build the deterministic chat script for the happy-path run.
+# Soft cap on how many scenes the scripted demo dispatches. The cap
+# protects CI-friendliness (one HITL gate per visual production fires
+# each iteration through the runner) while still proving the
+# multi-scene shape end-to-end.
+_DEMO_MIN_SCENES = 1
+_DEMO_MAX_SCENES = 6
+_DEMO_SECONDS_PER_SCENE = 12
 
-    Each AIMessage triggers exactly one tool call (no parallel
-    launches in the demo — the simulator doesn't model the timing
-    loop here). The sequence walks scenario → audio → visual →
-    production → assembly → b2_sync, fires every approval gate, and
-    ends with a final-answer message quoting the master MP4 URL so
-    :func:`LivePipelineRun._scrape_final_mp4_url` can recover it.
+
+def _resolve_num_scenes(
+    target_duration_sec: int,
+    num_scenes: int | None,
+) -> int:
+    """Resolve scene count for the scripted demo.
+
+    Precedence:
+    1. Explicit ``num_scenes`` (clamped to ``[1, 6]``).
+    2. ``target_duration_sec / 12``, rounded up to at least 1.
     """
-    scene_id = "scene_001"
-    final_mp4_url = (
-        f"b2://documentary/{topic.replace(' ', '_') or 'documentary'}/"
-        f"master_mp4/r0001.mp4"
+    if num_scenes is not None:
+        return max(_DEMO_MIN_SCENES, min(int(num_scenes), _DEMO_MAX_SCENES))
+    if target_duration_sec <= 0:
+        return _DEMO_MIN_SCENES
+    derived = (target_duration_sec + _DEMO_SECONDS_PER_SCENE - 1) // (
+        _DEMO_SECONDS_PER_SCENE
     )
-    scene_payload = {"id": scene_id, "duration_sec": float(target_duration_sec)}
-    timeline_payload = {"scenes": [scene_id]}
+    return max(_DEMO_MIN_SCENES, min(derived, _DEMO_MAX_SCENES))
+
+
+def _build_scene_payload(
+    scene_index: int,
+    topic: str,
+    duration_sec: float,
+) -> dict[str, Any]:
+    """Per-scene fixture: id, narration, visual concept, LTX prompt.
+
+    All fields are deterministic functions of ``scene_index`` so the
+    scripted run is reproducible across CI runs and the per-scene
+    dispatch shape is easy to assert in tests.
+    """
+    scene_id = f"scene_{scene_index:03d}"
+    beat_label = (
+        "opening"
+        if scene_index == 1
+        else "closing"
+        if scene_index == 0
+        else f"beat {scene_index}"
+    )
+    narration_text = (
+        f"In {beat_label} we examine {topic}. "
+        f"Across roughly {duration_sec:.0f} seconds we trace how it "
+        "shapes everyday life, why it matters now, and what it tells "
+        "us about the road ahead."
+    )
     visual_concept = {
         "shot_count": 1,
         "style": "documentary",
@@ -200,28 +258,71 @@ def _demo_chat_script(
         "mood": "grounded, authoritative",
         "palette": "muted earth tones",
         "phrases": [
-            f"Cinematic documentary establishing shot exploring {topic}",
+            f"Cinematic documentary {beat_label} shot exploring {topic}",
             "soft natural light, archival texture, restrained colour grading",
         ],
     }
-    narration_text = (
-        f"In this opening scene we examine {topic}. "
-        "Across the next sixty seconds we trace how it shapes everyday "
-        "life, why it matters now, and what it tells us about the road "
-        "ahead."
-    )
     visual_prompt = (
-        f"Cinematic documentary establishing shot exploring {topic}. "
+        f"Cinematic documentary {beat_label} shot exploring {topic}. "
         "Slow dolly in on a grounded subject, soft natural light, "
         "muted earth-tone palette, archival texture, restrained "
         "colour grading. 24fps, 1280x704."
     )
-    return [
+    return {
+        "scene_id": scene_id,
+        "narration_text": narration_text,
+        "visual_concept": visual_concept,
+        "visual_prompt": visual_prompt,
+        "duration_sec": duration_sec,
+    }
+
+
+def _demo_chat_script(
+    topic: str,
+    target_duration_sec: int,
+    language: str,
+    num_scenes: int | None = None,
+) -> list[AIMessage]:
+    """Build the deterministic chat script for the happy-path run.
+
+    The script walks scenario → audio → visual → production →
+    assembly → b2_sync and fires every approval gate. With ``N`` =
+    :func:`_resolve_num_scenes`:
+
+    - One ``launch_audio_render`` AIMessage carrying ``N`` parallel
+      ``tool_calls`` (one per scene), matching the AGENTS.md
+      "Timing stage" "batch launches" rule.
+    - One ``launch_visual_production`` AIMessage carrying ``N``
+      parallel ``tool_calls``. The HITL middleware fires the
+      visual approval gate ``N`` times — the live runner's
+      interrupt loop already handles per-call gating without any
+      extra plumbing.
+    - Per-scene serial calls for the visual SubAgent stubs
+      (``content_analyst`` / ``visual_concepter``) so each scene's
+      visual stage opens and closes on the stage ribbon.
+
+    Ends with a final-answer AIMessage quoting the master MP4 URL
+    so :func:`LivePipelineRun._scrape_final_mp4_url` can recover it.
+    """
+    n = _resolve_num_scenes(target_duration_sec, num_scenes)
+    per_scene_duration = float(target_duration_sec) / float(n)
+    scenes = [_build_scene_payload(i + 1, topic, per_scene_duration) for i in range(n)]
+    scene_ids = [s["scene_id"] for s in scenes]
+    final_mp4_url = (
+        f"b2://documentary/{topic.replace(' ', '_') or 'documentary'}/"
+        f"master_mp4/r0001.mp4"
+    )
+    timeline_payload = {"scenes": scene_ids}
+    scenes_payload = [
+        {"id": s["scene_id"], "duration_sec": s["duration_sec"]} for s in scenes
+    ]
+
+    script: list[AIMessage] = [
         _ai_tool_call(
             "generate_scenario",
             {
                 "topic": topic,
-                "num_scenes": 1,
+                "num_scenes": n,
                 "style": "documentary",
                 "language": language,
             },
@@ -229,17 +330,24 @@ def _demo_chat_script(
         _ai_tool_call(
             "evaluate_scenario",
             {
-                "scenes": [scene_payload],
+                "scenes": scenes_payload,
                 "target_duration_sec": float(target_duration_sec),
             },
         ),
-        _ai_tool_call(
-            "launch_audio_render",
-            {
-                "scene_id": scene_id,
-                "voice_id": "Ryan",
-                "text": narration_text,
-            },
+        # All ``launch_audio_render`` calls dispatched in parallel on a
+        # single turn — AGENTS.md Timing stage "batch launches".
+        _ai_tool_calls_batch(
+            [
+                (
+                    "launch_audio_render",
+                    {
+                        "scene_id": s["scene_id"],
+                        "voice_id": "Ryan",
+                        "text": s["narration_text"],
+                    },
+                )
+                for s in scenes
+            ]
         ),
         _ai_tool_call(
             "evaluate_timing",
@@ -249,32 +357,59 @@ def _demo_chat_script(
                 "target_duration_sec": float(target_duration_sec),
             },
         ),
-        _ai_tool_call(
-            "content_analyst",
-            {"scene_id": scene_id, "timeline_excerpt": timeline_payload},
-        ),
-        _ai_tool_call(
-            "visual_concepter",
-            {
-                "scene_id": scene_id,
-                "phrases": ["documentary establishing shot"],
-            },
-        ),
-        _ai_tool_call(
-            "launch_visual_production",
-            {
-                "scene_id": scene_id,
-                "visual_concept": visual_concept,
-                "prompt": visual_prompt,
-            },
-        ),
-        _ai_tool_call(
-            "launch_assembly",
-            {"timeline": timeline_payload, "output_path": final_mp4_url},
-        ),
-        _ai_tool_call("launch_b2_sync", {"artifact_path": final_mp4_url}),
-        _ai_final(f"Final master MP4: {final_mp4_url}"),
     ]
+
+    # Per-scene visual analysis — serial so each scene's visual stage
+    # bracket opens / closes distinctly on the UI's stage ribbon.
+    for s in scenes:
+        script.append(
+            _ai_tool_call(
+                "content_analyst",
+                {
+                    "scene_id": s["scene_id"],
+                    "timeline_excerpt": timeline_payload,
+                },
+            )
+        )
+        script.append(
+            _ai_tool_call(
+                "visual_concepter",
+                {
+                    "scene_id": s["scene_id"],
+                    "phrases": ["documentary establishing shot"],
+                },
+            )
+        )
+
+    # All ``launch_visual_production`` calls dispatched in parallel on a
+    # single turn. The HITL middleware fires the visual gate ``N`` times.
+    script.append(
+        _ai_tool_calls_batch(
+            [
+                (
+                    "launch_visual_production",
+                    {
+                        "scene_id": s["scene_id"],
+                        "visual_concept": s["visual_concept"],
+                        "prompt": s["visual_prompt"],
+                    },
+                )
+                for s in scenes
+            ]
+        )
+    )
+
+    script.extend(
+        [
+            _ai_tool_call(
+                "launch_assembly",
+                {"timeline": timeline_payload, "output_path": final_mp4_url},
+            ),
+            _ai_tool_call("launch_b2_sync", {"artifact_path": final_mp4_url}),
+            _ai_final(f"Final master MP4: {final_mp4_url}"),
+        ]
+    )
+    return script
 
 
 def _demo_tools() -> list[Any]:
@@ -309,6 +444,7 @@ def build_demo_live_agent(
     topic: str,
     target_duration_sec: int,
     language: str,
+    num_scenes: int | None = None,
 ) -> Any:
     """Assemble a real ``create_deep_agent`` agent for the demo run.
 
@@ -332,7 +468,9 @@ def build_demo_live_agent(
         A compiled LangGraph ``CompiledStateGraph``.
     """
     chat_model = _ScriptedToolCallingModel(
-        responses=_demo_chat_script(topic, target_duration_sec, language),
+        responses=_demo_chat_script(
+            topic, target_duration_sec, language, num_scenes=num_scenes
+        ),
     )
     base_tools = _demo_tools()
     real_overrides = build_real_worker_tools(run_dir)
