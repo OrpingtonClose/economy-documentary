@@ -61,6 +61,13 @@ LTX_VIDEO_PIN: ModelPin = ModelPin(
         }
     ),
     purpose="ltx-video",
+    # The BASIC ``ti2vid_one_stage`` CLI takes ``--checkpoint-path``
+    # pointing at a single safetensors file; sibling configs /
+    # distilled checkpoints / upscalers / LoRAs in the repo are not
+    # read. Restrict the on-demand snapshot download to match the
+    # bootstrap's pattern set so first-render does not silently
+    # complete the rest of the ~70+ GB repo.
+    download_allow_patterns=("ltx-2.3-22b-dev.safetensors",),
 )
 
 

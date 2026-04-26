@@ -29,6 +29,7 @@ from types import MappingProxyType
 
 import pytest
 
+from strands_agents import _model_pin as model_pin_module
 from strands_agents._model_pin import (
     ModelPin,
     ModelPinMismatchError,
@@ -252,6 +253,87 @@ def test_qwen3_tts_pin_targets_customvoice_checkpoint() -> None:
     assert QWEN3_TTS_PIN.model_id == "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
     assert "model.safetensors" in QWEN3_TTS_PIN.required_files
     assert "speech_tokenizer/model.safetensors" in QWEN3_TTS_PIN.required_files
+
+
+# ---------------------------------------------------------------------
+# download_allow_patterns — first-render download must respect bootstrap intent
+# ---------------------------------------------------------------------
+
+
+def test_materialize_snapshot_forwards_allow_patterns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pin with ``download_allow_patterns`` must forward them verbatim."""
+    captured: dict[str, object] = {}
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return str(tmp_path)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    pin = ModelPin(
+        model_id="acme/foo",
+        revision="0" * 40,
+        required_files=MappingProxyType({"weights.safetensors": "0" * 64}),
+        purpose="test",
+        download_allow_patterns=("weights.safetensors",),
+    )
+    out = model_pin_module._materialize_snapshot(pin)  # noqa: SLF001
+    assert out == tmp_path
+    assert captured["repo_id"] == "acme/foo"
+    assert captured["revision"] == "0" * 40
+    assert captured["allow_patterns"] == ["weights.safetensors"]
+
+
+def test_materialize_snapshot_omits_allow_patterns_when_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A pin without ``download_allow_patterns`` must not pass the kwarg."""
+    captured: dict[str, object] = {}
+
+    def fake_snapshot_download(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return str(tmp_path)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    pin = ModelPin(
+        model_id="acme/foo",
+        revision="0" * 40,
+        required_files=MappingProxyType({"weights.safetensors": "0" * 64}),
+        purpose="test",
+    )
+    model_pin_module._materialize_snapshot(pin)  # noqa: SLF001
+    assert "allow_patterns" not in captured
+
+
+def test_ltx_video_pin_download_pattern_matches_bootstrap() -> None:
+    """LTX-2.3 must restrict its on-demand download to the BASIC checkpoint.
+
+    The bootstrap (``scripts/ltx_video_worker_bootstrap.sh``) already
+    pre-downloads only ``ltx-2.3-22b-dev.safetensors`` via
+    ``allow_patterns``. The pin's ``download_allow_patterns`` field
+    must mirror that so the engine's on-first-render
+    ``snapshot_download`` call does not silently complete the rest of
+    the ~70+ GB repo (distilled checkpoints, upscalers, LoRAs that
+    the BASIC pipeline never reads).
+    """
+    assert LTX_VIDEO_PIN.download_allow_patterns == (
+        "ltx-2.3-22b-dev.safetensors",
+    )
+
+
+def test_gemma_pin_download_patterns_unset() -> None:
+    """Gemma must download its full repo so the encoder can find configs."""
+    assert LTX_VIDEO_GEMMA_PIN.download_allow_patterns is None
+
+
+def test_qwen3_tts_pin_download_patterns_unset() -> None:
+    """Qwen3-TTS uses ``from_pretrained`` and needs its full repo."""
+    assert QWEN3_TTS_PIN.download_allow_patterns is None
 
 
 def test_ltx_video_pin_targets_ltx_2_3() -> None:
