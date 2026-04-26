@@ -237,6 +237,7 @@ class LTXVideoEngine:
         num_frames: int,
         fps: int,
         seed: int | None,
+        negative_prompt: str | None = None,
     ) -> list[str]:
         """Assemble the ``python -m ltx_pipelines.ti2vid_one_stage`` argv."""
         python_bin = os.environ.get("LTX_VIDEO_LTX2_PYTHON", sys.executable)
@@ -261,6 +262,8 @@ class LTXVideoEngine:
             "--frame-rate",
             str(fps),
         ]
+        if negative_prompt is not None and negative_prompt.strip():
+            argv += ["--negative-prompt", negative_prompt]
         if seed is not None:
             argv += ["--seed", str(int(seed))]
         if self._offload_mode and self._offload_mode != "none":
@@ -330,6 +333,7 @@ class LTXVideoEngine:
                 num_frames=num_frames,
                 fps=fps,
                 seed=request.seed,
+                negative_prompt=request.negative_prompt,
             )
             logger.info(
                 "prompt_chars=<%d>, width=<%d>, height=<%d>, num_frames=<%d>, "

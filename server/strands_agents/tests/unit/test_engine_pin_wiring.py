@@ -87,3 +87,51 @@ def test_ltx_engine_constructor_default_uses_pin(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("LTX_VIDEO_MODEL_ID", "Lightricks/LTX-Video")
     engine = ltx_engine.LTXVideoEngine()
     assert engine._model_id == LTX_VIDEO_PIN.model_id  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------
+# argv composition — proves request fields reach the subprocess CLI
+# ---------------------------------------------------------------------
+
+
+def _build_argv(
+    *,
+    negative_prompt: str | None,
+    seed: int | None = None,
+) -> list[str]:
+    from pathlib import Path
+
+    engine = ltx_engine.LTXVideoEngine()
+    return engine._build_ltx2_argv(  # noqa: SLF001
+        ltx_dir=Path("/fake/ltx"),
+        gemma_dir=Path("/fake/gemma"),
+        prompt="a wide shot of the federal reserve building",
+        output_path=Path("/tmp/out.mp4"),
+        width=704,
+        height=480,
+        num_frames=121,
+        fps=24,
+        seed=seed,
+        negative_prompt=negative_prompt,
+    )
+
+
+def test_build_argv_forwards_negative_prompt() -> None:
+    """A non-empty ``negative_prompt`` must reach the CLI as ``--negative-prompt``."""
+    argv = _build_argv(negative_prompt="blurry, low quality, watermark")
+
+    assert "--negative-prompt" in argv
+    idx = argv.index("--negative-prompt")
+    assert argv[idx + 1] == "blurry, low quality, watermark"
+
+
+def test_build_argv_omits_negative_prompt_when_none() -> None:
+    """``None`` must NOT add a ``--negative-prompt`` flag (CLI default applies)."""
+    argv = _build_argv(negative_prompt=None)
+    assert "--negative-prompt" not in argv
+
+
+def test_build_argv_omits_negative_prompt_when_blank() -> None:
+    """Whitespace-only is treated as absent — keeps the CLI's own default."""
+    argv = _build_argv(negative_prompt="   ")
+    assert "--negative-prompt" not in argv
