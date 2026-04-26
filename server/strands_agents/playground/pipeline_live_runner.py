@@ -59,6 +59,7 @@ Design contract (versus :class:`SimulatedPipelineRun`):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -222,27 +223,43 @@ def _extract_envelope_fields(output: Any) -> dict[str, Any]:
 
         {"status": ..., "tool": ..., "args": {"engine": ..., "wav_bytes_len": ..., ...}}
 
-    This helper extracts the whitelisted keys from the ``args`` map
-    (or the top-level dict, for placeholder-shaped tools that don't
-    nest their fields) so the trajectory event carries them as
-    machine-readable detail fields instead of opaque tool output.
+    LangChain's tool-end callback may pass that return value through
+    as the dict itself, as a :class:`ToolMessage` whose ``content`` is
+    the dict, or as a JSON-serialised string (the
+    ``ToolNode`` path stringifies non-string returns). This helper
+    handles all three shapes and extracts the whitelisted keys from
+    the ``args`` map (or the top-level dict, for placeholder-shaped
+    tools that don't nest their fields).
 
-    Defensive: returns an empty dict when ``output`` is not a dict,
-    when the envelope is malformed, or when no whitelisted keys are
-    present. Never raises.
+    Defensive: returns an empty dict when ``output`` is malformed or
+    when no whitelisted keys are present. Never raises.
     """
     try:
-        if not isinstance(output, dict):
-            content = getattr(output, "content", None)
-            if not isinstance(content, dict):
+        normalised: Any = output
+
+        if not isinstance(normalised, dict):
+            content = getattr(normalised, "content", None)
+            if content is not None:
+                normalised = content
+
+        if isinstance(normalised, str):
+            stripped = normalised.strip()
+            if stripped.startswith("{"):
+                try:
+                    normalised = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return {}
+            else:
                 return {}
-            output = content
+
+        if not isinstance(normalised, dict):
+            return {}
 
         candidates: list[dict[str, Any]] = []
-        args = output.get("args")
+        args = normalised.get("args")
         if isinstance(args, dict):
             candidates.append(args)
-        candidates.append(output)
+        candidates.append(normalised)
 
         extracted: dict[str, Any] = {}
         for source in candidates:

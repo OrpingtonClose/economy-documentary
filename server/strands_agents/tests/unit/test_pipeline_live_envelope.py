@@ -14,8 +14,27 @@ fields making it into the SSE event detail. These tests pin down:
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from typing import Any
+
 from strands_agents.playground.pipeline_adapter import translate_pipeline_event
 from strands_agents.playground.pipeline_live_runner import _extract_envelope_fields
+
+
+@dataclass
+class _FakeToolMessage:
+    """Minimal stand-in for ``langchain_core.messages.ToolMessage``.
+
+    LangChain's tool-end callback wraps a tool's return value in a
+    ``ToolMessage`` whose ``content`` is the tool output, JSON-encoded
+    when the tool returned a non-string. The extractor must walk through
+    this wrapper to reach the underlying envelope.
+    """
+
+    content: Any
+    name: str = "fake_tool"
+    tool_call_id: str = "call_test"
 
 
 def test_extract_envelope_fields_pulls_whitelisted_keys_from_args() -> None:
@@ -70,6 +89,70 @@ def test_extract_envelope_fields_returns_empty_for_non_dict() -> None:
 def test_extract_envelope_fields_returns_empty_when_no_whitelisted_keys() -> None:
     output = {"status": "ok", "args": {"scene_id": "scene_001"}}
     assert _extract_envelope_fields(output) == {}
+
+
+def test_extract_envelope_fields_unwraps_tool_message_with_dict_content() -> None:
+    """``ToolMessage(content={...})`` shape — defensive path."""
+    inner = {
+        "status": "real-worker-dispatched",
+        "tool": "launch_audio_render",
+        "args": {"engine": "qwen3-tts", "wav_bytes_len": 1_000},
+    }
+    output = _FakeToolMessage(content=inner)
+
+    assert _extract_envelope_fields(output) == {
+        "engine": "qwen3-tts",
+        "wav_bytes_len": 1_000,
+    }
+
+
+def test_extract_envelope_fields_unwraps_tool_message_with_json_string_content() -> None:
+    """``ToolMessage(content=json.dumps({...}))`` — production shape.
+
+    LangChain's ``ToolNode`` JSON-encodes any non-string return so the
+    envelope arrives wrapped twice: ``ToolMessage`` outside, JSON string
+    inside. The extractor must unwrap both.
+    """
+    inner = {
+        "status": "real-worker-dispatched",
+        "tool": "launch_visual_production",
+        "args": {
+            "engine": "ltx-video",
+            "mp4_bytes_len": 279_774,
+            "status_code": 200,
+            "mp4_path": "/tmp/run/artifacts/scene_001.mp4",
+        },
+    }
+    output = _FakeToolMessage(content=json.dumps(inner))
+
+    assert _extract_envelope_fields(output) == {
+        "engine": "ltx-video",
+        "mp4_bytes_len": 279_774,
+        "status_code": 200,
+        "mp4_path": "/tmp/run/artifacts/scene_001.mp4",
+    }
+
+
+def test_extract_envelope_fields_unwraps_bare_json_string() -> None:
+    """Plain JSON-string output (no ``ToolMessage`` wrapper)."""
+    output = json.dumps(
+        {
+            "status": "real-worker-dispatched",
+            "tool": "launch_audio_render",
+            "args": {"engine": "qwen3-tts", "wav_bytes_len": 1_234},
+        }
+    )
+
+    assert _extract_envelope_fields(output) == {
+        "engine": "qwen3-tts",
+        "wav_bytes_len": 1_234,
+    }
+
+
+def test_extract_envelope_fields_returns_empty_for_invalid_json_string() -> None:
+    """Defensive — malformed JSON must never raise from the extractor."""
+    assert _extract_envelope_fields("{not valid json") == {}
+    assert _extract_envelope_fields("plain text, not even json-shaped") == {}
 
 
 def test_translate_pipeline_event_lifts_envelope_into_detail() -> None:
