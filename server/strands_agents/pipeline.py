@@ -49,12 +49,18 @@ brief into a final video, going through five stages:
    string from the approved scenario as the ``text`` argument to
    launch_audio_render so the TTS renders the actual script (slice 9c).
 3. Visual — delegate to the `visual` SubAgent via the task tool.
+   When the propose_visual_concept tool is available (slice
+   9c-LLM-visual gate set), call it once per scene with the scene's
+   first phrase, the project style_lock, and visual_style. Use the
+   returned ``prompt`` string and ``visual_concept`` dict directly
+   in the next stage.
 4. Production — delegate to the `production` SubAgent via the task
    tool. When calling launch_visual_production, pass a fully-formed
    style-locked ``prompt`` string built from the scene's
    visual_concept (shot type, camera movement, mood, palette,
    phrases) so the video model receives a rich description, not a
-   one-line caption (slice 9c).
+   one-line caption (slice 9c). When propose_visual_concept ran in
+   stage 3, prefer its returned prompt verbatim.
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,
@@ -316,10 +322,24 @@ def build_documentary_orchestrator(
     :mod:`tools.scenario_evaluator_checks` for structural checks
     (slice 9c-LLM-scenario). Without a model id resolution all
     scenario placeholders pass through.
+
+    When ``model`` is a string id (or ``STRANDS_MODEL`` /
+    ``VISUAL_LLM_MODEL_ID`` is set), an additional
+    ``propose_visual_concept`` tool is appended to the orchestrator's
+    tool list. The orchestrator calls it per scene to obtain a real,
+    style-locked LTX prompt + structured visual concept dict that
+    feeds straight into ``launch_visual_production`` (slice
+    9c-LLM-visual). Without a model id resolution the tool is
+    omitted and the orchestrator falls back to constructing concepts
+    inline from the scenario's ``visual_notes``.
     """
     from ._real_scenario_tools import (
         apply_real_scenario_overrides,
         build_real_scenario_tools,
+    )
+    from ._real_visual_tools import (
+        apply_real_visual_overrides,
+        build_real_visual_tools,
     )
     from .playground.pipeline_live_real_workers import (
         apply_real_worker_overrides,
@@ -327,9 +347,11 @@ def build_documentary_orchestrator(
     )
 
     base_tools = build_default_tools()
-    scenario_model_id = model if isinstance(model, str) else None
-    scenario_overrides = build_real_scenario_tools(model_id=scenario_model_id)
+    llm_model_id = model if isinstance(model, str) else None
+    scenario_overrides = build_real_scenario_tools(model_id=llm_model_id)
     tools = apply_real_scenario_overrides(base_tools, scenario_overrides)
+    visual_overrides = build_real_visual_tools(model_id=llm_model_id)
+    tools = apply_real_visual_overrides(tools, visual_overrides)
     real_overrides = build_real_worker_tools(run_dir)
     tools = apply_real_worker_overrides(tools, real_overrides)
     return build_orchestrator(
