@@ -212,7 +212,7 @@ def _demo_chat_script(
         ),
         _ai_tool_call(
             "launch_audio_render",
-            {"scene_id": scene_id, "voice_id": "default"},
+            {"scene_id": scene_id, "voice_id": "Ryan"},
         ),
         _ai_tool_call(
             "evaluate_timing",
