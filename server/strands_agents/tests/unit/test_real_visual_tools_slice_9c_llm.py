@@ -132,6 +132,36 @@ class TestBuildRealVisualTools:
 
         assert set(tools.keys()) == {"propose_visual_concept"}
 
+    def test_returns_empty_when_visual_llm_import_fails(self) -> None:
+        """Graceful degradation: import error returns ``{}`` not raises.
+
+        Mirrors :func:`_real_scenario_tools.build_real_scenario_tools`'s
+        defensive try/except so CI stays hermetic when the LLM stack
+        is unavailable (no boto3 creds, no openai key, etc.) and the
+        orchestrator transparently falls back to the placeholder
+        visual concept builder.
+        """
+        with patch(
+            "strands_agents.visual_llm.make_concept_proposer",
+            side_effect=ImportError("simulated litellm import failure"),
+        ):
+            tools = build_real_visual_tools(model_id="openai/gpt-4o")
+
+        assert tools == {}
+
+    def test_visual_llm_not_imported_at_module_level(self) -> None:
+        """``visual_llm`` must not be a top-level attr of the overlay.
+
+        A top-level ``from strands_agents import visual_llm`` would
+        crash module import the moment the LLM stack is unavailable,
+        which would break the entire orchestrator boot sequence —
+        not just the LLM overlay.
+        """
+        assert not hasattr(_real_visual_tools, "visual_llm"), (
+            "visual_llm must be imported lazily inside _build_propose_concept_tool, "
+            "not at module level"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Overlay application
@@ -245,9 +275,8 @@ class TestProposeVisualConceptTool:
                 },
             }
 
-        with patch.object(
-            _real_visual_tools.visual_llm,
-            "make_concept_proposer",
+        with patch(
+            "strands_agents.visual_llm.make_concept_proposer",
             return_value=fake_proposer,
         ) as mocked_factory:
             tools = build_real_visual_tools(model_id="openai/gpt-4o")
@@ -303,9 +332,8 @@ class TestProposeVisualConceptTool:
                 "ltx_params": {},
             }
 
-        with patch.object(
-            _real_visual_tools.visual_llm,
-            "make_concept_proposer",
+        with patch(
+            "strands_agents.visual_llm.make_concept_proposer",
             return_value=fake_proposer,
         ):
             tools = build_real_visual_tools(model_id="openai/gpt-4o")
@@ -333,9 +361,8 @@ class TestProposeVisualConceptTool:
                 "ltx_params": {},
             }
 
-        with patch.object(
-            _real_visual_tools.visual_llm,
-            "make_concept_proposer",
+        with patch(
+            "strands_agents.visual_llm.make_concept_proposer",
             return_value=fake_proposer,
         ):
             tools = build_real_visual_tools(model_id="openai/gpt-4o")
@@ -364,9 +391,8 @@ class TestProposeVisualConceptTool:
             }
 
         with (
-            patch.object(
-                _real_visual_tools.visual_llm,
-                "make_concept_proposer",
+            patch(
+                "strands_agents.visual_llm.make_concept_proposer",
                 return_value=fake_proposer,
             ),
             patch(

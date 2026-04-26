@@ -31,9 +31,12 @@ from typing import Any
 
 from langchain_core.tools import tool
 
-from strands_agents import visual_llm
-
 logger = logging.getLogger(__name__)
+
+_FALLBACK_PLACEHOLDER_REASON = (
+    "visual_llm import failed; visual LLM tools disabled, "
+    "orchestrator falls back to placeholder visual concept builder"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +86,9 @@ def _build_propose_concept_tool(model_id: str) -> Any:
     Returns:
         A LangChain ``@tool``-decorated callable.
     """
-    proposer = visual_llm.make_concept_proposer(model_id=model_id)
+    from .visual_llm import make_concept_proposer
+
+    proposer = make_concept_proposer(model_id=model_id)
 
     @tool
     def propose_visual_concept(
@@ -183,9 +188,20 @@ def build_real_visual_tools(model_id: str | None = None) -> dict[str, Any]:
             "<unset>",
         )
         return {}
+
+    try:
+        propose = _build_propose_concept_tool(resolved)
+    except ImportError as exc:
+        logger.warning(
+            "error=<%r> | %s",
+            exc,
+            _FALLBACK_PLACEHOLDER_REASON,
+        )
+        return {}
+
     logger.info("model_id=<%s> | building real visual tool overlay", resolved)
     return {
-        "propose_visual_concept": _build_propose_concept_tool(resolved),
+        "propose_visual_concept": propose,
     }
 
 
