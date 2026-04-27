@@ -269,6 +269,59 @@ class TestLiveB2CheckpointStoreUploadFailure:
         assert entry.size_bytes == len(b"hello")
 
 
+class TestLiveB2CheckpointStorePostUploadFailure:
+    def test_unexpected_post_upload_exception_releases_slot_and_signals_waiters(
+        self,
+    ) -> None:
+        """An exception after the B2 upload but before the manifest
+        insert (e.g. Pydantic ``ValidationError`` from ``ManifestEntry``
+        construction, or any future model-validation tightening) must
+        not leak the in-flight slot or deadlock parked callers.
+        """
+        bucket = _FakeBucket()
+        store = _make_store(bucket)
+
+        # Patch the module-level ``_now_iso`` shim that ``upload`` calls
+        # synchronously between the B2 upload and the manifest insert.
+        # Raising from inside it simulates an unexpected post-upload
+        # failure that the original ``except BaseException`` block did
+        # not cover (it only wrapped ``upload_bytes``).
+        from strands_agents.b2_checkpoint import store as store_module
+
+        original_now_iso = store_module._now_iso
+
+        def _explode() -> str:
+            raise RuntimeError("simulated post-upload failure")
+
+        store_module._now_iso = _explode  # type: ignore[assignment]
+        try:
+            with pytest.raises(RuntimeError, match="simulated post-upload"):
+                store.upload(
+                    payload=b"hello",
+                    kind="audio_wav",
+                    revision_tag="r0001",
+                    run_id="run-1",
+                )
+        finally:
+            store_module._now_iso = original_now_iso
+
+        # The B2 upload landed but the manifest insert did not — slot
+        # must still be released so concurrent callers don't deadlock.
+        assert store._in_flight == {}
+        assert len(bucket.uploads) == 1
+
+        # A parked thread waking up on the cleared event must be able to
+        # claim the slot itself and complete the upload on retry.
+        retry = store.upload(
+            payload=b"hello",
+            kind="audio_wav",
+            revision_tag="r0001",
+            run_id="run-1",
+        )
+        assert retry.size_bytes == len(b"hello")
+        assert store._in_flight == {}
+
+
 class TestLiveB2CheckpointStoreDuplicateIdempotencyKey:
     def test_collision_with_different_sha_raises(self) -> None:
         """Pre-computed idem key with different bytes → caller bug."""

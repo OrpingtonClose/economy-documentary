@@ -400,15 +400,21 @@ class LiveB2CheckpointStore:
             # failed (next iteration sees ``_in_flight`` cleared and
             # claims the slot itself).
 
-        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
-        b2_key = _b2_key(
-            run_id=run_id,
-            kind=kind,
-            revision_tag=revision_tag,
-            artifact_id=artifact_id,
-        )
-
+        # try/finally guarantees the in-flight slot is released and the
+        # event signalled even if an unexpected exception is raised
+        # between the claim and the manifest insert (e.g. Pydantic
+        # ``ValidationError`` from ``ManifestEntry`` construction).
+        # Without this, a parked caller's ``in_flight.wait()`` would
+        # deadlock and ``_in_flight`` would leak the entry.
         try:
+            artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+            b2_key = _b2_key(
+                run_id=run_id,
+                kind=kind,
+                revision_tag=revision_tag,
+                artifact_id=artifact_id,
+            )
+
             _, bucket = self._ensure_client()
             # ``upload_bytes`` is the b2sdk.v2 surface for uploading
             # raw payloads. Returns a ``FileVersion``.
@@ -416,51 +422,43 @@ class LiveB2CheckpointStore:
                 data_bytes=payload,
                 file_name=b2_key,
             )
-        except BaseException:
-            # Release the in-flight claim so a retry (same thread or a
-            # parked concurrent caller) can attempt the upload again.
+
+            entry = ManifestEntry(
+                artifact_id=artifact_id,
+                run_id=run_id,
+                revision_tag=revision_tag,
+                kind=kind,
+                b2_key=b2_key,
+                sha256=sha256,
+                size_bytes=len(payload),
+                uploaded_at_iso=_now_iso(),
+                idempotency_key=idem,
+            )
+
+            with self._lock:
+                # Defense in depth — even with the in-flight guard
+                # above, a misbehaving caller that pre-computes the
+                # idempotency key could still collide. If someone else
+                # registered while we were uploading, discard our
+                # manifest entry and return theirs. The orphan B2
+                # object is wasted bytes but not corrupt.
+                existing_id = self._by_idem.get(idem)
+                if existing_id is not None:
+                    logger.warning(
+                        "run_id=<%s>, idem=<%s>, orphan_b2_key=<%s> "
+                        "| concurrent live b2 upload won; discarding duplicate",
+                        run_id,
+                        idem,
+                        b2_key,
+                    )
+                    return self._entries[existing_id]
+                self._entries[artifact_id] = entry
+                self._by_idem[idem] = artifact_id
+                self._run_order.setdefault(run_id, []).append(artifact_id)
+        finally:
             with self._lock:
                 self._in_flight.pop(idem, None)
             in_flight.set()
-            raise
-
-        entry = ManifestEntry(
-            artifact_id=artifact_id,
-            run_id=run_id,
-            revision_tag=revision_tag,
-            kind=kind,
-            b2_key=b2_key,
-            sha256=sha256,
-            size_bytes=len(payload),
-            uploaded_at_iso=_now_iso(),
-            idempotency_key=idem,
-        )
-
-        with self._lock:
-            # Defense in depth — even with the in-flight guard above,
-            # a misbehaving caller that pre-computes the idempotency
-            # key could still collide. If someone else registered
-            # while we were uploading, discard our manifest entry and
-            # return theirs. The orphan B2 object is wasted bytes but
-            # not corrupt.
-            existing_id = self._by_idem.get(idem)
-            if existing_id is not None:
-                self._in_flight.pop(idem, None)
-                in_flight.set()
-                logger.warning(
-                    "run_id=<%s>, idem=<%s>, orphan_b2_key=<%s> "
-                    "| concurrent live b2 upload won; discarding duplicate",
-                    run_id,
-                    idem,
-                    b2_key,
-                )
-                return self._entries[existing_id]
-            self._entries[artifact_id] = entry
-            self._by_idem[idem] = artifact_id
-            self._run_order.setdefault(run_id, []).append(artifact_id)
-            self._in_flight.pop(idem, None)
-
-        in_flight.set()
 
         logger.info(
             "run_id=<%s>, artifact_id=<%s>, kind=<%s>, b2_key=<%s>, size=<%d> "
