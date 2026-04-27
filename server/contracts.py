@@ -30,8 +30,6 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-from testing.simulation_bridge import is_simulation_active
-
 
 # ---------------------------------------------------------------------------
 # Scene-level schema (scenario creator is the intelligence layer)
@@ -477,8 +475,7 @@ def validate_preconditions(contract: StageContract, state: dict) -> None:
     1. All required services are healthy (HTTP health check).
     2. All required state keys contain real data (not placeholder values).
 
-    Raises ``ContractViolation`` if any check fails in production mode.
-    In test mode, logs warnings but does not block.
+    Raises ``ContractViolation`` if any check fails.
     """
     errors: list[str] = []
 
@@ -516,10 +513,6 @@ def validate_preconditions(contract: StageContract, state: dict) -> None:
         f"{len(errors)} precondition(s) failed:\n"
         + "\n".join(f"  - {e}" for e in errors)
     )
-
-    if is_simulation_active():
-        logger.warning("Contract [%s]: %s (simulation mode — continuing)", contract.name, error_msg)
-        return
 
     raise ContractViolation(
         stage=contract.name,
@@ -584,10 +577,6 @@ def validate_postconditions(contract: StageContract, state: dict) -> None:
         f"{len(errors)} issue(s):\n"
         + "\n".join(f"  - {e}" for e in errors)
     )
-
-    if is_simulation_active():
-        logger.warning("Contract [%s]: %s (simulation mode — continuing)", contract.name, error_msg)
-        return
 
     raise ContractViolation(
         stage=contract.name,

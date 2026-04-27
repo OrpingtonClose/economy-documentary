@@ -1,23 +1,16 @@
 """
 WhisperX alignment tools -- word-level timestamp extraction from TTS audio.
 
-Runs WhisperX on generated WAV files.  In simulation mode, the ADK
-EnvironmentSimulationConfig / @simulated decorator intercepts calls and
-returns deterministic mock alignment data so the test suite works without
-the real WhisperX weights or CUDA.
+Runs WhisperX on generated WAV files.
 
 FAIL-LOUD POLICY (#82, SKILL.md rule 3):
     WhisperX is the duration oracle for this pipeline.  If it is
     unavailable, the alignment errors, or the WAV is missing, we raise
     RuntimeError immediately.  There is NO silent fallback to synthetic
-    per-word timing in production mode -- every downstream video decision
-    depends on real spoken durations.  The old silent fallback masked a
-    46% runtime shortfall (PAG run: measured 194s vs target 420s) that
-    was only discovered after all 21 clips had already been generated.
-
-Synthetic alignment remains available (``_generate_synthetic_alignment``)
-for the simulation bridge to inject -- but production code NEVER reaches
-the synthetic path on its own.
+    per-word timing -- every downstream video decision depends on real
+    spoken durations.  The old silent fallback masked a 46% runtime
+    shortfall (PAG run: measured 194s vs target 420s) that was only
+    discovered after all 21 clips had already been generated.
 """
 
 from __future__ import annotations
@@ -30,8 +23,6 @@ from google.adk.tools import FunctionTool
 
 logger = logging.getLogger(__name__)
 
-from testing.simulation_bridge import is_simulation_active, simulated
-
 _SECONDS_PER_WORD = 0.3
 _WORD_GAP = 0.05  # Small gap between words
 
@@ -39,9 +30,9 @@ _WORD_GAP = 0.05  # Small gap between words
 def _generate_synthetic_alignment(text: str) -> dict:
     """Generate synthetic word-level alignment data from text.
 
-    NOT used as a fallback in production.  Exposed so the simulation
-    bridge (and tests) can construct deterministic mock responses when
-    the real WhisperX binaries are unavailable.
+    NOT used as a fallback in production.  Retained for unit tests
+    that need deterministic mock alignment when real WhisperX
+    binaries are unavailable.
 
     Estimates ~0.3s per word with small gaps between words.
     """
@@ -67,7 +58,6 @@ def _generate_synthetic_alignment(text: str) -> dict:
     }
 
 
-@simulated("align_narration")
 def align_narration(
     wav_path: str,
     text: str,
@@ -77,9 +67,7 @@ def align_narration(
     """Run WhisperX alignment on generated TTS audio.
 
     FAIL LOUD: if the WAV is missing, WhisperX is not installed, or
-    alignment errors, raises RuntimeError.  In simulation mode the
-    ``@simulated`` decorator short-circuits this function entirely and
-    returns a mocked response, so tests still work without WhisperX.
+    alignment errors, raises RuntimeError.
 
     Args:
         wav_path: Path to the WAV file to align.
@@ -96,26 +84,24 @@ def align_narration(
             (see #82, #86).
     """
     if not os.path.exists(wav_path):
-        # In simulation mode the @simulated decorator intercepts before
-        # we get here.  Reaching this branch in production means the TTS
-        # worker silently dropped the clip -- absolutely must fail loud.
+        # Reaching this branch means the TTS worker silently dropped the
+        # clip -- absolutely must fail loud.
         raise RuntimeError(
             f"WhisperX cannot align {wav_path!r}: WAV file missing. "
             f"This is a pipeline-damage signal (TTS worker failed to "
             f"persist) -- refusing to fall back to synthetic duration."
         )
 
-    # Production mode: run actual WhisperX.  Any failure is fatal --
-    # see module docstring for rationale.
+    # Run actual WhisperX.  Any failure is fatal -- see module
+    # docstring for rationale.
     try:
         import whisperx  # type: ignore[import-not-found]
     except ImportError as e:
         raise RuntimeError(
-            "WhisperX is not installed but the pipeline is not in "
-            "simulation mode.  WhisperX is the authoritative duration "
-            "oracle (see SKILL.md rule 3, issues #82 and #86) -- refusing "
-            "to fall back to synthetic per-word timing. "
-            f"Install whisperx or set DOCUMENTARY_TEST_MODE=true. ({e})"
+            "WhisperX is not installed.  WhisperX is the authoritative "
+            "duration oracle (see SKILL.md rule 3, issues #82 and #86) -- "
+            "refusing to fall back to synthetic per-word timing. "
+            f"Install whisperx. ({e})"
         ) from e
 
     try:
@@ -182,7 +168,7 @@ def align_narration(
         raise RuntimeError(
             f"WhisperX alignment failed for {wav_path!r}: {e!r}. "
             f"Refusing to fall back to synthetic duration -- fix the "
-            f"WhisperX worker or run with DOCUMENTARY_TEST_MODE=true."
+            f"WhisperX worker."
         ) from e
 
 

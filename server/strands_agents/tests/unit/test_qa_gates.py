@@ -1,0 +1,359 @@
+"""Unit tests for :mod:`strands_agents.qa_gates`.
+
+Synthetic MP4s + WAVs are generated with ffmpeg fixtures so the
+suite stays hermetic — no GPU, no network, no model credentials.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from strands_agents import qa_gates
+from strands_agents.qa_gates import (
+    DEFAULT_DURATION_TOLERANCE_S,
+    DEFAULT_MIN_MEAN_PIXEL_DELTA,
+    VERDICT_FAIL,
+    VERDICT_PASS,
+    qa_duration_align,
+    qa_stills_judge,
+    qa_video_artifact_probe,
+)
+
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not available",
+)
+
+
+def _invoke(tool: Any, **kwargs: Any) -> dict[str, Any]:
+    """Call a ``@tool``-decorated function via its langchain handle."""
+    return tool.invoke(kwargs)
+
+
+def _make_silent_wav(path: Path, duration_s: float) -> None:
+    cmd = [
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=channel_layout=mono:sample_rate=16000",
+        "-t",
+        f"{duration_s}",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _make_motion_mp4(path: Path, duration_s: float, fps: int = 24) -> None:
+    """Render a coloured-noise MP4 with strong inter-frame motion."""
+    cmd = [
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"mandelbrot=size=128x128:rate={fps}",
+        "-t",
+        f"{duration_s}",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _make_still_mp4(path: Path, duration_s: float, fps: int = 24) -> None:
+    """Render an MP4 that is a single solid colour (zero motion)."""
+    cmd = [
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        f"color=color=gray:size=128x128:rate={fps}",
+        "-t",
+        f"{duration_s}",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# qa_video_artifact_probe
+# ---------------------------------------------------------------------------
+
+
+class TestQaVideoArtifactProbe:
+    def test_pass_on_valid_motion_clip(self, tmp_path: Path) -> None:
+        video = tmp_path / "video.mp4"
+        _make_motion_mp4(video, 4.0)
+
+        result = _invoke(
+            qa_video_artifact_probe,
+            scene_id="scene_1",
+            video_path=str(video),
+        )
+
+        assert result["tool"] == "qa_video_artifact_probe"
+        assert result["verdict"] == VERDICT_PASS
+        assert result["scene_id"] == "scene_1"
+        assert result["duration_s"] == pytest.approx(4.0, abs=0.5)
+        assert result["width"] == 128
+        assert result["height"] == 128
+        assert result["codec"] == "h264"
+        assert result["size_bytes"] > 1024
+
+    def test_fail_when_video_missing(self, tmp_path: Path) -> None:
+        result = _invoke(
+            qa_video_artifact_probe,
+            scene_id="scene_1",
+            video_path=str(tmp_path / "missing.mp4"),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "does not exist" in result["error"]
+
+    def test_fail_when_video_too_small(self, tmp_path: Path) -> None:
+        path = tmp_path / "tiny.mp4"
+        path.write_bytes(b"x")
+        result = _invoke(
+            qa_video_artifact_probe,
+            scene_id="scene_1",
+            video_path=str(path),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "too small" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# qa_duration_align
+# ---------------------------------------------------------------------------
+
+
+class TestQaDurationAlign:
+    def test_pass_when_durations_match(self, tmp_path: Path) -> None:
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 4.0)
+        _make_motion_mp4(video, 4.0)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+
+        assert result["tool"] == "qa_duration_align"
+        assert result["verdict"] == VERDICT_PASS
+        assert result["delta_s"] == pytest.approx(0.0, abs=0.2)
+        assert result["tolerance_s"] == DEFAULT_DURATION_TOLERANCE_S
+
+    def test_fail_on_frozen_frame_regression(self, tmp_path: Path) -> None:
+        # Slice 9j regression: 13 s narration paired with a 3.7 s clip
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 13.0)
+        _make_motion_mp4(video, 3.7)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+
+        assert result["verdict"] == VERDICT_FAIL
+        assert result["delta_s"] == pytest.approx(9.3, abs=0.5)
+        assert "tolerance" in result["reason"]
+
+    def test_pass_within_default_tolerance(self, tmp_path: Path) -> None:
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 4.0)
+        _make_motion_mp4(video, 4.3)  # delta ~0.3, under 0.5 tolerance
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+
+        assert result["verdict"] == VERDICT_PASS
+
+    def test_custom_tolerance_overrides_default(self, tmp_path: Path) -> None:
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 4.0)
+        _make_motion_mp4(video, 5.0)  # delta ~1.0
+
+        # Default tolerance fails
+        default_result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+        assert default_result["verdict"] == VERDICT_FAIL
+
+        # 1.5 s tolerance passes
+        loose_result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+            tolerance_s=1.5,
+        )
+        assert loose_result["verdict"] == VERDICT_PASS
+
+    def test_fail_when_audio_missing(self, tmp_path: Path) -> None:
+        video = tmp_path / "v.mp4"
+        _make_motion_mp4(video, 4.0)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(tmp_path / "missing.wav"),
+            video_path=str(video),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "audio_path does not exist" in result["error"]
+
+    def test_fail_when_video_missing(self, tmp_path: Path) -> None:
+        audio = tmp_path / "a.wav"
+        _make_silent_wav(audio, 4.0)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(tmp_path / "missing.mp4"),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "video_path does not exist" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# qa_stills_judge
+# ---------------------------------------------------------------------------
+
+
+class TestQaStillsJudge:
+    def test_fail_on_solid_colour_clip(self, tmp_path: Path) -> None:
+        # A solid grey clip has zero motion — must hard-fail.
+        video = tmp_path / "still.mp4"
+        _make_still_mp4(video, 4.0)
+
+        result = _invoke(
+            qa_stills_judge,
+            scene_id="scene_1",
+            video_path=str(video),
+        )
+
+        assert result["tool"] == "qa_stills_judge"
+        assert result["verdict"] == VERDICT_FAIL
+        assert result["mean_pixel_delta"] < DEFAULT_MIN_MEAN_PIXEL_DELTA
+        assert "mean inter-frame" in result["reason"]
+
+    def test_pass_on_motion_clip(self, tmp_path: Path) -> None:
+        video = tmp_path / "motion.mp4"
+        _make_motion_mp4(video, 4.0)
+
+        result = _invoke(
+            qa_stills_judge,
+            scene_id="scene_1",
+            video_path=str(video),
+        )
+
+        assert result["verdict"] == VERDICT_PASS
+        assert result["mean_pixel_delta"] >= DEFAULT_MIN_MEAN_PIXEL_DELTA
+
+    def test_fail_when_video_missing(self, tmp_path: Path) -> None:
+        result = _invoke(
+            qa_stills_judge,
+            scene_id="scene_1",
+            video_path=str(tmp_path / "missing.mp4"),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "does not exist" in result["error"]
+
+    def test_num_samples_minimum_enforced(self, tmp_path: Path) -> None:
+        video = tmp_path / "v.mp4"
+        _make_motion_mp4(video, 4.0)
+
+        with pytest.raises(ValueError):
+            _invoke(
+                qa_stills_judge,
+                scene_id="scene_1",
+                video_path=str(video),
+                num_samples=1,
+            )
+
+    def test_custom_floor_overrides_default(self, tmp_path: Path) -> None:
+        # Motion clip's delta is well above 1.5; bump the floor to a
+        # value above its delta and we should fail.
+        video = tmp_path / "v.mp4"
+        _make_motion_mp4(video, 4.0)
+
+        # Sanity: default passes
+        baseline = _invoke(
+            qa_stills_judge,
+            scene_id="scene_1",
+            video_path=str(video),
+        )
+        assert baseline["verdict"] == VERDICT_PASS
+
+        # Bump floor far above any plausible motion delta -> fail
+        high_floor = _invoke(
+            qa_stills_judge,
+            scene_id="scene_1",
+            video_path=str(video),
+            min_mean_pixel_delta=200.0,
+        )
+        assert high_floor["verdict"] == VERDICT_FAIL
+
+
+# ---------------------------------------------------------------------------
+# Module-level surface
+# ---------------------------------------------------------------------------
+
+
+class TestModuleSurface:
+    def test_exports_three_gates(self) -> None:
+        assert "qa_duration_align" in qa_gates.__all__
+        assert "qa_stills_judge" in qa_gates.__all__
+        assert "qa_video_artifact_probe" in qa_gates.__all__
+
+    def test_all_gates_are_langchain_tools(self) -> None:
+        # Sanity: each gate is decorated with @tool and exposes the
+        # langchain ``invoke`` method the orchestrator uses.
+        assert hasattr(qa_duration_align, "invoke")
+        assert hasattr(qa_stills_judge, "invoke")
+        assert hasattr(qa_video_artifact_probe, "invoke")
+
+    def test_default_tolerance_matches_post_mortem(self) -> None:
+        # User instructed in slice 9j post-mortem: hard fail at 0.5 s.
+        assert DEFAULT_DURATION_TOLERANCE_S == 0.5

@@ -1,9 +1,7 @@
 """
 TTS tools -- Qwen3-TTS generation wrapper.
 
-Generates narration WAV files using Qwen3-TTS on GPU.  In simulation mode
-(activated via ``testing.simulation_bridge``), the ADK EnvironmentSimulationConfig
-intercepts calls and returns mock responses — no hand-rolled ``_TEST_MODE`` needed.
+Generates narration WAV files using Qwen3-TTS on a GPU worker.
 """
 
 from __future__ import annotations
@@ -13,7 +11,6 @@ import json
 import logging
 import os
 import wave
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from google.adk.tools import FunctionTool
@@ -23,7 +20,6 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "TTS_OUTPUT_DIR", "/tmp/documentary-pipeline/audio"
 )
-from testing.simulation_bridge import simulated
 
 # Approximate speech rate: ~0.3s per word (for test duration estimation)
 _SECONDS_PER_WORD = 0.3
@@ -49,7 +45,6 @@ def _generate_silent_wav(output_path: str, duration: float) -> None:
         wf.writeframes(silent_data)
 
 
-@simulated("generate_narration")
 def generate_narration(
     scene_num: int,
     voice_role: str,

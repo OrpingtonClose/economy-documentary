@@ -216,8 +216,6 @@ def run_pipeline(
     """Run the documentary pipeline in production mode."""
     env = os.environ.copy()
     env["GPU_WORKER_URL"] = gpu_worker_url
-    # Make sure test mode is off
-    env.pop("DOCUMENTARY_TEST_MODE", None)
 
     # Use poetry run to ensure we're in the correct virtualenv with all deps
     cmd = [

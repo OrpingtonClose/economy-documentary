@@ -124,7 +124,6 @@ MAX_CONCURRENT_LLM=2
 MAX_CONTEXT_TOKENS=128000
 
 # Pipeline
-DOCUMENTARY_TEST_MODE=false
 TIMELINE_DIR=/workspace/documentary-output/timelines
 TTS_OUTPUT_DIR=/workspace/documentary-output/audio
 VIDEO_OUTPUT_DIR=/workspace/documentary-output/video

@@ -190,7 +190,6 @@ _INTERVENTION_TIMEOUT = float(os.environ.get("GATEKEEPER_TIMEOUT", "10"))
 _AUTO_APPROVE = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
-from testing.simulation_bridge import is_simulation_active
 
 
 def intervention_window(stage: str, checks: list[GatekeeperCheck]) -> bool:
@@ -201,7 +200,7 @@ def intervention_window(stage: str, checks: list[GatekeeperCheck]) -> bool:
 
     Returns True if the pipeline should proceed, False if halted.
     """
-    if _AUTO_APPROVE or is_simulation_active():
+    if _AUTO_APPROVE:
         logger.info(
             "Gatekeeper intervention window skipped (auto-approve): %s", stage
         )
@@ -664,39 +663,6 @@ def check_video_clip(
         ))
 
     # 5. Anti-cheat: dead stills
-    # In simulation mode, placeholder clips may be "dead stills" / "looping"
-    # — skip anti-cheat checks that would reject them.
-    if is_simulation_active():
-        for _ac_name in ("anti_cheat_dead_still", "anti_cheat_looping"):
-            checks.append(GatekeeperCheck(
-                name=_ac_name,
-                category="anti_cheat",
-                verdict=GatekeeperVerdict.PASS,
-                message="Skipped in test mode (solid-color placeholder clips expected)",
-                stage=stage,
-                scene_num=scene_num,
-                phrase_idx=phrase_idx,
-            ))
-        # Record explicit PASS for all remaining checks that the early return
-        # would skip, so the audit trail is complete in test mode.
-        for _skip_name, _skip_cat in (
-            ("qa_status", "semantic"),
-            ("anti_cheat_stretching", "anti_cheat"),
-            ("narration_duration_match", "cross_track"),
-        ):
-            checks.append(GatekeeperCheck(
-                name=_skip_name,
-                category=_skip_cat,
-                verdict=GatekeeperVerdict.PASS,
-                message="Skipped in test mode (solid-color placeholder clips expected)",
-                stage=stage,
-                scene_num=scene_num,
-                phrase_idx=phrase_idx,
-            ))
-        for c in checks:
-            _store.record_check(c)
-        return checks
-
     still_err = _check_dead_still(mp4_path, stats)
     if still_err:
         checks.append(GatekeeperCheck(

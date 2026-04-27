@@ -14,8 +14,6 @@ Covers:
    = {"stage": "scenario"}``) appends a ledger record AND releases the
    matching approval gate (#200). ``wait_for_approval`` then exits and
    emits ``approval_gate_closed`` with ``decision="approved"``.
-4. Auto-approved gates (simulation / test mode) do NOT emit open/close
-   events -- there is no human checkpoint for the UI to render.
 """
 
 from __future__ import annotations
@@ -67,8 +65,6 @@ def output_dir(tmp_path, monkeypatch):
         "_APPROVAL_FILE",
         os.path.join(str(tmp_path), ".approval_state.json"),
     )
-    monkeypatch.setattr(approval_gate, "_AUTO_APPROVE_ENV", False)
-    monkeypatch.setattr(approval_gate, "_should_auto_approve", lambda: False)
     monkeypatch.setattr(approval_gate, "_POLL_INTERVAL", 0.02)
     yield tmp_path
 
@@ -182,27 +178,6 @@ def test_wait_for_approval_emits_close_on_timeout(output_dir, monkeypatch):
     assert len(opens) == 1
     assert len(closes) == 1
     assert closes[0]["data"]["decision"] == "timeout"
-
-
-def test_wait_for_approval_auto_approve_emits_no_events(
-    output_dir, monkeypatch
-):
-    """In simulation / test mode there is no human checkpoint, so the
-    inline card must not render at all: suppress the event pair."""
-    monkeypatch.setattr(approval_gate, "_should_auto_approve", lambda: True)
-
-    queue = agui.subscribe_agui_events()
-    try:
-        approved = approval_gate.wait_for_approval("scenario")
-        events = _drain(queue)
-    finally:
-        agui.unsubscribe_agui_events(queue)
-
-    assert approved is True
-    assert not any(
-        e["type"] in ("approval_gate_opened", "approval_gate_closed")
-        for e in events
-    ), events
 
 
 def test_approve_endpoint_accepts_every_gated_pipeline_stage(output_dir):

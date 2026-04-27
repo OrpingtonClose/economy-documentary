@@ -29,18 +29,14 @@ logger = logging.getLogger(__name__)
 _OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
-# Auto-approve all stages (no human needed).
-# Controlled by DOCUMENTARY_AUTO_APPROVE env var OR active simulation mode.
-from testing.simulation_bridge import is_simulation_active
-
+# Auto-approve all stages (no human needed) when DOCUMENTARY_AUTO_APPROVE is
+# set. Used by unattended production runs (e.g. scheduled jobs) where no
+# human reviewer is online to click the approval card. Honoured in lockstep
+# with gatekeeper.py and recovery.py, which read the same env var to bypass
+# their own intervention windows / L4 escalation paths.
 _AUTO_APPROVE_ENV = os.environ.get(
     "DOCUMENTARY_AUTO_APPROVE", ""
 ).strip().lower() in ("1", "true", "yes")
-
-
-def _should_auto_approve() -> bool:
-    """Check if gates should auto-approve (env var OR active simulation)."""
-    return _AUTO_APPROVE_ENV or is_simulation_active()
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0
@@ -71,10 +67,10 @@ def _write_approval_state(state: dict) -> None:
 def is_stage_approved(stage: str) -> bool:
     """Check if a stage has been approved by the human.
 
-    In simulation mode or when DOCUMENTARY_AUTO_APPROVE is set, all stages
-    are auto-approved.
+    When ``DOCUMENTARY_AUTO_APPROVE`` is set, every stage is treated as
+    approved so unattended runs do not block on the human checkpoint.
     """
-    if _should_auto_approve():
+    if _AUTO_APPROVE_ENV:
         return True
     state = _read_approval_state()
     return state.get(stage, {}).get("approved", False)
@@ -91,12 +87,7 @@ def reset_stage_approval(stage: str) -> None:
     :func:`is_stage_approved` because the ``approved`` flag persists on
     disk from the first approval, silently auto-approving every subsequent
     reconstruction.
-
-    In simulation / auto-approve mode this is a no-op since approval is
-    bypassed entirely.
     """
-    if _should_auto_approve():
-        return
     state = _read_approval_state()
     if stage in state:
         state[stage].pop("approved", None)
@@ -109,17 +100,7 @@ def reset_stage_approval(stage: str) -> None:
 
 
 def mark_stage_ready(stage: str) -> None:
-    """Mark a stage as ready for human review (but not yet approved).
-
-    In simulation/auto-approve mode, stages are auto-approved — skip disk I/O.
-    """
-    if _should_auto_approve():
-        logger.info("Stage '%s' auto-approved (test mode)", stage)
-        _emit_gate_digest("gate_open", stage, reviewer="auto-approve")
-        _emit_gate_digest(
-            "gate_close", stage, decision="approved", reviewer="auto-approve"
-        )
-        return
+    """Mark a stage as ready for human review (but not yet approved)."""
     state = _read_approval_state()
     if stage not in state:
         state[stage] = {}
@@ -130,26 +111,23 @@ def mark_stage_ready(stage: str) -> None:
     _emit_gate_digest("gate_open", stage)
 
 
-def approve_stage(stage: str) -> None:
+def approve_stage(stage: str, *, reviewer: str = "programmatic") -> None:
     """Programmatically approve a stage (no human needed).
 
-    Used by quick-test and other automated paths that skip the normal
-    human-in-the-loop flow but still need downstream stages to proceed.
+    Used by automated paths that need downstream stages to proceed
+    without a human reviewer.
     """
-    if _should_auto_approve():
-        logger.info("Stage '%s' already auto-approved (auto-approve/simulation mode)", stage)
-        return
     state = _read_approval_state()
     if stage not in state:
         state[stage] = {}
     state[stage]["ready"] = True
     state[stage]["approved"] = True
     state[stage]["approved_at"] = time.time()
-    state[stage]["approved_by"] = "quick-test"
+    state[stage]["approved_by"] = reviewer
     _write_approval_state(state)
-    logger.info("Stage '%s' programmatically approved (quick-test)", stage)
+    logger.info("Stage '%s' programmatically approved (%s)", stage, reviewer)
     _emit_gate_digest(
-        "gate_close", stage, decision="approved", reviewer="quick-test"
+        "gate_close", stage, decision="approved", reviewer=reviewer
     )
 
 
@@ -225,7 +203,6 @@ def wait_for_approval(
     """Block until the human approves the given stage.
 
     Returns True if approved, False if timed out.
-    In test mode, returns immediately.
 
     Args:
         stage: The stage name being gated.
@@ -237,9 +214,6 @@ def wait_for_approval(
             loop skips the drift check (preserves the pre-B2 behaviour
             for callers that lack a handle on ``state``).
     """
-    if _should_auto_approve():
-        logger.info("Stage '%s' auto-approved (auto-approve/simulation mode)", stage)
-        return True
     start = time.time()
     logger.info("Waiting for human approval of stage '%s'...", stage)
 

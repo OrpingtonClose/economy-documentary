@@ -21,7 +21,6 @@ rule -- any deviation is factual proof the pipeline is damaged.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Optional
@@ -283,10 +282,7 @@ def _validate_production(timeline, state: dict) -> Optional[str]:
         # Collect unique languages present
         langs_present = {lang for (_, lang) in audio_by_scene_lang}
 
-        # In simulation mode, mock media has fixed durations that won't
-        # perfectly match narration timing — allow wider tolerance.
-        from testing.simulation_bridge import is_simulation_active
-        _tolerance = 10.0 if is_simulation_active() else 1.0
+        _tolerance = 1.0
 
         for sn, video_durs in video_by_scene.items():
             total_video = sum(video_durs)
