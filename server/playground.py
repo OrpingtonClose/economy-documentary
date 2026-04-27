@@ -1504,12 +1504,22 @@ async def list_recent_runs(
     round-trip per row.
     """
     capped_limit = max(1, min(int(limit) if limit else 20, 64))
-    streams = list(get_registry().recent(limit=capped_limit))
+    #: When ``component_id`` is supplied, the registry's "last N" view
+    #: would silently drop matching runs whenever non-matching ones
+    #: occupied the head — e.g. a sidebar requesting 20 pipeline runs
+    #: would see only 5 if the 15 most-recent registry entries were
+    #: c01..c15 component runs. Fetch the registry's full retention
+    #: window (64) and apply the trim *after* filtering so callers
+    #: always get up to ``limit`` matching runs.
+    fetch_limit = 64 if component_id is not None else capped_limit
+    streams = list(get_registry().recent(limit=fetch_limit))
     streams.reverse()  # most-recent first
     runs: list[dict[str, Any]] = []
     for stream in streams:
         if component_id is not None and stream.component_id != component_id:
             continue
+        if len(runs) >= capped_limit:
+            break
         snapshot = stream.snapshot()
         last_event = snapshot[-1] if snapshot else None
         dispatched = next(

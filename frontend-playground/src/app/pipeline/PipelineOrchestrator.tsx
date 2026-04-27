@@ -258,6 +258,30 @@ export function PipelineOrchestrator() {
   );
 
   const isRunning = runId !== null && !stream.terminal;
+  //: ``runMeta`` is set only by the submit handler in this session, so
+  //: ``runMeta?.run_id === runId`` is the cleanest signal for "this
+  //: run was started from this tab". A sidebar selection sets ``runId``
+  //: without populating ``runMeta`` (and clears the previous one — see
+  //: ``handleSelectRun`` below), so the submit button stays enabled
+  //: when the operator is merely *viewing* an in-flight run that
+  //: belongs to a different tab / session.
+  const isOwnActiveRun =
+    runMeta !== null && runMeta.run_id === runId && !stream.terminal;
+  //: Sidebar click handler: switching to a different run id has to
+  //: clear ``runMeta`` so the Run-meta block above the trajectory
+  //: doesn't render the previously-submitted run's topic / duration
+  //: while the trajectory + stage ribbon show data from the freshly
+  //: selected run. ``setRunId`` then triggers the URL/localStorage
+  //: sync effect.
+  const handleSelectRun = useCallback(
+    (nextRunId: string) => {
+      if (nextRunId !== runId) {
+        setRunMeta(null);
+      }
+      setRunId(nextRunId);
+    },
+    [runId],
+  );
   const runOk = stream.terminal?.status === "OK";
   const runFailed =
     stream.terminal != null &&
@@ -269,7 +293,7 @@ export function PipelineOrchestrator() {
       <PipelineSidebar
         runs={recentRuns}
         activeRunId={runId}
-        onSelectRun={setRunId}
+        onSelectRun={handleSelectRun}
       />
       <div className="flex min-w-0 flex-col gap-8">
       <header className="flex flex-col gap-3 border-b border-pg-border pb-8">
@@ -365,11 +389,11 @@ export function PipelineOrchestrator() {
           <div className="flex items-end">
             <button
               type="submit"
-              disabled={isSubmitting || isRunning}
+              disabled={isSubmitting || isOwnActiveRun}
               data-testid="pipeline-run-button"
               className="inline-flex w-full items-center justify-center gap-2 rounded bg-pg-accent px-4 py-2 text-sm font-semibold text-pg-bg transition hover:bg-pg-accent/80 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
             >
-              {isRunning
+              {isOwnActiveRun
                 ? "Running…"
                 : isSubmitting
                   ? "Dispatching…"
