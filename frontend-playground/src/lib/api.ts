@@ -19,6 +19,7 @@ import type {
   LangfuseConfig,
   RunResponse,
   RunState,
+  RunSummary,
   SaveUserCaseResponse,
   StartPipelineRunBody,
   StartPipelineRunResponse,
@@ -195,6 +196,28 @@ export async function startPipelineRun(
 /** Polling fallback for a run that the SSE stream cannot reach. */
 export async function getRunState(runId: string): Promise<RunState> {
   return getJson<RunState>(`/runs/${runId}`);
+}
+
+/**
+ * List the most-recent runs in the registry, newest first.
+ *
+ * Powers the recent-runs sidebar on ``/pipeline``. Filtering to
+ * ``component_id`` keeps c01..c15 component runs out of the
+ * sidebar so it only shows pipeline runs.
+ */
+export async function listRecentRuns(opts: {
+  readonly limit?: number;
+  readonly componentId?: string;
+} = {}): Promise<readonly RunSummary[]> {
+  const params = new URLSearchParams();
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts.componentId !== undefined) {
+    params.set("component_id", opts.componentId);
+  }
+  const query = params.toString();
+  const path = query ? `/runs?${query}` : "/runs";
+  const payload = await getJson<{ runs: RunSummary[] }>(path);
+  return payload.runs;
 }
 
 /** Absolute URL of the SSE event stream for one run. */

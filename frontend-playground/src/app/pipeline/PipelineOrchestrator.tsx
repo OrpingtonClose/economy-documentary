@@ -22,18 +22,41 @@
  * session-scoped, no persistence, no router state.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-import { startPipelineRun } from "@/lib/api";
+import { listRecentRuns, startPipelineRun } from "@/lib/api";
 import { PipelineApprovalCard } from "./PipelineApprovalCard";
 import { PipelineSceneMetrics } from "./PipelineSceneMetrics";
 import type {
   RunEvent,
+  RunSummary,
   StartPipelineRunResponse,
 } from "@/lib/types";
 import { useRunStream, type RunStreamState } from "@/lib/useRunStream";
+
+//: Component id used by ``POST /playground/pipeline/runs`` —
+//: filters the recent-runs sidebar to pipeline runs only.
+const PIPELINE_COMPONENT_ID = "pipeline";
+
+//: localStorage key for the last submitted run id. The page reads
+//: it on mount when the URL has no ``?run_id`` so a hard-refresh
+//: or fresh tab still finds the in-flight run, and writes it on
+//: every successful submit so the lookup is always current.
+const LAST_RUN_LS_KEY = "economy-documentary:pipeline:last_run_id";
+
+//: Recent-runs sidebar refresh cadence. 5s is fast enough for the
+//: sidebar to surface a freshly-submitted run from another tab
+//: without flooding ``GET /playground/runs?limit=N`` with polls.
+const RECENT_RUNS_POLL_MS = 5_000;
+
+//: Heartbeat thresholds in seconds. Below ``amber`` the badge
+//: stays neutral; above ``red`` it escalates to a warning. The
+//: pipeline routinely waits 30–90s on Qwen3-TTS or LTX-2.3 between
+//: visible events, so neutral has to extend past that.
+const HEARTBEAT_AMBER_SEC = 60;
+const HEARTBEAT_RED_SEC = 180;
 
 /**
  * Stable ordered list of pipeline stages, mirrored from
@@ -103,24 +126,80 @@ export function PipelineOrchestrator() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  //: Allow re-attaching to an in-flight run via ``?run_id=<id>``.
-  //: When the URL carries a ``run_id`` query parameter, subscribe
-  //: to that existing run on mount instead of waiting for the form
-  //: submit. Required so a UI driver that loses its browser process
-  //: mid-run can reconnect and continue monitoring/approving without
-  //: starting a fresh GPU-burning run from scratch.
+  //: URL state lives in three places that must stay in sync:
+  //:   1. ``?run_id=<id>`` query param — the canonical source of
+  //:      truth, shareable / bookmarkable.
+  //:   2. ``runId`` React state — drives the SSE subscription.
+  //:   3. ``localStorage[LAST_RUN_LS_KEY]`` — fallback for a fresh
+  //:      tab opened directly at ``/pipeline``.
+  //: The submit handler writes (1) and (3); the mount effect below
+  //: reads (1) preferentially and falls back to (3); ``setRunId``
+  //: is the only place (2) is mutated.
+  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   useEffect(() => {
     const fromUrl = searchParams?.get("run_id");
     if (fromUrl && fromUrl !== runId) {
       setRunId(fromUrl);
+      return;
+    }
+    //: No URL run_id and we have not picked one yet — fall back
+    //: to localStorage so a fresh tab that lands on bare
+    //: ``/pipeline`` still surfaces the operator's last run.
+    if (!fromUrl && runId === null && typeof window !== "undefined") {
+      const cached = window.localStorage.getItem(LAST_RUN_LS_KEY);
+      if (cached) setRunId(cached);
     }
     //: Intentionally only react to ``searchParams`` changes; we do
     //: not want to clobber a freshly-submitted run with a stale URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  //: Whenever the active run changes, mirror it into the URL and
+  //: localStorage. ``router.replace`` keeps the browser history
+  //: clean — no ``?run_id=...`` entry per submit, just a single
+  //: replaceable slot that follows the active run.
+  useEffect(() => {
+    if (!pathname || !router) return;
+    const fromUrl = searchParams?.get("run_id") ?? null;
+    if (runId && runId !== fromUrl) {
+      router.replace(`${pathname}?run_id=${encodeURIComponent(runId)}`);
+    }
+    if (typeof window !== "undefined" && runId) {
+      window.localStorage.setItem(LAST_RUN_LS_KEY, runId);
+    }
+  }, [runId, pathname, router, searchParams]);
+
   const stream: RunStreamState = useRunStream(runId);
+
+  //: Live recent-runs feed for the sidebar. Refreshes every
+  //: ``RECENT_RUNS_POLL_MS`` and on every successful run dispatch
+  //: so a freshly-submitted run appears at the top without
+  //: waiting for the next poll tick.
+  const recentRuns = useRecentRuns(runId);
+
+  //: Auto-scroll the trajectory log so the latest event is always
+  //: in view, but only if the operator hasn't scrolled up to read
+  //: history. The ``isPinnedToBottomRef`` flag is set on every
+  //: scroll event; when ``true`` we scroll to bottom on each new
+  //: event, when ``false`` we leave the scroll position alone.
+  const trajectoryRef = useRef<HTMLOListElement | null>(null);
+  const isPinnedToBottomRef = useRef<boolean>(true);
+  useEffect(() => {
+    const node = trajectoryRef.current;
+    if (!node || !isPinnedToBottomRef.current) return;
+    node.scrollTop = node.scrollHeight;
+  }, [stream.events.length]);
+  const onTrajectoryScroll = useCallback(
+    (event: React.UIEvent<HTMLOListElement>) => {
+      const node = event.currentTarget;
+      const distanceFromBottom =
+        node.scrollHeight - node.scrollTop - node.clientHeight;
+      isPinnedToBottomRef.current = distanceFromBottom <= 24;
+    },
+    [],
+  );
 
   const stages = useMemo(() => deriveStageStates(stream.events), [
     stream.events,
@@ -163,6 +242,12 @@ export function PipelineOrchestrator() {
         });
         setRunMeta(response);
         setRunId(response.run_id);
+        //: Persist the new run id to localStorage immediately so a
+        //: hard-refresh in the same window still re-attaches to it,
+        //: even before the URL effect above runs.
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(LAST_RUN_LS_KEY, response.run_id);
+        }
       } catch (err) {
         setSubmitError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -180,18 +265,32 @@ export function PipelineOrchestrator() {
     stream.terminal.status !== "CANCELLED";
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-6xl flex-col gap-8 px-8 py-12">
+    <main className="mx-auto grid min-h-screen w-full max-w-7xl grid-cols-1 gap-8 px-6 py-10 lg:grid-cols-[260px_1fr]">
+      <PipelineSidebar
+        runs={recentRuns}
+        activeRunId={runId}
+        onSelectRun={setRunId}
+      />
+      <div className="flex min-w-0 flex-col gap-8">
       <header className="flex flex-col gap-3 border-b border-pg-border pb-8">
         <div className="flex items-center justify-between gap-4">
           <p className="text-xs uppercase tracking-widest text-pg-muted">
             documentary-strands-migration · pipeline
           </p>
-          <Link
-            href="/components"
-            className="text-xs text-pg-accent hover:underline"
-          >
-            ← Components
-          </Link>
+          <div className="flex items-center gap-3">
+            <HeartbeatBadge
+              runId={runId}
+              ageSec={stream.lastEventAgeSec}
+              connection={stream.connection}
+              terminal={stream.terminal}
+            />
+            <Link
+              href="/components"
+              className="text-xs text-pg-accent hover:underline"
+            >
+              ← Components
+            </Link>
+          </div>
         </div>
         <h1 className="text-3xl font-semibold text-pg-text">
           Documentary Pipeline
@@ -422,6 +521,8 @@ export function PipelineOrchestrator() {
           </p>
         ) : (
           <ol
+            ref={trajectoryRef}
+            onScroll={onTrajectoryScroll}
             className="flex max-h-[420px] flex-col gap-1 overflow-y-auto font-mono text-xs"
             data-testid="pipeline-trajectory"
           >
@@ -440,7 +541,216 @@ export function PipelineOrchestrator() {
           </p>
         ) : null}
       </section>
+      </div>
     </main>
+  );
+}
+
+// --------------------------------------------------------------------------
+// Sidebar — recent runs list. Polls ``GET /playground/runs?limit=N``.
+// --------------------------------------------------------------------------
+
+function useRecentRuns(activeRunId: string | null): readonly RunSummary[] {
+  const [runs, setRuns] = useState<readonly RunSummary[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const fetchOnce = async () => {
+      try {
+        const list = await listRecentRuns({
+          limit: 20,
+          componentId: PIPELINE_COMPONENT_ID,
+        });
+        if (!cancelled) setRuns(list);
+      } catch {
+        //: Sidebar is observability — a missed poll is not
+        //: actionable. Swallow and try again on the next tick.
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(fetchOnce, RECENT_RUNS_POLL_MS);
+        }
+      }
+    };
+    void fetchOnce();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [activeRunId]);
+  return runs;
+}
+
+interface PipelineSidebarProps {
+  readonly runs: readonly RunSummary[];
+  readonly activeRunId: string | null;
+  readonly onSelectRun: (runId: string) => void;
+}
+
+function PipelineSidebar({
+  runs,
+  activeRunId,
+  onSelectRun,
+}: PipelineSidebarProps) {
+  return (
+    <aside
+      data-testid="pipeline-sidebar"
+      className="flex flex-col gap-3 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto"
+    >
+      <div className="flex flex-col gap-1 border-b border-pg-border pb-3">
+        <p className="text-xs uppercase tracking-widest text-pg-muted">
+          recent runs
+        </p>
+        <p className="text-xs text-pg-muted/70">
+          last {runs.length} pipeline runs on this server
+        </p>
+      </div>
+      {runs.length === 0 ? (
+        <p className="text-xs text-pg-muted">
+          No runs yet. Submit the form to start one.
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {runs.map((run) => (
+            <li key={run.run_id}>
+              <button
+                type="button"
+                data-testid={`pipeline-sidebar-run-${run.run_id}`}
+                onClick={() => onSelectRun(run.run_id)}
+                aria-pressed={run.run_id === activeRunId}
+                className={`flex w-full flex-col items-start gap-1 rounded border px-2 py-2 text-left text-xs transition hover:border-pg-accent/60 ${
+                  run.run_id === activeRunId
+                    ? "border-pg-accent bg-pg-accent/10 text-pg-text"
+                    : "border-pg-border bg-pg-surface text-pg-muted"
+                }`}
+              >
+                <span className="flex w-full items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-pg-text">
+                    {run.run_id.slice(0, 14)}
+                  </span>
+                  <RunRowStatusDot run={run} />
+                </span>
+                <span className="line-clamp-2 text-[11px] text-pg-text">
+                  {run.topic ?? run.case_name ?? "(no topic)"}
+                </span>
+                <span className="text-[10px] text-pg-muted/80">
+                  {run.target_duration_sec
+                    ? `${run.target_duration_sec}s`
+                    : "—"}
+                  {run.language ? ` · ${run.language}` : ""}
+                  {run.event_count > 0
+                    ? ` · ${run.event_count} ev`
+                    : ""}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </aside>
+  );
+}
+
+function RunRowStatusDot({ run }: { readonly run: RunSummary }) {
+  let color = "bg-pg-muted";
+  let label = "idle";
+  if (run.terminal_status === "OK") {
+    color = "bg-pg-green";
+    label = "ok";
+  } else if (
+    run.terminal_status &&
+    run.terminal_status !== "OK" &&
+    run.terminal_status !== "CANCELLED"
+  ) {
+    color = "bg-pg-red";
+    label = "error";
+  } else if (run.terminal_status === "CANCELLED") {
+    color = "bg-pg-amber";
+    label = "cancelled";
+  } else if (!run.closed) {
+    color = "bg-pg-accent";
+    label = "running";
+  }
+  return (
+    <span
+      title={label}
+      className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`}
+    />
+  );
+}
+
+// --------------------------------------------------------------------------
+// Heartbeat — "last event Ns ago" with color escalation.
+// --------------------------------------------------------------------------
+
+interface HeartbeatBadgeProps {
+  readonly runId: string | null;
+  readonly ageSec: number | null;
+  readonly connection: RunStreamState["connection"];
+  readonly terminal: RunStreamState["terminal"];
+}
+
+function HeartbeatBadge({
+  runId,
+  ageSec,
+  connection,
+  terminal,
+}: HeartbeatBadgeProps) {
+  if (runId === null) return null;
+  if (terminal !== null) {
+    return (
+      <span
+        data-testid="pipeline-heartbeat"
+        data-state="terminal"
+        className="rounded bg-pg-surface px-2 py-1 text-[11px] text-pg-muted"
+      >
+        run finished
+      </span>
+    );
+  }
+  if (connection === "lost") {
+    return (
+      <span
+        data-testid="pipeline-heartbeat"
+        data-state="lost"
+        className="rounded bg-pg-red/20 px-2 py-1 text-[11px] text-pg-red"
+      >
+        connection lost
+      </span>
+    );
+  }
+  if (ageSec === null) {
+    return (
+      <span
+        data-testid="pipeline-heartbeat"
+        data-state="waiting"
+        className="rounded bg-pg-surface px-2 py-1 text-[11px] text-pg-muted"
+      >
+        waiting for first event…
+      </span>
+    );
+  }
+  const rounded = Math.max(0, Math.round(ageSec));
+  let className =
+    "rounded bg-pg-accent/20 px-2 py-1 text-[11px] text-pg-accent";
+  let state: "fresh" | "amber" | "red" = "fresh";
+  if (ageSec >= HEARTBEAT_RED_SEC) {
+    className = "rounded bg-pg-red/20 px-2 py-1 text-[11px] text-pg-red";
+    state = "red";
+  } else if (ageSec >= HEARTBEAT_AMBER_SEC) {
+    className =
+      "rounded bg-pg-amber/20 px-2 py-1 text-[11px] text-pg-amber";
+    state = "amber";
+  }
+  return (
+    <span
+      data-testid="pipeline-heartbeat"
+      data-state={state}
+      data-age-sec={rounded}
+      title="Seconds since the last structured event landed."
+      className={className}
+    >
+      last event {rounded}s ago
+    </span>
   );
 }
 

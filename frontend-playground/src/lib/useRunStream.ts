@@ -84,6 +84,16 @@ export interface RunStreamState {
   readonly lastEvent: RunEvent | null;
   readonly lastNarration: RunEvent | null;
   readonly stall: RunStall | null;
+  /**
+   * Seconds since the most recent event landed, ticking once per
+   * 500ms. ``null`` when no events have arrived yet (or no run is
+   * subscribed). Drives the "last event Ns ago" heartbeat in the
+   * identity bar — a long-running pipeline can spend 60+ s waiting
+   * on Qwen3-TTS or LTX-2.3 between visible events, so the page
+   * needs an external proof-of-life signal that doesn't depend on
+   * the backend emitting structured events during that window.
+   */
+  readonly lastEventAgeSec: number | null;
   readonly terminal: RunTerminal | null;
   readonly connection: RunConnectionState;
   readonly error: string | null;
@@ -111,6 +121,7 @@ const INITIAL_STATE: RunStreamState = {
   lastEvent: null,
   lastNarration: null,
   stall: null,
+  lastEventAgeSec: null,
   terminal: null,
   connection: "idle",
   error: null,
@@ -246,6 +257,21 @@ export function useRunStream(runId: string | null): RunStreamState {
           stall.elapsed_ms / 1000
         )}s`
       : liveLine;
+    //: Age in seconds since the last event landed. Recomputed every
+    //: tick (500ms) so the identity-bar heartbeat advances without
+    //: waiting on the next backend event. We deliberately use
+    //: ``Date.now()`` against the event's epoch-second ``ts`` rather
+    //: than a monotonic clock — both are wall-clock-ish, and a small
+    //: amount of clock skew is fine for a "Ns ago" UI label.
+    let lastEventAgeSec: number | null = null;
+    if (lastEvent) {
+      const age = Math.max(0, Date.now() / 1000 - lastEvent.ts);
+      lastEventAgeSec = Number.isFinite(age) ? age : null;
+    }
+    //: ``tick`` is intentionally referenced inside the memo so the
+    //: derived value re-computes every interval; ``lastEventAgeSec``
+    //: would otherwise be frozen between events.
+    void tick;
     return {
       events,
       liveLine: finalLine,
@@ -253,6 +279,7 @@ export function useRunStream(runId: string | null): RunStreamState {
       lastEvent,
       lastNarration,
       stall,
+      lastEventAgeSec,
       terminal,
       connection,
       error,
