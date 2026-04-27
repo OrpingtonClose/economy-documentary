@@ -77,7 +77,11 @@ from strands_agents.playground.pipeline_adapter import (
     PIPELINE_STAGES,
     translate_pipeline_event,
 )
-from strands_agents.run import _ensure_interrupt_id, _extract_interrupt_metadata
+from strands_agents.run import (
+    _ensure_interrupt_id,
+    _extract_action_count,
+    _extract_interrupt_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -663,9 +667,15 @@ async def auto_accept_interrupt(state: dict[str, Any]) -> Command:
     can echo the operator's original project vocab on the
     ``pipeline.approval.resumed`` SSE event instead of leaking the
     langchain-translated form.
+
+    The decision count must equal the number of ``action_requests``
+    inside the interrupt — not the number of ``__interrupt__``
+    objects. ``HumanInTheLoopMiddleware`` packs N parallel tool
+    calls into a single interrupt with N action_requests, then
+    validates ``len(decisions) == N`` on resume. ``len(interrupts)``
+    is typically 1, which would crash any batched gate.
     """
-    interrupts = state.get("__interrupt__", []) or []
-    count = max(1, len(interrupts))
+    count = _extract_action_count(state)
     return Command(
         resume={
             "decisions": [{"type": "approve"} for _ in range(count)],

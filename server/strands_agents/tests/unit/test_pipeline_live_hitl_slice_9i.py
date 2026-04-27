@@ -331,6 +331,36 @@ class TestDecisionFromCommand:
         )
         assert _decision_from_command(command) == "accept"
 
+    def test_auto_accept_emits_one_decision_per_action_request(self) -> None:
+        # ``HumanInTheLoopMiddleware`` packs N parallel tool calls into
+        # a single interrupt with N ``action_requests``, then validates
+        # ``len(decisions) == N`` on resume. ``auto_accept_interrupt``
+        # must read N from the action_requests, not from the number of
+        # interrupt objects (which is typically 1). This test pins the
+        # bug Devin Review caught: 3 batched calls → 3 decisions.
+        from strands_agents.playground.pipeline_live_runner import (
+            auto_accept_interrupt,
+        )
+
+        state = {
+            "__interrupt__": [
+                {
+                    "value": {
+                        "action_requests": [
+                            {"name": "launch_visual_production", "args": {}},
+                            {"name": "launch_visual_production", "args": {}},
+                            {"name": "launch_visual_production", "args": {}},
+                        ],
+                    },
+                },
+            ],
+        }
+        command = asyncio.run(auto_accept_interrupt(state))
+        decisions = command.resume["decisions"]
+        assert len(decisions) == 3
+        for decision in decisions:
+            assert decision == {"type": "approve"}
+
 
 # ---------------------------------------------------------------------------
 # LivePipelineRun.run_id surface on the SSE wire
