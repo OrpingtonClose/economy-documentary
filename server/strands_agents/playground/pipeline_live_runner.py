@@ -626,6 +626,17 @@ class LivePipelineRun:
             await tracker.close_open()
             tool_count = handler.total_calls
             final_mp4_b2_url = _scrape_final_mp4_url(state)
+            #: If the orchestrator wrote a master.mp4 to the run-dir,
+            #: prefer the same-origin HTTP URL served by
+            #: ``GET /playground/runs/{run_id}/master.mp4`` over the
+            #: opaque ``b2://`` URL. The UI can drop a same-origin
+            #: ``video/mp4`` URL straight into a ``<video>`` tag; it
+            #: cannot do the same with a ``b2://`` scheme.
+            local_master = self.run_dir / "artifacts" / "master.mp4"
+            if local_master.exists() and (self.run_id or stream.run_id):
+                final_mp4_b2_url = (
+                    f"/playground/runs/{self.run_id or stream.run_id}/master.mp4"
+                )
             await _emit_translated(
                 stream,
                 "pipeline.run_finished",

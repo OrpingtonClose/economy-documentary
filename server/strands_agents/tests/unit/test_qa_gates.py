@@ -273,11 +273,19 @@ class TestQaDurationAlign:
 
         assert result["tool"] == "qa_duration_align"
         assert result["verdict"] == VERDICT_PASS
-        assert result["delta_s"] == pytest.approx(0.0, abs=0.2)
+        # delta_s is post-mux, always 0 by construction (loop-fill).
+        assert result["delta_s"] == pytest.approx(0.0, abs=1e-6)
+        assert result["pre_mux_delta_s"] == pytest.approx(0.0, abs=0.2)
+        assert result["loop_factor"] == pytest.approx(1.0, abs=0.05)
         assert result["tolerance_s"] == DEFAULT_DURATION_TOLERANCE_S
 
-    def test_fail_on_frozen_frame_regression(self, tmp_path: Path) -> None:
-        # Slice 9j regression: 13 s narration paired with a 3.7 s clip
+    def test_pass_when_video_shorter_than_audio_within_loop_factor(
+        self, tmp_path: Path
+    ) -> None:
+        # The slice 9j regression (13 s narration + 3.7 s clip) is
+        # PASS after PR #375 because the assembly leaf loops the clip
+        # to fill audio. ``loop_factor = 13/3.7 ≈ 3.5×`` is well below
+        # the default 5.0× ceiling, so this is a watchable scene.
         audio = tmp_path / "a.wav"
         video = tmp_path / "v.mp4"
         _make_silent_wav(audio, 13.0)
@@ -290,15 +298,56 @@ class TestQaDurationAlign:
             video_path=str(video),
         )
 
-        assert result["verdict"] == VERDICT_FAIL
-        assert result["delta_s"] == pytest.approx(9.3, abs=0.5)
-        assert "tolerance" in result["reason"]
+        assert result["verdict"] == VERDICT_PASS
+        assert result["loop_factor"] == pytest.approx(13.0 / 3.7, abs=0.1)
+        assert result["looped_video_duration_s"] == pytest.approx(13.0, abs=0.2)
+        assert result["pre_mux_delta_s"] == pytest.approx(9.3, abs=0.5)
 
-    def test_pass_within_default_tolerance(self, tmp_path: Path) -> None:
+    def test_fail_when_loop_factor_exceeds_ceiling(
+        self, tmp_path: Path
+    ) -> None:
+        # 1 s clip + 12 s narration => loop_factor = 12× > 5× ceiling.
+        # Fail-closed: too repetitive to call documentary footage.
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 12.0)
+        _make_motion_mp4(video, 1.0)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+
+        assert result["verdict"] == VERDICT_FAIL
+        assert "loop_factor" in result["reason"]
+        assert result["loop_factor"] == pytest.approx(12.0, abs=0.5)
+
+    def test_fail_when_video_too_short(self, tmp_path: Path) -> None:
+        # Sub-half-second video => degenerate clip (likely LTX OOM).
+        # Looping it can't hide that.
         audio = tmp_path / "a.wav"
         video = tmp_path / "v.mp4"
         _make_silent_wav(audio, 4.0)
-        _make_motion_mp4(video, 4.3)  # delta ~0.3, under 0.5 tolerance
+        _make_motion_mp4(video, 0.3)
+
+        result = _invoke(
+            qa_duration_align,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            video_path=str(video),
+        )
+
+        assert result["verdict"] == VERDICT_FAIL
+        assert "min_video_duration_s" in result["reason"]
+
+    def test_pass_within_default_tolerance(self, tmp_path: Path) -> None:
+        # Was a tolerance-based PASS pre-PR#375; remains PASS post.
+        audio = tmp_path / "a.wav"
+        video = tmp_path / "v.mp4"
+        _make_silent_wav(audio, 4.0)
+        _make_motion_mp4(video, 4.3)
 
         result = _invoke(
             qa_duration_align,
@@ -309,13 +358,16 @@ class TestQaDurationAlign:
 
         assert result["verdict"] == VERDICT_PASS
 
-    def test_custom_tolerance_overrides_default(self, tmp_path: Path) -> None:
+    def test_custom_max_loop_factor_overrides_default(
+        self, tmp_path: Path
+    ) -> None:
+        # 4 s narration + 0.6 s clip => loop_factor ≈ 6.7×.
+        # Default 5.0× ceiling fails; a 7× override passes.
         audio = tmp_path / "a.wav"
         video = tmp_path / "v.mp4"
         _make_silent_wav(audio, 4.0)
-        _make_motion_mp4(video, 5.0)  # delta ~1.0
+        _make_motion_mp4(video, 0.6)
 
-        # Default tolerance fails
         default_result = _invoke(
             qa_duration_align,
             scene_id="scene_1",
@@ -324,13 +376,12 @@ class TestQaDurationAlign:
         )
         assert default_result["verdict"] == VERDICT_FAIL
 
-        # 1.5 s tolerance passes
         loose_result = _invoke(
             qa_duration_align,
             scene_id="scene_1",
             audio_path=str(audio),
             video_path=str(video),
-            tolerance_s=1.5,
+            max_loop_factor=7.0,
         )
         assert loose_result["verdict"] == VERDICT_PASS
 

@@ -367,13 +367,18 @@ export function PipelineOrchestrator() {
           >
             Final master MP4
           </h2>
+          {finalMp4Url.startsWith("http") || finalMp4Url.startsWith("/") ? (
+            <video
+              data-testid="pipeline-final-video"
+              src={finalMp4Url}
+              controls
+              className="w-full max-w-3xl rounded border border-pg-border bg-black"
+            >
+              Your browser does not support inline video playback.
+            </video>
+          ) : null}
           <p className="break-all font-mono text-sm text-pg-text">
             {finalMp4Url}
-          </p>
-          <p className="text-xs text-pg-muted">
-            B2 URLs aren’t directly playable in the browser. Slice 9
-            will swap this for an HTML5 <code>&lt;video&gt;</code>{" "}
-            once the assembly leaf publishes a CDN-fronted master.
           </p>
         </section>
       ) : null}

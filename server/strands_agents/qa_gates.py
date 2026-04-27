@@ -67,12 +67,28 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 
-#: Default tolerance for :func:`qa_duration_align`. Anything tighter
-#: false-positives on legitimate worker variance (LTX-2.3 rounds
-#: frame counts to the 8k+1 grid; Qwen3-TTS adds a small trailing
-#: silence). 0.5 s is what the user instructed in the slice 9j
-#: post-mortem ("hard fail if |delta| > 0.5s").
+#: Default tolerance for :func:`qa_duration_align` -- only used in
+#: the *informational* ``pre_mux_delta_s`` field. The verdict no
+#: longer keys off raw duration delta because the assembly leaf
+#: (PR #375) loops video to fill audio via
+#: ``ffmpeg -stream_loop -1 -i <video> -i <audio> -t <audio_dur>``,
+#: so the muxed output's visible duration always equals ``audio_dur``
+#: regardless of the raw clip's length. Kept for backward-compat
+#: callers that still pass a custom tolerance.
 DEFAULT_DURATION_TOLERANCE_S: float = 0.5
+
+
+#: Maximum allowed ``audio_dur / video_dur`` loop factor. Above this
+#: the mux-loop produces visually repetitive footage that no longer
+#: reads as "documentary". 5.0× covers the typical
+#: ``LTX-2.3 4-5 s clip + 12-19 s narration`` range with headroom.
+DEFAULT_MAX_LOOP_FACTOR: float = 5.0
+
+
+#: Floor on the raw video clip duration. Below this the LTX render
+#: is degenerate (most often an OOM that returned a near-empty
+#: container). Looping a 100 ms clip is never going to look right.
+MIN_VIDEO_DURATION_S: float = 0.5
 
 
 #: Default frame-sample count for :func:`qa_stills_judge`. Eight
@@ -576,28 +592,48 @@ def qa_duration_align(
     audio_path: str,
     video_path: str,
     tolerance_s: float = DEFAULT_DURATION_TOLERANCE_S,
+    max_loop_factor: float = DEFAULT_MAX_LOOP_FACTOR,
+    min_video_duration_s: float = MIN_VIDEO_DURATION_S,
 ) -> dict[str, Any]:
-    """Hard-fail when audio and video durations diverge.
+    """Hard-fail when a scene's video can't be cleanly muxed against audio.
 
-    AGENTS.md hard invariant §5 ("QA immediately after each
-    artifact") requires this gate to run after every
-    ``launch_visual_production`` whose paired ``launch_audio_render``
-    has already returned. The orchestrator must escalate via the
-    ``escalation`` SubAgent on ``verdict == "fail"``.
+    AGENTS.md hard invariant §5 ("QA immediately after each artifact")
+    requires this gate to run after every ``launch_visual_production``
+    whose paired ``launch_audio_render`` has already returned. The
+    orchestrator must escalate via the ``escalation`` SubAgent on
+    ``verdict == "fail"``.
 
-    Slice 9j-quality-pass shipped frozen frames because no such
-    gate existed: a 3.7 s video paired with a 13 s narration tripped
-    nothing. With a 0.5 s tolerance this gate would have fired
-    ``delta=9.3 s`` and prevented the run from reaching assembly.
+    The assembly leaf (PR #375) muxes per-scene clips with
+    ``ffmpeg -stream_loop -1 -i <video> -i <audio> -t <audio_dur>``,
+    so a video shorter than its audio is looped to fill and a video
+    longer than its audio is trimmed. The *muxed* output's visible
+    duration therefore always equals ``audio_dur``; ``delta_s`` in
+    that domain is zero by construction. The frozen-frame regression
+    that motivated this gate (slice 9j) is now caught by
+    :func:`qa_stills_judge` on the raw clip.
+
+    What this gate guards instead are the *preconditions* for that
+    mux-fill to produce a watchable scene:
+
+    * Both files exist and ffprobe-able.
+    * ``video_dur >= min_video_duration_s`` -- a sub-half-second
+      clip is almost always an LTX OOM that returned a near-empty
+      container; looping it can't hide that.
+    * ``loop_factor = audio_dur / video_dur <= max_loop_factor`` --
+      above this ceiling the mux-loop produces visually repetitive
+      footage that no longer reads as documentary. Default 5.0×
+      covers the typical ``4-5 s LTX clip + 12-19 s narration`` range.
 
     Args:
         scene_id: The scene this artifact belongs to.
-        audio_path: Filesystem path to the rendered audio
-            (WAV, MP3, etc.; ffprobe figures out the container).
+        audio_path: Filesystem path to the rendered audio.
         video_path: Filesystem path to the rendered MP4.
-        tolerance_s: Max ``|audio_dur - video_dur|`` before failing.
-            Defaults to 0.5 s, the ceiling the operator set in the
-            slice 9j post-mortem.
+        tolerance_s: Informational only -- reported as
+            ``tolerance_s`` and used for the ``pre_mux_delta_s``
+            verdict pill the UI renders, but the post-mux verdict is
+            keyed on ``loop_factor`` and ``min_video_duration_s``.
+        max_loop_factor: Hard ceiling on ``audio_dur / video_dur``.
+        min_video_duration_s: Hard floor on raw ``video_dur``.
     """
     audio = Path(audio_path)
     video = Path(video_path)
@@ -609,6 +645,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=f"audio_path does not exist: {audio}",
         )
     if not video.is_file():
@@ -619,6 +657,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=f"video_path does not exist: {video}",
         )
     try:
@@ -632,6 +672,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=str(exc),
         )
     audio_dur = _resolve_duration_s(audio_payload)
@@ -646,10 +688,30 @@ def qa_duration_align(
             audio_duration_s=audio_dur,
             video_duration_s=video_dur,
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error="ffprobe returned no duration on at least one artifact",
         )
-    delta_s = abs(audio_dur - video_dur)
-    verdict = VERDICT_PASS if delta_s <= float(tolerance_s) else VERDICT_FAIL
+    pre_mux_delta_s = abs(audio_dur - video_dur)
+    looped_video_duration_s = audio_dur  # what the muxer produces
+    delta_s = 0.0  # post-mux delta, by construction
+    loop_factor = (
+        audio_dur / video_dur if video_dur > 0 else float("inf")
+    )
+    fail_reasons: list[str] = []
+    if video_dur < float(min_video_duration_s):
+        fail_reasons.append(
+            f"video_dur = {video_dur:.3f} s < "
+            f"min_video_duration_s {float(min_video_duration_s):.3f} s "
+            f"(degenerate clip, likely LTX OOM)"
+        )
+    if loop_factor > float(max_loop_factor):
+        fail_reasons.append(
+            f"loop_factor = {loop_factor:.2f}× > "
+            f"max_loop_factor {float(max_loop_factor):.2f}× "
+            f"(mux-loop would be visually repetitive)"
+        )
+    verdict = VERDICT_PASS if not fail_reasons else VERDICT_FAIL
     out = _envelope(
         "qa_duration_align",
         scene_id=scene_id,
@@ -658,14 +720,16 @@ def qa_duration_align(
         video_path=str(video),
         audio_duration_s=audio_dur,
         video_duration_s=video_dur,
+        looped_video_duration_s=looped_video_duration_s,
         delta_s=delta_s,
+        pre_mux_delta_s=pre_mux_delta_s,
+        loop_factor=loop_factor,
         tolerance_s=float(tolerance_s),
+        max_loop_factor=float(max_loop_factor),
+        min_video_duration_s=float(min_video_duration_s),
     )
     if verdict == VERDICT_FAIL:
-        out["reason"] = (
-            f"|audio_dur - video_dur| = {delta_s:.3f} s > "
-            f"tolerance {float(tolerance_s):.3f} s"
-        )
+        out["reason"] = "; ".join(fail_reasons)
     return out
 
 
