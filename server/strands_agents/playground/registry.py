@@ -70,6 +70,9 @@ INFRA_COMPONENT_IDS: tuple[str, ...] = (
     "infra_b2_checkpoint",
     "infra_pipeline_adapter",
     "infra_pipeline_live_orchestrator",
+    "qa_video_artifact_probe",
+    "qa_duration_align",
+    "qa_stills_judge",
 )
 
 
@@ -670,9 +673,7 @@ _COMPONENTS: tuple[Component, ...] = (
         ),
         cases_factory="infra_ltx_video_worker_live_cases",
         thresholds_attr=("INFRA_LTX_VIDEO_WORKER_LIVE_EVALUATOR_THRESHOLDS"),
-        experiment_builder_attr=(
-            "build_infra_ltx_video_worker_live_experiment"
-        ),
+        experiment_builder_attr=("build_infra_ltx_video_worker_live_experiment"),
         declared_models=(),
         task_attr="infra_ltx_video_worker_live_task",
     ),
@@ -732,6 +733,64 @@ _COMPONENTS: tuple[Component, ...] = (
         experiment_builder_attr=("build_infra_pipeline_live_orchestrator_experiment"),
         declared_models=(),
         task_attr="infra_pipeline_live_orchestrator_task",
+    ),
+    Component(
+        id="qa_video_artifact_probe",
+        title="QA: video artifact probe",
+        kind="gate",
+        row=4,
+        summary=(
+            "ffprobe wrapper that reports an MP4's duration, codec, "
+            "dimensions, and on-disk size. The deterministic floor "
+            "every QA gate built on top of ffprobe shares; surfaced "
+            "as a card so the orchestrator and the user inspect "
+            "the same envelope."
+        ),
+        experiment_module=("strands_agents.evals.experiments.qa_video_artifact_probe"),
+        cases_factory="qa_video_artifact_probe_cases",
+        thresholds_attr=("QA_VIDEO_ARTIFACT_PROBE_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_qa_video_artifact_probe_experiment"),
+        declared_models=(),
+        task_attr="qa_video_artifact_probe_task",
+    ),
+    Component(
+        id="qa_duration_align",
+        title="QA: audio/video duration align",
+        kind="gate",
+        row=4,
+        summary=(
+            "Hard-fails when |audio_dur - video_dur| > tolerance "
+            "(default 0.5 s). Catches the slice 9j frozen-frame "
+            "regression: a 3.7 s LTX-2.3 clip paired with 13 s of "
+            "narration trips delta=9.3 s and the run never reaches "
+            "assembly."
+        ),
+        experiment_module=("strands_agents.evals.experiments.qa_duration_align"),
+        cases_factory="qa_duration_align_cases",
+        thresholds_attr=("QA_DURATION_ALIGN_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_qa_duration_align_experiment"),
+        declared_models=(),
+        task_attr="qa_duration_align_task",
+    ),
+    Component(
+        id="qa_stills_judge",
+        title="QA: stills judge (frozen-frame guard)",
+        kind="gate",
+        row=4,
+        summary=(
+            "Decodes N evenly-spaced frames and hard-fails when the "
+            "mean L1 inter-frame pixel delta drops below the floor. "
+            "Catches a video that has the right duration but is "
+            "visually frozen — the muxer padded the last frame, or "
+            "LTX-2.3 emitted N near-identical frames. Deterministic "
+            "and credential-free."
+        ),
+        experiment_module=("strands_agents.evals.experiments.qa_stills_judge"),
+        cases_factory="qa_stills_judge_cases",
+        thresholds_attr=("QA_STILLS_JUDGE_EVALUATOR_THRESHOLDS"),
+        experiment_builder_attr=("build_qa_stills_judge_experiment"),
+        declared_models=(),
+        task_attr="qa_stills_judge_task",
     ),
 )
 
