@@ -321,11 +321,22 @@ def _resolve_enabled_flag(enabled: bool | None) -> bool:
 def _build_store(backend: str | None) -> B2CheckpointStore:
     """Return the store backend selected by ``B2_BACKEND``.
 
-    Defaults to ``memory`` when the gate is on but the operator has
-    not explicitly opted into ``live`` — keeps the slice safe to
-    enable in CI without dragging real B2 traffic in.
+    When ``B2_BACKEND`` is unset, auto-selects ``live`` if both
+    ``B2_KEY_ID`` and ``B2_APPLICATION_KEY`` are present in the
+    environment, else falls back to ``memory``. This keeps CI
+    hermetic (no creds → in-process store) while making the
+    production path real-by-default whenever credentials are wired
+    (no extra opt-in env var needed).
     """
-    backend = (backend or os.environ.get("B2_BACKEND", "memory")).strip().lower()
+    explicit = backend if backend is not None else os.environ.get("B2_BACKEND")
+    if explicit is None or not explicit.strip():
+        has_creds = bool(
+            os.environ.get("B2_KEY_ID", "").strip()
+            and os.environ.get("B2_APPLICATION_KEY", "").strip()
+        )
+        backend = "live" if has_creds else "memory"
+    else:
+        backend = explicit.strip().lower()
     if backend == "live":
         # Lazy import — keeps module import green when b2sdk is not
         # installed. ``LiveB2CheckpointStore`` itself imports b2sdk
