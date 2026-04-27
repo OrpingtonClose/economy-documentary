@@ -172,6 +172,13 @@ def resume_command_from_decision(
 ) -> Command:
     """Turn a validated decision into a LangGraph :class:`Command`.
 
+    Emits the legacy single-decision shape
+    (``Command(resume={"type": ...})``). Use
+    :func:`langchain_resume_command_from_decision` instead when the
+    interrupt was raised by ``langchain.agents.middleware.HumanInTheLoopMiddleware``,
+    which expects ``Command(resume={"decisions": [...]})`` with one
+    entry per parallel ``action_request``.
+
     Args:
         tool_name: The intercepted tool name.
         decision: Operator decision dict.
@@ -185,6 +192,99 @@ def resume_command_from_decision(
 
     validate_decision(tool_name, decision)
     return Command(resume=dict(decision))
+
+
+def _to_langchain_decision(
+    tool_name: str,
+    decision: ApprovalDecision,
+) -> dict[str, Any]:
+    """Translate a project ``ApprovalDecision`` to the langchain HITL vocab.
+
+    Mapping:
+
+    * ``{"type": "accept"}`` → ``{"type": "approve"}``
+    * ``{"type": "edit", "args": {...}}`` →
+      ``{"type": "edit", "edited_action": {"name": tool_name, "args": {...}}}``
+    * ``{"type": "reject", "reason": str}`` →
+      ``{"type": "reject", "message": str}``
+    * ``{"type": "respond", "content": ...}`` →
+      ``{"type": "reject", "message": str(content)}`` (langchain HITL
+      has no ``respond`` action; folding it into ``reject`` keeps the
+      operator's free-form content surfaced as the tool error message
+      so the agent transcript still records it)
+    """
+
+    decision_type = decision.get("type")
+    if decision_type == "accept":
+        return {"type": "approve"}
+    if decision_type == "edit":
+        args = decision.get("args") or {}
+        return {
+            "type": "edit",
+            "edited_action": {"name": tool_name, "args": dict(args)},
+        }
+    if decision_type == "reject":
+        reason = decision.get("reason") or ""
+        return {"type": "reject", "message": str(reason)}
+    if decision_type == "respond":
+        content = decision.get("content")
+        return {"type": "reject", "message": str(content)}
+    raise ValueError(f"unknown decision type: {decision_type!r}")
+
+
+def langchain_resume_command_from_decision(
+    tool_name: str,
+    decision: ApprovalDecision,
+    *,
+    action_count: int = 1,
+) -> Command:
+    """Build a langchain HITL middleware ``Command(resume=...)``.
+
+    ``langchain.agents.middleware.HumanInTheLoopMiddleware`` groups
+    every parallel tool call that needs review into a single
+    ``HITLRequest`` carrying N ``action_requests``. The middleware
+    then unwraps the resume payload as
+    ``response["decisions"]`` and validates ``len(decisions) == N``.
+    Single-decision shapes (``{"type": "approve"}``) raise
+    ``KeyError: 'decisions'`` the moment the run resumes.
+
+    This helper builds the correct shape: one langchain-vocab decision
+    per ``action_request``, all replicated from the operator's single
+    decision. The operator approves a *gate* (one user click), and the
+    middleware then receives one approval per parallel call covered
+    by that gate.
+
+    Args:
+        tool_name: The intercepted tool name. Used for ``edit`` to
+            rebuild ``edited_action.name``.
+        decision: Validated project ``ApprovalDecision``.
+        action_count: Number of ``action_requests`` in the langchain
+            ``HITLRequest``. Pass 1 for a non-batched gate
+            (``request_human_approval``, ``launch_assembly``).
+
+    Returns:
+        A ``Command(resume={"decisions": [...]})`` with
+        ``action_count`` entries.
+
+    Raises:
+        ValueError: If ``action_count < 1`` or the decision fails
+            :func:`validate_decision`.
+    """
+
+    if action_count < 1:
+        raise ValueError(
+            f"action_count must be >= 1, got {action_count}",
+        )
+
+    validate_decision(tool_name, decision)
+    langchain_decision = _to_langchain_decision(tool_name, decision)
+    return Command(
+        resume={
+            "decisions": [
+                dict(langchain_decision) for _ in range(action_count)
+            ],
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

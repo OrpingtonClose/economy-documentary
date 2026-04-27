@@ -41,6 +41,7 @@ from strands_agents.approval import (  # noqa: E402
     INTERRUPT_GATE_CONFIG,
     ApprovalDecision,
     ApprovalRecord,
+    langchain_resume_command_from_decision,
     new_interrupt_id,
     request_human_approval,
     resume_command_from_decision,
@@ -188,6 +189,105 @@ class TestResumeCommand:
             resume_command_from_decision(
                 "launch_assembly", {"type": "edit", "args": {}}
             )
+
+
+# ---------------------------------------------------------------------------
+# langchain_resume_command_from_decision
+# ---------------------------------------------------------------------------
+
+
+class TestLangchainResumeCommand:
+    """The shape ``langchain.agents.middleware.HumanInTheLoopMiddleware``
+    requires when resuming a paused graph.
+
+    Producing the legacy single-decision shape (``{"type": "approve"}``)
+    raises ``KeyError: 'decisions'`` mid-run when the middleware tries
+    to unwrap ``response["decisions"]``. These tests pin the contract.
+    """
+
+    def test_accept_maps_to_approve_in_decisions_array(self) -> None:
+        command = langchain_resume_command_from_decision(
+            "launch_visual_production", {"type": "accept"}
+        )
+        assert isinstance(command, Command)
+        assert command.resume == {"decisions": [{"type": "approve"}]}
+
+    def test_edit_wraps_args_under_edited_action(self) -> None:
+        command = langchain_resume_command_from_decision(
+            "launch_visual_production",
+            {"type": "edit", "args": {"scene_id": "s1", "prompt": "x"}},
+        )
+        assert command.resume == {
+            "decisions": [
+                {
+                    "type": "edit",
+                    "edited_action": {
+                        "name": "launch_visual_production",
+                        "args": {"scene_id": "s1", "prompt": "x"},
+                    },
+                },
+            ],
+        }
+
+    def test_reject_carries_reason_as_message(self) -> None:
+        command = langchain_resume_command_from_decision(
+            "launch_visual_production",
+            {"type": "reject", "reason": "bad shot"},
+        )
+        assert command.resume == {
+            "decisions": [{"type": "reject", "message": "bad shot"}],
+        }
+
+    def test_respond_folds_into_reject(self) -> None:
+        # langchain HITL has no ``respond`` action; surface the
+        # operator's content as a reject ``message`` so the agent
+        # transcript still records it.
+        command = langchain_resume_command_from_decision(
+            "request_human_approval",
+            {"type": "respond", "content": "see attached"},
+        )
+        assert command.resume == {
+            "decisions": [{"type": "reject", "message": "see attached"}],
+        }
+
+    def test_action_count_replicates_decision(self) -> None:
+        # When N parallel ``action_requests`` share a single gate,
+        # langchain validates ``len(decisions) == N``.
+        command = langchain_resume_command_from_decision(
+            "launch_visual_production",
+            {"type": "accept"},
+            action_count=5,
+        )
+        assert command.resume == {
+            "decisions": [{"type": "approve"}] * 5,
+        }
+
+    def test_action_count_zero_raises(self) -> None:
+        with pytest.raises(ValueError, match="action_count must be >= 1"):
+            langchain_resume_command_from_decision(
+                "launch_visual_production",
+                {"type": "accept"},
+                action_count=0,
+            )
+
+    def test_invalid_decision_raises_before_command(self) -> None:
+        with pytest.raises(ValueError):
+            langchain_resume_command_from_decision(
+                "launch_assembly",
+                {"type": "edit", "args": {}},
+            )
+
+    def test_decisions_are_independent_dicts(self) -> None:
+        # Mutating one replicated decision must not affect siblings.
+        command = langchain_resume_command_from_decision(
+            "launch_visual_production",
+            {"type": "accept"},
+            action_count=3,
+        )
+        decisions = command.resume["decisions"]
+        decisions[0]["type"] = "reject"
+        assert decisions[1] == {"type": "approve"}
+        assert decisions[2] == {"type": "approve"}
 
 
 # ---------------------------------------------------------------------------
@@ -617,27 +717,76 @@ class TestAutoRejectInterrupt:
             _auto_reject_interrupt({"__interrupt__": ["x"]}),
         )
         assert isinstance(command, Command)
+        # Auto-reject emits the langchain HITL middleware shape:
+        # ``{"decisions": [...]}`` with one entry per action_request.
+        # Tool name is unknown for a bare ``["x"]`` interrupt; the
+        # default-allowed superset includes "reject", so the auto path
+        # picks reject (mapped to langchain ``reject`` with ``message``).
         assert command.resume == {
-            "type": "reject",
-            "reason": "no operator attached",
+            "decisions": [
+                {"type": "reject", "message": "no operator attached"},
+            ],
         }
 
     def test_request_human_approval_gets_respond_not_reject(self) -> None:
         # request_human_approval only allows accept/respond.
         # Sending reject would bypass validate_decision and hit the
-        # middleware with an invalid payload.
+        # middleware with an invalid payload. Project ``respond`` has
+        # no langchain HITL counterpart, so it folds into ``reject``
+        # with the operator's ``content`` surfaced as ``message``.
         state = _interrupt_state("request_human_approval")
         command = asyncio.run(_auto_reject_interrupt(state))
         assert isinstance(command, Command)
         assert command.resume == {
-            "type": "respond",
-            "content": "no operator attached",
+            "decisions": [
+                {"type": "reject", "message": "no operator attached"},
+            ],
         }
 
     def test_launch_visual_production_gets_reject(self) -> None:
         state = _interrupt_state("launch_visual_production")
         command = asyncio.run(_auto_reject_interrupt(state))
-        assert command.resume["type"] == "reject"
+        decisions = command.resume["decisions"]
+        assert len(decisions) == 1
+        assert decisions[0]["type"] == "reject"
+
+    def test_langchain_action_requests_replicate_decisions(self) -> None:
+        # When the interrupt comes from langchain HumanInTheLoopMiddleware
+        # with N parallel ``action_requests``, the resume command must
+        # carry exactly N decisions or the middleware raises
+        # ``ValueError: Number of human decisions ... does not match
+        # number of hanging tool calls``.
+        state = {
+            "__interrupt__": [
+                {
+                    "id": "int-multi",
+                    "value": {
+                        "action_requests": [
+                            {
+                                "name": "launch_visual_production",
+                                "args": {"scene_id": f"s{i}"},
+                            }
+                            for i in range(3)
+                        ],
+                        "review_configs": [
+                            {
+                                "action_name": "launch_visual_production",
+                                "allowed_decisions": [
+                                    "approve",
+                                    "edit",
+                                    "reject",
+                                ],
+                            }
+                        ]
+                        * 3,
+                    },
+                },
+            ],
+        }
+        command = asyncio.run(_auto_reject_interrupt(state))
+        decisions = command.resume["decisions"]
+        assert len(decisions) == 3
+        assert all(d["type"] == "reject" for d in decisions)
 
 
 class TestQueueOperatorDecision:
@@ -668,7 +817,12 @@ class TestQueueOperatorDecision:
             command = await handler_task
 
             assert isinstance(command, Command)
-            assert command.resume == {"type": "accept"}
+            # Resumes through the langchain HITL middleware shape so a
+            # legacy ``{"type": "accept"}`` does not crash on
+            # ``KeyError: 'decisions'`` mid-run.
+            assert command.resume == {
+                "decisions": [{"type": "approve"}],
+            }
             resume_file = tmp_path / "approvals" / "resume_int-abc.json"
             assert resume_file.exists()
             record = json.loads(resume_file.read_text())
@@ -701,8 +855,12 @@ class TestReplayOperatorDecisions:
             second = await handler(
                 _interrupt_state("launch_visual_production", interrupt_id="int-2"),
             )
-            assert first.resume == {"type": "accept"}
-            assert second.resume == {"type": "reject", "reason": "no"}
+            assert first.resume == {
+                "decisions": [{"type": "approve"}],
+            }
+            assert second.resume == {
+                "decisions": [{"type": "reject", "message": "no"}],
+            }
             assert (tmp_path / "approvals" / "resume_int-1.json").exists()
             assert (tmp_path / "approvals" / "resume_int-2.json").exists()
 

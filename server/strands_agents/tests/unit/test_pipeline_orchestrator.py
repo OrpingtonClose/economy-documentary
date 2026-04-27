@@ -470,12 +470,15 @@ class _StubGraph:
 class TestRunDocumentary:
     def test_auto_reject_decision_default(self) -> None:
         command = asyncio.run(_auto_reject_interrupt({"__interrupt__": ["x"]}))
-        # _auto_reject_interrupt now returns a Command whose resume payload
-        # carries the canonical reject shape.
+        # _auto_reject_interrupt emits the langchain HITL middleware shape
+        # (``{"decisions": [...]}``) so the legacy single-decision payload
+        # cannot crash a paused graph with ``KeyError: 'decisions'`` on
+        # resume.
         assert isinstance(command, Command)
         assert command.resume == {
-            "type": "reject",
-            "reason": "no operator attached",
+            "decisions": [
+                {"type": "reject", "message": "no operator attached"},
+            ],
         }
 
     def test_interrupt_loop_resumes_with_decision(

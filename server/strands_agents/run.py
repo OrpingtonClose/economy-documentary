@@ -33,8 +33,8 @@ from .approval import (
     ApprovalDecision,
     ApprovalRecord,
     _allowed_decisions,
+    langchain_resume_command_from_decision,
     new_interrupt_id,
-    resume_command_from_decision,
     write_approval_record,
     write_pending_envelope,
 )
@@ -69,20 +69,25 @@ async def _auto_reject_interrupt(state: dict[str, Any]) -> Command:
         _, tool_name, _ = _extract_interrupt_metadata(state)
     except RuntimeError:
         tool_name = "unknown"
+    action_count = _extract_action_count(state)
 
     allowed = _allowed_decisions(tool_name)
     logger.warning(
-        "interrupt_count=<%d>, tool=<%s> | auto-declining (no operator attached)",
+        "interrupt_count=<%d>, tool=<%s>, action_count=<%d> | auto-declining (no operator attached)",
         len(interrupts),
         tool_name,
+        action_count,
     )
 
+    decision: ApprovalDecision
     if "reject" in allowed:
-        return Command(
-            resume={"type": "reject", "reason": "no operator attached"},
-        )
-    return Command(
-        resume={"type": "respond", "content": "no operator attached"},
+        decision = {"type": "reject", "reason": "no operator attached"}
+    else:
+        decision = {"type": "respond", "content": "no operator attached"}
+    return langchain_resume_command_from_decision(
+        tool_name,
+        decision,
+        action_count=action_count,
     )
 
 
@@ -164,6 +169,14 @@ def _extract_interrupt_metadata(
     as a list of :class:`langgraph.types.Interrupt` objects or dicts.
     We operate on whichever shape is there (tests hand-craft dicts;
     the real graph passes dataclass-like instances).
+
+    For interrupts raised by
+    ``langchain.agents.middleware.HumanInTheLoopMiddleware`` the
+    ``value`` carries ``action_requests`` (list) — each entry is a
+    parallel tool call covered by the same gate. We surface the first
+    one's ``name`` / ``args`` so the operator console preview shows
+    representative content; :func:`_extract_action_count` returns the
+    full N for resume-shape construction.
     """
 
     interrupts = state.get("__interrupt__", [])
@@ -181,18 +194,64 @@ def _extract_interrupt_metadata(
 
     interrupt_id = _ensure_interrupt_id(interrupt, state)
 
-    tool_name = (
-        value.get("tool_name")
-        or value.get("action_request", {}).get("action")
-        or "unknown"
-    )
+    action_requests = value.get("action_requests")
+    if isinstance(action_requests, list) and action_requests:
+        first = action_requests[0]
+        if isinstance(first, dict):
+            tool_name = first.get("name") or first.get("action") or "unknown"
+            args = first.get("args") or {}
+            description = first.get("description")
+        else:
+            tool_name = "unknown"
+            args = {}
+            description = None
+        review_configs = value.get("review_configs") or []
+        allowed_decisions: Any = None
+        if review_configs and isinstance(review_configs[0], dict):
+            allowed_decisions = review_configs[0].get("allowed_decisions")
+    else:
+        tool_name = (
+            value.get("tool_name")
+            or value.get("action_request", {}).get("action")
+            or "unknown"
+        )
+        args = value.get("tool_input") or value.get("args") or {}
+        description = value.get("description") or value.get("summary")
+        allowed_decisions = value.get("allowed_decisions")
 
     payload: dict[str, Any] = {
-        "args": value.get("tool_input") or value.get("args") or {},
-        "description": value.get("description") or value.get("summary"),
-        "allowed_decisions": value.get("allowed_decisions"),
+        "args": args,
+        "description": description,
+        "allowed_decisions": allowed_decisions,
     }
     return interrupt_id, str(tool_name), payload
+
+
+def _extract_action_count(state: dict[str, Any]) -> int:
+    """Return the number of ``action_requests`` in the pending interrupt.
+
+    Returns 1 for legacy (non-langchain-HITL) interrupt shapes that
+    carry a single ``action_request`` / ``tool_name`` directly on the
+    value. Returns ``len(action_requests)`` for langchain
+    ``HumanInTheLoopMiddleware`` interrupts, where N parallel tool
+    calls share one interrupt.
+    """
+
+    interrupts = state.get("__interrupt__", [])
+    if not interrupts:
+        return 1
+    interrupt = interrupts[0]
+    value = (
+        interrupt.get("value")
+        if isinstance(interrupt, dict)
+        else getattr(interrupt, "value", {}) or {}
+    )
+    if not isinstance(value, dict):
+        return 1
+    action_requests = value.get("action_requests")
+    if isinstance(action_requests, list) and action_requests:
+        return len(action_requests)
+    return 1
 
 
 def queue_operator_decision(
@@ -228,6 +287,7 @@ def queue_operator_decision(
 
     async def _handler(state: dict[str, Any]) -> Command:
         interrupt_id, tool_name, payload = _extract_interrupt_metadata(state)
+        action_count = _extract_action_count(state)
         write_pending_envelope(run_dir, interrupt_id, tool_name, payload)
         future = await actual_queue.add(
             run_id=run_id,
@@ -243,7 +303,11 @@ def queue_operator_decision(
             decision=decision,
         )
         write_approval_record(run_dir, record)
-        return resume_command_from_decision(tool_name, decision)
+        return langchain_resume_command_from_decision(
+            tool_name,
+            decision,
+            action_count=action_count,
+        )
 
     return _handler
 
@@ -282,6 +346,7 @@ def replay_operator_decisions(
                 "replay_operator_decisions: pre-scripted list exhausted",
             ) from exc
         interrupt_id, tool_name, _ = _extract_interrupt_metadata(state)
+        action_count = _extract_action_count(state)
         if run_dir is not None:
             record = ApprovalRecord(
                 interrupt_id=interrupt_id,
@@ -290,7 +355,11 @@ def replay_operator_decisions(
                 decision=decision,
             )
             write_approval_record(run_dir, record)
-        return resume_command_from_decision(tool_name, decision)
+        return langchain_resume_command_from_decision(
+            tool_name,
+            decision,
+            action_count=action_count,
+        )
 
     return _handler
 
