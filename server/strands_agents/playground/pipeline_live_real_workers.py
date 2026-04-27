@@ -38,7 +38,6 @@ import logging
 import os
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -91,16 +90,22 @@ def _envelope(name: str, **args: Any) -> dict[str, Any]:
 def _persist_artifact(
     run_dir: Path, scene_id: str, suffix: str, payload: bytes
 ) -> Path:
-    """Write ``payload`` to ``run_dir/scene_<scene_id>-<token>.<suffix>``.
+    """Write ``payload`` to ``run_dir/artifacts/<scene_id>.<suffix>``.
 
-    Returns the absolute path. The token suffix is a short random
-    hex so concurrent renders for the same scene do not clobber each
-    other (e.g. on retries).
+    The path is deterministic: ``{run_dir}/artifacts/{scene_id}.{suffix}``.
+    Per-scene QA gates downstream
+    (:func:`strands_agents.qa_gates.qa_audio_completeness`,
+    :func:`~strands_agents.qa_gates.qa_duration_align`,
+    :func:`~strands_agents.qa_gates.qa_stills_judge`) reconstruct the
+    same path from ``(artifacts_root, scene_id, suffix)``, so any token
+    suffix here would silently break the QA pipeline (the gate would
+    open a non-existent file and fail-by-default with no measurements).
+    Each pipeline run gets its own ``run_dir`` and each scene renders
+    exactly once per run, so a deterministic name cannot collide.
     """
     artifacts = run_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex[:8]
-    path = artifacts / f"{scene_id}-{token}.{suffix}"
+    path = artifacts / f"{scene_id}.{suffix}"
     path.write_bytes(payload)
     return path
 

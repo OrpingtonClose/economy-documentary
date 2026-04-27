@@ -239,6 +239,9 @@ _ENVELOPE_PASSTHROUGH_KEYS: tuple[str, ...] = (
     # in :file:`frontend-playground/src/app/pipeline/PipelineSceneMetrics.tsx`.
     "verdict",
     "reason",
+    "audio_path",
+    "video_path",
+    "error",
     "audio_duration_s",
     "video_duration_s",
     "delta_s",
