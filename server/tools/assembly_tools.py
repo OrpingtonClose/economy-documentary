@@ -3,7 +3,14 @@ Assembly tools -- ffmpeg wrappers for muxing, concat, trim, and final
 master rendering.
 
 Rules:
-- mux_audio_video: NO -shortest flag (video must be >= audio)
+- mux_audio_video: when video duration >= audio, no -t (video may extend
+  past audio). When video duration < audio (per-scene LTX clip shorter
+  than narration), the video stream is looped via ``-stream_loop -1``
+  and ``-t <audio_duration>`` is added so the muxed clip matches audio
+  length with motion repeating instead of the last frame freezing for
+  the remainder of the audio. ``-t`` is used in preference to
+  ``-shortest`` because ``-shortest`` overshoots by up to one libx264
+  GOP when looping.
 - All subprocess calls use list form (no shell=True)
 - Final deliverables (filename contains 'final') MUST use a non-preview
   :class:`MasterProfile` — ``PREVIEW_512P`` is rejected by
@@ -261,18 +268,38 @@ def mux_audio_video(
 
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
+    video_dur_min = _estimate_file_duration_minutes(video_path)
+    audio_dur_min = _estimate_file_duration_minutes(audio_path)
+    loop_video = video_dur_min + 1e-3 < audio_dur_min
+    video_input = ["-stream_loop", "-1", "-i", video_path] if loop_video else [
+        "-i",
+        video_path,
+    ]
+    # When looping a short clip to fill a longer audio track, an explicit
+    # ``-t <audio_duration>`` is required to cut at the exact audio length.
+    # ``-shortest`` alone overshoots by up to one GOP because libx264
+    # flushes a final group of pictures after the audio ends.
+    duration_args = ["-t", f"{audio_dur_min * 60.0:.3f}"] if loop_video else []
+    if loop_video:
+        logger.info(
+            "video_dur_min=<%.3f>, audio_dur_min=<%.3f> | looping video to fill audio",
+            video_dur_min,
+            audio_dur_min,
+        )
+
     if master_profile is not None:
         # Profile-driven encode: upscale source to the target resolution
         # with lanczos and use the profile's codec / audio settings.
         cmd = [
             "ffmpeg", "-y",
-            "-i", video_path,
+            *video_input,
             "-i", audio_path,
             "-vf", master_profile.scale_filter(),
             *master_profile.video_encode_args(),
             *master_profile.audio_encode_args(),
             "-map", "0:v:0",
             "-map", "1:a:0",
+            *duration_args,
             "-movflags", "+faststart",
             output_path,
         ]
@@ -282,7 +309,7 @@ def mux_audio_video(
         cmd = [
             "ffmpeg",
             "-y",
-            "-i", video_path,
+            *video_input,
             "-i", audio_path,
             "-c:v", "libx264",
             "-preset", "fast",
@@ -292,16 +319,14 @@ def mux_audio_video(
             "-b:a", "192k",
             "-map", "0:v:0",
             "-map", "1:a:0",
+            *duration_args,
             "-movflags", "+faststart",
             output_path,
         ]
 
     # Scale timeout by input duration (a 5-min movie re-encode takes much
     # longer than the old hardcoded 120s allowed)
-    dur_min = max(
-        _estimate_file_duration_minutes(audio_path),
-        _estimate_file_duration_minutes(video_path),
-    )
+    dur_min = max(audio_dur_min, video_dur_min)
     timeout = _scaled_timeout(
         _MUX_TIMEOUT_BASE, _MUX_TIMEOUT_PER_MIN, dur_min, _MUX_TIMEOUT_MAX,
     )
