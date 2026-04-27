@@ -27,6 +27,7 @@ import Link from "next/link";
 
 import { startPipelineRun } from "@/lib/api";
 import { PipelineApprovalCard } from "./PipelineApprovalCard";
+import { PipelineSceneMetrics } from "./PipelineSceneMetrics";
 import type {
   RunEvent,
   StartPipelineRunResponse,
@@ -351,6 +352,8 @@ export function PipelineOrchestrator() {
           </p>
         </section>
       ) : null}
+
+      <PipelineSceneMetrics events={stream.events} />
 
       {finalMp4Url ? (
         <section
