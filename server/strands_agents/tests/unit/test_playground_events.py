@@ -335,6 +335,86 @@ def test_events_sse_returns_404_for_unknown_run_id() -> None:
     assert res.status_code == 404
 
 
+def test_list_recent_runs_lifts_dispatch_detail_and_filters_component_id() -> None:
+    """``GET /playground/runs`` must return newest-first summaries with
+    ``topic`` / ``target_duration_sec`` / ``language`` lifted from the
+    ``run.dispatched`` event detail, and must respect ``component_id``
+    filtering so the ``/pipeline`` sidebar isn't polluted with c01..c15
+    component runs from the same registry.
+    """
+    component = get_component("c01")
+    assert component is not None
+    sentinel: dict[str, Any] = {"output": {"ok": True}}
+    previous_task = component._cache.get("task")
+    component._cache["task"] = lambda _case: sentinel
+    previous_cache = set_default_cache(
+        ReachabilityCache(_AlwaysReachableProber())
+    )
+    try:
+        client = _make_client()
+
+        #: Submit one component run (c01) and one pipeline run. The
+        #: sidebar query filters to ``component_id=pipeline`` so only
+        #: the pipeline run should come back.
+        component_start = client.post(
+            "/playground/components/c01/runs",
+            json={"case_name": "economics_basics"},
+        )
+        assert component_start.status_code == 200
+        _wait_for_terminal(client, component_start.json()["run_id"])
+
+        #: Fabricate a pipeline run by hand-emitting against the
+        #: registry — the real ``/playground/pipeline/runs`` requires
+        #: live worker URLs which aren't available here. The test only
+        #: cares that the endpoint reads ``component_id`` and lifts
+        #: ``run.dispatched`` detail correctly.
+        from playground import get_registry
+
+        registry = get_registry()
+        pipeline_stream = registry.new_run(
+            component_id="pipeline", case_name=None
+        )
+
+        async def _seed_dispatched() -> None:
+            await pipeline_stream.emit(
+                "run.dispatched",
+                "starting documentary pipeline",
+                detail={
+                    "topic": "The Federal Reserve",
+                    "target_duration_sec": 90,
+                    "language": "en",
+                },
+            )
+
+        asyncio.run(_seed_dispatched())
+
+        unfiltered = client.get("/playground/runs?limit=20").json()
+        assert "runs" in unfiltered
+        assert any(r["component_id"] == "c01" for r in unfiltered["runs"])
+        assert any(r["component_id"] == "pipeline" for r in unfiltered["runs"])
+
+        filtered = client.get(
+            "/playground/runs?limit=20&component_id=pipeline"
+        ).json()
+        assert all(r["component_id"] == "pipeline" for r in filtered["runs"])
+        pipeline_row = next(
+            r
+            for r in filtered["runs"]
+            if r["run_id"] == pipeline_stream.run_id
+        )
+        assert pipeline_row["topic"] == "The Federal Reserve"
+        assert pipeline_row["target_duration_sec"] == 90
+        assert pipeline_row["language"] == "en"
+        assert pipeline_row["closed"] is False
+        assert pipeline_row["last_event_kind"] == "run.dispatched"
+    finally:
+        set_default_cache(previous_cache)
+        if previous_task is None:
+            component._cache.pop("task", None)
+        else:
+            component._cache["task"] = previous_task
+
+
 # Unused Event import guard: keep the symbol in scope so future regression
 # guards don't have to re-import when extending this module.
 _ = Event

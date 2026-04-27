@@ -343,3 +343,29 @@ export interface StartPipelineRunResponse {
   readonly events_url: string;
   readonly state_url: string;
 }
+
+/**
+ * One row in the response of ``GET /playground/runs?limit=N``.
+ *
+ * Powers the recent-runs sidebar on ``/pipeline``. Topic +
+ * duration + language are lifted from the ``run.dispatched`` event
+ * detail so the sidebar can render something meaningful next to
+ * the 16-hex run id without an extra round-trip per row. Any of
+ * those three may be ``null`` when the dispatched event is missing
+ * (rare, but happens for c01..c15 component runs that share the
+ * registry).
+ */
+export interface RunSummary {
+  readonly run_id: string;
+  readonly component_id: string;
+  readonly case_name: string | null;
+  readonly created_at: number;
+  readonly closed: boolean;
+  readonly terminal_status: string | null;
+  readonly event_count: number;
+  readonly last_event_ts: number | null;
+  readonly last_event_kind: string | null;
+  readonly topic: string | null;
+  readonly target_duration_sec: number | null;
+  readonly language: string | null;
+}

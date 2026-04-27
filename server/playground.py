@@ -1483,6 +1483,85 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
     )
 
 
+@router.get("/runs", response_class=JSONResponse)
+async def list_recent_runs(
+    limit: int = 20,
+    component_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the registry's most-recent runs as flat summaries.
+
+    Powers the ``/pipeline`` page's recent-runs sidebar so a UI
+    driver that lost their browser process (or just opened a fresh
+    tab) can find an in-flight run and re-attach via
+    ``?run_id=<id>``. Filters to ``component_id`` when supplied so
+    the pipeline sidebar isn't polluted with c01..c15 component
+    runs from the same registry.
+
+    The summary intentionally lifts ``topic`` /
+    ``target_duration_sec`` / ``language`` off the
+    ``run.dispatched`` event detail so the sidebar can render
+    something more useful than a 16-hex run id without an extra
+    round-trip per row.
+    """
+    capped_limit = max(1, min(int(limit) if limit else 20, 64))
+    #: When ``component_id`` is supplied, the registry's "last N" view
+    #: would silently drop matching runs whenever non-matching ones
+    #: occupied the head — e.g. a sidebar requesting 20 pipeline runs
+    #: would see only 5 if the 15 most-recent registry entries were
+    #: c01..c15 component runs. Fetch the registry's full retention
+    #: window (64) and apply the trim *after* filtering so callers
+    #: always get up to ``limit`` matching runs.
+    fetch_limit = 64 if component_id is not None else capped_limit
+    streams = list(get_registry().recent(limit=fetch_limit))
+    streams.reverse()  # most-recent first
+    runs: list[dict[str, Any]] = []
+    for stream in streams:
+        if component_id is not None and stream.component_id != component_id:
+            continue
+        if len(runs) >= capped_limit:
+            break
+        snapshot = stream.snapshot()
+        last_event = snapshot[-1] if snapshot else None
+        dispatched = next(
+            (e for e in snapshot if e.kind == "run.dispatched"),
+            None,
+        )
+        topic = None
+        target_duration_sec = None
+        language = None
+        if dispatched is not None:
+            detail = dispatched.detail or {}
+            raw_topic = detail.get("topic")
+            if isinstance(raw_topic, str):
+                topic = raw_topic
+            raw_duration = detail.get("target_duration_sec")
+            if isinstance(raw_duration, (int, float)):
+                target_duration_sec = int(raw_duration)
+            raw_language = detail.get("language")
+            if isinstance(raw_language, str):
+                language = raw_language
+        terminal_status = (
+            stream.terminal.get("status") if stream.terminal else None
+        )
+        runs.append(
+            {
+                "run_id": stream.run_id,
+                "component_id": stream.component_id,
+                "case_name": stream.case_name,
+                "created_at": stream.created_at,
+                "closed": stream.closed,
+                "terminal_status": terminal_status,
+                "event_count": len(snapshot),
+                "last_event_ts": last_event.ts if last_event else None,
+                "last_event_kind": last_event.kind if last_event else None,
+                "topic": topic,
+                "target_duration_sec": target_duration_sec,
+                "language": language,
+            }
+        )
+    return {"runs": runs}
+
+
 # --------------------------------------------------------------------------
 # Pipeline runs — drive the documentary pipeline end-to-end from the
 # same RunStream surface that powers /components. The dispatcher
