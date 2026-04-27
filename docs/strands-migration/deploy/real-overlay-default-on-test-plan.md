@@ -19,6 +19,10 @@ A broken change would surface as either:
 - Backend stack trace at the LiveB2 checkpoint call site (TOCTOU regression)
 - Duplicate `pipeline.b2.checkpoint` events per `(scene_id, kind)` in the trajectory (TOCTOU)
 
+## Voice-mismatch coercion (commit `12fd7b5`)
+
+The TTS worker on this VM pool is pinned to a single voice (`WORKER_VOICE_ID`) per AGENTS.md hard invariant #1 ("one TTS voice per VM"). Prior to `12fd7b5`, a non-matching `voice_id` caused the worker to 409 with `reason=voice_mismatch` and the dispatcher returned an error envelope, stalling the timing loop until the 30-min httpx timeout. The new retry path detects the 409, re-issues the request with the pinned voice from the error detail, and surfaces both `voice_id` (effective) and `requested_voice_id` (originally asked) on the envelope. This test plan does not exercise the retry directly — it only requires that audio renders complete (Assertion 2 row populates) regardless of which voice the orchestrator picks.
+
 ## Primary flow (one E2E run via UI only)
 
 1. Open `http://127.0.0.1:3100/pipeline` in a fresh chromium window. Maximize.

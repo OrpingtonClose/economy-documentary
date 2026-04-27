@@ -172,8 +172,12 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
                 # 30 min httpx timeout.
                 if resp.status_code == 409:
                     try:
-                        detail = resp.json().get("detail") or {}
+                        body_json = resp.json()
                     except ValueError:
+                        body_json = None
+                    if isinstance(body_json, dict):
+                        detail = body_json.get("detail") or {}
+                    else:
                         detail = {}
                     if (
                         isinstance(detail, dict)
