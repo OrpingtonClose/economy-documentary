@@ -26,6 +26,7 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { startPipelineRun } from "@/lib/api";
+import { PipelineApprovalCard } from "./PipelineApprovalCard";
 import type {
   PipelineRunMode,
   RunEvent,
@@ -65,6 +66,17 @@ interface ApprovalState {
   readonly waitingSeq: number;
   readonly resolved: boolean;
   readonly decision: string | null;
+  /** Run id surfaced on the waiting event so the UI can post to
+   * ``POST /playground/approval/resume/{run_id}/{interrupt_id}``.
+   * ``null`` for legacy events that predate slice 9i.
+   */
+  readonly runId: string | null;
+  /** Interrupt id paired with ``runId``. ``null`` when missing. */
+  readonly interruptId: string | null;
+  /** Tool args the orchestrator interrupted on. Surfaced so the
+   * "Edit" panel can render mutable fields. ``null`` when the gate
+   * carries no args. */
+  readonly args: Record<string, unknown> | null;
 }
 
 const LANGUAGE_OPTIONS = [
@@ -351,26 +363,17 @@ export function PipelineOrchestrator() {
           </h2>
           <ul className="flex flex-col gap-2">
             {approvals.map((approval) => (
-              <li
+              <PipelineApprovalCard
                 key={`${approval.gate}-${approval.waitingSeq}`}
-                className="flex items-center justify-between rounded border border-pg-border bg-pg-surface px-3 py-2 text-sm"
-              >
-                <span className="font-mono text-pg-text">{approval.gate}</span>
-                {approval.resolved ? (
-                  <span className="rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green">
-                    resumed: {approval.decision ?? "accept"}
-                  </span>
-                ) : (
-                  <span className="rounded bg-pg-amber/20 px-2 py-0.5 text-xs text-pg-amber">
-                    waiting…
-                  </span>
-                )}
-              </li>
+                approval={approval}
+              />
             ))}
           </ul>
           <p className="text-xs text-pg-muted">
-            The simulator auto-resumes every gate. Slice 9 wires real
-            human-in-the-loop responses through the same envelope.
+            Pending gates wait for an operator decision via
+            ``POST /playground/approval/resume/{`{run_id}/{interrupt_id}`}``.
+            The simulator auto-resumes; live runs with
+            ``ENABLE_PIPELINE_HITL`` set bind on operator input.
           </p>
         </section>
       ) : null}
@@ -690,11 +693,27 @@ export function deriveApprovals(
     if (event.kind === "pipeline.approval.waiting") {
       const detail = event.detail ?? {};
       const gate = typeof detail.gate_name === "string" ? detail.gate_name : "";
+      const runId =
+        typeof detail.run_id === "string" && detail.run_id.length > 0
+          ? detail.run_id
+          : null;
+      const interruptId =
+        typeof detail.interrupt_id === "string" && detail.interrupt_id.length > 0
+          ? detail.interrupt_id
+          : null;
+      const rawArgs = detail.args;
+      const args =
+        rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+          ? (rawArgs as Record<string, unknown>)
+          : null;
       waiting.push({
         gate,
         waitingSeq: event.seq,
         resolved: false,
         decision: null,
+        runId,
+        interruptId,
+        args,
       });
     } else if (event.kind === "pipeline.approval.resumed") {
       const detail = event.detail ?? {};
@@ -718,6 +737,9 @@ export function deriveApprovals(
           waitingSeq: event.seq,
           resolved: true,
           decision,
+          runId: null,
+          interruptId: null,
+          args: null,
         });
       }
     }

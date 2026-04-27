@@ -77,7 +77,11 @@ from strands_agents.playground.pipeline_adapter import (
     PIPELINE_STAGES,
     translate_pipeline_event,
 )
-from strands_agents.run import _extract_interrupt_metadata
+from strands_agents.run import (
+    _ensure_interrupt_id,
+    _extract_action_count,
+    _extract_interrupt_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -490,6 +494,14 @@ class LivePipelineRun:
     operator_decision: "OperatorDecision | None" = None
     max_interrupt_rounds: int = 32
     per_event_delay_s: float = 0.0
+    run_id: str | None = None
+    """Playground :class:`RunStream` id surfaced on
+    ``pipeline.approval_gate`` events so the frontend can post the
+    operator decision to the right
+    ``/playground/approval/resume/{run_id}/{interrupt_id}`` URL.
+    Optional; ``None`` falls back to the in-event ``stream.run_id``
+    so the legacy auto-accept demo path stays untouched.
+    """
 
     async def run(self, stream: RunStream) -> dict[str, Any]:
         """Drive the orchestrator to completion and return a terminal dict.
@@ -543,6 +555,7 @@ class LivePipelineRun:
                     )
                 interrupt_id, tool_name, payload = _extract_hitl_interrupt(state)
                 gate_count += 1
+                resume_run_id = self.run_id or stream.run_id
                 await _emit_translated(
                     stream,
                     "pipeline.approval_gate",
@@ -551,6 +564,8 @@ class LivePipelineRun:
                         "allowed_decisions": payload.get("allowed_decisions")
                         or _default_allowed_for(tool_name),
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
+                        "args": payload.get("args"),
                     },
                 )
                 command = await operator(state)
@@ -562,6 +577,7 @@ class LivePipelineRun:
                         "gate_name": tool_name,
                         "decision": decision,
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
                     },
                 )
                 if self.per_event_delay_s > 0:
@@ -645,11 +661,26 @@ async def auto_accept_interrupt(state: dict[str, Any]) -> Command:
     interrupted tool call, using the middleware's vocabulary
     (``approve`` / ``edit`` / ``reject``). The playground demo
     always picks ``approve`` so the happy path runs end-to-end.
+
+    The resume payload also carries ``_project_decision_type``
+    (``"accept"``) as a sidecar so :func:`_decision_from_command`
+    can echo the operator's original project vocab on the
+    ``pipeline.approval.resumed`` SSE event instead of leaking the
+    langchain-translated form.
+
+    The decision count must equal the number of ``action_requests``
+    inside the interrupt — not the number of ``__interrupt__``
+    objects. ``HumanInTheLoopMiddleware`` packs N parallel tool
+    calls into a single interrupt with N action_requests, then
+    validates ``len(decisions) == N`` on resume. ``len(interrupts)``
+    is typically 1, which would crash any batched gate.
     """
-    interrupts = state.get("__interrupt__", []) or []
-    count = max(1, len(interrupts))
+    count = _extract_action_count(state)
     return Command(
-        resume={"decisions": [{"type": "approve"} for _ in range(count)]},
+        resume={
+            "decisions": [{"type": "approve"} for _ in range(count)],
+            "_project_decision_type": "accept",
+        },
     )
 
 
@@ -660,31 +691,53 @@ def _default_allowed_for(tool_name: str) -> list[str]:
     return ["accept", "reject", "respond"]
 
 
+#: Reverse mapping from langchain HITL vocab back to project vocab.
+#: Used as a last-resort fallback when the resume payload lacks the
+#: ``_project_decision_type`` sidecar (e.g. legacy callers). Lossy
+#: for ``reject`` because both project ``reject`` and ``respond``
+#: translate to langchain ``reject`` -- preferring ``reject`` here
+#: because it is the more common operator action.
+_LANGCHAIN_TO_PROJECT_DECISION: dict[str, str] = {
+    "approve": "accept",
+    "edit": "edit",
+    "reject": "reject",
+}
+
+
 def _decision_from_command(command: Command) -> str:
-    """Recover the decision ``type`` from a resume :class:`Command`.
+    """Recover the decision ``type`` in **project vocab** from a resume :class:`Command`.
 
-    Supports two shapes:
+    Three lookup paths, in order:
 
-    * The langchain ``HumanInTheLoopMiddleware`` shape:
-      ``resume={"decisions": [{"type": "approve"}, …]}``. The first
-      decision wins for reporting purposes (the demo always emits
-      a single decision per interrupt, matching the action-request
-      count).
-    * The legacy single-decision shape:
-      ``resume={"type": "accept", …}``.
+    1. ``resume["_project_decision_type"]`` -- the sidecar set by
+       :func:`langchain_resume_command_from_decision` and
+       :func:`auto_accept_interrupt`. Always project vocab
+       (``accept``/``edit``/``reject``/``respond``). This is the
+       authoritative source.
+    2. ``resume["decisions"][0]["type"]`` -- the langchain HITL
+       middleware shape. Reverse-mapped via
+       :data:`_LANGCHAIN_TO_PROJECT_DECISION` so the SSE event echoes
+       project vocab. Lossy for ``respond`` (folded to ``reject``)
+       but only hit when the sidecar is missing.
+    3. ``resume["type"]`` -- the legacy single-decision shape
+       (``Command(resume={"type": "accept"})``). Already project
+       vocab.
 
-    Falls back to ``"respond"`` when neither shape matches so the
-    UI never renders ``None``.
+    Falls back to ``"respond"`` when none match so the UI never
+    renders ``None``.
     """
     resume = getattr(command, "resume", None)
     if isinstance(resume, dict):
+        sidecar = resume.get("_project_decision_type")
+        if isinstance(sidecar, str):
+            return sidecar
         decisions = resume.get("decisions")
         if isinstance(decisions, list) and decisions:
             first = decisions[0]
             if isinstance(first, dict):
                 t = first.get("type")
                 if isinstance(t, str):
-                    return t
+                    return _LANGCHAIN_TO_PROJECT_DECISION.get(t, t)
         decision = resume.get("type")
         if isinstance(decision, str):
             return decision
@@ -716,11 +769,12 @@ def _extract_hitl_interrupt(
     if not isinstance(value, dict):
         value = {}
 
-    interrupt_id: str | None = (
-        interrupt.get("id")
-        if isinstance(interrupt, dict)
-        else getattr(interrupt, "id", None)
-    )
+    # Mutate the interrupt to carry a stable id even when the
+    # middleware shape doesn't ship one. The queue-backed
+    # :func:`queue_operator_decision` handler re-extracts metadata
+    # from the same interrupt object and must return the identical
+    # id, otherwise the frontend POSTs to a 404.
+    interrupt_id = _ensure_interrupt_id(interrupt, state)
 
     action_requests = value.get("action_requests")
     if isinstance(action_requests, list) and action_requests:
@@ -738,7 +792,7 @@ def _extract_hitl_interrupt(
                             allowed = [str(d) for d in ad]
                             break
             return (
-                str(interrupt_id) if interrupt_id else "",
+                interrupt_id,
                 tool_name,
                 {
                     "args": args if isinstance(args, dict) else {},

@@ -61,9 +61,7 @@ class TestPlaceholderSignatures:
 
         assert result["status"] == "placeholder"
         assert result["tool"] == "launch_audio_render"
-        assert result["args"]["text"] == (
-            "Real narration about the Federal Reserve."
-        )
+        assert result["args"]["text"] == ("Real narration about the Federal Reserve.")
 
     def test_audio_placeholder_text_defaults_to_none(self) -> None:
         result = _placeholders.launch_audio_render.invoke(
@@ -107,9 +105,7 @@ class TestResolveAudioText:
         assert _resolve_audio_text("scene_001", text) == text
 
     def test_strips_whitespace_around_text(self) -> None:
-        assert _resolve_audio_text("scene_001", "  hello world  ") == (
-            "hello world"
-        )
+        assert _resolve_audio_text("scene_001", "  hello world  ") == ("hello world")
 
     def test_falls_back_to_placeholder_on_none(self) -> None:
         out = _resolve_audio_text("scene_001", None)
@@ -370,6 +366,88 @@ class TestRealVisualDispatcher:
         assert "Aerial of a wind farm at dawn" in sent_prompt
         assert "mood: hopeful" in sent_prompt
         assert "palette: cool blues" in sent_prompt
+
+
+# ---------------------------------------------------------------------------
+# GPU-lock serialisation
+# ---------------------------------------------------------------------------
+
+
+class TestVisualDispatchSerialisation:
+    """AGENTS.md hard invariant: a single GPU worker must never receive
+    parallel ``/video/render`` requests. ``_video_dispatch_lock`` keeps
+    the queue at depth=1 even when LangGraph fires the @tool callable
+    concurrently across multiple scene dispatches.
+    """
+
+    def test_concurrent_invocations_are_serialised(
+        self,
+        run_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import threading
+        import time as _time
+
+        in_flight = 0
+        max_in_flight = 0
+        lock = threading.Lock()
+
+        class _SlowFakeHTTPXClient:
+            def __enter__(self) -> "_SlowFakeHTTPXClient":
+                return self
+
+            def __exit__(self, *exc: Any) -> None:
+                return None
+
+            def post(self, url: str, *, json: dict[str, Any]) -> _FakeResponse:
+                nonlocal in_flight, max_in_flight
+                with lock:
+                    in_flight += 1
+                    max_in_flight = max(max_in_flight, in_flight)
+                _time.sleep(0.05)
+                with lock:
+                    in_flight -= 1
+                return _FakeResponse(status_code=200, json_payload=_mp4_payload())
+
+        monkeypatch.setattr(httpx, "Client", lambda **_: _SlowFakeHTTPXClient())
+
+        overrides = build_real_worker_tools(
+            run_dir,
+            video_worker_url="http://video.invalid:9000",
+        )
+        video_tool = overrides["launch_visual_production"]
+
+        results: list[dict[str, Any]] = []
+
+        def _invoke(scene_id: str) -> None:
+            results.append(
+                video_tool.invoke(
+                    {
+                        "scene_id": scene_id,
+                        "visual_concept": {"phrases": ["test"]},
+                        "prompt": f"prompt for {scene_id}",
+                    }
+                )
+            )
+
+        threads = [
+            threading.Thread(target=_invoke, args=(f"scene_{i:03d}",)) for i in range(5)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 5
+        # Every dispatch must succeed end-to-end \u2014 the original bug had
+        # 4/5 returning 400 because the worker was hammered concurrently.
+        for r in results:
+            assert r["args"]["mp4_bytes_len"] > 0
+            assert r["args"]["engine"] == "ltx-video"
+        # The lock keeps in-flight count at \u22641 across the whole call.
+        assert max_in_flight == 1, (
+            f"expected serialised dispatch (max_in_flight=1), saw {max_in_flight}"
+        )
 
 
 # ---------------------------------------------------------------------------

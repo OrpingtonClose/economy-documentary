@@ -33,8 +33,8 @@ from .approval import (
     ApprovalDecision,
     ApprovalRecord,
     _allowed_decisions,
+    langchain_resume_command_from_decision,
     new_interrupt_id,
-    resume_command_from_decision,
     write_approval_record,
     write_pending_envelope,
 )
@@ -69,21 +69,95 @@ async def _auto_reject_interrupt(state: dict[str, Any]) -> Command:
         _, tool_name, _ = _extract_interrupt_metadata(state)
     except RuntimeError:
         tool_name = "unknown"
+    action_count = _extract_action_count(state)
 
     allowed = _allowed_decisions(tool_name)
     logger.warning(
-        "interrupt_count=<%d>, tool=<%s> | auto-declining (no operator attached)",
+        "interrupt_count=<%d>, tool=<%s>, action_count=<%d> | auto-declining (no operator attached)",
         len(interrupts),
         tool_name,
+        action_count,
     )
 
+    decision: ApprovalDecision
     if "reject" in allowed:
-        return Command(
-            resume={"type": "reject", "reason": "no operator attached"},
-        )
-    return Command(
-        resume={"type": "respond", "content": "no operator attached"},
+        decision = {"type": "reject", "reason": "no operator attached"}
+    else:
+        decision = {"type": "respond", "content": "no operator attached"}
+    return langchain_resume_command_from_decision(
+        tool_name,
+        decision,
+        action_count=action_count,
     )
+
+
+_INTERRUPT_ID_CACHE_KEY = "__interrupt_id_cache__"
+
+
+def _ensure_interrupt_id(
+    interrupt: Any,
+    state: dict[str, Any] | None = None,
+) -> str:
+    """Read or assign a stable id for the first pending interrupt.
+
+    Both the SSE-event extractor in :mod:`pipeline_live_runner` and
+    the queue-backed handler in :func:`queue_operator_decision`
+    derive the resume coordinates from ``state["__interrupt__"][0]``.
+    LangGraph interrupts normally carry an ``id`` field, but the
+    project-native escalation path (``request_human_approval``) and
+    a few middleware shapes do not. If each extractor minted its own
+    UUID, the SSE event and the queue registration would disagree
+    and the frontend ``POST /approval/resume/{run_id}/{interrupt_id}``
+    would 404 forever.
+
+    Resolution order:
+
+    1. If the interrupt already carries an ``id``, use it.
+    2. Otherwise look up a previously-minted id in the
+       per-``state`` cache (keyed by ``id(interrupt)``). This is
+       the only path that survives frozen dataclasses, since
+       ``setattr`` cannot persist anything on the object itself.
+    3. Otherwise mint a new UUID, write it back to both the
+       interrupt (best-effort) and the per-``state`` cache.
+
+    Subsequent extractors that hand the *same* ``state`` dict will
+    therefore always resolve to the same id, regardless of whether
+    the interrupt object was mutable.
+    """
+
+    if isinstance(interrupt, dict):
+        existing = interrupt.get("id")
+        if existing:
+            return str(existing)
+    else:
+        existing = getattr(interrupt, "id", None)
+        if existing:
+            return str(existing)
+
+    cache: dict[int, str] | None = None
+    if isinstance(state, dict):
+        cache = state.setdefault(_INTERRUPT_ID_CACHE_KEY, {})
+        cached = cache.get(id(interrupt))
+        if cached:
+            return cached
+
+    new_id = new_interrupt_id()
+
+    if isinstance(interrupt, dict):
+        interrupt["id"] = new_id
+    else:
+        try:
+            setattr(interrupt, "id", new_id)
+        except (AttributeError, TypeError):
+            # Frozen dataclasses / Pydantic ``model_config={"frozen": True}``
+            # reject attribute assignment. The state-level cache below
+            # is what guarantees stability in that case.
+            pass
+
+    if cache is not None:
+        cache[id(interrupt)] = new_id
+
+    return new_id
 
 
 def _extract_interrupt_metadata(
@@ -95,6 +169,14 @@ def _extract_interrupt_metadata(
     as a list of :class:`langgraph.types.Interrupt` objects or dicts.
     We operate on whichever shape is there (tests hand-craft dicts;
     the real graph passes dataclass-like instances).
+
+    For interrupts raised by
+    ``langchain.agents.middleware.HumanInTheLoopMiddleware`` the
+    ``value`` carries ``action_requests`` (list) — each entry is a
+    parallel tool call covered by the same gate. We surface the first
+    one's ``name`` / ``args`` so the operator console preview shows
+    representative content; :func:`_extract_action_count` returns the
+    full N for resume-shape construction.
     """
 
     interrupts = state.get("__interrupt__", [])
@@ -110,26 +192,66 @@ def _extract_interrupt_metadata(
     if not isinstance(value, dict):
         value = {}
 
-    interrupt_id: str | None = (
-        interrupt.get("id")
-        if isinstance(interrupt, dict)
-        else getattr(interrupt, "id", None)
-    )
-    if not interrupt_id:
-        interrupt_id = new_interrupt_id()
+    interrupt_id = _ensure_interrupt_id(interrupt, state)
 
-    tool_name = (
-        value.get("tool_name")
-        or value.get("action_request", {}).get("action")
-        or "unknown"
-    )
+    action_requests = value.get("action_requests")
+    if isinstance(action_requests, list) and action_requests:
+        first = action_requests[0]
+        if isinstance(first, dict):
+            tool_name = first.get("name") or first.get("action") or "unknown"
+            args = first.get("args") or {}
+            description = first.get("description")
+        else:
+            tool_name = "unknown"
+            args = {}
+            description = None
+        review_configs = value.get("review_configs") or []
+        allowed_decisions: Any = None
+        if review_configs and isinstance(review_configs[0], dict):
+            allowed_decisions = review_configs[0].get("allowed_decisions")
+    else:
+        tool_name = (
+            value.get("tool_name")
+            or value.get("action_request", {}).get("action")
+            or "unknown"
+        )
+        args = value.get("tool_input") or value.get("args") or {}
+        description = value.get("description") or value.get("summary")
+        allowed_decisions = value.get("allowed_decisions")
 
     payload: dict[str, Any] = {
-        "args": value.get("tool_input") or value.get("args") or {},
-        "description": value.get("description") or value.get("summary"),
-        "allowed_decisions": value.get("allowed_decisions"),
+        "args": args,
+        "description": description,
+        "allowed_decisions": allowed_decisions,
     }
     return interrupt_id, str(tool_name), payload
+
+
+def _extract_action_count(state: dict[str, Any]) -> int:
+    """Return the number of ``action_requests`` in the pending interrupt.
+
+    Returns 1 for legacy (non-langchain-HITL) interrupt shapes that
+    carry a single ``action_request`` / ``tool_name`` directly on the
+    value. Returns ``len(action_requests)`` for langchain
+    ``HumanInTheLoopMiddleware`` interrupts, where N parallel tool
+    calls share one interrupt.
+    """
+
+    interrupts = state.get("__interrupt__", [])
+    if not interrupts:
+        return 1
+    interrupt = interrupts[0]
+    value = (
+        interrupt.get("value")
+        if isinstance(interrupt, dict)
+        else getattr(interrupt, "value", {}) or {}
+    )
+    if not isinstance(value, dict):
+        return 1
+    action_requests = value.get("action_requests")
+    if isinstance(action_requests, list) and action_requests:
+        return len(action_requests)
+    return 1
 
 
 def queue_operator_decision(
@@ -165,6 +287,7 @@ def queue_operator_decision(
 
     async def _handler(state: dict[str, Any]) -> Command:
         interrupt_id, tool_name, payload = _extract_interrupt_metadata(state)
+        action_count = _extract_action_count(state)
         write_pending_envelope(run_dir, interrupt_id, tool_name, payload)
         future = await actual_queue.add(
             run_id=run_id,
@@ -180,7 +303,11 @@ def queue_operator_decision(
             decision=decision,
         )
         write_approval_record(run_dir, record)
-        return resume_command_from_decision(tool_name, decision)
+        return langchain_resume_command_from_decision(
+            tool_name,
+            decision,
+            action_count=action_count,
+        )
 
     return _handler
 
@@ -219,6 +346,7 @@ def replay_operator_decisions(
                 "replay_operator_decisions: pre-scripted list exhausted",
             ) from exc
         interrupt_id, tool_name, _ = _extract_interrupt_metadata(state)
+        action_count = _extract_action_count(state)
         if run_dir is not None:
             record = ApprovalRecord(
                 interrupt_id=interrupt_id,
@@ -227,7 +355,11 @@ def replay_operator_decisions(
                 decision=decision,
             )
             write_approval_record(run_dir, record)
-        return resume_command_from_decision(tool_name, decision)
+        return langchain_resume_command_from_decision(
+            tool_name,
+            decision,
+            action_count=action_count,
+        )
 
     return _handler
 

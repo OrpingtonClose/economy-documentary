@@ -274,25 +274,46 @@ def translate_pipeline_event(
     if event_type == "pipeline.approval_gate":
         gate = str(data.get("gate_name") or "unknown")
         allowed = list(data.get("allowed_decisions") or [])
+        detail: dict[str, Any] = {
+            "gate_name": gate,
+            "allowed_decisions": allowed,
+        }
+        # Slice 9i: thread the resume coordinates onto the wire so
+        # the UI can post the operator's decision to
+        # ``POST /playground/approval/resume/{run_id}/{interrupt_id}``
+        # without cross-referencing other events.
+        interrupt_id = data.get("interrupt_id")
+        if isinstance(interrupt_id, str) and interrupt_id:
+            detail["interrupt_id"] = interrupt_id
+        run_id = data.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            detail["run_id"] = run_id
+        args = data.get("args")
+        if isinstance(args, dict):
+            detail["args"] = args
         return TranslatedEvent(
             kind="pipeline.approval.waiting",
             summary=f"approval gate {gate} — waiting for human",
-            detail={
-                "gate_name": gate,
-                "allowed_decisions": allowed,
-            },
+            detail=detail,
         )
 
     if event_type == "pipeline.approval_resumed":
         gate = str(data.get("gate_name") or "unknown")
         decision = str(data.get("decision") or "unknown")
+        detail = {
+            "gate_name": gate,
+            "decision": decision,
+        }
+        interrupt_id = data.get("interrupt_id")
+        if isinstance(interrupt_id, str) and interrupt_id:
+            detail["interrupt_id"] = interrupt_id
+        run_id = data.get("run_id")
+        if isinstance(run_id, str) and run_id:
+            detail["run_id"] = run_id
         return TranslatedEvent(
             kind="pipeline.approval.resumed",
             summary=f"approval gate {gate} resumed: {decision}",
-            detail={
-                "gate_name": gate,
-                "decision": decision,
-            },
+            detail=detail,
         )
 
     if event_type == "pipeline.artifact":

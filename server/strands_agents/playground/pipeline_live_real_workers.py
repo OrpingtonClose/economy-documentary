@@ -36,6 +36,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -56,6 +57,18 @@ _DEFAULT_AUDIO_DURATION_S = 5.0
 _DEFAULT_VIDEO_DURATION_S = 4.0
 _DEFAULT_FPS = 24
 _DEFAULT_SEED = 7
+
+# Module-level lock that serialises ``/video/render`` POSTs to a single
+# H200-class GPU worker. AGENTS.md hard invariant: "Never parallelise
+# launch_visual_production jobs onto the same GPU worker." When the
+# orchestrator dispatches N scenes in one tool-call turn, LangGraph runs
+# the @tool callables concurrently on a thread pool; without this lock,
+# the worker is hammered with N simultaneous renders and OOMs on all but
+# one. Acquiring this lock around the httpx POST keeps the GPU queue at
+# depth=1 — renders complete sequentially but every scene returns a real
+# MP4. Audio dispatch runs against a separate worker pool and is left
+# parallel.
+_video_dispatch_lock = threading.Lock()
 
 
 def _now_ms() -> int:
@@ -273,8 +286,10 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
         }
         started_ms = _now_ms()
         try:
-            with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                resp = client.post(f"{worker_url}/video/render", json=body)
+            with _video_dispatch_lock:
+                logger.info("scene_id=<%s> | ltx dispatch acquired GPU lock", scene_id)
+                with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
+                    resp = client.post(f"{worker_url}/video/render", json=body)
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | ltx dispatch failed",
