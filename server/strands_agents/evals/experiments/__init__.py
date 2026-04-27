@@ -62,6 +62,12 @@ from strands_agents.evals.experiments.infra_ltx_video_worker import (
     infra_ltx_video_worker_cases,
     infra_ltx_video_worker_task,
 )
+from strands_agents.evals.experiments.infra_ltx_video_worker_live import (
+    INFRA_LTX_VIDEO_WORKER_LIVE_EVALUATOR_THRESHOLDS,
+    build_infra_ltx_video_worker_live_experiment,
+    infra_ltx_video_worker_live_cases,
+    infra_ltx_video_worker_live_task,
+)
 from strands_agents.evals.experiments.infra_qwen3_tts_worker import (
     INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS,
     build_infra_qwen3_tts_worker_experiment,
@@ -143,6 +149,7 @@ __all__ = [
     "INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS",
     "INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
     "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS",
+    "INFRA_LTX_VIDEO_WORKER_LIVE_EVALUATOR_THRESHOLDS",
     "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS",
     "INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS",
     "PRODUCTION_EVALUATOR_THRESHOLDS",
@@ -170,6 +177,7 @@ __all__ = [
     "build_infra_b2_checkpoint_experiment",
     "build_infra_guardian_experiment",
     "build_infra_ltx_video_worker_experiment",
+    "build_infra_ltx_video_worker_live_experiment",
     "build_infra_qwen3_tts_worker_experiment",
     "build_infra_worker_registry_experiment",
     "build_pipeline_experiment",
@@ -197,6 +205,8 @@ __all__ = [
     "infra_guardian_cases",
     "infra_guardian_task",
     "infra_ltx_video_worker_cases",
+    "infra_ltx_video_worker_live_cases",
+    "infra_ltx_video_worker_live_task",
     "infra_ltx_video_worker_task",
     "infra_qwen3_tts_worker_cases",
     "infra_qwen3_tts_worker_task",

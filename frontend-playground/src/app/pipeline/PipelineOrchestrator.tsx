@@ -26,8 +26,8 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 
 import { startPipelineRun } from "@/lib/api";
+import { PipelineApprovalCard } from "./PipelineApprovalCard";
 import type {
-  PipelineRunMode,
   RunEvent,
   StartPipelineRunResponse,
 } from "@/lib/types";
@@ -65,6 +65,17 @@ interface ApprovalState {
   readonly waitingSeq: number;
   readonly resolved: boolean;
   readonly decision: string | null;
+  /** Run id surfaced on the waiting event so the UI can post to
+   * ``POST /playground/approval/resume/{run_id}/{interrupt_id}``.
+   * ``null`` for legacy events that predate slice 9i.
+   */
+  readonly runId: string | null;
+  /** Interrupt id paired with ``runId``. ``null`` when missing. */
+  readonly interruptId: string | null;
+  /** Tool args the orchestrator interrupted on. Surfaced so the
+   * "Edit" panel can render mutable fields. ``null`` when the gate
+   * carries no args. */
+  readonly args: Record<string, unknown> | null;
 }
 
 const LANGUAGE_OPTIONS = [
@@ -84,7 +95,6 @@ export function PipelineOrchestrator() {
   const [topic, setTopic] = useState<string>(DEFAULT_TOPIC);
   const [durationSec, setDurationSec] = useState<number>(DEFAULT_DURATION);
   const [language, setLanguage] = useState<string>("en");
-  const [mode, setMode] = useState<PipelineRunMode>("simulator");
 
   const [runMeta, setRunMeta] = useState<StartPipelineRunResponse | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -131,7 +141,6 @@ export function PipelineOrchestrator() {
           topic: trimmedTopic,
           target_duration_sec: Math.floor(durationSec),
           language: language || "en",
-          mode,
         });
         setRunMeta(response);
         setRunId(response.run_id);
@@ -141,7 +150,7 @@ export function PipelineOrchestrator() {
         setIsSubmitting(false);
       }
     },
-    [topic, durationSec, language, mode],
+    [topic, durationSec, language],
   );
 
   const isRunning = runId !== null && !stream.terminal;
@@ -172,10 +181,10 @@ export function PipelineOrchestrator() {
           Submit a topic and watch the pipeline drive five stages
           end-to-end: scenario → audio → visual → production →
           assembly. Each stage emits structured events that fold into
-          the ribbon and the trajectory log below. The simulator
-          replays a deterministic sequence; <strong>live</strong>
-          drives the real DeepAgent orchestrator with a scripted LLM
-          and placeholder tools — same wire shape, no GPU spend.
+          the ribbon and the trajectory log below. Every run drives
+          the real DeepAgent orchestrator against real workers and
+          real LLM-backed QA gates — there is no scripted-replay or
+          simulator path.
         </p>
       </header>
 
@@ -191,7 +200,7 @@ export function PipelineOrchestrator() {
         </h2>
         <form
           onSubmit={onSubmit}
-          className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr_1fr_auto]"
+          className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr_auto]"
         >
           <label className="flex flex-col gap-1 text-sm text-pg-muted">
             <span>Topic</span>
@@ -233,20 +242,6 @@ export function PipelineOrchestrator() {
                   {option.label}
                 </option>
               ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-pg-muted">
-            <span>Mode</span>
-            <select
-              value={mode}
-              onChange={(event) =>
-                setMode(event.target.value as PipelineRunMode)
-              }
-              data-testid="pipeline-mode-input"
-              className="rounded border border-pg-border bg-pg-bg px-3 py-2 text-sm text-pg-text outline-none focus:border-pg-accent"
-            >
-              <option value="simulator">simulator</option>
-              <option value="live">live (scripted LLM)</option>
             </select>
           </label>
           <div className="flex items-end">
@@ -318,15 +313,6 @@ export function PipelineOrchestrator() {
                 {runMeta.target_duration_sec}s · {runMeta.language}
               </dd>
             </div>
-            <div className="flex gap-2">
-              <dt className="text-pg-muted/70">mode</dt>
-              <dd
-                className="font-mono text-pg-text"
-                data-testid="pipeline-mode-meta"
-              >
-                {runMeta.mode}
-              </dd>
-            </div>
             {totalElapsedMs !== null ? (
               <div className="flex gap-2">
                 <dt className="text-pg-muted/70">elapsed</dt>
@@ -351,26 +337,17 @@ export function PipelineOrchestrator() {
           </h2>
           <ul className="flex flex-col gap-2">
             {approvals.map((approval) => (
-              <li
+              <PipelineApprovalCard
                 key={`${approval.gate}-${approval.waitingSeq}`}
-                className="flex items-center justify-between rounded border border-pg-border bg-pg-surface px-3 py-2 text-sm"
-              >
-                <span className="font-mono text-pg-text">{approval.gate}</span>
-                {approval.resolved ? (
-                  <span className="rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green">
-                    resumed: {approval.decision ?? "accept"}
-                  </span>
-                ) : (
-                  <span className="rounded bg-pg-amber/20 px-2 py-0.5 text-xs text-pg-amber">
-                    waiting…
-                  </span>
-                )}
-              </li>
+                approval={approval}
+              />
             ))}
           </ul>
           <p className="text-xs text-pg-muted">
-            The simulator auto-resumes every gate. Slice 9 wires real
-            human-in-the-loop responses through the same envelope.
+            Pending gates wait for an operator decision via
+            ``POST /playground/approval/resume/{`{run_id}/{interrupt_id}`}``.
+            Unattended runs auto-resume; runs with
+            ``ENABLE_PIPELINE_HITL`` set bind on operator input.
           </p>
         </section>
       ) : null}
@@ -690,11 +667,27 @@ export function deriveApprovals(
     if (event.kind === "pipeline.approval.waiting") {
       const detail = event.detail ?? {};
       const gate = typeof detail.gate_name === "string" ? detail.gate_name : "";
+      const runId =
+        typeof detail.run_id === "string" && detail.run_id.length > 0
+          ? detail.run_id
+          : null;
+      const interruptId =
+        typeof detail.interrupt_id === "string" && detail.interrupt_id.length > 0
+          ? detail.interrupt_id
+          : null;
+      const rawArgs = detail.args;
+      const args =
+        rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
+          ? (rawArgs as Record<string, unknown>)
+          : null;
       waiting.push({
         gate,
         waitingSeq: event.seq,
         resolved: false,
         decision: null,
+        runId,
+        interruptId,
+        args,
       });
     } else if (event.kind === "pipeline.approval.resumed") {
       const detail = event.detail ?? {};
@@ -718,6 +711,9 @@ export function deriveApprovals(
           waitingSeq: event.seq,
           resolved: true,
           decision,
+          runId: null,
+          interruptId: null,
+          args: null,
         });
       }
     }

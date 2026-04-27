@@ -90,13 +90,25 @@ def evaluate_timing(
 
 
 @tool
-def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
-    """Audio render launch placeholder (real impl: component 04)."""
+def launch_audio_render(
+    scene_id: str,
+    voice_id: str,
+    text: str | None = None,
+) -> dict[str, Any]:
+    """Audio render launch placeholder (real impl: component 04).
+
+    The optional ``text`` argument carries the scene's narration so a
+    real-worker overlay (slice 9d-wire / 9c) can dispatch a non-trivial
+    TTS prompt instead of a hard-coded "Documentary narration for scene
+    X" line. The placeholder simply echoes it in the envelope so unit
+    tests can assert the orchestrator passed real content through.
+    """
 
     return _envelope(
         "launch_audio_render",
         scene_id=scene_id,
         voice_id=voice_id,
+        text=text,
     )
 
 
@@ -104,35 +116,87 @@ def launch_audio_render(scene_id: str, voice_id: str) -> dict[str, Any]:
 def launch_visual_production(
     scene_id: str,
     visual_concept: dict[str, Any],
+    prompt: str | None = None,
+    target_duration_s: float | None = None,
 ) -> dict[str, Any]:
-    """Visual production launch placeholder (real impl: component 10)."""
+    """Visual production launch placeholder (real impl: component 10).
+
+    The optional ``prompt`` argument carries a fully-formed LTX
+    prompt so the real-worker overlay can dispatch a rich,
+    style-locked description instead of synthesising one from the
+    sparse ``visual_concept`` dict. Mirrors ``launch_audio_render``'s
+    ``text`` argument (slice 9c).
+
+    ``target_duration_s`` (slice 9k) is the per-scene narration
+    length the worker should match. Without it, LTX-2.3 emits a
+    fixed ~89-frame clip (~3.7 s) and the muxer freezes the last
+    frame for the rest of the audio track.
+    """
 
     return _envelope(
         "launch_visual_production",
         scene_id=scene_id,
         visual_concept=visual_concept,
+        prompt=prompt,
+        target_duration_s=target_duration_s,
     )
 
 
 @tool
 def launch_assembly(
-    timeline: dict[str, Any],
-    output_path: str,
+    timeline: dict[str, Any] | None = None,
+    output_path: str | None = None,
+    clip_artifacts: list[dict[str, Any]] | None = None,
+    target_duration_sec: float | None = None,
 ) -> dict[str, Any]:
-    """Assembly launch placeholder (real impl: component 11)."""
+    """Assembly launch placeholder (real impl: component 11).
+
+    Slice 9g-assembly added the optional ``clip_artifacts`` argument so
+    the real-worker overlay can compose a master MP4 from the per-scene
+    artifacts persisted by the audio/video dispatchers. ``timeline`` /
+    ``output_path`` stay accepted (and default to ``None``) for
+    backward compatibility with the pre-9g demo script and any
+    downstream caller still emitting the legacy shape.
+    """
 
     return _envelope(
         "launch_assembly",
-        timeline=timeline,
-        output_path=output_path,
+        timeline=timeline or {},
+        output_path=output_path or "",
+        clip_artifacts=clip_artifacts or [],
+        target_duration_sec=target_duration_sec,
     )
 
 
 @tool
-def launch_b2_sync(artifact_path: str) -> dict[str, Any]:
-    """B2 sync placeholder (infrastructure leaf; no per-component PR)."""
+def launch_b2_sync(
+    artifact_path: str | None = None,
+    master_mp4_path: str | None = None,
+    clip_artifacts: list[dict[str, Any]] | None = None,
+    scenario_path: str | None = None,
+    run_id: str | None = None,
+    revision_tag: str | None = None,
+) -> dict[str, Any]:
+    """B2 sync placeholder (infrastructure leaf; real impl: slice 9h).
 
-    return _envelope("launch_b2_sync", artifact_path=artifact_path)
+    Slice 9h-b2-publish added the optional ``master_mp4_path`` /
+    ``clip_artifacts`` / ``scenario_path`` / ``run_id`` /
+    ``revision_tag`` arguments so the real-worker overlay can upload
+    every artifact in the run-dir to B2 and return a manifest. The
+    legacy ``artifact_path`` argument is preserved (and defaults to
+    ``None``) so pre-9h callers still work — both shapes echo through
+    the placeholder unchanged.
+    """
+
+    return _envelope(
+        "launch_b2_sync",
+        artifact_path=artifact_path or "",
+        master_mp4_path=master_mp4_path,
+        clip_artifacts=clip_artifacts or [],
+        scenario_path=scenario_path,
+        run_id=run_id,
+        revision_tag=revision_tag,
+    )
 
 
 @tool

@@ -39,16 +39,52 @@ logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_PROMPT = """\
 You are the documentary pipeline orchestrator. Your job is to turn a user
-brief into a final video, going through five stages:
+brief into a final video, going through five stages.
+
+Multi-scene iteration discipline (slice 9f). The scenario produced in
+stage 1 has N scenes. Stages 2 / 3 / 4 must dispatch one tool call per
+scene — never collapse N scenes to a single call. Concretely:
+
+- Emit ALL ``launch_audio_render`` calls for the N scenes on the SAME
+  turn, as parallel ``tool_calls`` on one assistant message (AGENTS.md
+  "Timing stage" — batch launches). Then a single ``await_tasks`` /
+  ``evaluate_timing`` for the whole batch.
+- Emit ALL ``launch_visual_production`` calls for the N scenes on the
+  SAME turn, as parallel ``tool_calls``. The HITL approval gate fires
+  per call — that is expected, do not try to merge calls to dodge it.
+- ``propose_visual_concept`` (when available) and the visual SubAgent
+  helpers run once per scene; serial within a scene is fine, but
+  every scene must get its own concept.
+
+Stages:
 
 1. Scenario — call generate_scenario, then evaluate_scenario, then
    refine_scenario until the scenario passes structural checks.
 2. Audio + timing — launch_audio_render in parallel per scene, await,
    evaluate_timing, and loop back to refine_scenario when timing fails
-   (see AGENTS.md "Timing stage").
+   (see AGENTS.md "Timing stage"). Always pass the scene's narration
+   string from the approved scenario as the ``text`` argument to
+   launch_audio_render so the TTS renders the actual script (slice 9c).
 3. Visual — delegate to the `visual` SubAgent via the task tool.
+   When the propose_visual_concept tool is available (slice
+   9c-LLM-visual gate set), call it once per scene with the scene's
+   first phrase, the project style_lock, and visual_style. Use the
+   returned ``prompt`` string and ``visual_concept`` dict directly
+   in the next stage.
 4. Production — delegate to the `production` SubAgent via the task
-   tool.
+   tool. When calling launch_visual_production, pass a fully-formed
+   style-locked ``prompt`` string built from the scene's
+   visual_concept (shot type, camera movement, mood, palette,
+   phrases) so the video model receives a rich description, not a
+   one-line caption (slice 9c). When propose_visual_concept ran in
+   stage 3, prefer its returned prompt verbatim. Also pass the
+   scene's narration duration (from ``evaluate_timing``'s
+   ``alignment_per_scene[i].duration_sec`` or the scenario scene's
+   ``duration_target_sec``) as ``target_duration_s`` so the video
+   model renders enough frames to cover the audio (slice 9k —
+   without this argument LTX-2.3 emits a fixed ~3.7 s clip and the
+   muxer freezes the last frame). Dispatch one call per scene in
+   parallel (slice 9f).
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,
@@ -293,12 +329,59 @@ def build_documentary_orchestrator(
     ``tools=build_default_tools()`` and
     ``subagents=build_default_subagents()``. Placeholders fill in
     wherever a per-component PR has not yet merged.
-    """
 
+    When ``QWEN3_TTS_WORKER_URL`` and/or ``LTX_VIDEO_WORKER_URL``
+    are set in the environment, the corresponding placeholder tools
+    (``launch_audio_render`` / ``launch_visual_production``) are
+    swapped for real-worker HTTP dispatchers that POST to the live
+    workers and persist returned bytes under
+    ``run_dir/artifacts/``. Both URLs unset → all placeholders
+    pass through, matching pre-slice-9e behaviour exactly.
+
+    When ``model`` is a string id (or ``STRANDS_MODEL`` /
+    ``SCENARIO_LLM_MODEL_ID`` is set), the scenario placeholders
+    (``generate_scenario`` / ``evaluate_scenario`` / ``refine_scenario``)
+    are swapped for real LLM-backed tools that delegate to
+    :mod:`scenario_llm` for narration generation and
+    :mod:`tools.scenario_evaluator_checks` for structural checks
+    (slice 9c-LLM-scenario). Without a model id resolution all
+    scenario placeholders pass through.
+
+    When ``model`` is a string id (or ``STRANDS_MODEL`` /
+    ``VISUAL_LLM_MODEL_ID`` is set), an additional
+    ``propose_visual_concept`` tool is appended to the orchestrator's
+    tool list. The orchestrator calls it per scene to obtain a real,
+    style-locked LTX prompt + structured visual concept dict that
+    feeds straight into ``launch_visual_production`` (slice
+    9c-LLM-visual). Without a model id resolution the tool is
+    omitted and the orchestrator falls back to constructing concepts
+    inline from the scenario's ``visual_notes``.
+    """
+    from ._real_scenario_tools import (
+        apply_real_scenario_overrides,
+        build_real_scenario_tools,
+    )
+    from ._real_visual_tools import (
+        apply_real_visual_overrides,
+        build_real_visual_tools,
+    )
+    from .playground.pipeline_live_real_workers import (
+        apply_real_worker_overrides,
+        build_real_worker_tools,
+    )
+
+    base_tools = build_default_tools()
+    llm_model_id = model if isinstance(model, str) else None
+    scenario_overrides = build_real_scenario_tools(model_id=llm_model_id)
+    tools = apply_real_scenario_overrides(base_tools, scenario_overrides)
+    visual_overrides = build_real_visual_tools(model_id=llm_model_id)
+    tools = apply_real_visual_overrides(tools, visual_overrides)
+    real_overrides = build_real_worker_tools(run_dir)
+    tools = apply_real_worker_overrides(tools, real_overrides)
     return build_orchestrator(
         run_dir,
         model=model,
-        tools=build_default_tools(),
+        tools=tools,
         subagents=build_default_subagents(),
     )
 

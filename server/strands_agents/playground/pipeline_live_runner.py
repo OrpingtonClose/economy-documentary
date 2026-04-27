@@ -1,17 +1,15 @@
 """Live pipeline runner — slice 9a of the documentary migration.
 
-A sibling of :class:`strands_agents.playground.pipeline_adapter.SimulatedPipelineRun`
-that drives the **real** ``create_deep_agent`` orchestrator
+Drives the **real** ``create_deep_agent`` orchestrator
 (:mod:`strands_agents.pipeline`) end-to-end onto a playground
-:class:`RunStream`.
+:class:`RunStream`. The pipeline has no scripted-replay fallback:
+workers are mocked at the HTTP boundary in CI, never substituted at
+the code level.
 
-The simulator emits a hand-rolled, deterministic event sequence so the
-``/pipeline`` UI surface can be exercised without LLM tokens. The live
-runner instead **observes** the real agent as it executes — every tool
+The runner **observes** the real agent as it executes — every tool
 the LLM picks, every interrupt the orchestrator hits, every assembly
-artifact — and translates those observations into the same
-``pipeline.*`` event vocabulary the simulator emits, so the UI does not
-need to know which engine produced the events.
+artifact — and translates those observations into the
+``pipeline.*`` event vocabulary the playground stream understands.
 
 The runner is built on three primitives, in order of increasing
 responsibility:
@@ -33,10 +31,9 @@ responsibility:
 * :class:`LivePipelineRun` — the public surface. Wraps the orchestrator
   build, the callback wiring, and an interrupt-resolution loop that
   emits ``pipeline.approval_gate`` + ``pipeline.approval_resumed``
-  envelopes around every gate. Mirrors :class:`SimulatedPipelineRun`'s
-  return shape so the FastAPI dispatcher can accept either one.
+  envelopes around every gate.
 
-Design contract (versus :class:`SimulatedPipelineRun`):
+Design contract:
 
 * The runner **does not** invent stage transitions — they fall out of
   observed tool calls. A run that picks tools the orchestrator did
@@ -59,6 +56,7 @@ Design contract (versus :class:`SimulatedPipelineRun`):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -76,7 +74,11 @@ from strands_agents.playground.pipeline_adapter import (
     PIPELINE_STAGES,
     translate_pipeline_event,
 )
-from strands_agents.run import _extract_interrupt_metadata
+from strands_agents.run import (
+    _ensure_interrupt_id,
+    _extract_action_count,
+    _extract_interrupt_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,7 @@ _TOOL_TO_STAGE: dict[str, str | None] = {
     "launch_audio_render": "audio",
     "content_analyst": "visual",
     "visual_concepter": "visual",
+    "propose_visual_concept": "visual",
     "launch_visual_production": "production",
     "launch_assembly": "assembly",
     "launch_b2_sync": "assembly",
@@ -199,6 +202,81 @@ async def _emit_translated(
     )
 
 
+#: Whitelisted dispatcher-envelope fields lifted from a real-worker
+#: tool's return value into the ``pipeline.tool.X.end`` detail. Kept
+#: small and explicit so an arbitrary tool return cannot leak large
+#: payloads (e.g. base64 audio/video) into the SSE wire.
+_ENVELOPE_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    "engine",
+    "wav_bytes_len",
+    "mp4_bytes_len",
+    "status_code",
+    "wav_path",
+    "mp4_path",
+)
+
+
+def _extract_envelope_fields(output: Any) -> dict[str, Any]:
+    """Pull whitelisted envelope fields out of a tool's return value.
+
+    The real-worker dispatch tools in
+    :mod:`strands_agents.playground.pipeline_live_real_workers`
+    return a placeholder-shaped envelope::
+
+        {"status": ..., "tool": ..., "args": {"engine": ..., "wav_bytes_len": ..., ...}}
+
+    LangChain's tool-end callback may pass that return value through
+    as the dict itself, as a :class:`ToolMessage` whose ``content`` is
+    the dict, or as a JSON-serialised string (the
+    ``ToolNode`` path stringifies non-string returns). This helper
+    handles all three shapes and extracts the whitelisted keys from
+    the ``args`` map (or the top-level dict, for placeholder-shaped
+    tools that don't nest their fields).
+
+    Defensive: returns an empty dict when ``output`` is malformed or
+    when no whitelisted keys are present. Never raises.
+    """
+    try:
+        normalised: Any = output
+
+        if not isinstance(normalised, dict):
+            content = getattr(normalised, "content", None)
+            if content is not None:
+                normalised = content
+
+        if isinstance(normalised, str):
+            stripped = normalised.strip()
+            if stripped.startswith("{"):
+                try:
+                    normalised = json.loads(stripped)
+                except json.JSONDecodeError:
+                    return {}
+            else:
+                return {}
+
+        if not isinstance(normalised, dict):
+            return {}
+
+        candidates: list[dict[str, Any]] = []
+        args = normalised.get("args")
+        if isinstance(args, dict):
+            candidates.append(args)
+        candidates.append(normalised)
+
+        extracted: dict[str, Any] = {}
+        for source in candidates:
+            for key in _ENVELOPE_PASSTHROUGH_KEYS:
+                if key in extracted:
+                    continue
+                value = source.get(key)
+                if value is None:
+                    continue
+                extracted[key] = value
+        return extracted
+    except Exception:  # noqa: BLE001 — never break the run on extraction
+        return {}
+
+
 class _PipelineCallbackHandler(AsyncCallbackHandler):
     """LangChain async callback that forwards tool events to the stream.
 
@@ -300,15 +378,19 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
             elapsed_ms = (
                 int((time.perf_counter() - start) * 1000) if start is not None else -1
             )
+            payload: dict[str, Any] = {
+                "tool": tool_name,
+                "agent": "orchestrator",
+                "elapsed_ms": elapsed_ms,
+                "ok": True,
+            }
+            envelope = _extract_envelope_fields(output)
+            if envelope:
+                payload["envelope"] = envelope
             await _emit_translated(
                 self._stream,
                 "pipeline.tool_call_finished",
-                {
-                    "tool": tool_name,
-                    "agent": "orchestrator",
-                    "elapsed_ms": elapsed_ms,
-                    "ok": True,
-                },
+                payload,
             )
         except Exception:  # noqa: BLE001 — emit must never break the run
             logger.debug("on_tool_end emit failed", exc_info=True)
@@ -364,9 +446,9 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
 class LivePipelineRun:
     """Drive the real ``create_deep_agent`` orchestrator onto a stream.
 
-    Mirrors :class:`SimulatedPipelineRun`'s public surface so the
-    FastAPI dispatcher can accept either runner under the same
-    request shape. Differences:
+    The runner is the only path the FastAPI ``/playground/pipeline/runs``
+    dispatcher uses; there is no scripted-replay fallback. Notable
+    properties:
 
     * ``agent``: the pre-built compiled LangGraph (or anything
       with ``.ainvoke``). The dispatcher in :mod:`server.playground`
@@ -409,6 +491,14 @@ class LivePipelineRun:
     operator_decision: "OperatorDecision | None" = None
     max_interrupt_rounds: int = 32
     per_event_delay_s: float = 0.0
+    run_id: str | None = None
+    """Playground :class:`RunStream` id surfaced on
+    ``pipeline.approval_gate`` events so the frontend can post the
+    operator decision to the right
+    ``/playground/approval/resume/{run_id}/{interrupt_id}`` URL.
+    Optional; ``None`` falls back to the in-event ``stream.run_id``
+    so the legacy auto-accept demo path stays untouched.
+    """
 
     async def run(self, stream: RunStream) -> dict[str, Any]:
         """Drive the orchestrator to completion and return a terminal dict.
@@ -462,6 +552,7 @@ class LivePipelineRun:
                     )
                 interrupt_id, tool_name, payload = _extract_hitl_interrupt(state)
                 gate_count += 1
+                resume_run_id = self.run_id or stream.run_id
                 await _emit_translated(
                     stream,
                     "pipeline.approval_gate",
@@ -470,6 +561,8 @@ class LivePipelineRun:
                         "allowed_decisions": payload.get("allowed_decisions")
                         or _default_allowed_for(tool_name),
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
+                        "args": payload.get("args"),
                     },
                 )
                 command = await operator(state)
@@ -481,6 +574,7 @@ class LivePipelineRun:
                         "gate_name": tool_name,
                         "decision": decision,
                         "interrupt_id": interrupt_id,
+                        "run_id": resume_run_id,
                     },
                 )
                 if self.per_event_delay_s > 0:
@@ -564,11 +658,26 @@ async def auto_accept_interrupt(state: dict[str, Any]) -> Command:
     interrupted tool call, using the middleware's vocabulary
     (``approve`` / ``edit`` / ``reject``). The playground demo
     always picks ``approve`` so the happy path runs end-to-end.
+
+    The resume payload also carries ``_project_decision_type``
+    (``"accept"``) as a sidecar so :func:`_decision_from_command`
+    can echo the operator's original project vocab on the
+    ``pipeline.approval.resumed`` SSE event instead of leaking the
+    langchain-translated form.
+
+    The decision count must equal the number of ``action_requests``
+    inside the interrupt — not the number of ``__interrupt__``
+    objects. ``HumanInTheLoopMiddleware`` packs N parallel tool
+    calls into a single interrupt with N action_requests, then
+    validates ``len(decisions) == N`` on resume. ``len(interrupts)``
+    is typically 1, which would crash any batched gate.
     """
-    interrupts = state.get("__interrupt__", []) or []
-    count = max(1, len(interrupts))
+    count = _extract_action_count(state)
     return Command(
-        resume={"decisions": [{"type": "approve"} for _ in range(count)]},
+        resume={
+            "decisions": [{"type": "approve"} for _ in range(count)],
+            "_project_decision_type": "accept",
+        },
     )
 
 
@@ -579,31 +688,53 @@ def _default_allowed_for(tool_name: str) -> list[str]:
     return ["accept", "reject", "respond"]
 
 
+#: Reverse mapping from langchain HITL vocab back to project vocab.
+#: Used as a last-resort fallback when the resume payload lacks the
+#: ``_project_decision_type`` sidecar (e.g. legacy callers). Lossy
+#: for ``reject`` because both project ``reject`` and ``respond``
+#: translate to langchain ``reject`` -- preferring ``reject`` here
+#: because it is the more common operator action.
+_LANGCHAIN_TO_PROJECT_DECISION: dict[str, str] = {
+    "approve": "accept",
+    "edit": "edit",
+    "reject": "reject",
+}
+
+
 def _decision_from_command(command: Command) -> str:
-    """Recover the decision ``type`` from a resume :class:`Command`.
+    """Recover the decision ``type`` in **project vocab** from a resume :class:`Command`.
 
-    Supports two shapes:
+    Three lookup paths, in order:
 
-    * The langchain ``HumanInTheLoopMiddleware`` shape:
-      ``resume={"decisions": [{"type": "approve"}, …]}``. The first
-      decision wins for reporting purposes (the demo always emits
-      a single decision per interrupt, matching the action-request
-      count).
-    * The legacy single-decision shape:
-      ``resume={"type": "accept", …}``.
+    1. ``resume["_project_decision_type"]`` -- the sidecar set by
+       :func:`langchain_resume_command_from_decision` and
+       :func:`auto_accept_interrupt`. Always project vocab
+       (``accept``/``edit``/``reject``/``respond``). This is the
+       authoritative source.
+    2. ``resume["decisions"][0]["type"]`` -- the langchain HITL
+       middleware shape. Reverse-mapped via
+       :data:`_LANGCHAIN_TO_PROJECT_DECISION` so the SSE event echoes
+       project vocab. Lossy for ``respond`` (folded to ``reject``)
+       but only hit when the sidecar is missing.
+    3. ``resume["type"]`` -- the legacy single-decision shape
+       (``Command(resume={"type": "accept"})``). Already project
+       vocab.
 
-    Falls back to ``"respond"`` when neither shape matches so the
-    UI never renders ``None``.
+    Falls back to ``"respond"`` when none match so the UI never
+    renders ``None``.
     """
     resume = getattr(command, "resume", None)
     if isinstance(resume, dict):
+        sidecar = resume.get("_project_decision_type")
+        if isinstance(sidecar, str):
+            return sidecar
         decisions = resume.get("decisions")
         if isinstance(decisions, list) and decisions:
             first = decisions[0]
             if isinstance(first, dict):
                 t = first.get("type")
                 if isinstance(t, str):
-                    return t
+                    return _LANGCHAIN_TO_PROJECT_DECISION.get(t, t)
         decision = resume.get("type")
         if isinstance(decision, str):
             return decision
@@ -635,11 +766,12 @@ def _extract_hitl_interrupt(
     if not isinstance(value, dict):
         value = {}
 
-    interrupt_id: str | None = (
-        interrupt.get("id")
-        if isinstance(interrupt, dict)
-        else getattr(interrupt, "id", None)
-    )
+    # Mutate the interrupt to carry a stable id even when the
+    # middleware shape doesn't ship one. The queue-backed
+    # :func:`queue_operator_decision` handler re-extracts metadata
+    # from the same interrupt object and must return the identical
+    # id, otherwise the frontend POSTs to a 404.
+    interrupt_id = _ensure_interrupt_id(interrupt, state)
 
     action_requests = value.get("action_requests")
     if isinstance(action_requests, list) and action_requests:
@@ -657,7 +789,7 @@ def _extract_hitl_interrupt(
                             allowed = [str(d) for d in ad]
                             break
             return (
-                str(interrupt_id) if interrupt_id else "",
+                interrupt_id,
                 tool_name,
                 {
                     "args": args if isinstance(args, dict) else {},
