@@ -13,8 +13,19 @@
  * same envelopes.
  */
 
+import { Suspense } from "react";
+
 import { PipelineOrchestrator } from "./PipelineOrchestrator";
 
 export default function PipelinePage() {
-  return <PipelineOrchestrator />;
+  //: ``PipelineOrchestrator`` calls ``useSearchParams`` to support
+  //: the ``?run_id=<id>`` re-attach affordance. Next.js app-router
+  //: requires that hook to be wrapped in a ``Suspense`` boundary at
+  //: build time; the fallback is intentionally trivial because the
+  //: orchestrator renders its own loading/empty states.
+  return (
+    <Suspense fallback={null}>
+      <PipelineOrchestrator />
+    </Suspense>
+  );
 }

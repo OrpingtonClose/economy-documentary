@@ -22,8 +22,9 @@
  * session-scoped, no persistence, no router state.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 import { startPipelineRun } from "@/lib/api";
 import { PipelineApprovalCard } from "./PipelineApprovalCard";
@@ -101,6 +102,23 @@ export function PipelineOrchestrator() {
   const [runId, setRunId] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  //: Allow re-attaching to an in-flight run via ``?run_id=<id>``.
+  //: When the URL carries a ``run_id`` query parameter, subscribe
+  //: to that existing run on mount instead of waiting for the form
+  //: submit. Required so a UI driver that loses its browser process
+  //: mid-run can reconnect and continue monitoring/approving without
+  //: starting a fresh GPU-burning run from scratch.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const fromUrl = searchParams?.get("run_id");
+    if (fromUrl && fromUrl !== runId) {
+      setRunId(fromUrl);
+    }
+    //: Intentionally only react to ``searchParams`` changes; we do
+    //: not want to clobber a freshly-submitted run with a stale URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const stream: RunStreamState = useRunStream(runId);
 
