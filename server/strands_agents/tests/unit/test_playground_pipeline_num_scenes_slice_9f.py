@@ -25,21 +25,20 @@ class TestNormalisePipelineRequestNumScenes:
 
     def test_default_is_none(self) -> None:
         request = StartPipelineRunRequest(topic="topic", target_duration_sec=60)
-        topic, duration, language, mode, num_scenes = _normalise_pipeline_request(
+        topic, duration, language, num_scenes = _normalise_pipeline_request(
             request
         )
         assert num_scenes is None
         assert topic == "topic"
         assert duration == 60
         assert language == "en"
-        assert mode == "simulator"
 
     @pytest.mark.parametrize("n", [1, 2, 3, 4, 5, 6])
     def test_in_range_passes_through(self, n: int) -> None:
         request = StartPipelineRunRequest(
             topic="topic", target_duration_sec=60, num_scenes=n
         )
-        _, _, _, _, num_scenes = _normalise_pipeline_request(request)
+        _, _, _, num_scenes = _normalise_pipeline_request(request)
         assert num_scenes == n
 
     def test_below_min_raises_400(self) -> None:

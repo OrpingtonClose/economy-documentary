@@ -28,7 +28,6 @@ import Link from "next/link";
 import { startPipelineRun } from "@/lib/api";
 import { PipelineApprovalCard } from "./PipelineApprovalCard";
 import type {
-  PipelineRunMode,
   RunEvent,
   StartPipelineRunResponse,
 } from "@/lib/types";
@@ -96,7 +95,6 @@ export function PipelineOrchestrator() {
   const [topic, setTopic] = useState<string>(DEFAULT_TOPIC);
   const [durationSec, setDurationSec] = useState<number>(DEFAULT_DURATION);
   const [language, setLanguage] = useState<string>("en");
-  const [mode, setMode] = useState<PipelineRunMode>("simulator");
 
   const [runMeta, setRunMeta] = useState<StartPipelineRunResponse | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
@@ -143,7 +141,6 @@ export function PipelineOrchestrator() {
           topic: trimmedTopic,
           target_duration_sec: Math.floor(durationSec),
           language: language || "en",
-          mode,
         });
         setRunMeta(response);
         setRunId(response.run_id);
@@ -153,7 +150,7 @@ export function PipelineOrchestrator() {
         setIsSubmitting(false);
       }
     },
-    [topic, durationSec, language, mode],
+    [topic, durationSec, language],
   );
 
   const isRunning = runId !== null && !stream.terminal;
@@ -184,10 +181,10 @@ export function PipelineOrchestrator() {
           Submit a topic and watch the pipeline drive five stages
           end-to-end: scenario → audio → visual → production →
           assembly. Each stage emits structured events that fold into
-          the ribbon and the trajectory log below. The simulator
-          replays a deterministic sequence; <strong>live</strong>
-          drives the real DeepAgent orchestrator with a scripted LLM
-          and placeholder tools — same wire shape, no GPU spend.
+          the ribbon and the trajectory log below. Every run drives
+          the real DeepAgent orchestrator against real workers and
+          real LLM-backed QA gates — there is no scripted-replay or
+          simulator path.
         </p>
       </header>
 
@@ -203,7 +200,7 @@ export function PipelineOrchestrator() {
         </h2>
         <form
           onSubmit={onSubmit}
-          className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr_1fr_auto]"
+          className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr_auto]"
         >
           <label className="flex flex-col gap-1 text-sm text-pg-muted">
             <span>Topic</span>
@@ -245,20 +242,6 @@ export function PipelineOrchestrator() {
                   {option.label}
                 </option>
               ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm text-pg-muted">
-            <span>Mode</span>
-            <select
-              value={mode}
-              onChange={(event) =>
-                setMode(event.target.value as PipelineRunMode)
-              }
-              data-testid="pipeline-mode-input"
-              className="rounded border border-pg-border bg-pg-bg px-3 py-2 text-sm text-pg-text outline-none focus:border-pg-accent"
-            >
-              <option value="simulator">simulator</option>
-              <option value="live">live (scripted LLM)</option>
             </select>
           </label>
           <div className="flex items-end">
@@ -330,15 +313,6 @@ export function PipelineOrchestrator() {
                 {runMeta.target_duration_sec}s · {runMeta.language}
               </dd>
             </div>
-            <div className="flex gap-2">
-              <dt className="text-pg-muted/70">mode</dt>
-              <dd
-                className="font-mono text-pg-text"
-                data-testid="pipeline-mode-meta"
-              >
-                {runMeta.mode}
-              </dd>
-            </div>
             {totalElapsedMs !== null ? (
               <div className="flex gap-2">
                 <dt className="text-pg-muted/70">elapsed</dt>
@@ -372,7 +346,7 @@ export function PipelineOrchestrator() {
           <p className="text-xs text-pg-muted">
             Pending gates wait for an operator decision via
             ``POST /playground/approval/resume/{`{run_id}/{interrupt_id}`}``.
-            The simulator auto-resumes; live runs with
+            Unattended runs auto-resume; runs with
             ``ENABLE_PIPELINE_HITL`` set bind on operator input.
           </p>
         </section>

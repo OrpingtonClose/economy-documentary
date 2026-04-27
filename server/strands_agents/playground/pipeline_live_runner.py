@@ -1,17 +1,15 @@
 """Live pipeline runner — slice 9a of the documentary migration.
 
-A sibling of :class:`strands_agents.playground.pipeline_adapter.SimulatedPipelineRun`
-that drives the **real** ``create_deep_agent`` orchestrator
+Drives the **real** ``create_deep_agent`` orchestrator
 (:mod:`strands_agents.pipeline`) end-to-end onto a playground
-:class:`RunStream`.
+:class:`RunStream`. The pipeline has no scripted-replay fallback:
+workers are mocked at the HTTP boundary in CI, never substituted at
+the code level.
 
-The simulator emits a hand-rolled, deterministic event sequence so the
-``/pipeline`` UI surface can be exercised without LLM tokens. The live
-runner instead **observes** the real agent as it executes — every tool
+The runner **observes** the real agent as it executes — every tool
 the LLM picks, every interrupt the orchestrator hits, every assembly
-artifact — and translates those observations into the same
-``pipeline.*`` event vocabulary the simulator emits, so the UI does not
-need to know which engine produced the events.
+artifact — and translates those observations into the
+``pipeline.*`` event vocabulary the playground stream understands.
 
 The runner is built on three primitives, in order of increasing
 responsibility:
@@ -33,10 +31,9 @@ responsibility:
 * :class:`LivePipelineRun` — the public surface. Wraps the orchestrator
   build, the callback wiring, and an interrupt-resolution loop that
   emits ``pipeline.approval_gate`` + ``pipeline.approval_resumed``
-  envelopes around every gate. Mirrors :class:`SimulatedPipelineRun`'s
-  return shape so the FastAPI dispatcher can accept either one.
+  envelopes around every gate.
 
-Design contract (versus :class:`SimulatedPipelineRun`):
+Design contract:
 
 * The runner **does not** invent stage transitions — they fall out of
   observed tool calls. A run that picks tools the orchestrator did
@@ -449,9 +446,9 @@ class _PipelineCallbackHandler(AsyncCallbackHandler):
 class LivePipelineRun:
     """Drive the real ``create_deep_agent`` orchestrator onto a stream.
 
-    Mirrors :class:`SimulatedPipelineRun`'s public surface so the
-    FastAPI dispatcher can accept either runner under the same
-    request shape. Differences:
+    The runner is the only path the FastAPI ``/playground/pipeline/runs``
+    dispatcher uses; there is no scripted-replay fallback. Notable
+    properties:
 
     * ``agent``: the pre-built compiled LangGraph (or anything
       with ``.ainvoke``). The dispatcher in :mod:`server.playground`

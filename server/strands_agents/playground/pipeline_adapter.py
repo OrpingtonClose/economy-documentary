@@ -15,14 +15,12 @@ isolation:
   a stream. Shipped as the strands-evals task surface for
   `infra_pipeline_adapter`.
 
-* :class:`SimulatedPipelineRun` — a **deterministic event replayer**
-  that walks the five pipeline stages (scenario → audio → visual →
-  production → assembly) plus approval gates without touching real
-  GPUs. Used by the ``/playground/pipeline/runs`` FastAPI surface so
-  the wire can be driven end-to-end before slice 9 attaches the real
-  orchestrator. Each stage emits the same event shape a real run
-  would, so the translator's contract is verified against the real
-  vocabulary, not a cartoon of it.
+* :func:`generate_simulation_events` + :func:`replay_events_onto_stream`
+  — **deterministic event-fixture helpers** used by the strands-evals
+  ``infra_pipeline_adapter`` experiment to feed the translator a
+  canned sequence in the real wire shape. They are test fixtures
+  only; the ``/playground/pipeline/runs`` FastAPI surface always
+  drives the real orchestrator (no scripted-replay fallback).
 
 Event vocabulary (the source side of the contract):
 
@@ -71,7 +69,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -456,8 +453,9 @@ def generate_simulation_events(
     Returns a flat list of ``(event_type, data)`` pairs in wall-clock
     order. Intended for two consumers:
 
-    1. :class:`SimulatedPipelineRun`, which replays it onto a live
-       :class:`RunStream` with realistic per-step spacing.
+    1. :func:`replay_events_onto_stream`, which feeds it onto a
+       :class:`RunStream` with realistic per-step spacing for
+       evaluator fixtures.
     2. The strands-evals experiment (``infra_pipeline_adapter``),
        which runs the sequence through :func:`translate_pipeline_event`
        and scores the emitted playground events.
@@ -627,91 +625,9 @@ async def replay_events_onto_stream(
             await asyncio.sleep(per_event_delay_s)
 
 
-@dataclass
-class SimulatedPipelineRun:
-    """Drive a deterministic pipeline run against a ``RunStream``.
-
-    The runner wraps :func:`generate_simulation_events` +
-    :func:`replay_events_onto_stream` into one awaitable. It is the
-    entrypoint used by the ``/playground/pipeline/runs`` FastAPI
-    surface: the real orchestrator is not yet attached (slice 9),
-    but the wire is exercised end-to-end with a plan that matches
-    the real shape.
-
-    Attributes:
-        topic: Documentary topic, shown in the ``run_started`` event.
-        target_duration_sec: Target final video length.
-        language: BCP-47 language code.
-        per_event_delay_s: Sleep between emitted events so the UI
-            timeline shows movement. 0.1 s is the default for a
-            ~7-second total run.
-        stages: Simulation plan. Defaults to the happy path.
-    """
-
-    topic: str
-    target_duration_sec: int
-    language: str
-    per_event_delay_s: float = 0.1
-    stages: tuple[SimulatedStage, ...] = field(
-        default_factory=default_simulation_stages
-    )
-
-    async def run(self, stream: Any) -> dict[str, Any]:
-        """Drive the simulation against ``stream`` and return terminal.
-
-        Emits every event from :func:`generate_simulation_events`
-        onto ``stream`` via :func:`replay_events_onto_stream`, then
-        returns a terminal dict suitable for
-        :meth:`RunStream.close`.
-
-        Args:
-            stream: The run's stream. Must expose
-                ``emit(kind, summary, detail)`` as an awaitable.
-
-        Returns:
-            Terminal dict:
-            ``{"status": "ok", "topic": …, "stage_count": …,
-            "event_count": …, "final_mp4_b2_url": …}``.
-        """
-
-        events = generate_simulation_events(
-            topic=self.topic,
-            target_duration_sec=self.target_duration_sec,
-            language=self.language,
-            stages=self.stages,
-        )
-        started = time.perf_counter()
-        await replay_events_onto_stream(
-            events, stream, per_event_delay_s=self.per_event_delay_s
-        )
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-
-        # Pull the final mp4 URL out of the canned sequence so the
-        # terminal payload the UI uses to render "Download" is the
-        # same one the simulator emitted — one source of truth, not
-        # two.
-        final_mp4_b2_url: str | None = None
-        for event_type, data in events:
-            if event_type == "pipeline.run_finished":
-                final_mp4_b2_url = data.get("final_mp4_b2_url")
-                break
-
-        return {
-            "status": "ok",
-            "topic": self.topic,
-            "target_duration_sec": self.target_duration_sec,
-            "language": self.language,
-            "stage_count": len(self.stages),
-            "event_count": len(events),
-            "elapsed_ms": elapsed_ms,
-            "final_mp4_b2_url": final_mp4_b2_url,
-        }
-
-
 __all__ = [
     "APPROVAL_GATES",
     "PIPELINE_STAGES",
-    "SimulatedPipelineRun",
     "SimulatedStage",
     "TranslatedEvent",
     "default_simulation_stages",

@@ -77,8 +77,14 @@ Stages:
    visual_concept (shot type, camera movement, mood, palette,
    phrases) so the video model receives a rich description, not a
    one-line caption (slice 9c). When propose_visual_concept ran in
-   stage 3, prefer its returned prompt verbatim. Dispatch one call
-   per scene in parallel (slice 9f).
+   stage 3, prefer its returned prompt verbatim. Also pass the
+   scene's narration duration (from ``evaluate_timing``'s
+   ``alignment_per_scene[i].duration_sec`` or the scenario scene's
+   ``duration_target_sec``) as ``target_duration_s`` so the video
+   model renders enough frames to cover the audio (slice 9k —
+   without this argument LTX-2.3 emits a fixed ~3.7 s clip and the
+   muxer freezes the last frame). Dispatch one call per scene in
+   parallel (slice 9f).
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,

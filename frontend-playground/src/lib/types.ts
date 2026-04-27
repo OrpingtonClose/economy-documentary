@@ -319,27 +319,17 @@ export interface StartRunResponse {
 }
 
 /**
- * Allowed values for :attr:`StartPipelineRunBody.mode`. Mirrors
- * ``PIPELINE_RUN_MODES`` in ``server/playground.py``.
- *
- * * ``"simulator"`` replays the slice-7 deterministic event sequence —
- *   no LLM tokens, no GPU.
- * * ``"live"`` drives the real ``create_deep_agent`` orchestrator
- *   through the slice-9a scripted-LLM runner — real LangGraph events,
- *   real interrupt resolution, no GPU spend.
- */
-export type PipelineRunMode = "simulator" | "live";
-
-/**
  * Body for ``POST /playground/pipeline/runs`` — the entry point for
  * the documentary pipeline orchestration page. Mirrors
  * :class:`StartPipelineRunRequest` in ``server/playground.py``.
+ *
+ * There is no "mode" toggle: every run drives the real DeepAgent
+ * orchestrator against real workers + real LLM-backed QA gates.
  */
 export interface StartPipelineRunBody {
   readonly topic: string;
   readonly target_duration_sec: number;
   readonly language: string;
-  readonly mode?: PipelineRunMode;
 }
 
 /** Mirror of the ``start_pipeline_run`` response envelope. */
@@ -350,7 +340,6 @@ export interface StartPipelineRunResponse {
   readonly topic: string;
   readonly target_duration_sec: number;
   readonly language: string;
-  readonly mode: PipelineRunMode;
   readonly events_url: string;
   readonly state_url: string;
 }

@@ -117,6 +117,7 @@ def launch_visual_production(
     scene_id: str,
     visual_concept: dict[str, Any],
     prompt: str | None = None,
+    target_duration_s: float | None = None,
 ) -> dict[str, Any]:
     """Visual production launch placeholder (real impl: component 10).
 
@@ -125,6 +126,11 @@ def launch_visual_production(
     style-locked description instead of synthesising one from the
     sparse ``visual_concept`` dict. Mirrors ``launch_audio_render``'s
     ``text`` argument (slice 9c).
+
+    ``target_duration_s`` (slice 9k) is the per-scene narration
+    length the worker should match. Without it, LTX-2.3 emits a
+    fixed ~89-frame clip (~3.7 s) and the muxer freezes the last
+    frame for the rest of the audio track.
     """
 
     return _envelope(
@@ -132,6 +138,7 @@ def launch_visual_production(
         scene_id=scene_id,
         visual_concept=visual_concept,
         prompt=prompt,
+        target_duration_s=target_duration_s,
     )
 
 

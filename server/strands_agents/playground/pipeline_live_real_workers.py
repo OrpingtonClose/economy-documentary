@@ -264,8 +264,9 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
         scene_id: str,
         visual_concept: dict[str, Any],
         prompt: str | None = None,
+        target_duration_s: float | None = None,
     ) -> dict[str, Any]:
-        """Real LTX-2.3 BASIC dispatch (slice 9d-wire / 9c).
+        """Real LTX-2.3 BASIC dispatch (slice 9d-wire / 9c / 9k).
 
         Sends a /video/render request to the live worker, decodes the
         base64 MP4, persists it under ``run_dir/artifacts/``, and
@@ -275,12 +276,26 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
         scenario content; falls back to a string synthesised from the
         ``visual_concept`` dict, then to a generic establishing-shot
         line.
+
+        ``target_duration_s`` (slice 9k) is the per-scene narration
+        length the worker should match. LTX-2.3 emits ~89 frames at
+        24 fps (~3.7 s) by default; without this argument the muxer
+        freezes the last frame for the remainder of the audio
+        track. Passing the per-scene narration duration tells the
+        worker to render ``ceil(target_duration_s * fps)`` frames so
+        video and audio cover the same wall-clock window.
         """
         resolved_prompt = _resolve_visual_prompt(visual_concept, prompt)
+        resolved_duration = (
+            float(target_duration_s)
+            if isinstance(target_duration_s, int | float)
+            and target_duration_s > 0
+            else _DEFAULT_VIDEO_DURATION_S
+        )
 
         body = {
             "prompt": resolved_prompt,
-            "duration_s": _DEFAULT_VIDEO_DURATION_S,
+            "duration_s": resolved_duration,
             "fps": _DEFAULT_FPS,
             "seed": _DEFAULT_SEED,
         }
@@ -334,6 +349,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             scene_id=scene_id,
             visual_concept=visual_concept,
             prompt=resolved_prompt,
+            target_duration_s=resolved_duration,
             status_code=resp.status_code,
             mp4_bytes_len=mp4_len,
             mp4_path=str(mp4_path) if mp4_path else None,

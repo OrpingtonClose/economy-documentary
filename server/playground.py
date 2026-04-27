@@ -1484,17 +1484,15 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
 
 
 # --------------------------------------------------------------------------
-# Pipeline runs (slice 8) — drives the documentary pipeline end-to-end
-# from the same RunStream surface that powers /components.
-#
-# Until slice 9 attaches the real orchestrator, the dispatcher uses
-# the deterministic ``SimulatedPipelineRun`` from slice 7 so the
-# wire (form → backend → SSE → stage ribbon → terminal MP4) can be
-# exercised without GPUs.
+# Pipeline runs — drive the documentary pipeline end-to-end from the
+# same RunStream surface that powers /components. The dispatcher
+# always invokes the real DeepAgent orchestrator + real worker tools
+# + real LLM-backed QA gates. CI mocks the worker HTTP boundary; it
+# does not substitute a different runner.
 # --------------------------------------------------------------------------
 
 
-# Minimum / maximum target durations the simulator accepts. Real
+# Minimum / maximum target durations the dispatcher accepts. Real
 # documentaries fall in roughly the 30s..600s window; clamping at the
 # API surface stops a 1-second probe or a 10-hour typo from reaching
 # the stream.
@@ -1514,20 +1512,6 @@ _PIPELINE_MAX_NUM_SCENES: int = 6
 PIPELINE_RUN_COMPONENT_ID: str = "pipeline"
 
 
-#: Allowed values for :attr:`StartPipelineRunRequest.mode`.
-#:
-#: * ``"simulator"`` — the slice-7 :class:`SimulatedPipelineRun`
-#:   replays a hand-rolled event sequence so the UI stays exercisable
-#:   with zero LLM tokens and zero GPU cost. Default for backward
-#:   compatibility.
-#: * ``"live"`` — slice-9a's :class:`LivePipelineRun` drives the real
-#:   ``create_deep_agent`` orchestrator end-to-end against scripted
-#:   placeholder tools and a scripted chat model. Real LangGraph
-#:   events, real interrupt resolution, real tool callbacks; no real
-#:   GPU spend.
-PIPELINE_RUN_MODES: tuple[str, ...] = ("simulator", "live")
-
-
 class StartPipelineRunRequest(BaseModel):
     """Body for ``POST /playground/pipeline/runs``.
 
@@ -1536,32 +1520,31 @@ class StartPipelineRunRequest(BaseModel):
     own defaults so a frontend can submit an empty form and still
     get a sensible run.
 
-    Slice 9a adds ``mode``: ``"simulator"`` (default, canned events)
-    or ``"live"`` (real ``create_deep_agent`` orchestrator with a
-    scripted LLM + placeholder tools — no GPU spend).
+    There is no "mode" toggle: the pipeline always drives the real
+    DeepAgent orchestrator against real workers + real LLM-backed QA
+    gates. Tests use httpx-mocked workers, never a code-level
+    "simulator mode".
     """
 
     topic: str = Field(default="The Federal Reserve")
     target_duration_sec: int = Field(default=60)
     language: str = Field(default="en")
-    mode: str = Field(default="simulator")
-    # Slice 9f: optional override for scripted-demo scene count. When
-    # ``None``, the demo derives N from ``target_duration_sec``
-    # (~12s/scene, clamped to ``[1, 6]``).
+    # Optional scene-count override. When ``None``, the orchestrator
+    # derives N from ``target_duration_sec`` (~12s/scene, clamped to
+    # ``[1, 6]``).
     num_scenes: int | None = Field(default=None)
 
 
 def _normalise_pipeline_request(
     request: StartPipelineRunRequest,
-) -> tuple[str, int, str, str, int | None]:
+) -> tuple[str, int, str, int | None]:
     """Validate + clamp pipeline-run inputs, raising HTTPException on bad input.
 
     Returns the cleaned
-    ``(topic, target_duration_sec, language, mode, num_scenes)`` tuple
-    ready to pass to :class:`SimulatedPipelineRun` or
-    :class:`LivePipelineRun`. ``num_scenes`` is ``None`` when the
-    caller didn't override it; the live demo derives N from duration
-    in that case.
+    ``(topic, target_duration_sec, language, num_scenes)`` tuple
+    ready to pass to :class:`PipelineRun`. ``num_scenes`` is ``None``
+    when the caller didn't override it; the orchestrator derives N
+    from duration in that case.
     """
     topic = (request.topic or "").strip()
     if not topic:
@@ -1592,15 +1575,6 @@ def _normalise_pipeline_request(
                 f"(max {_PIPELINE_LANGUAGE_MAX_LEN})"
             ),
         )
-    mode = (request.mode or "simulator").strip().lower() or "simulator"
-    if mode not in PIPELINE_RUN_MODES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"unknown pipeline run mode: {mode!r} "
-                f"(allowed: {sorted(PIPELINE_RUN_MODES)!r})"
-            ),
-        )
     num_scenes: int | None
     if request.num_scenes is None:
         num_scenes = None
@@ -1618,7 +1592,7 @@ def _normalise_pipeline_request(
                     f"{_PIPELINE_MAX_NUM_SCENES})"
                 ),
             )
-    return topic, duration, language, mode, num_scenes
+    return topic, duration, language, num_scenes
 
 
 async def _dispatch_pipeline_run(
@@ -1627,22 +1601,17 @@ async def _dispatch_pipeline_run(
     topic: str,
     target_duration_sec: int,
     language: str,
-    mode: str = "simulator",
     num_scenes: int | None = None,
 ) -> None:
     """Drive a pipeline run against ``stream`` and close it.
 
-    ``mode="simulator"`` (default) replays the slice-7
-    :class:`SimulatedPipelineRun` event sequence. ``mode="live"``
-    drives the real :func:`build_orchestrator` agent through the
-    slice-9a :class:`LivePipelineRun` runner, observing every tool
-    call + interrupt the orchestrator emits and translating them
-    onto ``stream``. Both paths land on the same ``run.ok`` /
-    ``run.error`` terminal so the UI stays mode-agnostic.
+    Always drives the real :func:`build_orchestrator` agent through
+    the :class:`PipelineRun` runner, observing every tool call +
+    interrupt the orchestrator emits and translating them onto
+    ``stream``. There is no scripted-replay fallback path: workers
+    are mocked at the HTTP boundary in CI, never substituted at the
+    code level.
     """
-    from strands_agents.playground.pipeline_adapter import (
-        SimulatedPipelineRun,
-    )
     from strands_agents.playground.pipeline_live_demo import (
         build_demo_live_agent,
     )
@@ -1670,46 +1639,37 @@ async def _dispatch_pipeline_run(
     run_dir: Path | None = None
     try:
         run_started = time.perf_counter()
-        if mode == "live":
-            run_dir = Path(tempfile.mkdtemp(prefix="pipeline_live_"))
-            agent = build_demo_live_agent(
-                run_dir,
-                topic=topic,
-                target_duration_sec=target_duration_sec,
-                language=language,
-                num_scenes=num_scenes,
-            )
-            # Slice 9i: when ``ENABLE_PIPELINE_HITL`` is set, swap the
-            # default ``auto_accept_interrupt`` for a queue-backed
-            # operator handler so the playground gates pause until
-            # the operator console (``POST /playground/approval/
-            # resume/{run_id}/{interrupt_id}``) submits a real
-            # decision. Unset env keeps the legacy auto-accept demo.
-            operator_decision = maybe_build_pipeline_hitl_operator(
-                run_id=stream.run_id,
-                run_dir=run_dir,
-            )
-            live_runner = LivePipelineRun(
-                topic=topic,
-                target_duration_sec=target_duration_sec,
-                language=language,
-                agent=agent,
-                run_dir=run_dir,
-                # Small per-event delay so the UI sees a progress-shaped
-                # timeline rather than a wall of events in one frame.
-                per_event_delay_s=0.15,
-                run_id=stream.run_id,
-                operator_decision=operator_decision,
-            )
-            result = await live_runner.run(stream)
-        else:
-            runner = SimulatedPipelineRun(
-                topic=topic,
-                target_duration_sec=target_duration_sec,
-                language=language,
-                per_event_delay_s=0.15,
-            )
-            result = await runner.run(stream)
+        run_dir = Path(tempfile.mkdtemp(prefix="pipeline_run_"))
+        agent = build_demo_live_agent(
+            run_dir,
+            topic=topic,
+            target_duration_sec=target_duration_sec,
+            language=language,
+            num_scenes=num_scenes,
+        )
+        # When ``ENABLE_PIPELINE_HITL`` is set, swap the default
+        # ``auto_accept_interrupt`` for a queue-backed operator handler
+        # so the playground gates pause until the operator console
+        # (``POST /playground/approval/resume/{run_id}/{interrupt_id}``)
+        # submits a real decision. Unset env keeps the legacy
+        # auto-accept demo for CI / unattended runs.
+        operator_decision = maybe_build_pipeline_hitl_operator(
+            run_id=stream.run_id,
+            run_dir=run_dir,
+        )
+        live_runner = LivePipelineRun(
+            topic=topic,
+            target_duration_sec=target_duration_sec,
+            language=language,
+            agent=agent,
+            run_dir=run_dir,
+            # Small per-event delay so the UI sees a progress-shaped
+            # timeline rather than a wall of events in one frame.
+            per_event_delay_s=0.15,
+            run_id=stream.run_id,
+            operator_decision=operator_decision,
+        )
+        result = await live_runner.run(stream)
         elapsed_ms = int((time.perf_counter() - run_started) * 1000)
         await stream.emit(
             "run.ok",
@@ -1779,7 +1739,7 @@ async def start_pipeline_run(
     request: StartPipelineRunRequest,
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
-    """Allocate a pipeline run, kick off the simulator, return immediately.
+    """Allocate a pipeline run and kick off the orchestrator.
 
     The frontend ``/pipeline`` page submits a topic / duration /
     language form here, then subscribes to the same SSE surface as
@@ -1788,11 +1748,13 @@ async def start_pipeline_run(
     * ``GET /playground/runs/<run_id>/events`` — live event stream.
     * ``GET /playground/runs/<run_id>``        — polling fallback.
 
-    Until slice 9, the dispatcher runs :class:`SimulatedPipelineRun`
-    so the wire stays exercised end-to-end without GPU spend.
+    There is no scripted-replay or simulator path: the dispatcher
+    always drives the real DeepAgent orchestrator. Tests mock the
+    HTTP boundary against worker endpoints; they do not substitute
+    a different runner.
     """
-    topic, duration, language, mode, num_scenes = _normalise_pipeline_request(request)
-    case_name = "live_run" if mode == "live" else "simulated_run"
+    topic, duration, language, num_scenes = _normalise_pipeline_request(request)
+    case_name = "pipeline_run"
 
     registry = get_registry()
     stream = registry.new_run(
@@ -1800,13 +1762,12 @@ async def start_pipeline_run(
     )
     await stream.emit(
         "run.dispatched",
-        f"queued pipeline run: {topic!r} ({duration}s, {language}, {mode})",
+        f"queued pipeline run: {topic!r} ({duration}s, {language})",
         detail={
             "component_id": PIPELINE_RUN_COMPONENT_ID,
             "topic": topic,
             "target_duration_sec": duration,
             "language": language,
-            "mode": mode,
             "num_scenes": num_scenes,
         },
     )
@@ -1816,7 +1777,6 @@ async def start_pipeline_run(
         topic=topic,
         target_duration_sec=duration,
         language=language,
-        mode=mode,
         num_scenes=num_scenes,
     )
     return {
@@ -1826,7 +1786,6 @@ async def start_pipeline_run(
         "topic": topic,
         "target_duration_sec": duration,
         "language": language,
-        "mode": mode,
         "num_scenes": num_scenes,
         "events_url": f"/playground/runs/{stream.run_id}/events",
         "state_url": f"/playground/runs/{stream.run_id}",

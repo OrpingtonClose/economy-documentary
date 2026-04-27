@@ -473,6 +473,9 @@ def _demo_chat_script(
 
     # All ``launch_visual_production`` calls dispatched in parallel on a
     # single turn. The HITL middleware fires the visual gate ``N`` times.
+    # Slice 9k: pass per-scene narration duration as ``target_duration_s``
+    # so LTX-2.3 renders enough frames to cover the audio (default
+    # ~89 frames @ 24 fps freezes after ~3.7 s otherwise).
     script.append(
         _ai_tool_calls_batch(
             [
@@ -482,6 +485,9 @@ def _demo_chat_script(
                         "scene_id": s["scene_id"],
                         "visual_concept": s["visual_concept"],
                         "prompt": s["visual_prompt"],
+                        "target_duration_s": float(
+                            s.get("duration_sec", per_scene_duration)
+                        ),
                     },
                 )
                 for s in scenes
