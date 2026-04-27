@@ -87,7 +87,6 @@ TREE_MAX_CONCURRENT = int(os.environ.get("TREE_MAX_CONCURRENT", "4"))
 MAX_SUBAGENT_TURNS = int(os.environ.get("MAX_SUBAGENT_TURNS", "12"))
 
 # ── Feature Flags ────────────────────────────────────────────
-DOCUMENTARY_TEST_MODE = os.environ.get("DOCUMENTARY_TEST_MODE", "false").strip().lower() in ("true", "1")
 ADK_DEBUG = os.environ.get("ADK_DEBUG", "false").strip().lower() in ("true", "1")
 PHOENIX_ENABLED = os.environ.get("PHOENIX_ENABLED", "false").strip().lower() in ("true", "1")
 PHOENIX_COLLECTOR_ENDPOINT = os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", "")

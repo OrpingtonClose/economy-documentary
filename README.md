@@ -41,12 +41,6 @@ npm install
 npm run dev
 ```
 
-### Test Run (no GPU needed)
-
-```bash
-DOCUMENTARY_TEST_MODE=true python test_run.py --topic "Your Topic"
-```
-
 ## Pipeline Phases
 
 | Phase | Agent | What It Does |
@@ -89,7 +83,6 @@ See [server/.env.example](server/.env.example) for the complete list.
 
 Key variables:
 - `ADK_MODEL` — Primary LLM model
-- `DOCUMENTARY_TEST_MODE` — Enable test mode (no GPU needed)
 - `VAST_API_KEY` — For GPU VM provisioning
 - `TIMELINE_DIR` — Where OTIO timelines are stored
 

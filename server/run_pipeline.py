@@ -7,8 +7,7 @@ Usage:
     cd server
     poetry run python run_pipeline.py \
         --topic "Cloudberry Jam" \
-        --corpus /tmp/documentary-pipeline/corpus/cloudberry_research.md \
-        --test-mode
+        --corpus /tmp/documentary-pipeline/corpus/cloudberry_research.md
 
 Environment:
     ADK_MODEL          — primary model (e.g. openai/google/gemini-2.5-flash)
@@ -28,37 +27,11 @@ import threading
 import time
 import uuid
 from typing import Any
-from urllib.error import URLError
 from urllib.request import Request, urlopen
-
-# Force simulation mode if --test-mode is passed (must be before imports)
-_SIMULATION_MODE = "--test-mode" in sys.argv or os.environ.get(
-    "DOCUMENTARY_SIMULATION_MODE", ""
-).strip().lower() in ("1", "true")
-if "--quick-test" in sys.argv:
-    os.environ["DOCUMENTARY_QUICK_TEST"] = "true"
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# Activate the E1 (happy path) simulation scenario when --test-mode is used.
-# This replaces the old DOCUMENTARY_TEST_MODE env var — the ADK
-# EnvironmentSimulationEngine must be explicitly activated with a config.
-if _SIMULATION_MODE:
-    from testing.simulation_bridge import activate_simulation
-    from testing.scenarios import get_scenario
-    _sim_scenario = os.environ.get("SIMULATION_SCENARIO", "E1")
-    try:
-        _sim_config = get_scenario(_sim_scenario)
-    except KeyError:
-        _sim_config = None
-    if _sim_config:
-        activate_simulation(_sim_config, scenario_name=_sim_scenario)
-    else:
-        print(f"ERROR: Unknown simulation scenario '{_sim_scenario}', cannot proceed in test mode")
-        sys.exit(1)
-
-from google.adk.agents import SequentialAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types as genai_types
@@ -218,7 +191,7 @@ def get_heartbeat() -> ProgressHeartbeat | None:
     return _heartbeat
 
 
-async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en", quick_test: bool = False) -> dict:
+async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en") -> dict:
     """Run the full documentary pipeline.
 
     Args:
@@ -260,22 +233,11 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
     initial_state[ORIGINAL_BRIEF_KEY] = _original_brief
 
-    # Quick-test mode: inject constraints into state for LLM prompt templates
-    if quick_test:
-        from agents.scenario_director import _QUICK_TEST_RULES
-        initial_state["quick_test"] = "true"
-        initial_state["quick_test_rules"] = _QUICK_TEST_RULES
-        initial_state["max_scene_duration"] = "15"
-        initial_state["max_words_per_scene"] = "37"
-        logger.info("QUICK TEST MODE: 2 scenes, ~15s each, ~1 min total")
-    else:
-        initial_state["quick_test"] = ""
-        initial_state["quick_test_rules"] = ""
-        initial_state["max_scene_duration"] = "45"
-        initial_state["max_words_per_scene"] = "112"
+    initial_state["max_scene_duration"] = "45"
+    initial_state["max_words_per_scene"] = "112"
 
     # Restore from B2 if a previous run exists for this topic
-    from tools.b2_checkpoint import restore_pipeline, set_run_id, get_run_id
+    from tools.b2_checkpoint import restore_pipeline
     os.environ["DOCUMENTARY_TOPIC"] = topic  # used by get_run_id() for new runs
     restored = restore_pipeline(topic)
     stages_complete = restored.get("stages_complete", [])
@@ -314,7 +276,6 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
     logger.info("Topic: %s", topic)
     logger.info("Corpus: %s", corpus_path)
     logger.info("Language: %s", language)
-    logger.info("Simulation mode: %s", _SIMULATION_MODE)
     logger.info("Model: %s", os.environ.get("ADK_MODEL", "(default)"))
 
     # Read corpus content to include in the initial message
@@ -513,10 +474,6 @@ def main():
     parser.add_argument("--language", default="dual_ru_en",
                         choices=["en", "ru", "dual_ru_en"],
                         help="Language mode (default: dual_ru_en)")
-    parser.add_argument("--test-mode", action="store_true",
-                        help="Run in test mode (synthetic media, no GPU needed)")
-    parser.add_argument("--quick-test", action="store_true",
-                        help="Quick test mode: 2 scenes, ~15s each, ~1 min total movie")
     parser.add_argument("--output-dir", default="/tmp/documentary-pipeline/output",
                         help="Output directory for the final documentary")
     parser.add_argument("--pipeline", default="adk", choices=["adk", "strands"],
@@ -554,15 +511,13 @@ def main():
     # before the pipeline starts.  Never silently degrade to
     # synthetic/placeholder media — that wastes hours of GPU time on
     # downstream stages that depend on real upstream artifacts.
-    if not args.test_mode and not _SIMULATION_MODE:
-        _preflight_check_dashboard()  # GAP 4.1
-        _preflight_check_workers()
+    _preflight_check_dashboard()  # GAP 4.1
+    _preflight_check_workers()
 
     result = asyncio.run(run_pipeline(
         topic=args.topic,
         corpus_path=args.corpus,
         language=args.language,
-        quick_test=args.quick_test,
     ))
 
     # Print summary

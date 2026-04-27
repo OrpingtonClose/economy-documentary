@@ -32,7 +32,6 @@ from callbacks.before_tool import before_tool_callback
 from callbacks.after_tool import after_tool_callback
 from callbacks.artifact_revision_tag import make_revision_tagging_callback
 from callbacks.deterministic_steps import write_visual_metadata_to_otio
-from callbacks.timeline_guardian import timeline_guardian_callback
 from tools.lora_tools import get_lora_details_tool, query_lora_catalog_tool
 from tools.validation_tools import validate_otio_compliance_tool, validate_stage_output_tool
 
@@ -557,15 +556,8 @@ def _visual_phase_setup(callback_context):
 
     If the visual_direction stage was already completed in B2, skip the
     entire LoopAgent by returning Content.
-
-    In quick-test mode, skip the full LLM-based visual planning loop
-    (content_analyst + visual_concepter + coherence_evaluator) and
-    generate simple visual concepts deterministically from scenes data.
-    This reduces the visual direction stage from ~7 minutes (multiple
-    LLM calls with deep reasoning) to <1 second.
     """
     import json
-    import os
     from google.genai import types as genai_types
     state = callback_context.state
     state["pipeline_phase"] = "visual_direction"
@@ -593,48 +585,6 @@ def _visual_phase_setup(callback_context):
         )
     if not intervention_window("visual_direction_start", handoff_checks):
         raise RuntimeError("GATEKEEPER: user halted pipeline at visual_direction start")
-
-    # QUICK-TEST: bypass entire LoopAgent with deterministic visual concepts
-    quick_test = os.environ.get("DOCUMENTARY_QUICK_TEST", "").strip().lower() in ("1", "true", "yes")
-    if quick_test:
-        logger.info("QUICK-TEST: bypassing visual director LoopAgent with deterministic concepts")
-        concepts = _generate_quick_test_concepts(state)
-        if concepts:
-            state["visual_concepts"] = json.dumps(concepts, ensure_ascii=False)
-            state["content_analysis"] = json.dumps(
-                {"mode": "quick-test", "scenes": len(concepts)},
-                ensure_ascii=False,
-            )
-            logger.info("QUICK-TEST: generated %d visual concepts deterministically", len(concepts))
-
-            # CRITICAL: When before_agent_callback returns Content, ADK
-            # skips the after_agent_callback entirely.  We must explicitly
-            # run the post-processing that _visual_after_with_gate would
-            # have done: write_visual_metadata_to_otio (B2 upload, infra
-            # notification, timeline guardian) + mark_stage_ready("prompts")
-            # to unblock the production stage's approval gate.
-            from callbacks.deterministic_steps import write_visual_metadata_to_otio
-            try:
-                write_visual_metadata_to_otio(callback_context)
-                logger.info("QUICK-TEST: write_visual_metadata_to_otio completed")
-            except RuntimeError:
-                raise  # OTIO violations are fatal — never swallow
-            except Exception as e:
-                logger.warning("QUICK-TEST: write_visual_metadata_to_otio error: %s", e)
-
-            from callbacks.approval_gate import mark_stage_ready, approve_stage
-            mark_stage_ready("prompts")
-            approve_stage("prompts")
-            logger.info("QUICK-TEST: marked prompts stage ready + approved")
-
-            return genai_types.Content(
-                role="model",
-                parts=[genai_types.Part(
-                    text=f"Visual direction complete (quick-test): {len(concepts)} concepts generated deterministically."
-                )],
-            )
-        else:
-            logger.warning("QUICK-TEST: no scenes found, falling through to LLM-based visual planning")
 
     # Ensure visual_style has a default so LLM agent templates don't crash
     # with KeyError when {visual_style} is referenced but not set.
@@ -664,7 +614,7 @@ def _visual_phase_setup(callback_context):
     return None
 
 
-def _generate_quick_test_concepts(state) -> list:
+def _generate_deterministic_concepts(state) -> list:
     """Generate visual concepts from scenes data without LLM calls.
 
     ARCHITECTURE RULE: One video concept per narration phrase per scene.
@@ -675,9 +625,6 @@ def _generate_quick_test_concepts(state) -> list:
     The OTIO timeline (populated by the audio stage) is the AUTHORITATIVE
     source for durations.  We never use the scenario's ``duration_sec``
     estimate for video sizing — it doesn't account for actual TTS output.
-
-    Quick-test mode: simple cinematography prompts, default LoRA, no deep
-    semantic analysis, no LoRA catalog queries, no coherence evaluation.
     """
     import json
     from callbacks.deterministic_steps import extract_json_array
@@ -695,7 +642,7 @@ def _generate_quick_test_concepts(state) -> list:
     )
     if not narr_durations:
         logger.warning(
-            "QUICK-TEST: no narration durations found in OTIO — "
+            "no narration durations found in OTIO — "
             "audio stage may not have run. Falling back to scenario estimates."
         )
 

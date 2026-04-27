@@ -157,7 +157,6 @@ mkdir -p "$(dirname "${ENV_FILE}")"
 
 cat >> "${ENV_FILE}" <<'ENVEOF'
 # --- Playground staging ---
-DOCUMENTARY_TEST_MODE=false
 # Persist user-authored cases off the ephemeral repo tree so re-pulling
 # `main` doesn't wipe them. Override via PLAYGROUND_USER_CASES_DIR env.
 PLAYGROUND_USER_CASES_DIR=/workspace/playground-user-cases

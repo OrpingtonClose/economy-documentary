@@ -77,11 +77,6 @@ def output_dir(tmp_path, monkeypatch):
         "_APPROVAL_FILE",
         os.path.join(str(tmp_path), ".approval_state.json"),
     )
-    # Disable auto-approval so wait_for_approval actually polls.
-    monkeypatch.setattr(approval_gate, "_AUTO_APPROVE_ENV", False)
-    monkeypatch.setattr(
-        approval_gate, "_should_auto_approve", lambda: False
-    )
     # Tight poll interval so the halt-blocking test runs in <1s.
     monkeypatch.setattr(approval_gate, "_POLL_INTERVAL", 0.02)
     yield tmp_path

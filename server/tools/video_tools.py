@@ -1,9 +1,7 @@
 """
 Video generation tools -- LTX-2.3 + ffprobe wrappers.
 
-Generates video clips using LTX-2.3 on GPU VM.  In simulation mode
-(activated via ``testing.simulation_bridge``), the ADK EnvironmentSimulationConfig
-intercepts calls and returns mock responses.
+Generates video clips using LTX-2.3 on a GPU worker.
 
 Rules:
 - ARCH-F3 (#164): ``duration_sec`` is honoured EXACTLY. No trim margin,
@@ -34,7 +32,6 @@ logger = logging.getLogger(__name__)
 _OUTPUT_BASE = os.environ.get(
     "VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video"
 )
-from testing.simulation_bridge import simulated
 
 # ARCH-F3 (#164): ``_TRIM_MARGIN`` was removed. Video generation now
 # honours the exact target ``duration_sec`` requested by the timeline;
@@ -121,7 +118,6 @@ def _generate_solid_color_mp4(
         return False
 
 
-@simulated("generate_video_clip")
 def generate_video_clip(
     prompt: str,
     duration_sec: float,
@@ -340,52 +336,22 @@ def generate_video_clip(
 
             # ── QA GATE ── raise INSIDE recovery context so
             # non_retryable_patterns routes to human escalation (L4).
-            _is_quick_test = os.environ.get(
-                "DOCUMENTARY_QUICK_TEST", ""
-            ).strip().lower() in ("1", "true", "yes")
-
-            _is_auto_approve = os.environ.get(
-                "DOCUMENTARY_AUTO_APPROVE", ""
-            ).strip().lower() in ("1", "true", "yes")
-
             if qa_quality in ("rejected", "poor"):
-                if _is_quick_test or _is_auto_approve:
-                    logger.warning(
-                        "QA %s clip %s (%s — accepting): %s",
-                        qa_quality.upper(),
-                        output_path,
-                        "quick-test" if _is_quick_test else "auto-approve",
-                        _qa_reason[:200],
-                    )
-                    qa_quality = "rejected_accepted"
-                    # Re-write status.json so persisted quality matches
-                    # the pipeline's actual decision (rejected_accepted,
-                    # not the raw quality written earlier).
-                    try:
-                        with open(_status_path, "w") as _sf2:
-                            json.dump({
-                                "quality": qa_quality, "qa_reason": _qa_reason,
-                                "attempts": _qa_attempts, "seed": _qa_seed,
-                                "status": "completed", "prompt_preview": prompt[:200],
-                            }, _sf2, indent=2)
-                    except OSError:
-                        pass
-                else:
-                    # Raise a retryable error that the recovery middleware
-                    # can catch. Include QA_HINTS so the creative amendment
-                    # (_video_amend_prompt_with_qa_hints) can inject
-                    # corrective guidance into the prompt for the next attempt.
-                    #
-                    # NOTE: Do NOT escalate here — execute_with_recovery
-                    # wraps _call_gpu_worker and will try creative amendments
-                    # (seed changes, prompt tweaks, step adjustments) first.
-                    # Human escalation happens at L4 of the recovery ladder
-                    # after all automated retries are exhausted.
-                    raise RuntimeError(
-                        f"QA {qa_quality.upper()}: visual quality below threshold. "
-                        f"Clip saved at {output_path} for inspection. "
-                        f"QA_HINTS: {_qa_reason}"
-                    )
+                # Raise a retryable error that the recovery middleware
+                # can catch. Include QA_HINTS so the creative amendment
+                # (_video_amend_prompt_with_qa_hints) can inject
+                # corrective guidance into the prompt for the next attempt.
+                #
+                # NOTE: Do NOT escalate here — execute_with_recovery
+                # wraps _call_gpu_worker and will try creative amendments
+                # (seed changes, prompt tweaks, step adjustments) first.
+                # Human escalation happens at L4 of the recovery ladder
+                # after all automated retries are exhausted.
+                raise RuntimeError(
+                    f"QA {qa_quality.upper()}: visual quality below threshold. "
+                    f"Clip saved at {output_path} for inspection. "
+                    f"QA_HINTS: {_qa_reason}"
+                )
 
             result_meta = {
                 "gen_time": float(resp.headers.get("X-Gen-Time", "0")),

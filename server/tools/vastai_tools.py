@@ -45,8 +45,6 @@ def register_owned_vm(vm_id: str) -> None:
 
 logger = logging.getLogger(__name__)
 
-from testing.simulation_bridge import simulated
-
 
 import ast as _ast
 import re as _re
@@ -108,7 +106,6 @@ def _vast_cmd(args: list[str]) -> dict | list:
         return {"error": "vastai command timed out"}
 
 
-@simulated("provision_gpu_vm")
 def provision_gpu_vm(
     gpu_type: str = "A100_SXM4",
     min_vram_gb: int = 48,
@@ -253,7 +250,6 @@ def provision_gpu_vm(
     )
 
 
-@simulated("check_vm_status")
 def check_vm_status(vm_id: str, tool_context=None) -> str:
     """Check if a Vast.ai VM is ready.
 
@@ -267,7 +263,6 @@ def check_vm_status(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@simulated("terminate_vm")
 def terminate_vm(vm_id: str, tool_context=None) -> str:
     """Stop and destroy a Vast.ai VM — ONLY if this pipeline created it.
 
@@ -297,7 +292,6 @@ def terminate_vm(vm_id: str, tool_context=None) -> str:
     return json.dumps(result)
 
 
-@simulated("list_active_vms")
 def list_active_vms(tool_context=None) -> str:
     """List all running Vast.ai VMs.
 

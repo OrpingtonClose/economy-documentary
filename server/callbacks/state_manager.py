@@ -25,9 +25,9 @@ def safe_state_dict(state: Any) -> dict:
     """Convert pipeline state to a plain dict safely.
 
     ADK ``State`` objects expose ``.to_dict()``, but callbacks may also
-    receive a plain ``dict`` (e.g. during testing, after B2 restore, or
-    in simulation mode).  Calling ``.to_dict()`` on a plain dict raises
-    ``AttributeError`` and crashes the pipeline silently.
+    receive a plain ``dict`` (e.g. after B2 restore).  Calling
+    ``.to_dict()`` on a plain dict raises ``AttributeError`` and crashes
+    the pipeline silently.
 
     This helper tries ``.to_dict()`` first, falls back to ``dict(state)``,
     and returns ``{}`` as a last resort — never crashes.
@@ -79,12 +79,6 @@ def build_pipeline_state() -> dict:
         "otio_violation": None,
         "pipeline_phase": "idle",
         "lora_selections": "{}",
-        "quick_test": "",
-        # Template variables for scenario_director instructions.
-        # Defaults are for standard (non-quick-test) mode.
-        # run_pipeline.py and _init_pipeline_state override these
-        # when DOCUMENTARY_QUICK_TEST is set.
-        "quick_test_rules": "",
         "max_scene_duration": "45",
         "max_words_per_scene": "112",
         # ARCH-A1 / ARCH-B1 substrate — empty by default; producers tag as

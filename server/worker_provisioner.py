@@ -57,12 +57,6 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
-from testing.simulation_bridge import (
-    has_provisioning_simulation,
-    is_simulation_active,
-    simulated,
-)
-
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -1271,36 +1265,6 @@ def wait_for_worker_healthy(
 
 
 # ---------------------------------------------------------------------------
-# Simulatable provisioning lifecycle
-# ---------------------------------------------------------------------------
-# When a simulation scenario includes ``vast_provision_lifecycle`` injections,
-# the provisioner uses these instead of real Vast.ai API calls.  This allows
-# test scenarios to exercise the retry logic and escalation ladder for
-# different provisioning failure modes (network, SSH, CUDA OOM, etc.)
-# without needing real GPU infrastructure.
-
-
-@simulated("vast_provision_lifecycle", json_return=False)
-def _simulated_provision_lifecycle(
-    role: str,
-    gpu_type: str,
-    attempt: int = 0,
-) -> Optional[dict]:
-    """Simulatable wrapper for the full VM provisioning lifecycle.
-
-    When simulation is active and an injection matches, returns:
-    - ``{"status": "healthy", "vm_id": "...", ...}`` for success
-    - ``{"status": "error", "error": "...", "error_category": "..."}`` for failure
-
-    When no injection matches, returns ``None`` (real provisioning follows).
-
-    The ``attempt`` parameter allows scenarios to inject different responses
-    for each retry attempt (e.g., fail on attempt 0, succeed on attempt 1).
-    """
-    return None  # stub — simulation engine provides the response
-
-
-# ---------------------------------------------------------------------------
 # High-level orchestrator — parallel lazy provisioning
 # ---------------------------------------------------------------------------
 
@@ -1354,14 +1318,6 @@ class WorkerProvisioner:
         # poisoned by old failures on this singleton.
         self._provision_start_error = ""
         self._specs_ready.clear()
-
-        if is_simulation_active() and not has_provisioning_simulation():
-            logger.info(
-                "WorkerProvisioner: simulation mode (no provisioning injections) "
-                "— skipping worker provisioning"
-            )
-            self._specs_ready.set()
-            return
 
         # Build specs from defaults
         specs_needed: list[WorkerSpec] = []
@@ -1478,35 +1434,28 @@ class WorkerProvisioner:
                     need_video = True
 
         if need_tts or need_video:
-            # In simulation mode with provisioning injections, skip budget
-            # calculation (no real Vast.ai API access) — use default budgets.
-            if is_simulation_active():
+            try:
+                tts_budget, video_budget = calculate_weighted_budgets()
+                for spec in specs_needed:
+                    if spec.status != "healthy":
+                        if spec.role == "tts":
+                            spec.max_price = tts_budget
+                        else:
+                            spec.max_price = video_budget
                 logger.info(
-                    "Simulation mode — using default budgets for provisioning"
+                    "Weighted budgets applied: TTS=$%.2f/hr, Video=$%.2f/hr. "
+                    "VRAM floors: TTS>=%dGB, Video>=%dGB.",
+                    tts_budget, video_budget,
+                    TTS_SPEC.min_vram_gb, VIDEO_SPEC.min_vram_gb,
                 )
-            else:
-                try:
-                    tts_budget, video_budget = calculate_weighted_budgets()
-                    for spec in specs_needed:
-                        if spec.status != "healthy":
-                            if spec.role == "tts":
-                                spec.max_price = tts_budget
-                            else:
-                                spec.max_price = video_budget
-                    logger.info(
-                        "Weighted budgets applied: TTS=$%.2f/hr, Video=$%.2f/hr. "
-                        "VRAM floors: TTS>=%dGB, Video>=%dGB.",
-                        tts_budget, video_budget,
-                        TTS_SPEC.min_vram_gb, VIDEO_SPEC.min_vram_gb,
-                    )
-                except Exception as exc:
-                    logger.error("Budget calculation failed: %s", exc)
-                    for spec in specs_needed:
-                        if spec.status != "healthy":
-                            spec.status = "failed"
-                            spec.error = str(exc)
-                            spec.ready_event.set()
-                    return
+            except Exception as exc:
+                logger.error("Budget calculation failed: %s", exc)
+                for spec in specs_needed:
+                    if spec.status != "healthy":
+                        spec.status = "failed"
+                        spec.error = str(exc)
+                        spec.ready_event.set()
+                return
 
         # Launch background threads for workers that need provisioning
         for spec in specs_needed:
@@ -1581,9 +1530,6 @@ class WorkerProvisioner:
         Returns True if the worker is healthy.
         Raises RuntimeError if provisioning failed or timed out.
         """
-        if is_simulation_active() and not has_provisioning_simulation():
-            return True
-
         # Wait for start_provisioning() to populate _specs.  When
         # provisioning runs in a background thread there's a window
         # where _specs is still empty.  Use a generous 120s ceiling
@@ -1686,9 +1632,6 @@ class WorkerProvisioner:
             require_video=require_video,
         )
 
-        if is_simulation_active() and not has_provisioning_simulation():
-            return {"status": "simulation_mode", "workers": []}
-
         status = {"workers": [], "provisioned": [], "already_healthy": []}
 
         for spec in self._specs:
@@ -1726,73 +1669,6 @@ class WorkerProvisioner:
         )
         return status
 
-    def _simulated_provision(
-        self, spec: WorkerSpec, timeout: int = 2400
-    ) -> None:
-        """Run the provisioning lifecycle using simulated responses.
-
-        Exercises the same retry logic as real provisioning but uses
-        injected responses from the active ``EnvironmentSimulationConfig``
-        instead of real Vast.ai API calls.
-
-        Each retry attempt calls ``_simulated_provision_lifecycle`` with
-        an incrementing ``attempt`` parameter, allowing scenarios to inject
-        different responses per attempt (e.g., fail on attempt 0, succeed
-        on attempt 1).
-        """
-        _MAX_PROVISION_RETRIES = 2
-
-        for attempt in range(1 + _MAX_PROVISION_RETRIES):
-            result = _simulated_provision_lifecycle(
-                role=spec.role,
-                gpu_type=spec.gpu_type,
-                attempt=attempt,
-            )
-
-            if result is None:
-                # No injection for this attempt — treat as implicit success
-                # (scenario may not define responses for all attempts).
-                spec.vm_id = f"sim-{spec.role}-{attempt}"
-                logger.info(
-                    "Simulated %s provisioning: no injection for attempt %d "
-                    "— treating as success",
-                    spec.role, attempt,
-                )
-                return
-
-            if result.get("status") == "healthy":
-                spec.vm_id = result.get("vm_id", f"sim-{spec.role}-{attempt}")
-                logger.info(
-                    "Simulated %s provisioning SUCCEEDED on attempt %d: "
-                    "vm_id=%s, gpu_type=%s",
-                    spec.role, attempt + 1,
-                    spec.vm_id, result.get("gpu_type", spec.gpu_type),
-                )
-                return
-
-            # Simulated failure
-            error = result.get("error", "Simulated provisioning failure")
-            category = result.get("error_category", "unknown")
-            stage = result.get("stage", "unknown")
-            logger.warning(
-                "Simulated %s provisioning FAILED "
-                "(attempt %d/%d, stage=%s, category=%s): %s",
-                spec.role, attempt + 1, 1 + _MAX_PROVISION_RETRIES,
-                stage, category, error,
-            )
-
-            if attempt < _MAX_PROVISION_RETRIES:
-                continue  # Retry on different host
-
-        # All retries exhausted
-        spec.bootstrap_error = error
-        spec.bootstrap_error_category = category
-        raise RuntimeError(
-            f"{spec.role} worker SIMULATED PROVISIONING FAILED "
-            f"after {1 + _MAX_PROVISION_RETRIES} attempts "
-            f"(last error: category={category}, stage={stage}): {error}"
-        )
-
     def _provision_and_connect(
         self, spec: WorkerSpec, timeout: int = 2400
     ) -> None:
@@ -1817,12 +1693,6 @@ class WorkerProvisioner:
         re-provisioned on a different host.
         Up to ``_MAX_PROVISION_RETRIES`` retries are attempted.
         """
-        # --- Simulated provisioning path ---
-        if is_simulation_active() and has_provisioning_simulation():
-            self._simulated_provision(spec, timeout)
-            return
-
-        # --- Real provisioning path ---
         _MAX_PROVISION_RETRIES = 2
         _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
         _start = time.time()
