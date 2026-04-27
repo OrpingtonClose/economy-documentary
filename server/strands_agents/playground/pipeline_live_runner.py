@@ -93,10 +93,23 @@ _TOOL_TO_STAGE: dict[str, str | None] = {
     "refine_scenario": "scenario",
     "evaluate_timing": "audio",
     "launch_audio_render": "audio",
+    # Slice 9p: ``qa_audio_completeness`` fires right after every
+    # ``launch_audio_render`` returns (AGENTS.md hard invariant §5
+    # "QA immediately after each artifact"). Map it to the audio
+    # stage so the stage ribbon stays open across the per-scene
+    # verdict batch before timing closes.
+    "qa_audio_completeness": "audio",
     "content_analyst": "visual",
     "visual_concepter": "visual",
     "propose_visual_concept": "visual",
     "launch_visual_production": "production",
+    # Slice 9o: QA gates fire after every visual production
+    # (AGENTS.md hard invariant §5). Map them to the production stage
+    # so the stage ribbon stays open across the verdict trio
+    # (probe → duration_align → stills_judge) before assembly opens.
+    "qa_video_artifact_probe": "production",
+    "qa_duration_align": "production",
+    "qa_stills_judge": "production",
     "launch_assembly": "assembly",
     "launch_b2_sync": "assembly",
     "check_tasks": None,
@@ -204,15 +217,44 @@ async def _emit_translated(
 
 #: Whitelisted dispatcher-envelope fields lifted from a real-worker
 #: tool's return value into the ``pipeline.tool.X.end`` detail. Kept
-#: small and explicit so an arbitrary tool return cannot leak large
-#: payloads (e.g. base64 audio/video) into the SSE wire.
+#: explicit so an arbitrary tool return cannot leak large payloads
+#: (e.g. base64 audio/video) into the SSE wire — but every per-scene
+#: identifier and QA measurement the ``/pipeline`` UI renders as a
+#: metric card must be on this list. The slice 9q post-mortem
+#: traced empty metric rows back to a too-narrow whitelist that
+#: stripped ``scene_id``, ``verdict``, and every QA measurement
+#: before they reached the SSE wire.
 _ENVELOPE_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    # Dispatcher envelope (audio / video render).
+    "scene_id",
     "engine",
     "wav_bytes_len",
     "mp4_bytes_len",
     "status_code",
     "wav_path",
     "mp4_path",
+    "duration_s",
+    "target_duration_s",
+    # QA gate envelope — verdict + measurements rendered per-scene
+    # in :file:`frontend-playground/src/app/pipeline/PipelineSceneMetrics.tsx`.
+    "verdict",
+    "reason",
+    "audio_path",
+    "video_path",
+    "error",
+    "audio_duration_s",
+    "video_duration_s",
+    "delta_s",
+    "tolerance_s",
+    "tail_rms_db",
+    "trailing_silence_s",
+    "min_trailing_silence_s",
+    "max_tail_rms_db",
+    "silence_noise_db",
+    "tail_window_s",
+    "mean_pixel_delta",
+    "min_mean_pixel_delta",
+    "num_samples",
 )
 
 
@@ -584,6 +626,17 @@ class LivePipelineRun:
             await tracker.close_open()
             tool_count = handler.total_calls
             final_mp4_b2_url = _scrape_final_mp4_url(state)
+            #: If the orchestrator wrote a master.mp4 to the run-dir,
+            #: prefer the same-origin HTTP URL served by
+            #: ``GET /playground/runs/{run_id}/master.mp4`` over the
+            #: opaque ``b2://`` URL. The UI can drop a same-origin
+            #: ``video/mp4`` URL straight into a ``<video>`` tag; it
+            #: cannot do the same with a ``b2://`` scheme.
+            local_master = self.run_dir / "artifacts" / "master.mp4"
+            if local_master.exists() and (self.run_id or stream.run_id):
+                final_mp4_b2_url = (
+                    f"/playground/runs/{self.run_id or stream.run_id}/master.mp4"
+                )
             await _emit_translated(
                 stream,
                 "pipeline.run_finished",

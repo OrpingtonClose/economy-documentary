@@ -260,9 +260,10 @@ class LiveB2CheckpointStore:
     def __init__(
         self,
         *,
-        bucket_name: str = "documentary-checkpoints",
+        bucket_name: str | None = None,
         key_id_env: str = "B2_KEY_ID",
         application_key_env: str = "B2_APPLICATION_KEY",
+        bucket_env: str = "B2_BUCKET_NAME",
     ) -> None:
         key_id = os.environ.get(key_id_env)
         application_key = os.environ.get(application_key_env)
@@ -272,16 +273,45 @@ class LiveB2CheckpointStore:
                 f"{application_key_env} in the environment before "
                 f"constructing LiveB2CheckpointStore"
             )
-        self._bucket_name = bucket_name
+        resolved_bucket = (
+            bucket_name
+            or os.environ.get(bucket_env)
+            or "documentary-checkpoints"
+        )
+        self._bucket_name = resolved_bucket
         self._key_id = key_id
         self._application_key = application_key
-        # The actual b2sdk client is constructed lazily inside upload /
-        # download so import of this module does not depend on b2sdk
-        # being installed. Keeps the strands-evals Experiment (which
-        # imports the module to get the Protocol) free of runtime deps.
+        # b2sdk client + bucket handle are constructed lazily inside
+        # ``_ensure_client`` so import of this module does not depend
+        # on b2sdk being installed. Keeps the strands-evals Experiment
+        # (which only imports the Protocol) free of runtime deps.
         self._client: object | None = None
+        self._bucket: object | None = None
+        self._lock = threading.Lock()
+        self._entries: dict[str, ManifestEntry] = {}
+        self._by_idem: dict[str, str] = {}
+        self._run_order: dict[str, list[str]] = {}
 
-    def upload(  # pragma: no cover — production path, not in evals CI
+    def _ensure_client(self) -> tuple[object, object]:
+        """Lazily build the b2sdk client + bucket handle.
+
+        Held under ``self._lock`` so concurrent first-touch upload
+        calls don't authorise twice.
+        """
+        with self._lock:
+            if self._bucket is not None:
+                return self._client, self._bucket  # type: ignore[return-value]
+            from b2sdk.v2 import B2Api, InMemoryAccountInfo
+
+            info = InMemoryAccountInfo()
+            api = B2Api(info)
+            api.authorize_account("production", self._key_id, self._application_key)
+            bucket = api.get_bucket_by_name(self._bucket_name)
+            self._client = api
+            self._bucket = bucket
+            return api, bucket
+
+    def upload(
         self,
         *,
         payload: bytes,
@@ -289,26 +319,84 @@ class LiveB2CheckpointStore:
         revision_tag: str,
         run_id: str,
     ) -> ManifestEntry:
-        raise NotImplementedError(
-            "LiveB2CheckpointStore.upload is wired up in a later slice"
+        sha256 = _sha256_bytes(payload)
+        idem = _idempotency_key(
+            run_id=run_id, kind=kind, revision_tag=revision_tag, sha256=sha256
         )
+        with self._lock:
+            existing_id = self._by_idem.get(idem)
+            if existing_id is not None:
+                return self._entries[existing_id]
 
-    def download(  # pragma: no cover
-        self, *, artifact_id: str, dest: Path
-    ) -> Path:
-        raise NotImplementedError(
-            "LiveB2CheckpointStore.download is wired up in a later slice"
+        artifact_id = f"art-{uuid.uuid4().hex[:12]}"
+        b2_key = _b2_key(
+            run_id=run_id,
+            kind=kind,
+            revision_tag=revision_tag,
+            artifact_id=artifact_id,
         )
+        _, bucket = self._ensure_client()
+        # ``upload_bytes`` is the b2sdk.v2 surface for uploading raw
+        # payloads. Returns a ``FileVersion``.
+        bucket.upload_bytes(  # type: ignore[union-attr]
+            data_bytes=payload,
+            file_name=b2_key,
+        )
+        entry = ManifestEntry(
+            artifact_id=artifact_id,
+            run_id=run_id,
+            revision_tag=revision_tag,
+            kind=kind,
+            b2_key=b2_key,
+            sha256=sha256,
+            size_bytes=len(payload),
+            uploaded_at_iso=_now_iso(),
+            idempotency_key=idem,
+        )
+        with self._lock:
+            self._entries[artifact_id] = entry
+            self._by_idem[idem] = artifact_id
+            self._run_order.setdefault(run_id, []).append(artifact_id)
+        logger.info(
+            "run_id=<%s>, artifact_id=<%s>, kind=<%s>, b2_key=<%s>, size=<%d> "
+            "| live b2 upload ok",
+            run_id,
+            artifact_id,
+            kind,
+            b2_key,
+            len(payload),
+        )
+        return entry
 
-    def list_for_run(self, run_id: str) -> Manifest:  # pragma: no cover
-        raise NotImplementedError(
-            "LiveB2CheckpointStore.list_for_run is wired up in a later slice"
-        )
+    def download(self, *, artifact_id: str, dest: Path) -> Path:
+        with self._lock:
+            entry = self._entries.get(artifact_id)
+        if entry is None:
+            raise ManifestMissingError(run_id=f"(unknown-artifact:{artifact_id})")
+        _, bucket = self._ensure_client()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        downloaded = bucket.download_file_by_name(entry.b2_key)  # type: ignore[union-attr]
+        downloaded.save_to(str(dest))
+        actual = _sha256_bytes(dest.read_bytes())
+        if actual != entry.sha256:
+            raise ChecksumMismatchError(
+                artifact_id=artifact_id,
+                expected_sha256=entry.sha256,
+                actual_sha256=actual,
+            )
+        return dest
 
-    def exists(self, artifact_id: str) -> bool:  # pragma: no cover
-        raise NotImplementedError(
-            "LiveB2CheckpointStore.exists is wired up in a later slice"
-        )
+    def list_for_run(self, run_id: str) -> Manifest:
+        with self._lock:
+            order = self._run_order.get(run_id)
+            if order is None:
+                raise ManifestMissingError(run_id=run_id)
+            entries = tuple(self._entries[aid] for aid in order)
+        return Manifest(run_id=run_id, entries=entries)
+
+    def exists(self, artifact_id: str) -> bool:
+        with self._lock:
+            return artifact_id in self._entries
 
 
 __all__ = [

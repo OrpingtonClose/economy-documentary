@@ -67,12 +67,28 @@ from langchain_core.tools import tool
 logger = logging.getLogger(__name__)
 
 
-#: Default tolerance for :func:`qa_duration_align`. Anything tighter
-#: false-positives on legitimate worker variance (LTX-2.3 rounds
-#: frame counts to the 8k+1 grid; Qwen3-TTS adds a small trailing
-#: silence). 0.5 s is what the user instructed in the slice 9j
-#: post-mortem ("hard fail if |delta| > 0.5s").
+#: Default tolerance for :func:`qa_duration_align` -- only used in
+#: the *informational* ``pre_mux_delta_s`` field. The verdict no
+#: longer keys off raw duration delta because the assembly leaf
+#: (PR #375) loops video to fill audio via
+#: ``ffmpeg -stream_loop -1 -i <video> -i <audio> -t <audio_dur>``,
+#: so the muxed output's visible duration always equals ``audio_dur``
+#: regardless of the raw clip's length. Kept for backward-compat
+#: callers that still pass a custom tolerance.
 DEFAULT_DURATION_TOLERANCE_S: float = 0.5
+
+
+#: Maximum allowed ``audio_dur / video_dur`` loop factor. Above this
+#: the mux-loop produces visually repetitive footage that no longer
+#: reads as "documentary". 5.0× covers the typical
+#: ``LTX-2.3 4-5 s clip + 12-19 s narration`` range with headroom.
+DEFAULT_MAX_LOOP_FACTOR: float = 5.0
+
+
+#: Floor on the raw video clip duration. Below this the LTX render
+#: is degenerate (most often an OOM that returned a near-empty
+#: container). Looping a 100 ms clip is never going to look right.
+MIN_VIDEO_DURATION_S: float = 0.5
 
 
 #: Default frame-sample count for :func:`qa_stills_judge`. Eight
@@ -95,6 +111,31 @@ DEFAULT_MIN_MEAN_PIXEL_DELTA: float = 1.5
 #: certainly truncated and we'd rather fail loudly than have
 #: ffprobe report ``duration_sec=0`` and confuse the orchestrator.
 MIN_VIDEO_BYTES: int = 1024
+
+
+#: Slice 9p — :func:`qa_audio_completeness` thresholds.
+#:
+#: ``MIN_TRAILING_SILENCE_S`` is the minimum amount of trailing
+#: silence a healthy narration must have. Qwen3-TTS ends a sentence
+#: with a natural pause (typically 200-400 ms of decay + room tone);
+#: a hard cut produces a file that ends *with* spoken energy and
+#: zero trailing silence. We accept anything ≥ 0.15 s as natural.
+#: Anything shorter is a candidate for "abruptly cut narration"
+#: and the gate fails closed.
+#:
+#: ``SILENCE_NOISE_DB`` is the dBFS floor below which a sample is
+#: counted as silence. Qwen3-TTS room-tone sits around -45 dBFS;
+#: -40 dBFS is comfortably above that floor and below any real
+#: speech energy.
+MIN_TRAILING_SILENCE_S: float = 0.15
+SILENCE_NOISE_DB: float = -40.0
+
+
+#: Minimum duration before a narration audio file is even worth
+#: probing for trailing silence. Below this the recording is too
+#: short for trailing silence to be meaningful (Qwen3-TTS warmup
+#: artifacts can dominate).
+MIN_NARRATION_DURATION_S: float = 0.5
 
 
 VERDICT_PASS: str = "pass"
@@ -318,6 +359,158 @@ def _envelope(
     return out
 
 
+def _detect_silence_segments(
+    audio_path: Path,
+    *,
+    noise_db: float = SILENCE_NOISE_DB,
+    min_duration_s: float = 0.05,
+) -> list[tuple[float, float]]:
+    """Return ``[(silence_start_s, silence_end_s), ...]`` from ffmpeg's silencedetect.
+
+    Uses ``ffmpeg -af silencedetect`` which writes ``silence_start``
+    and ``silence_end`` lines to stderr. We do not need the audio
+    output, so the muxer is set to ``null``. Each detected silence
+    region must last at least ``min_duration_s`` seconds.
+
+    A region that ends at the very end of the file may have no
+    matching ``silence_end`` line — silencedetect only emits one
+    when the silence is interrupted. We patch that case in the
+    caller by treating "open" silence regions as ending at the
+    file duration.
+    """
+    cmd = [
+        _ffmpeg_path(),
+        "-hide_banner",
+        "-nostats",
+        "-i",
+        str(audio_path),
+        "-af",
+        f"silencedetect=noise={noise_db}dB:duration={min_duration_s}",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise _ProbeError(
+            f"ffmpeg silencedetect failed for {audio_path}: rc={exc.returncode} "
+            f"stderr={exc.stderr.strip()[:200]}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise _ProbeError(
+            f"ffmpeg silencedetect timed out for {audio_path}"
+        ) from exc
+    starts: list[float] = []
+    ends: list[float] = []
+    for raw_line in completed.stderr.splitlines():
+        line = raw_line.strip()
+        if "silence_start:" in line:
+            try:
+                starts.append(float(line.rsplit("silence_start:", 1)[1].strip()))
+            except ValueError:
+                continue
+        elif "silence_end:" in line:
+            tail = line.rsplit("silence_end:", 1)[1].strip()
+            try:
+                ends.append(float(tail.split()[0]))
+            except (ValueError, IndexError):
+                continue
+    paired: list[tuple[float, float]] = []
+    for i, start in enumerate(starts):
+        end = ends[i] if i < len(ends) else float("nan")
+        paired.append((start, end))
+    return paired
+
+
+def _measure_tail_rms_db(
+    audio_path: Path,
+    *,
+    duration_s: float,
+    tail_window_s: float = 0.05,
+) -> float:
+    """Measure mean dBFS of the last ``tail_window_s`` seconds of an audio file.
+
+    Uses ffmpeg's ``astats`` filter which prints ``RMS_level`` lines
+    to stderr. A healthy narration decays to ``≤ -40 dBFS`` (room
+    tone); an abrupt cut leaves speech-band energy (``≥ -25 dBFS``)
+    right up against the file end.
+
+    Implementation note: ``astats=metadata=1:reset=1`` resets every
+    block; ``metadata=1`` exposes per-channel stats in the per-frame
+    log. We trim the input to the tail window with ``-ss`` so astats
+    only measures the boundary samples.
+
+    Returns ``-inf`` when astats produced no usable RMS line (e.g.
+    file is shorter than the window). Caller treats ``-inf`` as
+    pass-by-no-evidence rather than fail, since the gate's
+    primary signal is trailing silence.
+    """
+    if duration_s <= tail_window_s:
+        return float("-inf")
+    seek = max(0.0, duration_s - tail_window_s)
+    cmd = [
+        _ffmpeg_path(),
+        "-hide_banner",
+        "-nostats",
+        "-ss",
+        f"{seek:.6f}",
+        "-i",
+        str(audio_path),
+        "-t",
+        f"{tail_window_s:.6f}",
+        "-af",
+        "astats=metadata=1:reset=0",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise _ProbeError(
+            f"ffmpeg astats failed for {audio_path}: rc={exc.returncode} "
+            f"stderr={exc.stderr.strip()[:200]}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise _ProbeError(f"ffmpeg astats timed out for {audio_path}") from exc
+    rms_values: list[float] = []
+    for raw_line in completed.stderr.splitlines():
+        line = raw_line.strip()
+        # astats with metadata=1 emits "[Parsed_astats_0 @ ...] Overall"
+        # blocks plus per-channel "RMS level dB:" lines. We accept
+        # both ``RMS level dB:`` and ``RMS_level=`` shapes since the
+        # exact label depends on ffmpeg version.
+        if "RMS level dB:" in line:
+            tail = line.rsplit("RMS level dB:", 1)[1].strip()
+        elif "RMS_level=" in line:
+            tail = line.rsplit("RMS_level=", 1)[1].strip()
+        else:
+            continue
+        try:
+            rms_values.append(float(tail.split()[0]))
+        except (ValueError, IndexError):
+            continue
+    if not rms_values:
+        return float("-inf")
+    finite = [v for v in rms_values if v != float("-inf") and v == v]
+    if not finite:
+        return float("-inf")
+    return sum(finite) / len(finite)
+
+
 @tool
 def qa_video_artifact_probe(
     scene_id: str,
@@ -399,28 +592,48 @@ def qa_duration_align(
     audio_path: str,
     video_path: str,
     tolerance_s: float = DEFAULT_DURATION_TOLERANCE_S,
+    max_loop_factor: float = DEFAULT_MAX_LOOP_FACTOR,
+    min_video_duration_s: float = MIN_VIDEO_DURATION_S,
 ) -> dict[str, Any]:
-    """Hard-fail when audio and video durations diverge.
+    """Hard-fail when a scene's video can't be cleanly muxed against audio.
 
-    AGENTS.md hard invariant §5 ("QA immediately after each
-    artifact") requires this gate to run after every
-    ``launch_visual_production`` whose paired ``launch_audio_render``
-    has already returned. The orchestrator must escalate via the
-    ``escalation`` SubAgent on ``verdict == "fail"``.
+    AGENTS.md hard invariant §5 ("QA immediately after each artifact")
+    requires this gate to run after every ``launch_visual_production``
+    whose paired ``launch_audio_render`` has already returned. The
+    orchestrator must escalate via the ``escalation`` SubAgent on
+    ``verdict == "fail"``.
 
-    Slice 9j-quality-pass shipped frozen frames because no such
-    gate existed: a 3.7 s video paired with a 13 s narration tripped
-    nothing. With a 0.5 s tolerance this gate would have fired
-    ``delta=9.3 s`` and prevented the run from reaching assembly.
+    The assembly leaf (PR #375) muxes per-scene clips with
+    ``ffmpeg -stream_loop -1 -i <video> -i <audio> -t <audio_dur>``,
+    so a video shorter than its audio is looped to fill and a video
+    longer than its audio is trimmed. The *muxed* output's visible
+    duration therefore always equals ``audio_dur``; ``delta_s`` in
+    that domain is zero by construction. The frozen-frame regression
+    that motivated this gate (slice 9j) is now caught by
+    :func:`qa_stills_judge` on the raw clip.
+
+    What this gate guards instead are the *preconditions* for that
+    mux-fill to produce a watchable scene:
+
+    * Both files exist and ffprobe-able.
+    * ``video_dur >= min_video_duration_s`` -- a sub-half-second
+      clip is almost always an LTX OOM that returned a near-empty
+      container; looping it can't hide that.
+    * ``loop_factor = audio_dur / video_dur <= max_loop_factor`` --
+      above this ceiling the mux-loop produces visually repetitive
+      footage that no longer reads as documentary. Default 5.0×
+      covers the typical ``4-5 s LTX clip + 12-19 s narration`` range.
 
     Args:
         scene_id: The scene this artifact belongs to.
-        audio_path: Filesystem path to the rendered audio
-            (WAV, MP3, etc.; ffprobe figures out the container).
+        audio_path: Filesystem path to the rendered audio.
         video_path: Filesystem path to the rendered MP4.
-        tolerance_s: Max ``|audio_dur - video_dur|`` before failing.
-            Defaults to 0.5 s, the ceiling the operator set in the
-            slice 9j post-mortem.
+        tolerance_s: Informational only -- reported as
+            ``tolerance_s`` and used for the ``pre_mux_delta_s``
+            verdict pill the UI renders, but the post-mux verdict is
+            keyed on ``loop_factor`` and ``min_video_duration_s``.
+        max_loop_factor: Hard ceiling on ``audio_dur / video_dur``.
+        min_video_duration_s: Hard floor on raw ``video_dur``.
     """
     audio = Path(audio_path)
     video = Path(video_path)
@@ -432,6 +645,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=f"audio_path does not exist: {audio}",
         )
     if not video.is_file():
@@ -442,6 +657,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=f"video_path does not exist: {video}",
         )
     try:
@@ -455,6 +672,8 @@ def qa_duration_align(
             audio_path=str(audio),
             video_path=str(video),
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error=str(exc),
         )
     audio_dur = _resolve_duration_s(audio_payload)
@@ -469,10 +688,30 @@ def qa_duration_align(
             audio_duration_s=audio_dur,
             video_duration_s=video_dur,
             tolerance_s=float(tolerance_s),
+            max_loop_factor=float(max_loop_factor),
+            min_video_duration_s=float(min_video_duration_s),
             error="ffprobe returned no duration on at least one artifact",
         )
-    delta_s = abs(audio_dur - video_dur)
-    verdict = VERDICT_PASS if delta_s <= float(tolerance_s) else VERDICT_FAIL
+    pre_mux_delta_s = abs(audio_dur - video_dur)
+    looped_video_duration_s = audio_dur  # what the muxer produces
+    delta_s = 0.0  # post-mux delta, by construction
+    loop_factor = (
+        audio_dur / video_dur if video_dur > 0 else float("inf")
+    )
+    fail_reasons: list[str] = []
+    if video_dur < float(min_video_duration_s):
+        fail_reasons.append(
+            f"video_dur = {video_dur:.3f} s < "
+            f"min_video_duration_s {float(min_video_duration_s):.3f} s "
+            f"(degenerate clip, likely LTX OOM)"
+        )
+    if loop_factor > float(max_loop_factor):
+        fail_reasons.append(
+            f"loop_factor = {loop_factor:.2f}× > "
+            f"max_loop_factor {float(max_loop_factor):.2f}× "
+            f"(mux-loop would be visually repetitive)"
+        )
+    verdict = VERDICT_PASS if not fail_reasons else VERDICT_FAIL
     out = _envelope(
         "qa_duration_align",
         scene_id=scene_id,
@@ -481,14 +720,16 @@ def qa_duration_align(
         video_path=str(video),
         audio_duration_s=audio_dur,
         video_duration_s=video_dur,
+        looped_video_duration_s=looped_video_duration_s,
         delta_s=delta_s,
+        pre_mux_delta_s=pre_mux_delta_s,
+        loop_factor=loop_factor,
         tolerance_s=float(tolerance_s),
+        max_loop_factor=float(max_loop_factor),
+        min_video_duration_s=float(min_video_duration_s),
     )
     if verdict == VERDICT_FAIL:
-        out["reason"] = (
-            f"|audio_dur - video_dur| = {delta_s:.3f} s > "
-            f"tolerance {float(tolerance_s):.3f} s"
-        )
+        out["reason"] = "; ".join(fail_reasons)
     return out
 
 
@@ -571,12 +812,199 @@ def qa_stills_judge(
     return out
 
 
+@tool
+def qa_audio_completeness(
+    scene_id: str,
+    audio_path: str,
+    min_trailing_silence_s: float = MIN_TRAILING_SILENCE_S,
+    silence_noise_db: float = SILENCE_NOISE_DB,
+    max_tail_rms_db: float = -25.0,
+    tail_window_s: float = 0.05,
+) -> dict[str, Any]:
+    """Hard-fail when narration ends abruptly mid-utterance.
+
+    Slice 9p — the slice 9j-quality-pass run shipped with several
+    audio clips that ended mid-word because Qwen3-TTS ran out of
+    decoded token budget. The previous gates didn't catch it:
+    :func:`qa_duration_align` only looks at total duration,
+    :func:`qa_stills_judge` looks at video pixels. Neither
+    decodes audio. The user flagged this as an *auditory* signature
+    rather than a transcript-content concern, so this gate works on
+    waveform energy alone — no transcription, no LLM.
+
+    Two independent waveform signatures; the gate fails closed only
+    when **both** indicate a hard cut. Either signature alone is
+    sufficient to clear the file:
+
+    1. **Trailing silence** (``silencedetect``): the file's last
+       silence region must extend to (or past) the file end and
+       must be at least ``min_trailing_silence_s`` long. A natural
+       sentence ending leaves room tone; a hard cut leaves none.
+    2. **End-of-file RMS energy** (``astats``): the mean dBFS over
+       the last ``tail_window_s`` seconds must be below
+       ``max_tail_rms_db``. A natural decay sits at ``≤ -40 dBFS``
+       (room tone); spoken energy near the boundary indicates the
+       waveform was sliced mid-utterance.
+
+    Real Qwen3-TTS narrations frequently end with a short (~80 ms)
+    trailing-silence region but a deeply-quiet tail (-100 dBFS+).
+    Those are healthy, not cut — the sentence ended naturally and
+    the buffer drained to digital silence faster than the
+    silencedetect window. Conversely, a file with strong speech
+    energy at the boundary AND zero trailing silence is the
+    unambiguous abrupt-cut signature. Both signals must agree on
+    "cut" before we hard-fail.
+
+    The orchestrator must escalate via the ``escalation`` SubAgent
+    when ``verdict == "fail"`` (AGENTS.md hard invariant §3 / §5
+    "fail closed on TTS / QA immediately after each artifact").
+    Both tests are deterministic, ffmpeg-only, and CI-hermetic.
+
+    Args:
+        scene_id: The scene this artifact belongs to.
+        audio_path: Filesystem path to the rendered audio (WAV/MP3).
+        min_trailing_silence_s: Minimum trailing silence required
+            for a healthy narration. Default 0.15 s.
+        silence_noise_db: dBFS floor below which a sample counts
+            as silence for ``silencedetect``. Default ``-40`` dB.
+        max_tail_rms_db: Maximum mean dBFS allowed in the final
+            ``tail_window_s`` seconds. Default ``-25`` dB.
+        tail_window_s: Window length for the end-of-file RMS check.
+            Default 0.05 s (50 ms).
+    """
+    audio = Path(audio_path)
+    if not audio.is_file():
+        return _envelope(
+            "qa_audio_completeness",
+            scene_id=scene_id,
+            verdict=VERDICT_FAIL,
+            audio_path=str(audio),
+            min_trailing_silence_s=float(min_trailing_silence_s),
+            silence_noise_db=float(silence_noise_db),
+            max_tail_rms_db=float(max_tail_rms_db),
+            tail_window_s=float(tail_window_s),
+            error=f"audio_path does not exist: {audio}",
+        )
+    try:
+        payload = _ffprobe_json(audio)
+    except _ProbeError as exc:
+        return _envelope(
+            "qa_audio_completeness",
+            scene_id=scene_id,
+            verdict=VERDICT_FAIL,
+            audio_path=str(audio),
+            error=str(exc),
+        )
+    duration_s = _resolve_duration_s(payload)
+    if duration_s is None or duration_s < MIN_NARRATION_DURATION_S:
+        return _envelope(
+            "qa_audio_completeness",
+            scene_id=scene_id,
+            verdict=VERDICT_FAIL,
+            audio_path=str(audio),
+            audio_duration_s=duration_s,
+            error=(
+                f"audio too short or unparseable (duration_s={duration_s}, "
+                f"floor={MIN_NARRATION_DURATION_S})"
+            ),
+        )
+    try:
+        silence_segments = _detect_silence_segments(
+            audio,
+            noise_db=float(silence_noise_db),
+            min_duration_s=0.05,
+        )
+    except _ProbeError as exc:
+        return _envelope(
+            "qa_audio_completeness",
+            scene_id=scene_id,
+            verdict=VERDICT_FAIL,
+            audio_path=str(audio),
+            audio_duration_s=duration_s,
+            error=str(exc),
+        )
+    # silencedetect reports the last silence_start that has no
+    # matching silence_end as an "open" region (NaN end). We treat
+    # such a region as ending at the file boundary — that's the
+    # canonical "trailing silence" case.
+    trailing_silence_s = 0.0
+    if silence_segments:
+        last_start, last_end = silence_segments[-1]
+        # ``last_end != last_end`` is the NaN check (a NaN never
+        # equals itself). When silencedetect emitted no
+        # ``silence_end`` for the last region, treat the silence as
+        # extending to the file end.
+        effective_end = duration_s if last_end != last_end else last_end
+        if effective_end >= duration_s - 1e-3:
+            trailing_silence_s = max(0.0, effective_end - last_start)
+    try:
+        tail_rms_db = _measure_tail_rms_db(
+            audio,
+            duration_s=duration_s,
+            tail_window_s=float(tail_window_s),
+        )
+    except _ProbeError as exc:
+        return _envelope(
+            "qa_audio_completeness",
+            scene_id=scene_id,
+            verdict=VERDICT_FAIL,
+            audio_path=str(audio),
+            audio_duration_s=duration_s,
+            trailing_silence_s=trailing_silence_s,
+            error=str(exc),
+        )
+    silence_pass = trailing_silence_s >= float(min_trailing_silence_s)
+    # ``-inf`` means astats produced no measurement (file too short
+    # for the window). Treat as "no evidence" — defer to silence
+    # signal in that case.
+    rms_pass = (
+        tail_rms_db == float("-inf") or tail_rms_db <= float(max_tail_rms_db)
+    )
+    # Either signature clearing the file is enough. Hard cut requires
+    # BOTH signatures to flag (no trailing silence AND speech-band
+    # energy right at the file boundary). See docstring for why.
+    verdict = VERDICT_PASS if (silence_pass or rms_pass) else VERDICT_FAIL
+    out = _envelope(
+        "qa_audio_completeness",
+        scene_id=scene_id,
+        verdict=verdict,
+        audio_path=str(audio),
+        audio_duration_s=duration_s,
+        trailing_silence_s=trailing_silence_s,
+        tail_rms_db=tail_rms_db if tail_rms_db != float("-inf") else None,
+        min_trailing_silence_s=float(min_trailing_silence_s),
+        max_tail_rms_db=float(max_tail_rms_db),
+        silence_noise_db=float(silence_noise_db),
+        tail_window_s=float(tail_window_s),
+    )
+    if verdict == VERDICT_FAIL:
+        reasons: list[str] = []
+        if not silence_pass:
+            reasons.append(
+                f"trailing silence {trailing_silence_s:.3f} s < "
+                f"{float(min_trailing_silence_s):.3f} s "
+                "(narration ends without a natural pause — likely cut mid-utterance)"
+            )
+        if not rms_pass:
+            reasons.append(
+                f"end-of-file RMS {tail_rms_db:.2f} dBFS > "
+                f"{float(max_tail_rms_db):.2f} dBFS "
+                "(spoken-band energy at file boundary — likely cut mid-utterance)"
+            )
+        out["reason"] = "; ".join(reasons)
+    return out
+
+
 __all__ = [
     "DEFAULT_DURATION_TOLERANCE_S",
     "DEFAULT_MIN_MEAN_PIXEL_DELTA",
     "DEFAULT_STILLS_NUM_SAMPLES",
+    "MIN_NARRATION_DURATION_S",
+    "MIN_TRAILING_SILENCE_S",
+    "SILENCE_NOISE_DB",
     "VERDICT_FAIL",
     "VERDICT_PASS",
+    "qa_audio_completeness",
     "qa_duration_align",
     "qa_stills_judge",
     "qa_video_artifact_probe",

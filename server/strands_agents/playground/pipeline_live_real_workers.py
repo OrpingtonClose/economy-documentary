@@ -38,7 +38,6 @@ import logging
 import os
 import threading
 import time
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +54,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_S = 30 * 60.0
 _DEFAULT_AUDIO_DURATION_S = 5.0
 _DEFAULT_VIDEO_DURATION_S = 4.0
+# LTX-2.3 22B VAE decode is O(frames) in VRAM. On a 140 GiB H200 the
+# decoder OOMs above ~6 s @ 1280x704 (allocates ~128 GiB for 353 frames).
+# Cap dispatched duration here; the assembly muxer already loops the
+# resulting clip to fill the full narration via ``-stream_loop -1`` +
+# ``-t <audio_duration>`` (see server/tools/assembly_tools.py). Looping
+# preserves visible motion across the whole audio span — the slice 9j
+# frozen-frame regression that the loop fix targets.
+_MAX_VIDEO_DURATION_S = 5.0
 _DEFAULT_FPS = 24
 _DEFAULT_SEED = 7
 
@@ -83,16 +90,22 @@ def _envelope(name: str, **args: Any) -> dict[str, Any]:
 def _persist_artifact(
     run_dir: Path, scene_id: str, suffix: str, payload: bytes
 ) -> Path:
-    """Write ``payload`` to ``run_dir/scene_<scene_id>-<token>.<suffix>``.
+    """Write ``payload`` to ``run_dir/artifacts/<scene_id>.<suffix>``.
 
-    Returns the absolute path. The token suffix is a short random
-    hex so concurrent renders for the same scene do not clobber each
-    other (e.g. on retries).
+    The path is deterministic: ``{run_dir}/artifacts/{scene_id}.{suffix}``.
+    Per-scene QA gates downstream
+    (:func:`strands_agents.qa_gates.qa_audio_completeness`,
+    :func:`~strands_agents.qa_gates.qa_duration_align`,
+    :func:`~strands_agents.qa_gates.qa_stills_judge`) reconstruct the
+    same path from ``(artifacts_root, scene_id, suffix)``, so any token
+    suffix here would silently break the QA pipeline (the gate would
+    open a non-existent file and fail-by-default with no measurements).
+    Each pipeline run gets its own ``run_dir`` and each scene renders
+    exactly once per run, so a deterministic name cannot collide.
     """
     artifacts = run_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
-    token = uuid.uuid4().hex[:8]
-    path = artifacts / f"{scene_id}-{token}.{suffix}"
+    path = artifacts / f"{scene_id}.{suffix}"
     path.write_bytes(payload)
     return path
 
@@ -212,6 +225,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             status_code=resp.status_code,
             wav_bytes_len=wav_len,
             wav_path=str(wav_path) if wav_path else None,
+            duration_s=duration_sec,
             elapsed_ms=elapsed_ms,
             engine=payload.get("engine") if isinstance(payload, dict) else None,
             alignment=alignment,
@@ -286,12 +300,21 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
         video and audio cover the same wall-clock window.
         """
         resolved_prompt = _resolve_visual_prompt(visual_concept, prompt)
-        resolved_duration = (
+        requested_duration = (
             float(target_duration_s)
             if isinstance(target_duration_s, int | float)
             and target_duration_s > 0
             else _DEFAULT_VIDEO_DURATION_S
         )
+        resolved_duration = min(requested_duration, _MAX_VIDEO_DURATION_S)
+        if resolved_duration < requested_duration:
+            logger.info(
+                "scene_id=<%s>, requested=<%.3f>, capped=<%.3f> | "
+                "ltx duration capped to avoid VAE OOM; muxer loops clip",
+                scene_id,
+                requested_duration,
+                resolved_duration,
+            )
 
         body = {
             "prompt": resolved_prompt,
@@ -350,6 +373,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             visual_concept=visual_concept,
             prompt=resolved_prompt,
             target_duration_s=resolved_duration,
+            duration_s=resolved_duration,
             status_code=resp.status_code,
             mp4_bytes_len=mp4_len,
             mp4_path=str(mp4_path) if mp4_path else None,

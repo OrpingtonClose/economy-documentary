@@ -128,9 +128,10 @@ class TestDefaultTools:
         assert expected_leaves.issubset(names), expected_leaves - names
 
     def test_tool_count(self) -> None:
-        # 10 leaves + 3 QA gates (qa_duration_align, qa_stills_judge,
-        # qa_video_artifact_probe) + request_human_approval = 14
-        assert len(build_default_tools()) == 14
+        # 10 leaves + 4 QA gates (qa_audio_completeness,
+        # qa_duration_align, qa_stills_judge, qa_video_artifact_probe)
+        # + request_human_approval = 15
+        assert len(build_default_tools()) == 15
 
 
 class TestRealWorkerOverlay:
@@ -353,8 +354,8 @@ class TestRealWorkerOverlay:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Overlays must not add or drop tools — count stays at 14
-        # (10 leaves + 3 QA gates + request_human_approval, slice 9l).
+        # Overlays must not add or drop tools — count stays at 15
+        # (10 leaves + 4 QA gates + request_human_approval, slice 9p).
         monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
         monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
         captured: dict[str, Any] = {}
@@ -375,7 +376,7 @@ class TestRealWorkerOverlay:
             _capture,
         )
         build_documentary_orchestrator(tmp_path, model=_fake_model())
-        assert len(captured["tools"]) == 14
+        assert len(captured["tools"]) == 15
 
 
 class TestDefaultSubagents:

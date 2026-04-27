@@ -33,7 +33,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from . import _placeholders
 from .approval import INTERRUPT_GATE_CONFIG, request_human_approval
-from .qa_gates import qa_duration_align, qa_stills_judge, qa_video_artifact_probe
+from .qa_gates import (
+    qa_audio_completeness,
+    qa_duration_align,
+    qa_stills_judge,
+    qa_video_artifact_probe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,20 @@ Stages:
    (see AGENTS.md "Timing stage"). Always pass the scene's narration
    string from the approved scenario as the ``text`` argument to
    launch_audio_render so the TTS renders the actual script (slice 9c).
+
+   After every successful ``launch_audio_render`` and BEFORE moving to
+   ``evaluate_timing``, you MUST call ``qa_audio_completeness`` (with
+   the ``audio_path`` from the audio dispatcher envelope). This gate
+   is non-negotiable per AGENTS.md hard invariants §3 and §5
+   ("fail closed on TTS", "QA immediately after each artifact"). It
+   detects the Qwen3-TTS abrupt-cut failure mode (narration sliced
+   mid-utterance when the model exhausts its decoded-token budget) by
+   checking trailing silence + end-of-file RMS energy. If the gate
+   returns ``verdict == "fail"``, do NOT proceed to ``evaluate_timing``
+   — delegate to the ``escalation`` SubAgent via the task tool with
+   the failed gate's envelope and the dispatcher envelope. Never
+   silently accept a failed audio gate; never re-run the same audio
+   dispatch with the same args without an escalation decision.
 3. Visual — delegate to the `visual` SubAgent via the task tool.
    When the propose_visual_concept tool is available (slice
    9c-LLM-visual gate set), call it once per scene with the scene's
@@ -202,6 +221,7 @@ def build_default_tools() -> list[_Tool]:
         _placeholders.launch_b2_sync,
         _placeholders.check_tasks,
         _placeholders.await_tasks,
+        qa_audio_completeness,
         qa_duration_align,
         qa_stills_judge,
         qa_video_artifact_probe,

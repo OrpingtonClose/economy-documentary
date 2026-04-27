@@ -66,6 +66,12 @@ from strands_agents.playground.pipeline_live_real_workers import (
     apply_real_worker_overrides,
     build_real_worker_tools,
 )
+from strands_agents.qa_gates import (
+    qa_audio_completeness,
+    qa_duration_align,
+    qa_stills_judge,
+    qa_video_artifact_probe,
+)
 from strands_agents.timing_tool import compute_timing_report
 
 logger = logging.getLogger(__name__)
@@ -333,6 +339,7 @@ def _demo_chat_script(
     target_duration_sec: int,
     language: str,
     num_scenes: int | None = None,
+    artifacts_dir: Path | None = None,
 ) -> list[AIMessage]:
     """Build the deterministic chat script for the happy-path run.
 
@@ -400,6 +407,15 @@ def _demo_chat_script(
         ],
     }
 
+    # Slice 9p: hoisted above script construction so the
+    # ``qa_audio_completeness`` batch (emitted right after
+    # ``launch_audio_render``) can reference per-scene ``audio_path``
+    # values. The per-scene QA-after-visual-production loop further
+    # down reuses the same ``artifacts_root``.
+    artifacts_root = artifacts_dir if artifacts_dir is not None else Path(
+        "artifacts"
+    )
+
     script: list[AIMessage] = [
         _ai_tool_call(
             "generate_scenario",
@@ -427,6 +443,26 @@ def _demo_chat_script(
                         "scene_id": s["scene_id"],
                         "voice_id": "Ryan",
                         "text": s["narration_text"],
+                    },
+                )
+                for s in scenes
+            ]
+        ),
+        # Slice 9p — fire ``qa_audio_completeness`` immediately after
+        # every audio render returns. AGENTS.md hard invariant §5
+        # "QA immediately after each artifact" + §3 "fail closed on
+        # TTS". Auditory signature only (silencedetect + astats); no
+        # transcription, no LLM. Catches the Qwen3-TTS abrupt-cut
+        # failure mode the slice 9j run shipped with.
+        _ai_tool_calls_batch(
+            [
+                (
+                    "qa_audio_completeness",
+                    {
+                        "scene_id": s["scene_id"],
+                        "audio_path": str(
+                            artifacts_root / f"{s['scene_id']}.wav"
+                        ),
                     },
                 )
                 for s in scenes
@@ -494,6 +530,48 @@ def _demo_chat_script(
             ]
         )
     )
+
+    # Slice 9n / 9o: AGENTS.md hard invariant §5 — “QA immediately after
+    # each artifact, never batch QA at the end.” The slice 9j frozen-frame
+    # regression slipped past 12 plumbing PASS checks because the live
+    # scripted brain never invoked the QA gates that exist as production
+    # tools in :mod:`strands_agents.qa_gates`. Wire all three gates
+    # (``qa_video_artifact_probe`` / ``qa_duration_align`` /
+    # ``qa_stills_judge``) on a single batched turn per scene right after
+    # ``launch_visual_production``, so a future regression of the same
+    # shape leaves a fail-closed verdict in the trajectory before
+    # ``launch_assembly`` ever fires. The dispatchers persist artifacts
+    # under ``run_dir/artifacts/<scene_id>.{mp4,wav}`` — those are the
+    # paths the QA gates read. ``artifacts_root`` was hoisted above
+    # script construction (slice 9p) so the post-audio QA batch can
+    # reference the same per-scene paths.
+    qa_calls: list[tuple[str, dict[str, Any]]] = []
+    for s in scenes:
+        scene_id = s["scene_id"]
+        video_path = str(artifacts_root / f"{scene_id}.mp4")
+        audio_path = str(artifacts_root / f"{scene_id}.wav")
+        qa_calls.extend(
+            [
+                (
+                    "qa_video_artifact_probe",
+                    {"scene_id": scene_id, "video_path": video_path},
+                ),
+                (
+                    "qa_duration_align",
+                    {
+                        "scene_id": scene_id,
+                        "audio_path": audio_path,
+                        "video_path": video_path,
+                    },
+                ),
+                (
+                    "qa_stills_judge",
+                    {"scene_id": scene_id, "video_path": video_path},
+                ),
+            ]
+        )
+    if qa_calls:
+        script.append(_ai_tool_calls_batch(qa_calls))
 
     # Slice 9g-assembly: pass per-scene ``clip_artifacts`` so the real
     # assembly overlay (env-gated on ``ENABLE_REAL_ASSEMBLY=1``) can
@@ -564,9 +642,17 @@ def _demo_tools() -> list[Any]:
         # the demo previously bound just echoed args.
         evaluate_timing,
         _placeholders.launch_audio_render,
+        qa_audio_completeness,
         content_analyst,
         visual_concepter,
         _placeholders.launch_visual_production,
+        # Slice 9o: AGENTS.md §5 — the production scripted brain calls
+        # all three QA gates after every visual production so the
+        # gates that exist in :mod:`strands_agents.qa_gates` are wired
+        # into the live trajectory, not just the eval framework.
+        qa_video_artifact_probe,
+        qa_duration_align,
+        qa_stills_judge,
         _placeholders.launch_assembly,
         _placeholders.launch_b2_sync,
         _placeholders.check_tasks,
@@ -606,7 +692,11 @@ def build_demo_live_agent(
     """
     chat_model = _ScriptedToolCallingModel(
         responses=_demo_chat_script(
-            topic, target_duration_sec, language, num_scenes=num_scenes
+            topic,
+            target_duration_sec,
+            language,
+            num_scenes=num_scenes,
+            artifacts_dir=run_dir / "artifacts",
         ),
     )
     base_tools = _demo_tools()

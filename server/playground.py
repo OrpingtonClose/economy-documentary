@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from strands_evals.case import Case
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
@@ -1512,6 +1512,35 @@ _PIPELINE_MAX_NUM_SCENES: int = 6
 PIPELINE_RUN_COMPONENT_ID: str = "pipeline"
 
 
+#: In-memory map of ``run_id`` -> ``master.mp4`` path on disk.
+#: Populated by :func:`_dispatch_pipeline_run` once the assembly
+#: leaf reports a master.mp4 and consumed by the
+#: :func:`stream_master_mp4` route so the UI can play the master
+#: directly without depending on a B2 round-trip.
+_PIPELINE_MASTER_PATHS: dict[str, Path] = {}
+
+
+@router.get("/runs/{run_id}/master.mp4")
+async def stream_master_mp4(run_id: str) -> FileResponse:
+    """Serve the master ``.mp4`` for a completed pipeline run.
+
+    The orchestrator writes ``master.mp4`` into the run's temporary
+    artifacts directory; this route exposes it under a stable
+    same-origin URL so the ``/pipeline`` UI can drop the path
+    straight into a ``<video>`` tag without depending on B2 being
+    reachable.
+    """
+    path = _PIPELINE_MASTER_PATHS.get(run_id)
+    if path is None or not path.exists():
+        raise HTTPException(status_code=404, detail="master.mp4 not found")
+    return FileResponse(
+        path=str(path),
+        media_type="video/mp4",
+        filename="master.mp4",
+        headers={"Accept-Ranges": "bytes"},
+    )
+
+
 class StartPipelineRunRequest(BaseModel):
     """Body for ``POST /playground/pipeline/runs``.
 
@@ -1671,6 +1700,31 @@ async def _dispatch_pipeline_run(
         )
         result = await live_runner.run(stream)
         elapsed_ms = int((time.perf_counter() - run_started) * 1000)
+        # Register the master.mp4 location so
+        # ``GET /playground/runs/{run_id}/master.mp4`` can stream it
+        # back to the UI. We copy the file into a stable, run-id keyed
+        # path under ``/tmp/pipeline_masters`` so the temp run-dir can
+        # be cleaned up without taking the playable mp4 with it.
+        master_src = run_dir / "artifacts" / "master.mp4"
+        if master_src.exists():
+            stable_dir = Path(tempfile.gettempdir()) / "pipeline_masters"
+            stable_dir.mkdir(parents=True, exist_ok=True)
+            stable_path = stable_dir / f"{stream.run_id}.mp4"
+            try:
+                shutil.copyfile(str(master_src), str(stable_path))
+                _PIPELINE_MASTER_PATHS[stream.run_id] = stable_path
+                logger.info(
+                    "run_id=<%s>, src=<%s>, stable=<%s> | master.mp4 registered for streaming",
+                    stream.run_id,
+                    master_src,
+                    stable_path,
+                )
+            except Exception:  # noqa: BLE001 — telemetry-only
+                logger.exception(
+                    "run_id=<%s>, src=<%s> | master.mp4 stable copy failed",
+                    stream.run_id,
+                    master_src,
+                )
         await stream.emit(
             "run.ok",
             "pipeline run completed",

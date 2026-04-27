@@ -55,6 +55,7 @@ def test_extract_envelope_fields_pulls_whitelisted_keys_from_args() -> None:
     extracted = _extract_envelope_fields(output)
 
     assert extracted == {
+        "scene_id": "scene_001",
         "engine": "qwen3-tts",
         "wav_bytes_len": 314_159,
         "status_code": 200,
@@ -87,8 +88,83 @@ def test_extract_envelope_fields_returns_empty_for_non_dict() -> None:
 
 
 def test_extract_envelope_fields_returns_empty_when_no_whitelisted_keys() -> None:
-    output = {"status": "ok", "args": {"scene_id": "scene_001"}}
+    output = {"status": "ok", "args": {"voice_id": "Ryan"}}
     assert _extract_envelope_fields(output) == {}
+
+
+def test_extract_envelope_fields_lifts_qa_gate_envelope_top_level() -> None:
+    """QA gates return a top-level dict (no ``args`` nesting).
+
+    The :file:`/pipeline` UI's per-scene metric cards depend on every
+    QA verdict + measurement reaching the SSE wire. The slice 9q
+    post-mortem traced empty rows back to a too-narrow whitelist that
+    stripped ``scene_id`` and ``verdict`` here. This test pins the
+    fields the metric cards read.
+    """
+    output = {
+        "tool": "qa_duration_align",
+        "scene_id": "scene_002",
+        "verdict": "pass",
+        "audio_duration_s": 12.34,
+        "video_duration_s": 12.40,
+        "delta_s": 0.06,
+        "tolerance_s": 0.5,
+    }
+
+    assert _extract_envelope_fields(output) == {
+        "scene_id": "scene_002",
+        "verdict": "pass",
+        "audio_duration_s": 12.34,
+        "video_duration_s": 12.40,
+        "delta_s": 0.06,
+        "tolerance_s": 0.5,
+    }
+
+
+def test_extract_envelope_fields_lifts_qa_audio_completeness_envelope() -> None:
+    output = {
+        "tool": "qa_audio_completeness",
+        "scene_id": "scene_003",
+        "verdict": "pass",
+        "audio_duration_s": 13.21,
+        "trailing_silence_s": 0.184,
+        "tail_rms_db": -47.6,
+        "min_trailing_silence_s": 0.15,
+        "max_tail_rms_db": -25.0,
+        "silence_noise_db": -45.0,
+        "tail_window_s": 0.05,
+    }
+
+    assert _extract_envelope_fields(output) == {
+        "scene_id": "scene_003",
+        "verdict": "pass",
+        "audio_duration_s": 13.21,
+        "trailing_silence_s": 0.184,
+        "tail_rms_db": -47.6,
+        "min_trailing_silence_s": 0.15,
+        "max_tail_rms_db": -25.0,
+        "silence_noise_db": -45.0,
+        "tail_window_s": 0.05,
+    }
+
+
+def test_extract_envelope_fields_lifts_qa_stills_judge_envelope() -> None:
+    output = {
+        "tool": "qa_stills_judge",
+        "scene_id": "scene_004",
+        "verdict": "pass",
+        "mean_pixel_delta": 8.7,
+        "min_mean_pixel_delta": 1.5,
+        "num_samples": 8,
+    }
+
+    assert _extract_envelope_fields(output) == {
+        "scene_id": "scene_004",
+        "verdict": "pass",
+        "mean_pixel_delta": 8.7,
+        "min_mean_pixel_delta": 1.5,
+        "num_samples": 8,
+    }
 
 
 def test_extract_envelope_fields_unwraps_tool_message_with_dict_content() -> None:

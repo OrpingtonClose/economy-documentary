@@ -289,6 +289,51 @@ class TestProfileApplication:
         assert probe["video"]["width"] == 640
         assert probe["video"]["height"] == 360
 
+    def test_mux_loops_video_when_shorter_than_audio(self, tmp_path):
+        # The slice 9j frozen-frame regression: a 4.7s LTX clip paired with
+        # 13s of TTS narration. Without -stream_loop the muxer holds the
+        # last video frame for 8s. With the fix the video loops and the
+        # output duration matches the audio (within one frame).
+        video = str(tmp_path / "short_clip.mp4")
+        audio = str(tmp_path / "long_narration.wav")
+        _synthesize_video(video, 320, 180, 24, 1.0)
+        _synthesize_voiced_wav(audio, dur=3.0)
+        out = str(tmp_path / "scene_muxed.mp4")
+
+        result = json.loads(mux_audio_video(
+            audio_path=audio, video_path=video, output_path=out,
+        ))
+        assert result.get("status") == "muxed", result
+
+        probe = _probe(out)
+        v_dur = float(probe["video"].get("duration", 0))
+        a_dur = float(probe["audio"].get("duration", 0))
+        assert abs(v_dur - a_dur) < 0.1, (
+            f"video {v_dur}s vs audio {a_dur}s — loop did not fill audio"
+        )
+        assert 2.9 <= a_dur <= 3.1, a_dur
+
+    def test_mux_does_not_truncate_when_video_longer_than_audio(self, tmp_path):
+        # Symmetric pin: when video is longer, no -shortest is added so the
+        # video keeps its full duration (audio plays then ends, video tail
+        # plays out — original contract).
+        video = str(tmp_path / "long_clip.mp4")
+        audio = str(tmp_path / "short_narration.wav")
+        _synthesize_video(video, 320, 180, 24, 3.0)
+        _synthesize_voiced_wav(audio, dur=1.0)
+        out = str(tmp_path / "scene_long_video.mp4")
+
+        result = json.loads(mux_audio_video(
+            audio_path=audio, video_path=video, output_path=out,
+        ))
+        assert result.get("status") == "muxed", result
+
+        probe = _probe(out)
+        v_dur = float(probe["video"].get("duration", 0))
+        assert 2.9 <= v_dur <= 3.1, (
+            f"video duration {v_dur}s — must not be truncated to audio length"
+        )
+
     def test_upscale_to_profile_writes_expected_resolution(self, tmp_path):
         src = str(tmp_path / "src.mp4")
         _synthesize_video(src, 512, 320, 24, 1.0)
