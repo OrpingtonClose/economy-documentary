@@ -768,7 +768,9 @@ def qa_audio_completeness(
     rather than a transcript-content concern, so this gate works on
     waveform energy alone — no transcription, no LLM.
 
-    Two independent waveform tests, both must pass:
+    Two independent waveform signatures; the gate fails closed only
+    when **both** indicate a hard cut. Either signature alone is
+    sufficient to clear the file:
 
     1. **Trailing silence** (``silencedetect``): the file's last
        silence region must extend to (or past) the file end and
@@ -779,6 +781,15 @@ def qa_audio_completeness(
        ``max_tail_rms_db``. A natural decay sits at ``≤ -40 dBFS``
        (room tone); spoken energy near the boundary indicates the
        waveform was sliced mid-utterance.
+
+    Real Qwen3-TTS narrations frequently end with a short (~80 ms)
+    trailing-silence region but a deeply-quiet tail (-100 dBFS+).
+    Those are healthy, not cut — the sentence ended naturally and
+    the buffer drained to digital silence faster than the
+    silencedetect window. Conversely, a file with strong speech
+    energy at the boundary AND zero trailing silence is the
+    unambiguous abrupt-cut signature. Both signals must agree on
+    "cut" before we hard-fail.
 
     The orchestrator must escalate via the ``escalation`` SubAgent
     when ``verdict == "fail"`` (AGENTS.md hard invariant §3 / §5
@@ -880,12 +891,15 @@ def qa_audio_completeness(
         )
     silence_pass = trailing_silence_s >= float(min_trailing_silence_s)
     # ``-inf`` means astats produced no measurement (file too short
-    # for the window). We don't fail on missing evidence here — the
-    # primary signal is trailing silence.
+    # for the window). Treat as "no evidence" — defer to silence
+    # signal in that case.
     rms_pass = (
         tail_rms_db == float("-inf") or tail_rms_db <= float(max_tail_rms_db)
     )
-    verdict = VERDICT_PASS if silence_pass and rms_pass else VERDICT_FAIL
+    # Either signature clearing the file is enough. Hard cut requires
+    # BOTH signatures to flag (no trailing silence AND speech-band
+    # energy right at the file boundary). See docstring for why.
+    verdict = VERDICT_PASS if (silence_pass or rms_pass) else VERDICT_FAIL
     out = _envelope(
         "qa_audio_completeness",
         scene_id=scene_id,

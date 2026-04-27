@@ -217,15 +217,41 @@ async def _emit_translated(
 
 #: Whitelisted dispatcher-envelope fields lifted from a real-worker
 #: tool's return value into the ``pipeline.tool.X.end`` detail. Kept
-#: small and explicit so an arbitrary tool return cannot leak large
-#: payloads (e.g. base64 audio/video) into the SSE wire.
+#: explicit so an arbitrary tool return cannot leak large payloads
+#: (e.g. base64 audio/video) into the SSE wire — but every per-scene
+#: identifier and QA measurement the ``/pipeline`` UI renders as a
+#: metric card must be on this list. The slice 9q post-mortem
+#: traced empty metric rows back to a too-narrow whitelist that
+#: stripped ``scene_id``, ``verdict``, and every QA measurement
+#: before they reached the SSE wire.
 _ENVELOPE_PASSTHROUGH_KEYS: tuple[str, ...] = (
+    # Dispatcher envelope (audio / video render).
+    "scene_id",
     "engine",
     "wav_bytes_len",
     "mp4_bytes_len",
     "status_code",
     "wav_path",
     "mp4_path",
+    "duration_s",
+    "target_duration_s",
+    # QA gate envelope — verdict + measurements rendered per-scene
+    # in :file:`frontend-playground/src/app/pipeline/PipelineSceneMetrics.tsx`.
+    "verdict",
+    "reason",
+    "audio_duration_s",
+    "video_duration_s",
+    "delta_s",
+    "tolerance_s",
+    "tail_rms_db",
+    "trailing_silence_s",
+    "min_trailing_silence_s",
+    "max_tail_rms_db",
+    "silence_noise_db",
+    "tail_window_s",
+    "mean_pixel_delta",
+    "min_mean_pixel_delta",
+    "num_samples",
 )
 
 

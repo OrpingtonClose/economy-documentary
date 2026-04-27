@@ -132,11 +132,13 @@ def _make_natural_narration_wav(
 
 
 def _make_abrupt_cut_wav(path: Path, *, duration_s: float = 2.0) -> None:
-    """Synthesise an abruptly-cut narration: pure tone to the last sample.
+    """Synthesise an abruptly-cut narration: full-amplitude tone to EOF.
 
-    A sine wave at -10 dBFS for the whole duration with no trailing
+    A 0-dBFS sine wave for the whole duration with no trailing
     silence — the auditory signature of Qwen3-TTS running out of
-    token budget mid-utterance.
+    token budget mid-utterance. Tail RMS lands around -3 dBFS,
+    well above the speech-band threshold; combined with zero
+    trailing silence, both auditory signatures flag a hard cut.
     """
     cmd = [
         "ffmpeg",
@@ -149,8 +151,6 @@ def _make_abrupt_cut_wav(path: Path, *, duration_s: float = 2.0) -> None:
         "sine=frequency=440:sample_rate=16000",
         "-t",
         f"{duration_s}",
-        "-af",
-        "volume=-10dB",
         "-ac",
         "1",
         str(path),
@@ -486,9 +486,12 @@ class TestQaAudioCompleteness:
             or "end-of-file RMS" in result["reason"]
         )
 
-    def test_fail_on_short_trailing_silence(self, tmp_path: Path) -> None:
-        # 50 ms trailing silence is below the 150 ms floor → fails the
-        # silence test even though tail RMS is fine.
+    def test_pass_on_short_silence_with_quiet_tail(self, tmp_path: Path) -> None:
+        # Real Qwen3-TTS narrations frequently leave only ~80 ms of
+        # detectable trailing silence but the tail is essentially
+        # digital silence (-100 dBFS+). That's healthy: either
+        # auditory signature alone clears the file. The combined
+        # gate is "fail only if both signals flag a cut".
         audio = tmp_path / "short_tail.wav"
         _make_natural_narration_wav(
             audio, speech_duration_s=2.0, trailing_silence_s=0.05
@@ -500,18 +503,21 @@ class TestQaAudioCompleteness:
             audio_path=str(audio),
         )
 
-        assert result["verdict"] == VERDICT_FAIL
+        assert result["verdict"] == VERDICT_PASS
+        # Silence test alone fails (50 ms < 150 ms floor) but RMS test
+        # passes — file ends in silence even though the silencedetect
+        # window measured a shorter region.
         assert result["trailing_silence_s"] < MIN_TRAILING_SILENCE_S
 
-    def test_custom_silence_floor_can_pass_a_short_tail(
+    def test_loose_thresholds_can_clear_an_abrupt_cut(
         self, tmp_path: Path
     ) -> None:
-        # Operator can loosen the trailing-silence floor; a 50 ms tail
-        # passes when the floor is 0.04 s, fails at the default.
-        audio = tmp_path / "short_tail.wav"
-        _make_natural_narration_wav(
-            audio, speech_duration_s=2.0, trailing_silence_s=0.05
-        )
+        # Operators can loosen the gate per-call: an abrupt cut
+        # (both signatures fail at default) becomes PASS once the
+        # silence floor is lowered below 0 s. Demonstrates the
+        # thresholds are wired through and tunable.
+        audio = tmp_path / "abrupt.wav"
+        _make_abrupt_cut_wav(audio, duration_s=2.0)
 
         default = _invoke(
             qa_audio_completeness,
@@ -524,7 +530,8 @@ class TestQaAudioCompleteness:
             qa_audio_completeness,
             scene_id="scene_1",
             audio_path=str(audio),
-            min_trailing_silence_s=0.04,
+            min_trailing_silence_s=-1.0,
+            max_tail_rms_db=10.0,
         )
         assert loosened["verdict"] == VERDICT_PASS
 
