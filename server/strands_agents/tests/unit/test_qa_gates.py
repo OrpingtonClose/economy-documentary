@@ -17,8 +17,10 @@ from strands_agents import qa_gates
 from strands_agents.qa_gates import (
     DEFAULT_DURATION_TOLERANCE_S,
     DEFAULT_MIN_MEAN_PIXEL_DELTA,
+    MIN_TRAILING_SILENCE_S,
     VERDICT_FAIL,
     VERDICT_PASS,
+    qa_audio_completeness,
     qa_duration_align,
     qa_stills_judge,
     qa_video_artifact_probe,
@@ -48,6 +50,109 @@ def _make_silent_wav(path: Path, duration_s: float) -> None:
         "anullsrc=channel_layout=mono:sample_rate=16000",
         "-t",
         f"{duration_s}",
+        str(path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def _make_natural_narration_wav(
+    path: Path,
+    *,
+    speech_duration_s: float = 2.0,
+    trailing_silence_s: float = 0.4,
+) -> None:
+    """Synthesise a healthy narration: speech then trailing silence.
+
+    Speech is a sine tone at -10 dBFS for ``speech_duration_s``, then
+    pure silence for ``trailing_silence_s``. This mirrors the
+    auditory shape of a natural sentence ending: spoken energy that
+    decays into room tone before the file ends.
+    """
+    speech = path.with_suffix(".speech.wav")
+    silence = path.with_suffix(".silence.wav")
+    list_file = path.with_suffix(".list")
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=16000",
+            "-t",
+            f"{speech_duration_s}",
+            "-af",
+            "volume=-10dB",
+            "-ac",
+            "1",
+            str(speech),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=mono:sample_rate=16000",
+            "-t",
+            f"{trailing_silence_s}",
+            str(silence),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    list_file.write_text(f"file '{speech}'\nfile '{silence}'\n")
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-c",
+            "copy",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+def _make_abrupt_cut_wav(path: Path, *, duration_s: float = 2.0) -> None:
+    """Synthesise an abruptly-cut narration: pure tone to the last sample.
+
+    A sine wave at -10 dBFS for the whole duration with no trailing
+    silence — the auditory signature of Qwen3-TTS running out of
+    token budget mid-utterance.
+    """
+    cmd = [
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=16000",
+        "-t",
+        f"{duration_s}",
+        "-af",
+        "volume=-10dB",
+        "-ac",
+        "1",
         str(path),
     ]
     subprocess.run(cmd, check=True, capture_output=True)
@@ -337,15 +442,127 @@ class TestQaStillsJudge:
 
 
 # ---------------------------------------------------------------------------
+# qa_audio_completeness  (slice 9p — auditory abrupt-cut detection)
+# ---------------------------------------------------------------------------
+
+
+class TestQaAudioCompleteness:
+    def test_pass_on_natural_narration(self, tmp_path: Path) -> None:
+        # Speech + 400 ms trailing silence → both auditory tests pass.
+        audio = tmp_path / "natural.wav"
+        _make_natural_narration_wav(
+            audio, speech_duration_s=2.0, trailing_silence_s=0.4
+        )
+
+        result = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+        )
+
+        assert result["tool"] == "qa_audio_completeness"
+        assert result["verdict"] == VERDICT_PASS
+        assert result["trailing_silence_s"] >= MIN_TRAILING_SILENCE_S
+        assert result["audio_duration_s"] == pytest.approx(2.4, abs=0.2)
+
+    def test_fail_on_abrupt_cut(self, tmp_path: Path) -> None:
+        # Pure speech-band tone right up to the file boundary → both
+        # auditory tests fail (no trailing silence + high tail RMS).
+        audio = tmp_path / "abrupt.wav"
+        _make_abrupt_cut_wav(audio, duration_s=2.0)
+
+        result = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+        )
+
+        assert result["verdict"] == VERDICT_FAIL
+        assert result["trailing_silence_s"] < MIN_TRAILING_SILENCE_S
+        assert "reason" in result
+        # At least one of the two auditory signatures must be cited.
+        assert (
+            "trailing silence" in result["reason"]
+            or "end-of-file RMS" in result["reason"]
+        )
+
+    def test_fail_on_short_trailing_silence(self, tmp_path: Path) -> None:
+        # 50 ms trailing silence is below the 150 ms floor → fails the
+        # silence test even though tail RMS is fine.
+        audio = tmp_path / "short_tail.wav"
+        _make_natural_narration_wav(
+            audio, speech_duration_s=2.0, trailing_silence_s=0.05
+        )
+
+        result = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+        )
+
+        assert result["verdict"] == VERDICT_FAIL
+        assert result["trailing_silence_s"] < MIN_TRAILING_SILENCE_S
+
+    def test_custom_silence_floor_can_pass_a_short_tail(
+        self, tmp_path: Path
+    ) -> None:
+        # Operator can loosen the trailing-silence floor; a 50 ms tail
+        # passes when the floor is 0.04 s, fails at the default.
+        audio = tmp_path / "short_tail.wav"
+        _make_natural_narration_wav(
+            audio, speech_duration_s=2.0, trailing_silence_s=0.05
+        )
+
+        default = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+        )
+        assert default["verdict"] == VERDICT_FAIL
+
+        loosened = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+            min_trailing_silence_s=0.04,
+        )
+        assert loosened["verdict"] == VERDICT_PASS
+
+    def test_fail_when_audio_missing(self, tmp_path: Path) -> None:
+        result = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(tmp_path / "missing.wav"),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "does not exist" in result["error"]
+
+    def test_fail_when_audio_too_short(self, tmp_path: Path) -> None:
+        # 100 ms file is below the 0.5 s floor → fail loudly rather
+        # than rendering an inscrutable verdict.
+        audio = tmp_path / "tiny.wav"
+        _make_silent_wav(audio, 0.1)
+
+        result = _invoke(
+            qa_audio_completeness,
+            scene_id="scene_1",
+            audio_path=str(audio),
+        )
+        assert result["verdict"] == VERDICT_FAIL
+        assert "too short" in result["error"]
+
+
+# ---------------------------------------------------------------------------
 # Module-level surface
 # ---------------------------------------------------------------------------
 
 
 class TestModuleSurface:
-    def test_exports_three_gates(self) -> None:
+    def test_exports_four_gates(self) -> None:
         assert "qa_duration_align" in qa_gates.__all__
         assert "qa_stills_judge" in qa_gates.__all__
         assert "qa_video_artifact_probe" in qa_gates.__all__
+        assert "qa_audio_completeness" in qa_gates.__all__
 
     def test_all_gates_are_langchain_tools(self) -> None:
         # Sanity: each gate is decorated with @tool and exposes the
@@ -353,6 +570,7 @@ class TestModuleSurface:
         assert hasattr(qa_duration_align, "invoke")
         assert hasattr(qa_stills_judge, "invoke")
         assert hasattr(qa_video_artifact_probe, "invoke")
+        assert hasattr(qa_audio_completeness, "invoke")
 
     def test_default_tolerance_matches_post_mortem(self) -> None:
         # User instructed in slice 9j post-mortem: hard fail at 0.5 s.

@@ -93,10 +93,23 @@ _TOOL_TO_STAGE: dict[str, str | None] = {
     "refine_scenario": "scenario",
     "evaluate_timing": "audio",
     "launch_audio_render": "audio",
+    # Slice 9p: ``qa_audio_completeness`` fires right after every
+    # ``launch_audio_render`` returns (AGENTS.md hard invariant §5
+    # "QA immediately after each artifact"). Map it to the audio
+    # stage so the stage ribbon stays open across the per-scene
+    # verdict batch before timing closes.
+    "qa_audio_completeness": "audio",
     "content_analyst": "visual",
     "visual_concepter": "visual",
     "propose_visual_concept": "visual",
     "launch_visual_production": "production",
+    # Slice 9o: QA gates fire after every visual production
+    # (AGENTS.md hard invariant §5). Map them to the production stage
+    # so the stage ribbon stays open across the verdict trio
+    # (probe → duration_align → stills_judge) before assembly opens.
+    "qa_video_artifact_probe": "production",
+    "qa_duration_align": "production",
+    "qa_stills_judge": "production",
     "launch_assembly": "assembly",
     "launch_b2_sync": "assembly",
     "check_tasks": None,
