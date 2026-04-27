@@ -131,7 +131,9 @@ def _build_catalog_app() -> FastAPI:
 _CLIENT: TestClient = TestClient(_build_catalog_app())
 
 
-def playground_catalog_task(case: Case[dict[str, Any], dict[str, Any]]) -> dict[str, Any]:
+def playground_catalog_task(
+    case: Case[dict[str, Any], dict[str, Any]],
+) -> dict[str, Any]:
     """Dispatch a case's HTTP request and return the JSON response.
 
     Every case carries an ``input`` dict with ``method`` and ``path``.
@@ -160,12 +162,14 @@ def _component_count_case() -> Case[dict[str, Any], dict[str, Any]]:
         input={"method": "GET", "path": "/playground/components"},
         expected_output={
             "status": 200,
-            "body": {"total": 24},
+            "body": {"total": 27},
         },
     )
 
 
-def _component_detail_case(component_id: str, title: str) -> Case[dict[str, Any], dict[str, Any]]:
+def _component_detail_case(
+    component_id: str, title: str
+) -> Case[dict[str, Any], dict[str, Any]]:
     return Case[dict[str, Any], dict[str, Any]](
         name=f"detail_{component_id}",
         session_id=f"playground-catalog-detail-{component_id}",
@@ -177,7 +181,9 @@ def _component_detail_case(component_id: str, title: str) -> Case[dict[str, Any]
     )
 
 
-def _cases_endpoint_case(component_id: str, case_count: int) -> Case[dict[str, Any], dict[str, Any]]:
+def _cases_endpoint_case(
+    component_id: str, case_count: int
+) -> Case[dict[str, Any], dict[str, Any]]:
     return Case[dict[str, Any], dict[str, Any]](
         name=f"cases_{component_id}",
         session_id=f"playground-catalog-cases-{component_id}",

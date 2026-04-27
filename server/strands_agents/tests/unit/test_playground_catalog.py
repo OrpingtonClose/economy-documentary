@@ -52,14 +52,14 @@ def test_subset_match_list_rejects_missing_expected_prefix() -> None:
 
 def test_registry_enumerates_pipeline_components_in_atlas_order() -> None:
     ids = tuple(c.id for c in iter_components())
-    pipeline_ids = tuple(i for i in ids if not i.startswith("infra_"))
+    pipeline_ids = tuple(i for i in ids if i in COMPONENT_IDS)
     assert pipeline_ids == COMPONENT_IDS
     assert len(pipeline_ids) == 15
 
 
 def test_registry_enumerates_infra_components_after_pipeline() -> None:
     ids = tuple(c.id for c in iter_components())
-    infra_ids = tuple(i for i in ids if i.startswith("infra_"))
+    infra_ids = tuple(i for i in ids if i in INFRA_COMPONENT_IDS)
     assert infra_ids == INFRA_COMPONENT_IDS
     # Pipeline rows land first so the UI can group by row without
     # re-sorting.
@@ -78,6 +78,11 @@ def test_every_component_declares_kind_and_row() -> None:
         }
         if component.kind == "infra":
             assert component.row == 4
+        elif component.kind == "gate":
+            # Gates live either inline with the pipeline (row 3, e.g.
+            # approval gates) or alongside infra units when they wrap
+            # rendered artifacts (row 4, e.g. QA gates).
+            assert component.row in {3, 4}
         else:
             assert component.row in {1, 2, 3}
         assert component.title
@@ -87,8 +92,9 @@ def test_every_component_declares_kind_and_row() -> None:
 def test_catalog_experiment_cases_cover_every_component() -> None:
     exp = build_playground_catalog_experiment()
     # 1 list-endpoint case + 2 per component (detail + cases) + 1
-    # 404 case. 24 components (15 pipeline + 9 infra) → 1 + 48 + 1 = 50.
-    assert len(exp.cases) == 50
+    # 404 case. With 27 components (15 pipeline + 12 infra incl. the
+    # three QA-gate cards) → 1 + 54 + 1 = 56.
+    assert len(exp.cases) == 56
     detail_cases = {c.name for c in exp.cases if c.name.startswith("detail_")}
     cases_cases = {c.name for c in exp.cases if c.name.startswith("cases_")}
     for component_id in ALL_COMPONENT_IDS:
@@ -108,6 +114,8 @@ def test_catalog_experiment_passes_every_case() -> None:
         )
         if not passed
     ]
-    threshold, hard_gate = PLAYGROUND_CATALOG_EVALUATOR_THRESHOLDS[report.evaluator_name]
+    threshold, hard_gate = PLAYGROUND_CATALOG_EVALUATOR_THRESHOLDS[
+        report.evaluator_name
+    ]
     assert hard_gate is True
     assert report.overall_score >= threshold
