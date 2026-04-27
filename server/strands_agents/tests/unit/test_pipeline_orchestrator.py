@@ -479,6 +479,7 @@ class TestRunDocumentary:
             "decisions": [
                 {"type": "reject", "message": "no operator attached"},
             ],
+            "_project_decision_type": "reject",
         }
 
     def test_interrupt_loop_resumes_with_decision(

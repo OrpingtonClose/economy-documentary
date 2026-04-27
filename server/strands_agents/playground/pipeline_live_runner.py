@@ -657,11 +657,20 @@ async def auto_accept_interrupt(state: dict[str, Any]) -> Command:
     interrupted tool call, using the middleware's vocabulary
     (``approve`` / ``edit`` / ``reject``). The playground demo
     always picks ``approve`` so the happy path runs end-to-end.
+
+    The resume payload also carries ``_project_decision_type``
+    (``"accept"``) as a sidecar so :func:`_decision_from_command`
+    can echo the operator's original project vocab on the
+    ``pipeline.approval.resumed`` SSE event instead of leaking the
+    langchain-translated form.
     """
     interrupts = state.get("__interrupt__", []) or []
     count = max(1, len(interrupts))
     return Command(
-        resume={"decisions": [{"type": "approve"} for _ in range(count)]},
+        resume={
+            "decisions": [{"type": "approve"} for _ in range(count)],
+            "_project_decision_type": "accept",
+        },
     )
 
 
@@ -672,31 +681,53 @@ def _default_allowed_for(tool_name: str) -> list[str]:
     return ["accept", "reject", "respond"]
 
 
+#: Reverse mapping from langchain HITL vocab back to project vocab.
+#: Used as a last-resort fallback when the resume payload lacks the
+#: ``_project_decision_type`` sidecar (e.g. legacy callers). Lossy
+#: for ``reject`` because both project ``reject`` and ``respond``
+#: translate to langchain ``reject`` -- preferring ``reject`` here
+#: because it is the more common operator action.
+_LANGCHAIN_TO_PROJECT_DECISION: dict[str, str] = {
+    "approve": "accept",
+    "edit": "edit",
+    "reject": "reject",
+}
+
+
 def _decision_from_command(command: Command) -> str:
-    """Recover the decision ``type`` from a resume :class:`Command`.
+    """Recover the decision ``type`` in **project vocab** from a resume :class:`Command`.
 
-    Supports two shapes:
+    Three lookup paths, in order:
 
-    * The langchain ``HumanInTheLoopMiddleware`` shape:
-      ``resume={"decisions": [{"type": "approve"}, …]}``. The first
-      decision wins for reporting purposes (the demo always emits
-      a single decision per interrupt, matching the action-request
-      count).
-    * The legacy single-decision shape:
-      ``resume={"type": "accept", …}``.
+    1. ``resume["_project_decision_type"]`` -- the sidecar set by
+       :func:`langchain_resume_command_from_decision` and
+       :func:`auto_accept_interrupt`. Always project vocab
+       (``accept``/``edit``/``reject``/``respond``). This is the
+       authoritative source.
+    2. ``resume["decisions"][0]["type"]`` -- the langchain HITL
+       middleware shape. Reverse-mapped via
+       :data:`_LANGCHAIN_TO_PROJECT_DECISION` so the SSE event echoes
+       project vocab. Lossy for ``respond`` (folded to ``reject``)
+       but only hit when the sidecar is missing.
+    3. ``resume["type"]`` -- the legacy single-decision shape
+       (``Command(resume={"type": "accept"})``). Already project
+       vocab.
 
-    Falls back to ``"respond"`` when neither shape matches so the
-    UI never renders ``None``.
+    Falls back to ``"respond"`` when none match so the UI never
+    renders ``None``.
     """
     resume = getattr(command, "resume", None)
     if isinstance(resume, dict):
+        sidecar = resume.get("_project_decision_type")
+        if isinstance(sidecar, str):
+            return sidecar
         decisions = resume.get("decisions")
         if isinstance(decisions, list) and decisions:
             first = decisions[0]
             if isinstance(first, dict):
                 t = first.get("type")
                 if isinstance(t, str):
-                    return t
+                    return _LANGCHAIN_TO_PROJECT_DECISION.get(t, t)
         decision = resume.get("type")
         if isinstance(decision, str):
             return decision

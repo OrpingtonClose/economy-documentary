@@ -278,11 +278,22 @@ def langchain_resume_command_from_decision(
 
     validate_decision(tool_name, decision)
     langchain_decision = _to_langchain_decision(tool_name, decision)
+    project_type = decision.get("type")
     return Command(
         resume={
             "decisions": [
                 dict(langchain_decision) for _ in range(action_count)
             ],
+            #: Sidecar carrying the operator's original project-vocab
+            #: decision type (``accept`` / ``edit`` / ``reject`` /
+            #: ``respond``) so the SSE
+            #: ``pipeline.approval.resumed`` event can echo what the
+            #: operator actually clicked, not the langchain-translated
+            #: form. Langchain's ``HumanInTheLoopMiddleware`` only
+            #: reads ``response["decisions"]`` so extra keys are
+            #: ignored; see
+            #: ``langchain/agents/middleware/human_in_the_loop.py:337``.
+            "_project_decision_type": project_type,
         },
     )
 

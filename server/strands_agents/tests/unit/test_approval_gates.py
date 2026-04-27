@@ -210,7 +210,10 @@ class TestLangchainResumeCommand:
             "launch_visual_production", {"type": "accept"}
         )
         assert isinstance(command, Command)
-        assert command.resume == {"decisions": [{"type": "approve"}]}
+        assert command.resume == {
+            "decisions": [{"type": "approve"}],
+            "_project_decision_type": "accept",
+        }
 
     def test_edit_wraps_args_under_edited_action(self) -> None:
         command = langchain_resume_command_from_decision(
@@ -227,6 +230,7 @@ class TestLangchainResumeCommand:
                     },
                 },
             ],
+            "_project_decision_type": "edit",
         }
 
     def test_reject_carries_reason_as_message(self) -> None:
@@ -236,18 +240,23 @@ class TestLangchainResumeCommand:
         )
         assert command.resume == {
             "decisions": [{"type": "reject", "message": "bad shot"}],
+            "_project_decision_type": "reject",
         }
 
     def test_respond_folds_into_reject(self) -> None:
         # langchain HITL has no ``respond`` action; surface the
         # operator's content as a reject ``message`` so the agent
-        # transcript still records it.
+        # transcript still records it. The ``_project_decision_type``
+        # sidecar still preserves the original ``respond`` so the SSE
+        # event echoes the operator's actual click instead of the
+        # langchain-translated ``reject``.
         command = langchain_resume_command_from_decision(
             "request_human_approval",
             {"type": "respond", "content": "see attached"},
         )
         assert command.resume == {
             "decisions": [{"type": "reject", "message": "see attached"}],
+            "_project_decision_type": "respond",
         }
 
     def test_action_count_replicates_decision(self) -> None:
@@ -260,6 +269,7 @@ class TestLangchainResumeCommand:
         )
         assert command.resume == {
             "decisions": [{"type": "approve"}] * 5,
+            "_project_decision_type": "accept",
         }
 
     def test_action_count_zero_raises(self) -> None:
@@ -726,6 +736,7 @@ class TestAutoRejectInterrupt:
             "decisions": [
                 {"type": "reject", "message": "no operator attached"},
             ],
+            "_project_decision_type": "reject",
         }
 
     def test_request_human_approval_gets_respond_not_reject(self) -> None:
@@ -741,6 +752,7 @@ class TestAutoRejectInterrupt:
             "decisions": [
                 {"type": "reject", "message": "no operator attached"},
             ],
+            "_project_decision_type": "respond",
         }
 
     def test_launch_visual_production_gets_reject(self) -> None:
@@ -822,6 +834,7 @@ class TestQueueOperatorDecision:
             # ``KeyError: 'decisions'`` mid-run.
             assert command.resume == {
                 "decisions": [{"type": "approve"}],
+                "_project_decision_type": "accept",
             }
             resume_file = tmp_path / "approvals" / "resume_int-abc.json"
             assert resume_file.exists()
@@ -857,9 +870,11 @@ class TestReplayOperatorDecisions:
             )
             assert first.resume == {
                 "decisions": [{"type": "approve"}],
+                "_project_decision_type": "accept",
             }
             assert second.resume == {
                 "decisions": [{"type": "reject", "message": "no"}],
+                "_project_decision_type": "reject",
             }
             assert (tmp_path / "approvals" / "resume_int-1.json").exists()
             assert (tmp_path / "approvals" / "resume_int-2.json").exists()

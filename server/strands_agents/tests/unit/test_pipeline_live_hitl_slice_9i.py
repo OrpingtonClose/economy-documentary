@@ -185,16 +185,151 @@ class TestTranslateApprovalGate:
             "pipeline.approval_resumed",
             {
                 "gate_name": "launch_assembly",
-                "decision": "approve",
+                "decision": "accept",
                 "interrupt_id": "int-789",
                 "run_id": "run-xyz",
             },
         )
 
         assert translated.kind == "pipeline.approval.resumed"
-        assert translated.detail["decision"] == "approve"
+        assert translated.detail["decision"] == "accept"
         assert translated.detail["interrupt_id"] == "int-789"
         assert translated.detail["run_id"] == "run-xyz"
+
+
+# ---------------------------------------------------------------------------
+# _decision_from_command — project-vocab on the SSE wire
+# ---------------------------------------------------------------------------
+
+
+class TestDecisionFromCommand:
+    """Pin that the SSE ``pipeline.approval.resumed`` event echoes the
+    operator's original project vocab (``accept`` / ``edit`` / ``reject``
+    / ``respond``), not the langchain-translated form (``approve`` /
+    ``edit`` / ``reject``).
+
+    The bug this guards against: ``langchain_resume_command_from_decision``
+    builds a ``Command(resume={"decisions": [{"type": "approve"}, ...]})``
+    where the inner type is langchain vocab. Reading that directly into
+    the SSE event leaks ``approve`` to the frontend, so the operator
+    sees ``resumed: approve`` after clicking ``accept``. The
+    ``_project_decision_type`` sidecar fixes this by carrying the
+    operator's original click through the resume payload.
+    """
+
+    def test_sidecar_returns_project_vocab_accept(self) -> None:
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        command = Command(
+            resume={
+                "decisions": [{"type": "approve"}],
+                "_project_decision_type": "accept",
+            },
+        )
+        assert _decision_from_command(command) == "accept"
+
+    def test_sidecar_returns_project_vocab_respond(self) -> None:
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        # ``respond`` collapses to ``reject`` on the langchain side but
+        # the sidecar preserves the operator's actual click.
+        command = Command(
+            resume={
+                "decisions": [
+                    {"type": "reject", "message": "see attached"},
+                ],
+                "_project_decision_type": "respond",
+            },
+        )
+        assert _decision_from_command(command) == "respond"
+
+    def test_sidecar_returns_project_vocab_edit_and_reject(self) -> None:
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        edit_cmd = Command(
+            resume={
+                "decisions": [
+                    {
+                        "type": "edit",
+                        "edited_action": {"name": "t", "args": {}},
+                    },
+                ],
+                "_project_decision_type": "edit",
+            },
+        )
+        reject_cmd = Command(
+            resume={
+                "decisions": [{"type": "reject", "message": "x"}],
+                "_project_decision_type": "reject",
+            },
+        )
+        assert _decision_from_command(edit_cmd) == "edit"
+        assert _decision_from_command(reject_cmd) == "reject"
+
+    def test_reverse_maps_langchain_vocab_when_sidecar_missing(self) -> None:
+        # Legacy callers that build ``Command(resume={"decisions": ...})``
+        # without the sidecar still land on project vocab via the reverse
+        # map. ``approve`` → ``accept``, ``reject`` → ``reject``,
+        # ``edit`` → ``edit``.
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        approve_cmd = Command(resume={"decisions": [{"type": "approve"}]})
+        reject_cmd = Command(resume={"decisions": [{"type": "reject"}]})
+        edit_cmd = Command(resume={"decisions": [{"type": "edit"}]})
+        assert _decision_from_command(approve_cmd) == "accept"
+        assert _decision_from_command(reject_cmd) == "reject"
+        assert _decision_from_command(edit_cmd) == "edit"
+
+    def test_legacy_single_decision_shape_passthrough(self) -> None:
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        legacy = Command(resume={"type": "accept"})
+        assert _decision_from_command(legacy) == "accept"
+
+    def test_no_resume_falls_back_to_respond(self) -> None:
+        from langgraph.types import Command
+
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+        )
+
+        empty = Command()
+        assert _decision_from_command(empty) == "respond"
+
+    def test_auto_accept_command_round_trips_to_accept(self) -> None:
+        # ``auto_accept_interrupt`` is the CI/demo default. After this
+        # fix it must emit a Command whose ``_decision_from_command``
+        # readout is project-vocab ``accept`` so the SSE event matches
+        # what the user clicked.
+        from strands_agents.playground.pipeline_live_runner import (
+            _decision_from_command,
+            auto_accept_interrupt,
+        )
+
+        command = asyncio.run(
+            auto_accept_interrupt({"__interrupt__": [{"value": "x"}]}),
+        )
+        assert _decision_from_command(command) == "accept"
 
 
 # ---------------------------------------------------------------------------
