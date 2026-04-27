@@ -291,6 +291,15 @@ class LiveB2CheckpointStore:
         self._entries: dict[str, ManifestEntry] = {}
         self._by_idem: dict[str, str] = {}
         self._run_order: dict[str, list[str]] = {}
+        # idempotency_key -> Event signalling that the in-flight upload
+        # has terminated (success or failure). Concurrent callers with
+        # the same key wait on this event rather than racing the B2
+        # upload + manifest insert. Without this, two threads with the
+        # same ``(run_id, kind, revision_tag, sha256)`` both pass the
+        # initial idempotency check before either registers, both call
+        # ``bucket.upload_bytes``, and the second ``self._by_idem``
+        # write orphans the first artifact in ``self._entries``.
+        self._in_flight: dict[str, threading.Event] = {}
 
     def _ensure_client(self) -> tuple[object, object]:
         """Lazily build the b2sdk client + bucket handle.
@@ -323,10 +332,73 @@ class LiveB2CheckpointStore:
         idem = _idempotency_key(
             run_id=run_id, kind=kind, revision_tag=revision_tag, sha256=sha256
         )
-        with self._lock:
-            existing_id = self._by_idem.get(idem)
-            if existing_id is not None:
-                return self._entries[existing_id]
+
+        # Loop until either (a) we observe the idempotent fast-path,
+        # or (b) we successfully claim the in-flight slot for ``idem``.
+        # A concurrent caller with the same key parks on the event
+        # outside the critical section, then re-checks.
+        while True:
+            with self._lock:
+                existing_id = self._by_idem.get(idem)
+                if existing_id is not None:
+                    # Idempotent replay — same bytes, same revision,
+                    # same kind. Either the original caller registered
+                    # (race resolved cleanly) or the manifest was
+                    # populated by an earlier successful upload.
+                    return self._entries[existing_id]
+
+                in_flight = self._in_flight.get(idem)
+                if in_flight is None:
+                    # We're the first caller for this idem; claim it
+                    # by registering an Event under the lock so any
+                    # concurrent caller will park on it.
+                    in_flight = threading.Event()
+                    self._in_flight[idem] = in_flight
+
+                    # Monotonic revision guard — port from the
+                    # in-memory variant. Lexicographic compare on the
+                    # caller-supplied tag (e.g. ``r0001`` < ``r0002``).
+                    run_entries = [
+                        self._entries[aid]
+                        for aid in self._run_order.get(run_id, [])
+                    ]
+                    if run_entries:
+                        latest_tag = max(e.revision_tag for e in run_entries)
+                        if revision_tag < latest_tag:
+                            del self._in_flight[idem]
+                            in_flight.set()
+                            raise StaleRevisionError(
+                                run_id=run_id,
+                                attempted_revision_tag=revision_tag,
+                                latest_revision_tag=latest_tag,
+                            )
+
+                    # Idempotency-collision guard — same key with
+                    # different bytes is always a caller bug. Cannot
+                    # be reached via the normal code path (the key
+                    # embeds the sha256), but guards against a bypass
+                    # that pre-computes the key elsewhere.
+                    for existing_entry in run_entries:
+                        if (
+                            existing_entry.idempotency_key == idem
+                            and existing_entry.sha256 != sha256
+                        ):
+                            del self._in_flight[idem]
+                            in_flight.set()
+                            raise DuplicateIdempotencyKeyError(
+                                idempotency_key=idem,
+                                existing_artifact_id=existing_entry.artifact_id,
+                                incoming_sha256=sha256,
+                            )
+
+                    break  # Exit while-loop; we own the upload slot.
+                # Else: another thread holds the slot — wait outside.
+
+            in_flight.wait()
+            # Loop and re-check: the winner has either registered
+            # (next iteration hits the ``_by_idem`` fast-path) or
+            # failed (next iteration sees ``_in_flight`` cleared and
+            # claims the slot itself).
 
         artifact_id = f"art-{uuid.uuid4().hex[:12]}"
         b2_key = _b2_key(
@@ -335,13 +407,23 @@ class LiveB2CheckpointStore:
             revision_tag=revision_tag,
             artifact_id=artifact_id,
         )
-        _, bucket = self._ensure_client()
-        # ``upload_bytes`` is the b2sdk.v2 surface for uploading raw
-        # payloads. Returns a ``FileVersion``.
-        bucket.upload_bytes(  # type: ignore[union-attr]
-            data_bytes=payload,
-            file_name=b2_key,
-        )
+
+        try:
+            _, bucket = self._ensure_client()
+            # ``upload_bytes`` is the b2sdk.v2 surface for uploading
+            # raw payloads. Returns a ``FileVersion``.
+            bucket.upload_bytes(  # type: ignore[union-attr]
+                data_bytes=payload,
+                file_name=b2_key,
+            )
+        except BaseException:
+            # Release the in-flight claim so a retry (same thread or a
+            # parked concurrent caller) can attempt the upload again.
+            with self._lock:
+                self._in_flight.pop(idem, None)
+            in_flight.set()
+            raise
+
         entry = ManifestEntry(
             artifact_id=artifact_id,
             run_id=run_id,
@@ -353,10 +435,33 @@ class LiveB2CheckpointStore:
             uploaded_at_iso=_now_iso(),
             idempotency_key=idem,
         )
+
         with self._lock:
+            # Defense in depth — even with the in-flight guard above,
+            # a misbehaving caller that pre-computes the idempotency
+            # key could still collide. If someone else registered
+            # while we were uploading, discard our manifest entry and
+            # return theirs. The orphan B2 object is wasted bytes but
+            # not corrupt.
+            existing_id = self._by_idem.get(idem)
+            if existing_id is not None:
+                self._in_flight.pop(idem, None)
+                in_flight.set()
+                logger.warning(
+                    "run_id=<%s>, idem=<%s>, orphan_b2_key=<%s> "
+                    "| concurrent live b2 upload won; discarding duplicate",
+                    run_id,
+                    idem,
+                    b2_key,
+                )
+                return self._entries[existing_id]
             self._entries[artifact_id] = entry
             self._by_idem[idem] = artifact_id
             self._run_order.setdefault(run_id, []).append(artifact_id)
+            self._in_flight.pop(idem, None)
+
+        in_flight.set()
+
         logger.info(
             "run_id=<%s>, artifact_id=<%s>, kind=<%s>, b2_key=<%s>, size=<%d> "
             "| live b2 upload ok",
