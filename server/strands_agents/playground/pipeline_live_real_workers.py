@@ -150,9 +150,10 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         hard-coded placeholder line (slice 9c).
         """
         resolved_text = _resolve_audio_text(scene_id, text)
+        effective_voice_id = voice_id
         body = {
             "scene_id": scene_id,
-            "voice_id": voice_id,
+            "voice_id": effective_voice_id,
             "text": resolved_text,
             "duration_s": _DEFAULT_AUDIO_DURATION_S,
             "seed": _DEFAULT_SEED,
@@ -161,6 +162,37 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         try:
             with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
                 resp = client.post(f"{worker_url}/tts/render", json=body)
+                # AGENTS.md hard invariant #1: one TTS voice per VM. The
+                # orchestrator's scripted brain may pick a character
+                # voice that differs from the worker's pinned voice;
+                # the worker 409s with ``reason=voice_mismatch`` and
+                # ``pinned_voice_id=<X>``. Coerce the request to the
+                # worker's pinned voice and retry once. Without this,
+                # the dispatched render hangs the timing loop until the
+                # 30 min httpx timeout.
+                if resp.status_code == 409:
+                    try:
+                        detail = resp.json().get("detail") or {}
+                    except ValueError:
+                        detail = {}
+                    if (
+                        isinstance(detail, dict)
+                        and detail.get("reason") == "voice_mismatch"
+                        and isinstance(detail.get("pinned_voice_id"), str)
+                    ):
+                        pinned = detail["pinned_voice_id"]
+                        logger.info(
+                            "scene_id=<%s>, requested=<%s>, pinned=<%s> | "
+                            "retrying with pinned voice",
+                            scene_id,
+                            effective_voice_id,
+                            pinned,
+                        )
+                        effective_voice_id = pinned
+                        body["voice_id"] = pinned
+                        resp = client.post(
+                            f"{worker_url}/tts/render", json=body
+                        )
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | tts dispatch failed", scene_id, exc
@@ -168,7 +200,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             return _envelope(
                 "launch_audio_render",
                 scene_id=scene_id,
-                voice_id=voice_id,
+                voice_id=effective_voice_id,
                 error=repr(exc),
             )
 
@@ -220,7 +252,8 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         return _envelope(
             "launch_audio_render",
             scene_id=scene_id,
-            voice_id=voice_id,
+            voice_id=effective_voice_id,
+            requested_voice_id=voice_id,
             text=resolved_text,
             status_code=resp.status_code,
             wav_bytes_len=wav_len,

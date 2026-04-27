@@ -343,7 +343,12 @@ def _build_store(backend: str | None) -> B2CheckpointStore:
         # lazily inside upload/download.
         from strands_agents.b2_checkpoint import LiveB2CheckpointStore
 
-        return LiveB2CheckpointStore()
+        bucket_name = (
+            os.environ.get("B2_ARTIFACTS_BUCKET", "").strip()
+            or os.environ.get("B2_BUCKET_NAME", "").strip()
+            or None
+        )
+        return LiveB2CheckpointStore(bucket_name=bucket_name)
     return InMemoryB2CheckpointStore()
 
 
