@@ -700,7 +700,11 @@ def build_demo_live_agent(
         ),
     )
     base_tools = _demo_tools()
-    real_overrides = build_real_worker_tools(run_dir)
+    real_overrides = build_real_worker_tools(
+        run_dir,
+        enable_real_assembly=True,
+        enable_real_b2=True,
+    )
     tools = apply_real_worker_overrides(base_tools, real_overrides)
     # langchain HITL middleware vocabulary: ``approve`` / ``edit`` /
     # ``reject``. The project's operator-console vocabulary

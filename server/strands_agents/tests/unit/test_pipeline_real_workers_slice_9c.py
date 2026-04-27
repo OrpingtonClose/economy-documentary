@@ -201,10 +201,26 @@ class _FakeResponse:
 
 
 class _FakeHTTPXClient:
-    """Captures ``httpx.Client.post`` calls for assertion."""
+    """Captures ``httpx.Client.post`` calls for assertion.
 
-    def __init__(self, *, response: _FakeResponse) -> None:
-        self.response = response
+    Accepts either a single ``response`` (returned for every call) or a
+    list ``responses`` consumed sequentially — used by tests that
+    exercise the voice_mismatch retry path.
+    """
+
+    def __init__(
+        self,
+        *,
+        response: _FakeResponse | None = None,
+        responses: list[_FakeResponse] | None = None,
+    ) -> None:
+        if responses is None:
+            assert response is not None
+            self._responses = [response]
+            self._cycle = True
+        else:
+            self._responses = list(responses)
+            self._cycle = False
         self.calls: list[dict[str, Any]] = []
 
     def __enter__(self) -> "_FakeHTTPXClient":
@@ -214,8 +230,11 @@ class _FakeHTTPXClient:
         return None
 
     def post(self, url: str, *, json: dict[str, Any]) -> _FakeResponse:
-        self.calls.append({"url": url, "json": json})
-        return self.response
+        # Snapshot the body — callers may mutate the dict between retries.
+        self.calls.append({"url": url, "json": dict(json)})
+        if self._cycle:
+            return self._responses[0]
+        return self._responses.pop(0)
 
 
 @pytest.fixture
@@ -275,6 +294,57 @@ class TestRealAudioDispatcher:
         assert result["args"]["text"] == narration
         assert result["args"]["wav_bytes_len"] > 0
         assert result["args"]["engine"] == "qwen3-tts"
+
+    def test_retries_with_pinned_voice_on_409_voice_mismatch(
+        self,
+        run_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """AGENTS.md hard invariant #1: one TTS voice per VM.
+
+        When the orchestrator dispatches a non-pinned ``voice_id``, the
+        worker 409s with ``reason=voice_mismatch`` and the pinned voice
+        in the detail payload. The dispatcher must re-issue the request
+        with the pinned voice instead of bubbling the failure up — that
+        is what allows the timing loop to converge against a single-VM
+        TTS pool.
+        """
+        rejection = _FakeResponse(
+            status_code=409,
+            json_payload={
+                "detail": {
+                    "reason": "voice_mismatch",
+                    "pinned_voice_id": "Ryan",
+                    "requested_voice_id": "alex",
+                }
+            },
+        )
+        success = _FakeResponse(status_code=200, json_payload=_wav_payload())
+        fake = _FakeHTTPXClient(responses=[rejection, success])
+        monkeypatch.setattr(httpx, "Client", lambda **_: fake)
+
+        overrides = build_real_worker_tools(
+            run_dir,
+            audio_worker_url="http://audio.invalid:8000",
+            video_worker_url=None,
+        )
+        audio_tool = overrides["launch_audio_render"]
+
+        result = audio_tool.invoke(
+            {
+                "scene_id": "scene_001",
+                "voice_id": "alex",
+                "text": "Inflation is the rate at which prices rise.",
+            }
+        )
+
+        assert len(fake.calls) == 2
+        assert fake.calls[0]["json"]["voice_id"] == "alex"
+        assert fake.calls[1]["json"]["voice_id"] == "Ryan"
+        assert result["args"]["status_code"] == 200
+        assert result["args"]["voice_id"] == "Ryan"
+        assert result["args"]["requested_voice_id"] == "alex"
+        assert result["args"]["wav_bytes_len"] > 0
 
     def test_falls_back_to_placeholder_when_text_missing(
         self,

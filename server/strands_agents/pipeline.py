@@ -416,7 +416,11 @@ def build_documentary_orchestrator(
     tools = apply_real_scenario_overrides(base_tools, scenario_overrides)
     visual_overrides = build_real_visual_tools(model_id=llm_model_id)
     tools = apply_real_visual_overrides(tools, visual_overrides)
-    real_overrides = build_real_worker_tools(run_dir)
+    real_overrides = build_real_worker_tools(
+        run_dir,
+        enable_real_assembly=True,
+        enable_real_b2=True,
+    )
     tools = apply_real_worker_overrides(tools, real_overrides)
     return build_orchestrator(
         run_dir,

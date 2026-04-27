@@ -332,13 +332,15 @@ class TestRealWorkerOverlay:
         build_documentary_orchestrator(tmp_path, model=_fake_model())
 
         # Non-overlaid tools should still be the canonical objects.
+        # ``launch_assembly`` + ``launch_b2_sync`` are part of the
+        # production overlay — single production path mandate; they are
+        # always swapped to the real implementations whenever
+        # ``build_documentary_orchestrator`` runs.
         names_to_canonical = {
             "generate_scenario": _placeholders.generate_scenario,
             "evaluate_scenario": _placeholders.evaluate_scenario,
             "refine_scenario": _placeholders.refine_scenario,
             "evaluate_timing": _placeholders.evaluate_timing,
-            "launch_assembly": _placeholders.launch_assembly,
-            "launch_b2_sync": _placeholders.launch_b2_sync,
             "check_tasks": _placeholders.check_tasks,
             "await_tasks": _placeholders.await_tasks,
             "request_human_approval": request_human_approval,
@@ -348,6 +350,9 @@ class TestRealWorkerOverlay:
         }
         for name, canonical in names_to_canonical.items():
             assert by_name[name] is canonical, name
+        # The production overlay must replace these — not the placeholders.
+        assert by_name["launch_assembly"] is not _placeholders.launch_assembly
+        assert by_name["launch_b2_sync"] is not _placeholders.launch_b2_sync
 
     def test_tool_count_stable(
         self,
