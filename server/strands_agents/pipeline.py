@@ -33,6 +33,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from . import _placeholders
 from .approval import INTERRUPT_GATE_CONFIG, request_human_approval
+from .qa_gates import qa_duration_align, qa_stills_judge, qa_video_artifact_probe
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,22 @@ Stages:
    without this argument LTX-2.3 emits a fixed ~3.7 s clip and the
    muxer freezes the last frame). Dispatch one call per scene in
    parallel (slice 9f).
+
+   After every successful ``launch_visual_production`` and BEFORE
+   moving to assembly, you MUST call BOTH ``qa_duration_align``
+   (with the scene's ``audio_path`` from the audio dispatcher
+   envelope and ``video_path`` from the visual dispatcher envelope)
+   AND ``qa_stills_judge`` (with the same ``video_path``). These
+   gates are non-negotiable per AGENTS.md hard invariants §3-5
+   ("fail closed on video render", "QA immediately after each
+   artifact"). If either gate returns ``verdict == "fail"``, do NOT
+   proceed to assembly — delegate to the ``escalation`` SubAgent
+   via the task tool with a payload containing the failed gate's
+   envelope, the scene_id, and the dispatcher envelopes. Follow
+   the escalation decision (``retry`` / ``fix`` / ``skip`` /
+   ``escalate_to_human`` / ``abort``). Never silently accept a
+   failed QA gate; never re-run the same dispatch with the same
+   args without an escalation decision.
 5. Assembly — launch_assembly, await, then launch_b2_sync.
 
 Approval gates (handled by interrupt_on): launch_visual_production,
@@ -185,6 +202,9 @@ def build_default_tools() -> list[_Tool]:
         _placeholders.launch_b2_sync,
         _placeholders.check_tasks,
         _placeholders.await_tasks,
+        qa_duration_align,
+        qa_stills_judge,
+        qa_video_artifact_probe,
         request_human_approval,
     ]
 

@@ -128,8 +128,9 @@ class TestDefaultTools:
         assert expected_leaves.issubset(names), expected_leaves - names
 
     def test_tool_count(self) -> None:
-        # 10 leaves + request_human_approval = 11
-        assert len(build_default_tools()) == 11
+        # 10 leaves + 3 QA gates (qa_duration_align, qa_stills_judge,
+        # qa_video_artifact_probe) + request_human_approval = 14
+        assert len(build_default_tools()) == 14
 
 
 class TestRealWorkerOverlay:
@@ -352,7 +353,8 @@ class TestRealWorkerOverlay:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Overlays must not add or drop tools — count stays at 11.
+        # Overlays must not add or drop tools — count stays at 14
+        # (10 leaves + 3 QA gates + request_human_approval, slice 9l).
         monkeypatch.setenv("QWEN3_TTS_WORKER_URL", "http://audio.invalid:8000")
         monkeypatch.setenv("LTX_VIDEO_WORKER_URL", "http://video.invalid:9000")
         captured: dict[str, Any] = {}
@@ -373,7 +375,7 @@ class TestRealWorkerOverlay:
             _capture,
         )
         build_documentary_orchestrator(tmp_path, model=_fake_model())
-        assert len(captured["tools"]) == 11
+        assert len(captured["tools"]) == 14
 
 
 class TestDefaultSubagents:
@@ -440,6 +442,24 @@ class TestBuildOrchestrator:
             "Assembly",
         ):
             assert keyword in ORCHESTRATOR_PROMPT, keyword
+
+    def test_prompt_mandates_qa_gates_after_visual_production(self) -> None:
+        # Slice 9l anti-drift: a future LLM rewriting the prompt and
+        # dropping the QA gate instructions must fail CI. The slice
+        # 9j frozen-frame regression is exactly what happens when
+        # these gates aren't called.
+        for keyword in (
+            "qa_duration_align",
+            "qa_stills_judge",
+            "escalation",
+            "AGENTS.md hard invariants",
+        ):
+            assert keyword in ORCHESTRATOR_PROMPT, keyword
+
+    def test_prompt_forbids_silent_qa_failure(self) -> None:
+        # Either gate failing must NOT silently advance to assembly.
+        assert "Never silently accept a" in ORCHESTRATOR_PROMPT
+        assert "verdict == \"fail\"" in ORCHESTRATOR_PROMPT
 
 
 # ---------------------------------------------------------------------------
