@@ -1768,7 +1768,10 @@ async def _dispatch_pipeline_run(
                 logger.debug("pipeline run span close failed", exc_info=True)
         await stream.close(terminal=terminal)
         if run_dir is not None:
-            shutil.rmtree(run_dir, ignore_errors=True)
+            if os.environ.get("KEEP_RUN_DIR", "").strip().lower() in ("1", "true", "yes", "on"):
+                logger.info("run_dir=<%s> | KEEP_RUN_DIR set, preserving", run_dir)
+            else:
+                shutil.rmtree(run_dir, ignore_errors=True)
 
 
 @router.post("/pipeline/runs", response_class=JSONResponse)
