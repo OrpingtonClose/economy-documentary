@@ -395,15 +395,22 @@ def _build_visual_tool(
             "fps": _DEFAULT_FPS,
             "seed": _DEFAULT_SEED,
         }
+        # Resolve the worker URL OUTSIDE the GPU dispatch lock. The lock
+        # serialises ``/video/render`` calls so the H200 queue stays at
+        # depth=1 (AGENTS.md hard invariant); it is not for serialising
+        # provisioning waits, which can block up to 45 minutes for a
+        # Vast.ai VM and would otherwise stall every concurrent
+        # pipeline run on the server. Audio dispatch already resolves
+        # its URL outside any lock for the same reason.
+        resolved_url = worker_url or _resolve_worker_url_on_demand(
+            role="video",
+            primary_env="LTX_VIDEO_WORKER_URL",
+            fallback_env="GPU_WORKER_URL",
+        )
         started_ms = _now_ms()
         try:
             with _video_dispatch_lock:
                 logger.info("scene_id=<%s> | ltx dispatch acquired GPU lock", scene_id)
-                resolved_url = worker_url or _resolve_worker_url_on_demand(
-                    role="video",
-                    primary_env="LTX_VIDEO_WORKER_URL",
-                    fallback_env="GPU_WORKER_URL",
-                )
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
                     resp = client.post(f"{resolved_url}/video/render", json=body)
         except httpx.HTTPError as exc:
