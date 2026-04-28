@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Documentary Pipeline — Anxious Operator UX Report</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 900px; margin: 2em auto; padding: 0 1em; line-height: 1.7; color: #222; background: #fafafa; }
+h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 0.3em; }
+h2 { color: #1a1a2e; margin-top: 2em; border-bottom: 1px solid #ddd; padding-bottom: 0.2em; }
+h3 { color: #16213e; }
+blockquote { border-left: 4px solid #e94560; margin: 1em 0; padding: 0.5em 1em; background: #fff3f3; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+th { background: #1a1a2e; color: white; }
+tr:nth-child(even) { background: #f0f0f0; }
+code { background: #fee; padding: 2px 5px; border-radius: 3px; color: #c0392b; }
+hr { border: none; border-top: 2px solid #e94560; margin: 2em 0; }
+strong { color: #c0392b; }
+</style>
+</head>
+<body>
+<h1>Documentary Pipeline — Anxious Operator UX Report</h1>
+<p><strong>Topic chosen:</strong> The Secret Life of Honey Bees<br />
+<strong>Run ID:</strong> run_5b665c200779<br />
+<strong>Total time on page:</strong> ~3 minutes 20 seconds<br />
+<strong>Pipeline elapsed:</strong> 7.725 seconds (claimed)</p>
+<hr />
+<h2>1. Did you produce a watchable documentary? <strong>No.</strong></h2>
+<p>I stopped because the pipeline said "run.ok" and "done" on every stage — all green — but then:
+- Every single scene in the QA table shows <strong>FAIL</strong> in red
+- Audio: <strong>0.00s</strong>. Video: <strong>0.00s</strong>. The documentary is zero seconds long.
+- The "Final master MP4" shows <code>b2://documentary/The_Secret_Life_of_Honey_Bees/master_mp4/r0001.mp4</code> — a storage path I cannot click, open, or play
+- There is <strong>no video player</strong> anywhere on the page
+- There is <strong>no playable link</strong> anywhere on the page</p>
+<p>The page told me the run succeeded. The QA table told me everything failed. I have no video. I don't know which to believe.</p>
+<hr />
+<h2>2. The minute-by-minute anxiety log</h2>
+<blockquote>
+<p><strong>05:46:16</strong> — Page loaded. I see "Documentary Pipeline" with a long paragraph of jargon: "structured events," "trajectory log," "DeepAgent orchestrator," "LLM-backed QA gates." My stomach tightens. I don't know what any of these words mean. There's a form with a topic ("The Federal Reserve"), duration (60), and language (English). The "Run pipeline" button is bright blue. Everything else says "idle" and has dashes. I'm afraid to touch anything. <strong>Anxiety: 5/10.</strong></p>
+<p><strong>05:46:30</strong> — I changed the topic to "The Secret Life of Honey Bees." This felt safe. It's just a text box. I re-read the duration field — 60. Sixty what? Seconds? Minutes? It says "(sec)" next to it. Ok, 60 seconds. That seems short for a documentary but I don't want to change it and break something. <strong>Anxiety: 4/10.</strong></p>
+<p><strong>05:46:35</strong> — I clicked "Run pipeline." The button changed to "Running…" with a spinner. The narrator box turned bright and says "Subscribed to the run. Waiting on the orchestrator to emit its first event…" — what is an orchestrator? Why is it EMITTING? The top-right says "waiting for first event…" I don't know what an event is in this context. All stage boxes still show dashes. <strong>Anxiety: 6/10.</strong></p>
+<p><strong>05:46:36 to 05:47:10</strong> — I was staring at the screen waiting for something to happen. The page says it's "waiting" and I'm waiting too. I noticed "110 ev" appear next to the run in the left sidebar. I don't know what "ev" means. Events? Envelopes? I saw the stage boxes start saying "done" but it all happened so fast I couldn't follow. <strong>Anxiety: 7/10</strong> — everything changed at once and I couldn't read any of it in real time.</p>
+<p><strong>05:47:15</strong> — The narrator now says "RUN FINISHED." All five stage boxes say "done" in green. There's a "run.ok" badge. The narrator text includes backtick-formatted code: <code>target_duration_sec</code>, <code>language</code>, <code>final_mp4_b2_url</code>. WHY IS THERE CODE IN THE NARRATOR TEXT. The narrator is supposed to be speaking to ME, a PERSON, not a computer. It says "contract-honest" — I have no idea what that means. It says "No evaluators were run" — was I supposed to run evaluators?? <strong>Anxiety: 7/10.</strong></p>
+<p><strong>05:47:22</strong> — I scrolled down and saw the "Approval gates" section. It shows <code>launch_visual_production</code> and <code>launch_assembly</code> both with green "resumed: accept" badges. Below them: a technical API path <code>POST /playground/approval/resume/{run_id}/{interrupt_id}</code>. This is CODE on the screen! On a website meant for me! And it says "Unattended runs auto-resume" — wait, was I supposed to be attended? Did I miss something? <strong>Anxiety: 8/10.</strong></p>
+<p><strong>05:47:30</strong> — I saw "Final master MP4" with the text <code>b2://documentary/The_Secret_Life_of_Honey_Bees/master_mp4/r0001.mp4</code>. This is not a link. I cannot click it. There is no play button. Where is my video?? <strong>Anxiety: 9/10.</strong></p>
+<p><strong>05:47:45</strong> — I expanded "Per-scene QA metrics." EVERYTHING IS RED. Every scene — scene_001 through scene_005 — has FAIL on every metric. The values are all dashes (—). The MASTER row says 0.00s audio, 0.00s video, "final verdict: FAIL." But the top of the page says run.ok?? THE PAGE IS CONTRADICTING ITSELF. <strong>Anxiety: 10/10.</strong></p>
+<p><strong>05:48:00</strong> — I expanded the Trajectory. 110 entries of pure technical log. <code>pipeline.tool.qa_video_artifact_probe.start</code>, <code>pipeline.approval.waiting</code>, <code>pipeline.tool.launch_b2_sync.end</code>. None of this is English. Event #2 says "GPU workers provisioning in background (TTS H200, video L40S — ETA ~10m)" but the whole run took 7.8 seconds. The GPU workers never showed up, did they? <strong>Anxiety: 10/10.</strong></p>
+</blockquote>
+<hr />
+<h2>3. Words and phrases that scared or confused me</h2>
+<table>
+<thead>
+<tr>
+<th>Word/Phrase</th>
+<th>What I thought it meant</th>
+<th>What I eventually figured out</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>pipeline</strong></td>
+<td>Plumbing? An oil pipeline?</td>
+<td>Some kind of process that makes videos, apparently</td>
+</tr>
+<tr>
+<td><strong>orchestrator</strong></td>
+<td>Someone conducting an orchestra?</td>
+<td>A computer program that runs the steps</td>
+</tr>
+<tr>
+<td><strong>emit</strong> / <strong>emits structured events</strong></td>
+<td>Something toxic being released</td>
+<td>The system sending status messages</td>
+</tr>
+<tr>
+<td><strong>trajectory</strong></td>
+<td>A rocket's path</td>
+<td>A log of everything that happened</td>
+</tr>
+<tr>
+<td><strong>QA gates</strong></td>
+<td>An entrance to a building? Quality… something?</td>
+<td>Quality checks on the video/audio (that all failed)</td>
+</tr>
+<tr>
+<td><strong>approval gate</strong></td>
+<td>A tollbooth I need to pass through?</td>
+<td>A pause point where I'm supposed to approve something</td>
+</tr>
+<tr>
+<td><strong>contract-honest</strong></td>
+<td>Something to do with a legal contract?</td>
+<td>I STILL don't know</td>
+</tr>
+<tr>
+<td><strong>run.ok</strong></td>
+<td>The run is ok</td>
+<td>Apparently doesn't mean the video was actually made</td>
+</tr>
+<tr>
+<td><strong>run.dispatched</strong></td>
+<td>Something was sent somewhere</td>
+<td>The run was started/queued</td>
+</tr>
+<tr>
+<td><strong>b2://</strong></td>
+<td>A vitamin? A type of URL?</td>
+<td>Some kind of file storage path I can't access</td>
+</tr>
+<tr>
+<td><strong>tail_rms</strong></td>
+<td>A tail? RMS like the Titanic?</td>
+<td>No idea. Some audio measurement?</td>
+</tr>
+<tr>
+<td><strong>Δ</strong> (delta)</td>
+<td>A Greek letter from math class</td>
+<td>Some kind of difference measurement</td>
+</tr>
+<tr>
+<td><strong>tol = 0.50s</strong></td>
+<td>Toll? Like a tollbooth charge?</td>
+<td>Tolerance — how much error is allowed?</td>
+</tr>
+<tr>
+<td><strong>mean_delta</strong></td>
+<td>Mean as in average? Or mean as in cruel?</td>
+<td>Average of some differences</td>
+</tr>
+<tr>
+<td><strong>floor = 1.500</strong></td>
+<td>A floor? The ground floor?</td>
+<td>Some minimum threshold value</td>
+</tr>
+<tr>
+<td><strong>silence = —</strong></td>
+<td>Silence equals... nothing?</td>
+<td>A measurement that has no value</td>
+</tr>
+<tr>
+<td><strong>H200 / L40S</strong></td>
+<td>Airplane models</td>
+<td>Types of GPU hardware (I think)</td>
+</tr>
+<tr>
+<td><strong>TTS</strong></td>
+<td>Text to speech? Tuberculosis test?</td>
+<td>Text-to-speech maybe</td>
+</tr>
+<tr>
+<td><strong>ENABLE_PIPELINE_HITL</strong></td>
+<td>An acronym wrapped in an acronym</td>
+<td>Some setting about human involvement</td>
+</tr>
+<tr>
+<td><strong>scene_id</strong></td>
+<td>The ID of a scene</td>
+<td>Ok this one was actually understandable</td>
+</tr>
+<tr>
+<td><strong>POST /playground/approval/resume/{run_id}/{interrupt_id}</strong></td>
+<td>A URL? An address? Code??</td>
+<td>An API endpoint — code that should NOT be shown to me</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>4. Moments where I wanted to give up</h2>
+<ol>
+<li>
+<p><strong>When the narrator spoke in code</strong> (05:47:15) — The narrator said <code>target_duration_sec</code> and <code>final_mp4_b2_url</code>. I thought the narrator was supposed to explain things to me in plain language. Instead it spoke in computer code. I wanted to close the tab because clearly this website wasn't made for people like me. <strong>What I wanted instead:</strong> "Your video is done! Here's the link to watch it." <strong>What brought me back:</strong> Stubbornness and the fact that the stages all said "done" in green.</p>
+</li>
+<li>
+<p><strong>When I saw the QA table of all-red FAILs</strong> (05:47:45) — The top of the page said everything was OK. Then I expanded the QA section and everything was red FAIL. I felt lied to. I wanted to close the tab because I assumed I'd broken something. <strong>What I wanted instead:</strong> If something failed, tell me AT THE TOP, in big clear text. Don't let the header say "ok" while the details say "FAIL." <strong>What brought me back:</strong> Nothing — I was at this point just documenting the wreckage.</p>
+</li>
+<li>
+<p><strong>When I couldn't find a video to play</strong> (05:47:30) — The page shows <code>b2://...</code> which is not a URL I can click. There's no embedded video player. There's no "Watch your documentary" button. The entire POINT was to make a video and there's no way to watch it. <strong>What I wanted instead:</strong> A big, obvious video player right at the top of the "run finished" state, or at LEAST a clickable link. <strong>What brought me back:</strong> The naive hope that maybe I was missing something.</p>
+</li>
+</ol>
+<hr />
+<h2>5. The "is it dead?" check</h2>
+<p>The page was actually never silent for more than ~30 seconds because the entire pipeline completed in 7.8 seconds. This is its own problem — I was told by the event log that "GPU workers provisioning in background... ETA ~10m" but the run finished instantly. Either:
+- The GPU workers never actually provisioned and no real work was done, or
+- The estimate was wildly wrong</p>
+<p>Either way, the speed itself was suspicious. A 60-second documentary produced in 7.8 seconds with 0 scenes and 0.00s of content? That's not "fast" — that's "nothing happened."</p>
+<p>The only brief silence was between clicking "Run pipeline" (05:46:35) and the run finishing (~05:47:10), roughly 35 seconds. During that time the narrator said "Waiting on the orchestrator to emit its first event…" and I was staring at it, hands slightly clammy, wondering if I'd broken it by choosing honey bees as a topic. Did I refresh? No — I was too scared to touch anything.</p>
+<hr />
+<h2>6. Buttons / inputs I was afraid to click</h2>
+<table>
+<thead>
+<tr>
+<th>Element</th>
+<th>What the label said</th>
+<th>What I was afraid would happen</th>
+<th>What actually happened</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>"Run pipeline"</strong> button</td>
+<td>"Run pipeline"</td>
+<td>I'd start something I couldn't stop, or break the system, or get charged money</td>
+<td>It started the pipeline run. The button changed to "Running..." and became unclickable. That was ok.</td>
+</tr>
+<tr>
+<td><strong>"Per-scene QA metrics"</strong> expandable</td>
+<td>"Per-scene QA metrics — click to expand"</td>
+<td>I'd see something terrifying and technical</td>
+<td>I did. A table of all-red FAILs with math symbols.</td>
+</tr>
+<tr>
+<td><strong>"Trajectory (110)"</strong> expandable</td>
+<td>"Trajectory (110) — click to expand"</td>
+<td>110 items of incomprehensible data would flood my screen</td>
+<td>Yes, exactly that. 110 lines of technical event logs.</td>
+</tr>
+<tr>
+<td><strong>"← Components"</strong> link (top right)</td>
+<td>"← Components"</td>
+<td>It would navigate me away from my run and I'd lose everything</td>
+<td>I never clicked it. Still don't know what it does.</td>
+</tr>
+<tr>
+<td><strong>Left sidebar run button</strong></td>
+<td>"run_5b665c2007... The Secret Life of Honey Bees"</td>
+<td>Clicking it would restart or reset my run</td>
+<td>I never clicked it.</td>
+</tr>
+<tr>
+<td><strong>"Run pipeline"</strong> button (after run finished)</td>
+<td>"Run pipeline" — it came back after the run finished</td>
+<td>I'd accidentally start a SECOND run and waste resources or break the first one</td>
+<td>I didn't click it.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>7. Errors I saw</h2>
+<p><strong>No explicit error messages appeared.</strong> The page never showed a red error banner, a stack trace, or an error toast. This is actually WORSE than showing an error, because:</p>
+<ul>
+<li>The page said "run.ok" and "done" — <strong>giving me the impression everything worked</strong></li>
+<li>But the QA metrics table showed all FAIL with null values — <strong>indicating nothing was actually produced</strong></li>
+<li>The narrator said "smooth execution without any notable delays or errors" — <strong>actively lying to me while 0 seconds of video were produced</strong></li>
+</ul>
+<p>The closest thing to an error was the QA table full of red "FAIL" badges with dashes for every value. But this was hidden behind a "click to expand" section, so I had to actively seek it out. If I hadn't expanded it, I would have walked away thinking my documentary was finished.</p>
+<hr />
+<h2>8. The five concrete things the page should do differently</h2>
+<h3>1. When the run finishes, show an honest result — not a misleading "ok"</h3>
+<p><strong>Where:</strong> The "Stage progress" section header and the "run.ok" badge.<br />
+<strong>Current:</strong> Shows "run.ok" in green even when QA verdict is FAIL and 0 content was produced.<br />
+<strong>Should be:</strong> If the QA final verdict is FAIL, or if 0 seconds of audio/video were produced, the badge should say something like <strong>"Run complete — but your video wasn't created. Something went wrong with the media generation."</strong> in orange or red. Never show green "ok" when the output is empty.</p>
+<h3>2. The "Final master MP4" should be an embedded, playable video player — or an honest error</h3>
+<p><strong>Where:</strong> The "Final master MP4" section at the bottom.<br />
+<strong>Current:</strong> Shows <code>b2://documentary/The_Secret_Life_of_Honey_Bees/master_mp4/r0001.mp4</code> as plain, unclickable text.<br />
+<strong>Should be:</strong> If the video exists, embed an HTML5 <code>&lt;video&gt;</code> player with a big play button. If the video does NOT exist (as in this case — 0.00s of content), show: <strong>"Your video couldn't be created this time. The system went through all the steps but no actual video or audio was generated. You can try again by clicking 'Run pipeline.'"</strong> Do NOT show a raw b2:// storage path to an operator.</p>
+<h3>3. The narrator should speak plain English, not code</h3>
+<p><strong>Where:</strong> The "PIPELINE NARRATOR" section.<br />
+<strong>Current:</strong> Says things like <em>"The output appears contract-honest, as it includes expected fields such as <code>target_duration_sec</code>, <code>language</code>, and <code>final_mp4_b2_url</code>"</em><br />
+<strong>Should be:</strong> <strong>"Your documentary about 'The Secret Life of Honey Bees' has finished processing. Unfortunately, no video was produced — all quality checks failed because no media files were generated. This might mean the video-making hardware wasn't ready in time. You can try running it again."</strong> No backtick code. No jargon. No "contract-honest."</p>
+<h3>4. The QA table should be human-readable, not a wall of abbreviations and math</h3>
+<p><strong>Where:</strong> The "Per-scene QA metrics" table.<br />
+<strong>Current:</strong> Columns like <code>qa_audio_completeness</code>, <code>qa_duration_align</code>, <code>qa_stills_judge</code> with values like <code>tail_rms = —</code>, <code>Δ = —</code>, <code>mean_delta = —</code>, <code>floor = 1.500</code>.<br />
+<strong>Should be:</strong> Rename columns to plain English: "Sound quality," "Timing accuracy," "Visual quality." Replace the math values with human-readable summaries: "No audio was generated" instead of <code>tail_rms = —</code>. Use a simple pass/fail summary sentence at the top: <strong>"0 out of 5 scenes passed quality checks. No audio or video was generated."</strong> Hide the raw metrics behind a "Show technical details" toggle for engineers.</p>
+<h3>5. The approval gates should have been actual buttons I could click — or shouldn't show at all</h3>
+<p><strong>Where:</strong> The "Approval gates" section.<br />
+<strong>Current:</strong> Shows <code>launch_visual_production</code> and <code>launch_assembly</code> with "resumed: accept" badges, and below them an API path: <code>POST /playground/approval/resume/{run_id}/{interrupt_id}</code>.<br />
+<strong>Should be:</strong> Either (a) if this is an unattended run, don't show the approval section at all — just put "Auto-approved" in the trajectory if engineers need to know. Or (b) if I'm supposed to approve things, show me big friendly buttons that say <strong>"Ready to make the video — approve?"</strong> with <strong>"Yes, go ahead"</strong> and <strong>"No, cancel"</strong> buttons. NEVER show me a raw API URL.</p>
+<hr />
+<h2>9. One sentence summary</h2>
+<p><strong>"This website made me feel like I'd accidentally wandered into the cockpit of an airplane and all the instrument panels were flashing green except for one hidden panel in the back that was entirely on fire."</strong></p>
+</body>
+</html>

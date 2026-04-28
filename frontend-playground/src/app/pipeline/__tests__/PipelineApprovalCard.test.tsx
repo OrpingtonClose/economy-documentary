@@ -77,10 +77,12 @@ afterEach(() => {
 });
 
 describe("PipelineApprovalCard — pending gate", () => {
-  it("renders gate name and waiting pill", () => {
+  it("renders friendly gate question and waiting pill", () => {
     renderCard(pendingApproval());
 
-    expect(screen.getByText("launch_visual_production")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Start rendering the videos for each scene\?/),
+    ).toBeInTheDocument();
     expect(
       screen.getByTestId("pipeline-approval-status-waiting"),
     ).toHaveTextContent("waiting");
@@ -235,7 +237,7 @@ describe("PipelineApprovalCard — pending gate", () => {
     expect(screen.getByTestId("pipeline-approval-edit-toggle")).toBeDisabled();
     expect(screen.getByTestId("pipeline-approval-reject")).toBeDisabled();
     expect(
-      screen.getByText(/Gate received without resume coordinates/i),
+      screen.getByText(/This step is running on its own/i),
     ).toBeInTheDocument();
   });
 
@@ -249,7 +251,7 @@ describe("PipelineApprovalCard — pending gate", () => {
 });
 
 describe("PipelineApprovalCard — resolved gate", () => {
-  it("collapses to a 'resumed: …' pill with no buttons", () => {
+  it("collapses to a friendly resolved pill with no buttons", () => {
     renderCard({
       gate: "launch_assembly",
       waitingSeq: 11,
@@ -262,7 +264,7 @@ describe("PipelineApprovalCard — resolved gate", () => {
 
     expect(
       screen.getByTestId("pipeline-approval-status-resolved"),
-    ).toHaveTextContent(/resumed: accept/);
+    ).toHaveTextContent(/okay given/);
     expect(
       screen.queryByTestId("pipeline-approval-approve"),
     ).not.toBeInTheDocument();
@@ -274,7 +276,7 @@ describe("PipelineApprovalCard — resolved gate", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("falls back to 'accept' label when decision is null", () => {
+  it("falls back to 'okay given' label when decision is null", () => {
     renderCard({
       gate: "launch_assembly",
       waitingSeq: 12,
@@ -287,6 +289,6 @@ describe("PipelineApprovalCard — resolved gate", () => {
 
     expect(
       screen.getByTestId("pipeline-approval-status-resolved"),
-    ).toHaveTextContent(/resumed: accept/);
+    ).toHaveTextContent(/okay given/);
   });
 });

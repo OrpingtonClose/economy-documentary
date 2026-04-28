@@ -168,21 +168,25 @@ export function PipelineApprovalCard({
       className="flex flex-col gap-2 rounded border border-pg-border bg-pg-surface px-3 py-2 text-sm"
       data-testid={`pipeline-approval-${approval.gate}`}
     >
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-pg-text">{approval.gate}</span>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium text-pg-text">
+          {friendlyGateLabel(approval.gate)}
+        </span>
         {approval.resolved ? (
           <span
             className="rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green"
             data-testid="pipeline-approval-status-resolved"
           >
-            resumed: {approval.decision ?? "accept"}
+            {approval.decision === "reject"
+              ? "stopped"
+              : "okay given"}
           </span>
         ) : (
           <span
             className="rounded bg-pg-amber/20 px-2 py-0.5 text-xs text-pg-amber"
             data-testid="pipeline-approval-status-waiting"
           >
-            waiting…
+            waiting on you…
           </span>
         )}
       </div>
@@ -197,16 +201,7 @@ export function PipelineApprovalCard({
               disabled={!canDispatch || submission.inFlight}
               onClick={onApprove}
             >
-              {submission.inFlight ? "…" : "Approve"}
-            </button>
-            <button
-              type="button"
-              className="rounded border border-pg-amber/40 bg-pg-amber/10 px-3 py-1 text-xs font-medium text-pg-amber hover:bg-pg-amber/20 disabled:opacity-50"
-              data-testid="pipeline-approval-edit-toggle"
-              disabled={!canDispatch || submission.inFlight}
-              onClick={onEditToggle}
-            >
-              {mode === "editing" ? "Cancel edit" : "Edit"}
+              {submission.inFlight ? "…" : "Yes, go ahead"}
             </button>
             <button
               type="button"
@@ -215,7 +210,18 @@ export function PipelineApprovalCard({
               disabled={!canDispatch || submission.inFlight}
               onClick={onReject}
             >
-              Reject
+              Stop
+            </button>
+            <button
+              type="button"
+              className="rounded border border-pg-border bg-pg-surface px-3 py-1 text-xs font-medium text-pg-muted hover:bg-pg-bg/60 disabled:opacity-50"
+              data-testid="pipeline-approval-edit-toggle"
+              disabled={!canDispatch || submission.inFlight}
+              onClick={onEditToggle}
+            >
+              {mode === "editing"
+                ? "Cancel changes"
+                : "Change details (advanced)"}
             </button>
           </div>
 
@@ -260,8 +266,7 @@ export function PipelineApprovalCard({
 
           {!canDispatch ? (
             <span className="text-xs text-pg-muted">
-              Gate received without resume coordinates; the demo simulator
-              auto-approves.
+              This step is running on its own — no action needed.
             </span>
           ) : null}
 
@@ -277,4 +282,30 @@ export function PipelineApprovalCard({
       )}
     </li>
   );
+}
+
+
+/**
+ * Translate a backend gate identifier into a plain-English question
+ * for a non-technical operator.
+ *
+ * The backend gate names are tool identifiers (``launch_visual_production``,
+ * ``launch_assembly``); surfacing them verbatim is exactly the
+ * "panel of code-words" failure mode the persona-test caught. The
+ * mapping is best-effort: unknown gates fall back to a generic
+ * "Ready for the next step?" rather than leaking the raw token.
+ */
+function friendlyGateLabel(gate: string): string {
+  switch (gate) {
+    case "launch_visual_production":
+      return "Start rendering the videos for each scene?";
+    case "launch_assembly":
+      return "Stitch all scenes into the final video?";
+    case "launch_b2_sync":
+      return "Upload the finished video to cloud storage?";
+    case "launch_audio_render":
+      return "Start recording the narration?";
+    default:
+      return "Ready for the next step?";
+  }
 }
