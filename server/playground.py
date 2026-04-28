@@ -1980,7 +1980,7 @@ async def _dispatch_pipeline_run(
             )
             if interpretation:
                 terminal["interpretation"] = interpretation
-        except Exception:  # noqa: BLE001 — best-effort
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — best-effort
             logger.debug("pipeline interpret_run failed", exc_info=True)
         if run_span_cm is not None:
             try:

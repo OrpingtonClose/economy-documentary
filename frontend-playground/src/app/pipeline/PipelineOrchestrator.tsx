@@ -328,13 +328,11 @@ export function PipelineOrchestrator() {
           Documentary Pipeline
         </h1>
         <p className="max-w-3xl text-pg-muted">
-          Submit a topic and watch the pipeline drive five stages
-          end-to-end: scenario → audio → visual → production →
-          assembly. Each stage emits structured events that fold into
-          the ribbon and the trajectory log below. Every run drives
-          the real DeepAgent orchestrator against real workers and
-          real LLM-backed QA gates — there is no scripted-replay or
-          simulator path.
+          Pick a topic and we&apos;ll make a short documentary for you.
+          We write a script, record the narration, draw the visuals,
+          stitch everything together, and check each scene before
+          handing you a finished video. The narrator banner below
+          tells you what we&apos;re doing right now.
         </p>
       </header>
 
@@ -412,10 +410,10 @@ export function PipelineOrchestrator() {
               className="inline-flex w-full items-center justify-center gap-2 rounded bg-pg-accent px-4 py-2 text-sm font-semibold text-pg-bg transition hover:bg-pg-accent/80 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto"
             >
               {isOwnActiveRun
-                ? "Running…"
+                ? "Working…"
                 : isSubmitting
-                  ? "Dispatching…"
-                  : "Run pipeline"}
+                  ? "Starting…"
+                  : "Make a documentary"}
             </button>
           </div>
         </form>
@@ -663,7 +661,7 @@ function PipelineNarratorBanner({
   } else {
     label = "Pipeline narrator";
     body =
-      "Subscribed to the run. Waiting on the orchestrator to emit its first event…";
+      "Connected. Waiting for the system to start the first step…";
     variant = "narrating";
   }
 
@@ -954,7 +952,7 @@ function RunStatusPill({
         data-testid="pipeline-status-pill"
         className="rounded bg-pg-green/20 px-2 py-1 text-xs text-pg-green"
       >
-        run.ok
+        Finished
       </span>
     );
   }
@@ -964,7 +962,7 @@ function RunStatusPill({
         data-testid="pipeline-status-pill"
         className="rounded bg-pg-red/20 px-2 py-1 text-xs text-pg-red"
       >
-        run.error
+        Stopped
       </span>
     );
   }
@@ -974,14 +972,14 @@ function RunStatusPill({
         data-testid="pipeline-status-pill"
         className="rounded bg-pg-accent/20 px-2 py-1 text-xs text-pg-accent"
       >
-        running…
+        Working…
       </span>
     );
   }
   if (connection === "lost") {
     return (
       <span className="rounded bg-pg-red/20 px-2 py-1 text-xs text-pg-red">
-        connection lost
+        Connection lost
       </span>
     );
   }
