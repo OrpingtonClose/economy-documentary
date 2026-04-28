@@ -174,7 +174,11 @@ export function PipelineApprovalCard({
         </span>
         {approval.resolved ? (
           <span
-            className="rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green"
+            className={
+              approval.decision === "reject"
+                ? "rounded bg-pg-red/20 px-2 py-0.5 text-xs text-pg-red"
+                : "rounded bg-pg-green/20 px-2 py-0.5 text-xs text-pg-green"
+            }
             data-testid="pipeline-approval-status-resolved"
           >
             {approval.decision === "reject"

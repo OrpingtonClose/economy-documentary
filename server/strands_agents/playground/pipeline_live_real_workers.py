@@ -83,20 +83,18 @@ def _resolve_worker_url_on_demand(
     from worker_provisioner import get_provisioner  # type: ignore[import-not-found]
 
     provisioner = get_provisioner()
-    spec = provisioner.wait_for_worker(role, timeout=timeout_s)
-    url = (
-        os.environ.get(fallback_env, "").strip()
-        or getattr(spec, "worker_url", "")
-    )
+    provisioner.wait_for_worker(role, timeout=timeout_s)
+    spec = provisioner._get_spec(role)
+    url = os.environ.get(fallback_env, "").strip()
+    if not url and spec is not None:
+        url = (spec.worker_url or "").strip()
+        if not url and spec.local_port:
+            url = f"http://localhost:{spec.local_port}"
     if not url:
-        local_port = getattr(spec, "local_port", 0)
-        if local_port:
-            url = f"http://localhost:{local_port}"
-        else:
-            raise RuntimeError(
-                f"{role} worker URL still empty after wait_for_worker — "
-                "provisioner did not populate the env var"
-            )
+        raise RuntimeError(
+            f"{role} worker URL still empty after wait_for_worker — "
+            "provisioner did not populate the env var"
+        )
     os.environ[primary_env] = url
     return url.rstrip("/")
 
