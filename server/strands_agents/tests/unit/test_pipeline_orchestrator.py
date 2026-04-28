@@ -135,14 +135,17 @@ class TestDefaultTools:
 
 
 class TestRealWorkerOverlay:
-    """``build_documentary_orchestrator`` must wire real-worker
-    HTTP dispatchers into the production tool list when the worker
-    URL env vars are set, and pass placeholders through unchanged
-    when they are not. Slice 9e — closes the gap between the demo
-    route ``/pipeline?mode=live`` and the production ``run_documentary``.
+    """``build_documentary_orchestrator`` always overlays the
+    ``launch_audio_render`` and ``launch_visual_production`` placeholders
+    with real-worker HTTP dispatchers whose worker URL is resolved
+    *at call time* via lazy on-demand provisioning. Pre-warming via
+    env vars is forbidden by the orchestrator's operational contract —
+    GPU VMs are spun up only when a run actually starts. The env vars
+    remain a fast-path short-circuit for already-warm URLs but are
+    no longer required to enable the overlay.
     """
 
-    def test_no_overlay_when_env_unset(
+    def test_overlay_active_when_env_unset(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -176,10 +179,13 @@ class TestRealWorkerOverlay:
             t for t in captured["tools"]
             if getattr(t, "name", None) == "launch_visual_production"
         )
-        # Both should still be the placeholder objects from
-        # _placeholders, not the real-worker dispatch closures.
-        assert audio is _placeholders.launch_audio_render
-        assert video is _placeholders.launch_visual_production
+        # On-demand provisioning: the overlay is always installed; the
+        # worker URL is resolved lazily on first dispatch via
+        # ``WorkerProvisioner.wait_for_worker``.
+        assert audio is not _placeholders.launch_audio_render
+        assert getattr(audio, "name", None) == "launch_audio_render"
+        assert video is not _placeholders.launch_visual_production
+        assert getattr(video, "name", None) == "launch_visual_production"
 
     def test_video_overlay_when_video_env_set(
         self,
@@ -215,8 +221,9 @@ class TestRealWorkerOverlay:
             t for t in captured["tools"]
             if getattr(t, "name", None) == "launch_visual_production"
         )
-        # Audio still placeholder (TTS URL unset), video swapped.
-        assert audio is _placeholders.launch_audio_render
+        # Both overlays active; the env var only short-circuits URL
+        # resolution for the video tool.
+        assert audio is not _placeholders.launch_audio_render
         assert video is not _placeholders.launch_visual_production
         assert getattr(video, "name", None) == "launch_visual_production"
 
@@ -256,7 +263,8 @@ class TestRealWorkerOverlay:
         )
         assert audio is not _placeholders.launch_audio_render
         assert getattr(audio, "name", None) == "launch_audio_render"
-        assert video is _placeholders.launch_visual_production
+        assert video is not _placeholders.launch_visual_production
+        assert getattr(video, "name", None) == "launch_visual_production"
 
     def test_both_overlays_when_both_env_set(
         self,

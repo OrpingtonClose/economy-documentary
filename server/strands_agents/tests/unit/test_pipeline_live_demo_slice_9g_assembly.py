@@ -494,14 +494,25 @@ class TestApplyRealAssemblyOverrides:
 
 
 class TestBuildRealWorkerToolsAssembly:
+    """``build_real_worker_tools`` always installs the audio + video
+    dispatch overlays (URL resolved lazily via on-demand worker
+    provisioning). The assembly overlay is independently togglable via
+    ``enable_real_assembly`` / ``ENABLE_REAL_ASSEMBLY``.
+    """
+
     def test_assembly_appears_with_gate_on(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("ENABLE_REAL_ASSEMBLY", "1")
         monkeypatch.delenv("QWEN3_TTS_WORKER_URL", raising=False)
         monkeypatch.delenv("LTX_VIDEO_WORKER_URL", raising=False)
-        overrides = build_real_worker_tools(tmp_path)
-        assert set(overrides.keys()) == {"launch_assembly"}
+        overrides = build_real_worker_tools(tmp_path, enable_real_b2=False)
+        # Audio + video overlays are always installed (on-demand
+        # provisioning); ``ENABLE_REAL_ASSEMBLY=1`` adds the assembly
+        # overlay on top.
+        assert "launch_assembly" in overrides
+        assert "launch_audio_render" in overrides
+        assert "launch_visual_production" in overrides
 
     def test_assembly_absent_when_gate_off(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -509,7 +520,12 @@ class TestBuildRealWorkerToolsAssembly:
         monkeypatch.delenv("ENABLE_REAL_ASSEMBLY", raising=False)
         monkeypatch.delenv("QWEN3_TTS_WORKER_URL", raising=False)
         monkeypatch.delenv("LTX_VIDEO_WORKER_URL", raising=False)
-        assert build_real_worker_tools(tmp_path) == {}
+        overrides = build_real_worker_tools(tmp_path, enable_real_b2=False)
+        # Audio + video overlays still present (on-demand provisioning);
+        # only the assembly overlay is gated off.
+        assert "launch_assembly" not in overrides
+        assert "launch_audio_render" in overrides
+        assert "launch_visual_production" in overrides
 
     def test_assembly_merges_with_audio_video_overrides(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -519,12 +535,13 @@ class TestBuildRealWorkerToolsAssembly:
             tmp_path,
             audio_worker_url="http://tts.example/",
             video_worker_url="http://ltx.example/",
+            enable_real_b2=False,
         )
-        assert set(overrides.keys()) == {
+        assert {
             "launch_audio_render",
             "launch_visual_production",
             "launch_assembly",
-        }
+        }.issubset(overrides.keys())
 
 
 # ---------------------------------------------------------------------------
