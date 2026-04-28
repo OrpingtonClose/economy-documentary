@@ -1935,6 +1935,9 @@ async def _dispatch_pipeline_run(
             "status": RUN_STATUS_TASK_ERROR,
             "component_id": stream.component_id,
             "case_name": stream.case_name,
+            "error": str(exc),
+            "error_class": "PipelineIntegrityError",
+            "reason_kind": exc.reason_kind,
             "output": None,
             "trajectory": None,
         }

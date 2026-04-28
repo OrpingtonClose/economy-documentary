@@ -87,13 +87,16 @@ def _resolve_worker_url_on_demand(
     url = (
         os.environ.get(fallback_env, "").strip()
         or getattr(spec, "worker_url", "")
-        or f"http://localhost:{getattr(spec, 'local_port', 0)}"
     )
     if not url:
-        raise RuntimeError(
-            f"{role} worker URL still empty after wait_for_worker — "
-            "provisioner did not populate the env var"
-        )
+        local_port = getattr(spec, "local_port", 0)
+        if local_port:
+            url = f"http://localhost:{local_port}"
+        else:
+            raise RuntimeError(
+                f"{role} worker URL still empty after wait_for_worker — "
+                "provisioner did not populate the env var"
+            )
     os.environ[primary_env] = url
     return url.rstrip("/")
 
