@@ -51,6 +51,54 @@ from strands_agents._real_b2_tools import build_real_b2_tools
 logger = logging.getLogger(__name__)
 
 
+def _resolve_worker_url_on_demand(
+    *,
+    role: str,
+    primary_env: str,
+    fallback_env: str,
+    timeout_s: int = 2700,
+) -> str:
+    """Return a worker URL, blocking on lazy provisioning if needed.
+
+    Reads ``primary_env`` first (the dispatch tools' historical name —
+    ``QWEN3_TTS_WORKER_URL`` / ``LTX_VIDEO_WORKER_URL``), then
+    ``fallback_env`` (the WorkerProvisioner's name —
+    ``TTS_WORKER_URL`` / ``GPU_WORKER_URL``). If both are unset, calls
+    ``WorkerProvisioner.wait_for_worker(role)`` which blocks until a
+    Vast.ai VM is provisioned + healthy + the URL is set on
+    ``os.environ[fallback_env]``. Mirrors the URL into ``primary_env``
+    so subsequent calls short-circuit. Worker provisioning is
+    user-demand-only — pre-warming is forbidden by the orchestrator's
+    operational contract.
+    """
+    url = os.environ.get(primary_env, "").strip()
+    if url:
+        return url.rstrip("/")
+    url = os.environ.get(fallback_env, "").strip()
+    if url:
+        os.environ[primary_env] = url
+        return url.rstrip("/")
+    # Lazy import keeps this module importable in CI / unit tests that
+    # never touch the live provisioner.
+    from worker_provisioner import get_provisioner  # type: ignore[import-not-found]
+
+    provisioner = get_provisioner()
+    provisioner.wait_for_worker(role, timeout=timeout_s)
+    spec = provisioner._get_spec(role)
+    url = os.environ.get(fallback_env, "").strip()
+    if not url and spec is not None:
+        url = (spec.worker_url or "").strip()
+        if not url and spec.local_port:
+            url = f"http://localhost:{spec.local_port}"
+    if not url:
+        raise RuntimeError(
+            f"{role} worker URL still empty after wait_for_worker — "
+            "provisioner did not populate the env var"
+        )
+    os.environ[primary_env] = url
+    return url.rstrip("/")
+
+
 _DEFAULT_TIMEOUT_S = 30 * 60.0
 _DEFAULT_AUDIO_DURATION_S = 5.0
 _DEFAULT_VIDEO_DURATION_S = 4.0
@@ -130,8 +178,19 @@ def _resolve_audio_text(
     )
 
 
-def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
-    """Return a ``@tool``-decorated callable that POSTs to the live TTS."""
+def _build_audio_tool(
+    *,
+    run_dir: Path,
+    worker_url: str | None = None,
+) -> Any:
+    """Return a ``@tool``-decorated callable that POSTs to the live TTS.
+
+    ``worker_url`` is optional; when omitted, the tool resolves the URL
+    at call time via :func:`_resolve_worker_url_on_demand`, which
+    blocks until ``WorkerProvisioner`` has spun up a TTS VM. This lets
+    the orchestrator build the agent immediately at run-start and have
+    the scenario stage proceed in parallel with worker provisioning.
+    """
 
     @tool
     def launch_audio_render(
@@ -150,6 +209,11 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         hard-coded placeholder line (slice 9c).
         """
         resolved_text = _resolve_audio_text(scene_id, text)
+        resolved_url = worker_url or _resolve_worker_url_on_demand(
+            role="tts",
+            primary_env="QWEN3_TTS_WORKER_URL",
+            fallback_env="TTS_WORKER_URL",
+        )
         body = {
             "scene_id": scene_id,
             "voice_id": voice_id,
@@ -160,7 +224,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         started_ms = _now_ms()
         try:
             with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                resp = client.post(f"{worker_url}/tts/render", json=body)
+                resp = client.post(f"{resolved_url}/tts/render", json=body)
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | tts dispatch failed", scene_id, exc
@@ -270,8 +334,17 @@ def _resolve_visual_prompt(
     return "Documentary establishing shot, slow zoom, cinematic lighting"
 
 
-def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
-    """Return a ``@tool``-decorated callable that POSTs to the live LTX worker."""
+def _build_visual_tool(
+    *,
+    run_dir: Path,
+    worker_url: str | None = None,
+) -> Any:
+    """Return a ``@tool``-decorated callable that POSTs to the live LTX worker.
+
+    ``worker_url`` is optional; when omitted, the tool resolves the URL
+    at call time via :func:`_resolve_worker_url_on_demand`, which
+    blocks until ``WorkerProvisioner`` has spun up a video VM.
+    """
 
     @tool
     def launch_visual_production(
@@ -322,12 +395,24 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             "fps": _DEFAULT_FPS,
             "seed": _DEFAULT_SEED,
         }
+        # Resolve the worker URL OUTSIDE the GPU dispatch lock. The lock
+        # serialises ``/video/render`` calls so the H200 queue stays at
+        # depth=1 (AGENTS.md hard invariant); it is not for serialising
+        # provisioning waits, which can block up to 45 minutes for a
+        # Vast.ai VM and would otherwise stall every concurrent
+        # pipeline run on the server. Audio dispatch already resolves
+        # its URL outside any lock for the same reason.
+        resolved_url = worker_url or _resolve_worker_url_on_demand(
+            role="video",
+            primary_env="LTX_VIDEO_WORKER_URL",
+            fallback_env="GPU_WORKER_URL",
+        )
         started_ms = _now_ms()
         try:
             with _video_dispatch_lock:
                 logger.info("scene_id=<%s> | ltx dispatch acquired GPU lock", scene_id)
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                    resp = client.post(f"{worker_url}/video/render", json=body)
+                    resp = client.post(f"{resolved_url}/video/render", json=body)
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | ltx dispatch failed",
@@ -415,16 +500,20 @@ def build_real_worker_tools(
         to the placeholder set.
     """
     overrides: dict[str, Any] = {}
+    # On-demand provisioning: dispatch tools are always built. When no
+    # explicit URL is supplied and the env var is empty, the tool's
+    # call-time resolver blocks on ``WorkerProvisioner.wait_for_worker``
+    # and provisions a Vast.ai VM lazily. Pre-warming via env vars is
+    # forbidden by the orchestrator's operational contract — GPU VMs
+    # are spun up only when a run actually starts.
     audio = (audio_worker_url or os.environ.get("QWEN3_TTS_WORKER_URL", "")).rstrip("/")
     video = (video_worker_url or os.environ.get("LTX_VIDEO_WORKER_URL", "")).rstrip("/")
-    if audio:
-        overrides["launch_audio_render"] = _build_audio_tool(
-            run_dir=run_dir, worker_url=audio
-        )
-    if video:
-        overrides["launch_visual_production"] = _build_visual_tool(
-            run_dir=run_dir, worker_url=video
-        )
+    overrides["launch_audio_render"] = _build_audio_tool(
+        run_dir=run_dir, worker_url=audio or None
+    )
+    overrides["launch_visual_production"] = _build_visual_tool(
+        run_dir=run_dir, worker_url=video or None
+    )
     overrides.update(
         build_real_assembly_tools(run_dir=run_dir, enabled=enable_real_assembly)
     )

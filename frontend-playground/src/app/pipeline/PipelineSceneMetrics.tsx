@@ -303,12 +303,12 @@ export function PipelineSceneMetrics({ events }: PipelineSceneMetricsProps) {
           id="pipeline-metrics-heading"
           className="text-lg font-semibold text-pg-text"
         >
-          Per-scene QA metrics
+          Per-scene quality checks
         </h2>
         <p className="text-sm text-pg-muted">
-          Audio render, visual production, and QA gate verdicts will
-          land here as they fire — one row per scene, with the exact
-          measured value next to every PASS/FAIL pill.
+          Once each scene has been rendered we run a sound check, a
+          timing check, and a visual check on it. Results will appear
+          here as scenes finish.
         </p>
       </section>
     );
@@ -354,13 +354,18 @@ export function PipelineSceneMetrics({ events }: PipelineSceneMetricsProps) {
           id="pipeline-metrics-heading"
           className="text-lg font-semibold text-pg-text"
         >
-          Per-scene QA metrics ({scenes.length})
+          Per-scene quality checks ({scenes.length})
         </h2>
         <VerdictPill
           verdict={masterVerdict}
           testid="pipeline-metrics-master-verdict"
         />
       </div>
+      <p className="text-xs text-pg-muted">
+        Each scene goes through three quick checks before it lands in
+        the final video. Green means the scene is good to ship; red
+        means we need to fix that scene before assembling the master.
+      </p>
       <div className="overflow-x-auto">
         <table
           className="min-w-full table-auto border-collapse text-xs"
@@ -369,11 +374,26 @@ export function PipelineSceneMetrics({ events }: PipelineSceneMetricsProps) {
           <thead>
             <tr className="border-b border-pg-border text-left text-[10px] uppercase tracking-wider text-pg-muted">
               <th className="px-2 py-2">Scene</th>
-              <th className="px-2 py-2">Audio</th>
-              <th className="px-2 py-2">Video</th>
-              <th className="px-2 py-2">qa_audio_completeness</th>
-              <th className="px-2 py-2">qa_duration_align</th>
-              <th className="px-2 py-2">qa_stills_judge</th>
+              <th className="px-2 py-2">Narration</th>
+              <th className="px-2 py-2">Visuals</th>
+              <th
+                className="px-2 py-2"
+                title="Sound check — confirms the narration is clean and ends naturally."
+              >
+                Sound check
+              </th>
+              <th
+                className="px-2 py-2"
+                title="Timing check — confirms the visuals match the narration length."
+              >
+                Timing check
+              </th>
+              <th
+                className="px-2 py-2"
+                title="Visual check — confirms the video has motion (not a frozen still)."
+              >
+                Visual check
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -453,33 +473,41 @@ function SceneRow({ scene }: { readonly scene: SceneMetrics }) {
             verdict={scene.audioCompleteness?.verdict ?? null}
             testid={`pipeline-metrics-${scene.sceneId}-audio-completeness-verdict`}
           />
-        </div>
-        <div className="mt-1 flex flex-col gap-0.5 font-mono text-[10px]">
-          <span className={failingClass(audioFail)}>
-            tail_rms ={" "}
-            <span
-              data-testid={`pipeline-metrics-${scene.sceneId}-tail-rms-db`}
-            >
-              {fmtDb(scene.audioCompleteness?.tailRmsDb ?? null)}
-            </span>
+          <span className="text-[11px] text-pg-text">
+            {audioCheckSummary(scene.audioCompleteness)}
           </span>
-          <span className={failingClass(audioFail)}>
-            silence ={" "}
-            <span
-              data-testid={`pipeline-metrics-${scene.sceneId}-trailing-silence-s`}
-            >
-              {fmtSeconds(scene.audioCompleteness?.trailingSilenceS ?? null)}
-            </span>
-          </span>
-          {scene.audioCompleteness?.reason ? (
-            <span
-              className="text-pg-red"
-              data-testid={`pipeline-metrics-${scene.sceneId}-audio-completeness-reason`}
-            >
-              {scene.audioCompleteness.reason}
-            </span>
-          ) : null}
         </div>
+        <details className="mt-1 text-[10px]">
+          <summary className="cursor-pointer text-pg-muted">
+            details
+          </summary>
+          <div className="mt-1 flex flex-col gap-0.5 font-mono">
+            <span className={failingClass(audioFail)}>
+              tail_rms ={" "}
+              <span
+                data-testid={`pipeline-metrics-${scene.sceneId}-tail-rms-db`}
+              >
+                {fmtDb(scene.audioCompleteness?.tailRmsDb ?? null)}
+              </span>
+            </span>
+            <span className={failingClass(audioFail)}>
+              silence ={" "}
+              <span
+                data-testid={`pipeline-metrics-${scene.sceneId}-trailing-silence-s`}
+              >
+                {fmtSeconds(scene.audioCompleteness?.trailingSilenceS ?? null)}
+              </span>
+            </span>
+            {scene.audioCompleteness?.reason ? (
+              <span
+                className="text-pg-red"
+                data-testid={`pipeline-metrics-${scene.sceneId}-audio-completeness-reason`}
+              >
+                {scene.audioCompleteness.reason}
+              </span>
+            ) : null}
+          </div>
+        </details>
       </td>
       <td
         className="px-2 py-2"
@@ -490,28 +518,36 @@ function SceneRow({ scene }: { readonly scene: SceneMetrics }) {
             verdict={scene.durationAlign?.verdict ?? null}
             testid={`pipeline-metrics-${scene.sceneId}-duration-align-verdict`}
           />
-        </div>
-        <div className="mt-1 flex flex-col gap-0.5 font-mono text-[10px]">
-          <span className={failingClass(durationFail)}>
-            Δ ={" "}
-            <span
-              data-testid={`pipeline-metrics-${scene.sceneId}-delta-s`}
-            >
-              {fmtSeconds(scene.durationAlign?.deltaS ?? null)}
-            </span>
+          <span className="text-[11px] text-pg-text">
+            {durationCheckSummary(scene.durationAlign)}
           </span>
-          <span className="text-pg-muted">
-            tol = {fmtSeconds(scene.durationAlign?.toleranceS ?? null)}
-          </span>
-          {scene.durationAlign?.reason ? (
-            <span
-              className="text-pg-red"
-              data-testid={`pipeline-metrics-${scene.sceneId}-duration-align-reason`}
-            >
-              {scene.durationAlign.reason}
-            </span>
-          ) : null}
         </div>
+        <details className="mt-1 text-[10px]">
+          <summary className="cursor-pointer text-pg-muted">
+            details
+          </summary>
+          <div className="mt-1 flex flex-col gap-0.5 font-mono">
+            <span className={failingClass(durationFail)}>
+              Δ ={" "}
+              <span
+                data-testid={`pipeline-metrics-${scene.sceneId}-delta-s`}
+              >
+                {fmtSeconds(scene.durationAlign?.deltaS ?? null)}
+              </span>
+            </span>
+            <span className="text-pg-muted">
+              tol = {fmtSeconds(scene.durationAlign?.toleranceS ?? null)}
+            </span>
+            {scene.durationAlign?.reason ? (
+              <span
+                className="text-pg-red"
+                data-testid={`pipeline-metrics-${scene.sceneId}-duration-align-reason`}
+              >
+                {scene.durationAlign.reason}
+              </span>
+            ) : null}
+          </div>
+        </details>
       </td>
       <td
         className="px-2 py-2"
@@ -522,30 +558,98 @@ function SceneRow({ scene }: { readonly scene: SceneMetrics }) {
             verdict={scene.stillsJudge?.verdict ?? null}
             testid={`pipeline-metrics-${scene.sceneId}-stills-judge-verdict`}
           />
-        </div>
-        <div className="mt-1 flex flex-col gap-0.5 font-mono text-[10px]">
-          <span className={failingClass(stillsFail)}>
-            mean_delta ={" "}
-            <span
-              data-testid={`pipeline-metrics-${scene.sceneId}-mean-pixel-delta`}
-            >
-              {fmtNumber(scene.stillsJudge?.meanPixelDelta ?? null, 3)}
-            </span>
+          <span className="text-[11px] text-pg-text">
+            {stillsCheckSummary(scene.stillsJudge)}
           </span>
-          <span className="text-pg-muted">
-            floor ={" "}
-            {fmtNumber(scene.stillsJudge?.minMeanPixelDelta ?? null, 3)}
-          </span>
-          {scene.stillsJudge?.reason ? (
-            <span
-              className="text-pg-red"
-              data-testid={`pipeline-metrics-${scene.sceneId}-stills-judge-reason`}
-            >
-              {scene.stillsJudge.reason}
-            </span>
-          ) : null}
         </div>
+        <details className="mt-1 text-[10px]">
+          <summary className="cursor-pointer text-pg-muted">
+            details
+          </summary>
+          <div className="mt-1 flex flex-col gap-0.5 font-mono">
+            <span className={failingClass(stillsFail)}>
+              mean_delta ={" "}
+              <span
+                data-testid={`pipeline-metrics-${scene.sceneId}-mean-pixel-delta`}
+              >
+                {fmtNumber(scene.stillsJudge?.meanPixelDelta ?? null, 3)}
+              </span>
+            </span>
+            <span className="text-pg-muted">
+              floor ={" "}
+              {fmtNumber(scene.stillsJudge?.minMeanPixelDelta ?? null, 3)}
+            </span>
+            {scene.stillsJudge?.reason ? (
+              <span
+                className="text-pg-red"
+                data-testid={`pipeline-metrics-${scene.sceneId}-stills-judge-reason`}
+              >
+                {scene.stillsJudge.reason}
+              </span>
+            ) : null}
+          </div>
+        </details>
       </td>
     </tr>
   );
+}
+
+
+/**
+ * Plain-English summary of the audio completeness check.
+ *
+ * The persona-test feedback was that ``tail_rms = -44 dBFS`` /
+ * ``silence = 180ms`` is meaningless to a non-technical operator
+ * — the same data needs a one-line human label so they know
+ * whether to be calm or worried even before they expand the
+ * details.
+ */
+function audioCheckSummary(
+  ac: SceneMetrics["audioCompleteness"] | undefined,
+): string {
+  if (!ac || !ac.verdict) {
+    return "checking…";
+  }
+  const verdict = ac.verdict.toLowerCase();
+  if (verdict === "pass") {
+    return "narration sounds clean";
+  }
+  if (verdict === "fail") {
+    return "narration cut off or noisy";
+  }
+  return "checking…";
+}
+
+/** Plain-English summary of the duration-align check. */
+function durationCheckSummary(
+  da: SceneMetrics["durationAlign"] | undefined,
+): string {
+  if (!da || !da.verdict) {
+    return "checking…";
+  }
+  const verdict = da.verdict.toLowerCase();
+  if (verdict === "pass") {
+    return "visuals match narration length";
+  }
+  if (verdict === "fail") {
+    return "visuals are off-length vs narration";
+  }
+  return "checking…";
+}
+
+/** Plain-English summary of the stills-judge check. */
+function stillsCheckSummary(
+  sj: SceneMetrics["stillsJudge"] | undefined,
+): string {
+  if (!sj || !sj.verdict) {
+    return "checking…";
+  }
+  const verdict = sj.verdict.toLowerCase();
+  if (verdict === "pass") {
+    return "video has motion";
+  }
+  if (verdict === "fail") {
+    return "video looks frozen";
+  }
+  return "checking…";
 }

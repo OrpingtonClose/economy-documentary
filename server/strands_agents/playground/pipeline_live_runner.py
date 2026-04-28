@@ -642,8 +642,16 @@ class LivePipelineRun:
                 "pipeline.run_finished",
                 {
                     "status": "ok",
-                    "final_mp4_b2_url": final_mp4_b2_url
-                    or _placeholder_mp4_url(self.topic),
+                    #: Honest about absence: never fall back to a
+                    #: synthetic ``b2://documentary/...`` URL that
+                    #: cannot be played. If the orchestrator's final
+                    #: state did not surface an mp4 URL we leave the
+                    #: field unset; the integrity audit in
+                    #: :func:`server.playground._audit_pipeline_integrity`
+                    #: catches the missing-master-mp4 case and flips
+                    #: the run to ``run.error`` before the UI ever
+                    #: sees a ``run.ok`` with no playable file.
+                    "final_mp4_b2_url": final_mp4_b2_url,
                 },
             )
         except Exception as exc:

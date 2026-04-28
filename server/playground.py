@@ -23,7 +23,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -1512,6 +1512,122 @@ _PIPELINE_MAX_NUM_SCENES: int = 6
 PIPELINE_RUN_COMPONENT_ID: str = "pipeline"
 
 
+class PipelineIntegrityError(RuntimeError):
+    """A pipeline run produced no playable artifacts or all QA gates failed.
+
+    Raised inside :func:`_dispatch_pipeline_run` after the orchestrator
+    returns a nominally-successful result but a post-run audit of the
+    event stream + run-dir disagrees. The audit treats two regression
+    modes as hard failures:
+
+    * **No master.mp4 on disk** — the assembly leaf never produced a
+      playable artifact (typically because every scene's audio /
+      visual dispatch returned an empty payload while the worker
+      was still provisioning).
+    * **Any per-scene QA verdict is ``fail``** — at least one
+      ``qa_audio_completeness`` / ``qa_duration_align`` /
+      ``qa_stills_judge`` envelope landed with verdict ``fail``.
+      A run that ships unplayable scenes is not an honest ``run.ok``.
+
+    Raising this exception forces the existing ``except`` branch in
+    :func:`_dispatch_pipeline_run` to emit ``run.error`` with the
+    plain-English ``message`` instead of a green ``run.ok`` that
+    contradicts the in-page metrics. The frontend's status pill +
+    narrator banner read off the terminal payload, so a single
+    integrity-fail event flips both the top-of-page status and the
+    narration to a coherent failure story.
+    """
+
+    def __init__(self, message: str, *, reason_kind: str) -> None:
+        super().__init__(message)
+        self.reason_kind = reason_kind
+
+
+def _audit_pipeline_integrity(
+    stream: RunStream,
+    *,
+    master_path: Optional[Path],
+) -> None:
+    """Audit a finished pipeline run; raise on integrity failure.
+
+    The audit is deliberately conservative: it does not second-guess
+    the orchestrator's own success/failure signal beyond two checks
+    that a real operator would call out as "the page is lying":
+
+    1. ``master_path`` must be set, exist, and be > 0 bytes. This is
+       the *stable* copy under ``/tmp/pipeline_masters`` that the
+       ``stream_master_mp4`` route actually serves — checking the
+       in-temp ``master_src`` path instead would let a successful run
+       with a failed stable-copy slip through (the temp dir is wiped
+       in the ``finally`` block and the API would 404 on the video).
+    2. No ``pipeline.tool.qa_*.end`` envelope on the stream may carry
+       ``verdict == "fail"``. The QA gates are the contract for
+       per-scene playability; a single failed gate means the operator
+       would see a red row in the metrics card while the top of the
+       page claims success.
+
+    Both checks read off observable state — the file the
+    ``stream_master_mp4`` route is about to serve and the same SSE
+    envelopes the frontend renders into ``PipelineSceneMetrics`` —
+    so the page-level status pill cannot disagree with the per-scene
+    cards.
+    """
+    if (
+        master_path is None
+        or not master_path.exists()
+        or master_path.stat().st_size == 0
+    ):
+        raise PipelineIntegrityError(
+            (
+                "The system finished its checklist but no playable video "
+                "was produced. The most common cause is that the GPU "
+                "workers were still provisioning when the pipeline "
+                "tried to render audio + video, so every scene came "
+                "back empty. Try again — the next run will reuse the "
+                "now-warm workers."
+            ),
+            reason_kind="no_master_mp4",
+        )
+
+    failed_scenes: list[str] = []
+    failed_gates: list[str] = []
+    for event in stream.snapshot():
+        if not event.kind.startswith("pipeline.tool."):
+            continue
+        if not event.kind.endswith(".end"):
+            continue
+        detail = event.detail or {}
+        envelope = detail.get("envelope")
+        if not isinstance(envelope, dict):
+            continue
+        verdict = envelope.get("verdict")
+        if not isinstance(verdict, str) or verdict.lower() != "fail":
+            continue
+        tool_name = event.kind[len("pipeline.tool.") : -len(".end")]
+        if not tool_name.startswith("qa_"):
+            continue
+        scene_id = envelope.get("scene_id")
+        if isinstance(scene_id, str) and scene_id:
+            failed_scenes.append(scene_id)
+        failed_gates.append(tool_name)
+
+    if failed_gates:
+        unique_scenes = sorted(set(failed_scenes))
+        scene_phrase = (
+            f" on {', '.join(unique_scenes)}" if unique_scenes else ""
+        )
+        raise PipelineIntegrityError(
+            (
+                f"Some scenes did not pass quality checks{scene_phrase}. "
+                "The video file is on disk but the system flagged "
+                "audio, timing, or visual issues that an operator would "
+                "spot on playback. Open the per-scene checks below to "
+                "see which scenes need re-rendering."
+            ),
+            reason_kind="qa_fail",
+        )
+
+
 #: In-memory map of ``run_id`` -> ``master.mp4`` path on disk.
 #: Populated by :func:`_dispatch_pipeline_run` once the assembly
 #: leaf reports a master.mp4 and consumed by the
@@ -1656,6 +1772,45 @@ async def _dispatch_pipeline_run(
 
     run_span_cm = _start_run_root_span(stream)
 
+    #: On-demand GPU worker provisioning. Pre-warming Vast.ai VMs is
+    #: forbidden by the operator contract — workers are spun up only
+    #: when a run actually starts. ``start_provisioning`` is
+    #: non-blocking: it kicks background threads that boot the TTS +
+    #: video VMs in parallel, populating ``TTS_WORKER_URL`` /
+    #: ``GPU_WORKER_URL`` once each is healthy. The dispatch tools
+    #: built into the orchestrator below resolve those URLs lazily at
+    #: tool-call time via ``WorkerProvisioner.wait_for_worker``, so
+    #: the scenario stage runs immediately while the GPUs boot in
+    #: parallel and audio dispatch blocks only on its first call.
+    try:
+        from worker_provisioner import (  # type: ignore[import-not-found]
+            get_provisioner,
+        )
+        get_provisioner().start_provisioning(
+            require_tts=True,
+            require_video=True,
+        )
+        await stream.emit(
+            "pipeline.workers.provisioning_started",
+            "GPU workers provisioning in background (TTS H200, video L40S — ETA ~10m)",
+            detail={"roles": ["tts", "video"]},
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort kickoff
+        logger.warning(
+            "run_id=<%s>, error=<%r> | worker provisioner kickoff failed; "
+            "tools will still attempt lazy provision on first call",
+            stream.run_id,
+            exc,
+        )
+
+    #: Live LLM narrator loop — emits ``narrate`` events into the
+    #: stream every ~1.5s describing what just happened in plain
+    #: English. The frontend renders the freshest ``narrate`` event
+    #: in a sticky banner so an operator who only glances at the
+    #: page always sees current state without parsing structured
+    #: events.
+    narrator_task = asyncio.create_task(narrator_loop(stream))
+
     terminal: dict[str, Any] = {
         "status": RUN_STATUS_TASK_ERROR,
         "component_id": stream.component_id,
@@ -1706,18 +1861,20 @@ async def _dispatch_pipeline_run(
         # path under ``/tmp/pipeline_masters`` so the temp run-dir can
         # be cleaned up without taking the playable mp4 with it.
         master_src = run_dir / "artifacts" / "master.mp4"
+        stable_path: Optional[Path] = None
         if master_src.exists():
             stable_dir = Path(tempfile.gettempdir()) / "pipeline_masters"
             stable_dir.mkdir(parents=True, exist_ok=True)
-            stable_path = stable_dir / f"{stream.run_id}.mp4"
+            candidate = stable_dir / f"{stream.run_id}.mp4"
             try:
-                shutil.copyfile(str(master_src), str(stable_path))
-                _PIPELINE_MASTER_PATHS[stream.run_id] = stable_path
+                shutil.copyfile(str(master_src), str(candidate))
+                _PIPELINE_MASTER_PATHS[stream.run_id] = candidate
+                stable_path = candidate
                 logger.info(
                     "run_id=<%s>, src=<%s>, stable=<%s> | master.mp4 registered for streaming",
                     stream.run_id,
                     master_src,
-                    stable_path,
+                    candidate,
                 )
             except Exception:  # noqa: BLE001 — telemetry-only
                 logger.exception(
@@ -1725,6 +1882,18 @@ async def _dispatch_pipeline_run(
                     stream.run_id,
                     master_src,
                 )
+        #: Integrity audit — never emit ``run.ok`` if the page would
+        #: contradict itself. The audit raises
+        #: :class:`PipelineIntegrityError` when the stable master.mp4
+        #: is missing (either the orchestrator never produced one or
+        #: the stable copy above failed) or any per-scene QA gate
+        #: failed. The existing ``except`` branch below catches it and
+        #: emits ``run.error`` with the plain-English message so the
+        #: status pill + narrator + per-scene cards all tell the same
+        #: story. We pass ``stable_path`` (not ``master_src``) so the
+        #: audit checks the file the API will actually serve — the
+        #: temp ``run_dir`` is wiped in the ``finally`` block.
+        _audit_pipeline_integrity(stream, master_path=stable_path)
         await stream.emit(
             "run.ok",
             "pipeline run completed",
@@ -1752,6 +1921,40 @@ async def _dispatch_pipeline_run(
             "trajectory": None,
         }
         raise
+    except PipelineIntegrityError as exc:
+        #: Integrity failures are operator-facing, not bugs — log at
+        #: warning, not exception. The message is already pre-written
+        #: in plain English; surface it as ``run.error`` with a
+        #: structured ``reason_kind`` so the frontend narrator can
+        #: render a friendly explanation without mentioning Python
+        #: class names.
+        logger.warning(
+            "topic=<%s>, duration=<%d>, reason=<%s> | pipeline integrity audit failed",
+            topic,
+            target_duration_sec,
+            exc.reason_kind,
+        )
+        await stream.emit(
+            "run.error",
+            str(exc),
+            detail={
+                "status": RUN_STATUS_TASK_ERROR,
+                "error_class": "PipelineIntegrityError",
+                "error": str(exc),
+                "reason_kind": exc.reason_kind,
+                "operator_message": str(exc),
+            },
+        )
+        terminal = {
+            "status": RUN_STATUS_TASK_ERROR,
+            "component_id": stream.component_id,
+            "case_name": stream.case_name,
+            "error": str(exc),
+            "error_class": "PipelineIntegrityError",
+            "reason_kind": exc.reason_kind,
+            "output": None,
+            "trajectory": None,
+        }
     except Exception as exc:  # noqa: BLE001 — surface to UI
         logger.exception(
             "pipeline run failed: topic=%s duration=%d", topic, target_duration_sec
@@ -1775,6 +1978,24 @@ async def _dispatch_pipeline_run(
             "trajectory": None,
         }
     finally:
+        narrator_task.cancel()
+        try:
+            await narrator_task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+        #: Post-run interpretation — a single paragraph the operator
+        #: can read after the run terminates. Best-effort: failures
+        #: never block run close.
+        try:
+            interpretation = await interpret_run(
+                stream,
+                output=terminal.get("output"),
+                evaluator_scores=None,
+            )
+            if interpretation:
+                terminal["interpretation"] = interpretation
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001 — best-effort
+            logger.debug("pipeline interpret_run failed", exc_info=True)
         if run_span_cm is not None:
             try:
                 run_span_cm.__exit__(None, None, None)
