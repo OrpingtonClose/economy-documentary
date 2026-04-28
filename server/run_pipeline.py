@@ -628,6 +628,14 @@ def _preflight_check_llm_key() -> None:
         if os.environ.get("GOOGLE_API_KEY"):
             logger.info("PRE-FLIGHT OK: GOOGLE_API_KEY is set (model: %s)", model_name)
             return
+        if os.environ.get("OPENAI_API_KEY"):
+            logger.warning(
+                "ADK_MODEL is '%s' (needs GOOGLE_API_KEY) but only OPENAI_API_KEY is set. "
+                "Switching to litellm/openai/gpt-4o automatically.",
+                model_name,
+            )
+            os.environ["ADK_MODEL"] = "litellm/openai/gpt-4o"
+            return
         logger.error(
             "PRE-FLIGHT FAILED: ADK_MODEL is '%s' but GOOGLE_API_KEY is not set.\n\n"
             "Fix: export GOOGLE_API_KEY=your-key\n"
