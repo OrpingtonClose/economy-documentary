@@ -23,7 +23,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -1546,7 +1546,7 @@ class PipelineIntegrityError(RuntimeError):
 def _audit_pipeline_integrity(
     stream: RunStream,
     *,
-    master_src: Path,
+    master_path: Optional[Path],
 ) -> None:
     """Audit a finished pipeline run; raise on integrity failure.
 
@@ -1554,8 +1554,12 @@ def _audit_pipeline_integrity(
     the orchestrator's own success/failure signal beyond two checks
     that a real operator would call out as "the page is lying":
 
-    1. ``master_src`` must exist and be > 0 bytes. A run that produced
-       no master.mp4 is never ``run.ok`` — there is no video to play.
+    1. ``master_path`` must be set, exist, and be > 0 bytes. This is
+       the *stable* copy under ``/tmp/pipeline_masters`` that the
+       ``stream_master_mp4`` route actually serves — checking the
+       in-temp ``master_src`` path instead would let a successful run
+       with a failed stable-copy slip through (the temp dir is wiped
+       in the ``finally`` block and the API would 404 on the video).
     2. No ``pipeline.tool.qa_*.end`` envelope on the stream may carry
        ``verdict == "fail"``. The QA gates are the contract for
        per-scene playability; a single failed gate means the operator
@@ -1568,7 +1572,11 @@ def _audit_pipeline_integrity(
     so the page-level status pill cannot disagree with the per-scene
     cards.
     """
-    if not master_src.exists() or master_src.stat().st_size == 0:
+    if (
+        master_path is None
+        or not master_path.exists()
+        or master_path.stat().st_size == 0
+    ):
         raise PipelineIntegrityError(
             (
                 "The system finished its checklist but no playable video "
@@ -1853,18 +1861,20 @@ async def _dispatch_pipeline_run(
         # path under ``/tmp/pipeline_masters`` so the temp run-dir can
         # be cleaned up without taking the playable mp4 with it.
         master_src = run_dir / "artifacts" / "master.mp4"
+        stable_path: Optional[Path] = None
         if master_src.exists():
             stable_dir = Path(tempfile.gettempdir()) / "pipeline_masters"
             stable_dir.mkdir(parents=True, exist_ok=True)
-            stable_path = stable_dir / f"{stream.run_id}.mp4"
+            candidate = stable_dir / f"{stream.run_id}.mp4"
             try:
-                shutil.copyfile(str(master_src), str(stable_path))
-                _PIPELINE_MASTER_PATHS[stream.run_id] = stable_path
+                shutil.copyfile(str(master_src), str(candidate))
+                _PIPELINE_MASTER_PATHS[stream.run_id] = candidate
+                stable_path = candidate
                 logger.info(
                     "run_id=<%s>, src=<%s>, stable=<%s> | master.mp4 registered for streaming",
                     stream.run_id,
                     master_src,
-                    stable_path,
+                    candidate,
                 )
             except Exception:  # noqa: BLE001 — telemetry-only
                 logger.exception(
@@ -1874,12 +1884,16 @@ async def _dispatch_pipeline_run(
                 )
         #: Integrity audit — never emit ``run.ok`` if the page would
         #: contradict itself. The audit raises
-        #: :class:`PipelineIntegrityError` when the master.mp4 is
-        #: missing or any per-scene QA gate failed; the existing
-        #: ``except`` branch below catches it and emits ``run.error``
-        #: with the plain-English message so the status pill +
-        #: narrator + per-scene cards all tell the same story.
-        _audit_pipeline_integrity(stream, master_src=master_src)
+        #: :class:`PipelineIntegrityError` when the stable master.mp4
+        #: is missing (either the orchestrator never produced one or
+        #: the stable copy above failed) or any per-scene QA gate
+        #: failed. The existing ``except`` branch below catches it and
+        #: emits ``run.error`` with the plain-English message so the
+        #: status pill + narrator + per-scene cards all tell the same
+        #: story. We pass ``stable_path`` (not ``master_src``) so the
+        #: audit checks the file the API will actually serve — the
+        #: temp ``run_dir`` is wiped in the ``finally`` block.
+        _audit_pipeline_integrity(stream, master_path=stable_path)
         await stream.emit(
             "run.ok",
             "pipeline run completed",
