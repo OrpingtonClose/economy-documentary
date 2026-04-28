@@ -287,8 +287,10 @@ echo -e "${BOLD}Starting pipeline now...${NC}"
 echo "────────────────────────────────────────────────────"
 
 cd "$SERVER_DIR"
+set +e
 poetry run python "${PIPELINE_ARGS[@]}"
 PIPELINE_EXIT=$?
+set -e
 
 echo "────────────────────────────────────────────────────"
 

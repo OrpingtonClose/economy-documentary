@@ -518,7 +518,8 @@ def main():
 
     # Auto-generate corpus if not provided
     if not args.corpus:
-        args.corpus = f"/tmp/documentary-pipeline/corpus/auto_{args.topic.lower().replace(' ', '_')[:30]}.md"
+        safe_name = "".join(c if c.isalnum() or c == '_' else '_' for c in args.topic.lower().replace(' ', '_'))[:30]
+        args.corpus = f"/tmp/documentary-pipeline/corpus/auto_{safe_name}.md"
         with open(args.corpus, "w") as f:
             f.write(f"# {args.topic}\n\n")
             f.write(f"Research corpus for documentary about: {args.topic}\n\n")
