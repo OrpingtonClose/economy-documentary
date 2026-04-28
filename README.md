@@ -1,50 +1,57 @@
 # Documentary Pipeline
 
-Topic-agnostic, ADHD-friendly AI documentary generation pipeline.
+AI documentary generation pipeline. Give it a topic, get a movie.
 
-Built with **Google ADK** (Agent Development Kit) + **CopilotKit AG-UI** for
-real-time human-in-the-loop control.
+## Make a Movie (Start Here)
 
-## Architecture
-
-```
-Frontend (Next.js + CopilotKit)
-    ↕ AG-UI Protocol (SSE)
-Backend (FastAPI + Google ADK)
-    → Scenario Director (EvaluatorOptimizer)
-    → Audio Agent (Qwen3-TTS + WhisperX)
-    → Visual Director (LoopAgent × 3 sub-agents)
-    → Production Supervisor (LTX-2.3 on GPU)
-    → Assembler Agent (ffmpeg)
+```bash
+./make_movie.sh "The History of Coffee"
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
+That one command handles everything — dependencies, configuration, and
+running the pipeline. See [QUICKSTART.md](QUICKSTART.md) for details.
 
-## Quick Start
+**Requirements:** Python 3.12+. That's it.
 
-### Backend
+## How It Works
+
+The pipeline runs 5 agents in sequence:
+
+1. **Scenario Director** — writes an ADHD-friendly script (multiple voices, short scenes)
+2. **Audio Agent** — generates narration via TTS + word-level alignment
+3. **Visual Director** — creates cinematic visual prompts for each scene
+4. **Production Supervisor** — generates video clips on GPU (LTX-2.3)
+5. **Assembler Agent** — combines everything into a final documentary
+
+Built with Google ADK (Agent Development Kit). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Running Modes
+
+| Mode | Command | What It Does | Needs GPU? |
+|------|---------|-------------|------------|
+| **Test** | `./make_movie.sh "Topic"` | Full pipeline with simulated media | No |
+| **Quick test** | `./make_movie.sh "Topic" --quick` | 2 scenes, ~1 min | No |
+| **Production** | `./make_movie.sh "Topic" --corpus research.md --production` | Real video | Yes |
+
+## Manual Setup (Advanced)
+
+If you prefer to run things manually instead of using `make_movie.sh`:
 
 ```bash
 cd server
-cp .env.example .env
-# Edit .env with your API keys
-
-poetry install
-poetry run uvicorn server:app --reload --port 8000
+cp .env.example .env          # Create config (edit to add API keys)
+poetry install                 # Install dependencies
+poetry run python run_pipeline.py --topic "Your Topic" --corpus research.md --test-mode
 ```
 
-### Frontend
+### Frontend (Optional)
+
+The frontend provides a dashboard with human review gates:
 
 ```bash
 cd frontend
 npm install
 npm run dev
-```
-
-### Test Run (no GPU needed)
-
-```bash
-DOCUMENTARY_TEST_MODE=true python test_run.py --topic "Your Topic"
 ```
 
 ## Pipeline Phases

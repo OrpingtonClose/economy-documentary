@@ -392,50 +392,57 @@ def _wire_simulation_callbacks(sim_callback) -> None:
                 expanded.append(sub)
 
     for agent in expanded:
-        # On first wiring, save the original callback; on re-wiring, restore it
-        # so we don't compose on top of a previous composition.
-        if agent.name in _original_callbacks:
-            orig = _original_callbacks[agent.name]
-        else:
-            orig = agent.before_tool_callback
-            _original_callbacks[agent.name] = orig
+        # Skip agents that don't support canonical_before_tool_callbacks
+        # (e.g. LoopAgent, SequentialAgent)
+        if not hasattr(agent, "canonical_before_tool_callbacks"):
+            continue
 
-        def _compose(original_cb, agent_name):
-            """Create a composed callback that checks SimulationRegistry dynamically."""
-            async def _composed(callback_context, tool_name, tool_input):
-                # Dynamic check: is simulation still active?
+        # On first wiring, save the original callbacks; on re-wiring, restore
+        # them so we don't compose on top of a previous composition.
+        if agent.name in _original_callbacks:
+            agent.canonical_before_tool_callbacks = list(
+                _original_callbacks[agent.name]
+            )
+        else:
+            _original_callbacks[agent.name] = list(
+                agent.canonical_before_tool_callbacks
+            )
+
+        def _make_sim_callback(sim_cb, agent_name):
+            """Create a simulation callback matching ADK 1.29+ signature."""
+            async def _sim_before_tool(tool, args, tool_context):
                 from testing.simulation_bridge import is_simulation_active
 
-                if is_simulation_active():
-                    result = None
-                    try:
-                        if asyncio.iscoroutinefunction(sim_callback):
-                            result = await sim_callback(callback_context, tool_name, tool_input)
-                        else:
-                            result = sim_callback(callback_context, tool_name, tool_input)
-                    except Exception as exc:
-                        logger.debug(
-                            "Simulation callback error for %s.%s: %s",
-                            agent_name, tool_name, exc,
-                        )
+                if not is_simulation_active():
+                    return None
 
-                    if result is not None:
-                        logger.info(
-                            "Simulation intercepted ADK tool %s on %s",
-                            tool_name, agent_name,
-                        )
-                        return result
+                try:
+                    if asyncio.iscoroutinefunction(sim_cb):
+                        result = await sim_cb(tool, args, tool_context)
+                    else:
+                        result = sim_cb(tool, args, tool_context)
+                except Exception as exc:
+                    tool_name = getattr(tool, "name", str(tool))
+                    logger.debug(
+                        "Simulation callback error for %s.%s: %s",
+                        agent_name, tool_name, exc,
+                    )
+                    return None
 
-                # No simulation match or simulation inactive — run original
-                if original_cb is not None:
-                    if asyncio.iscoroutinefunction(original_cb):
-                        return await original_cb(callback_context, tool_name, tool_input)
-                    return original_cb(callback_context, tool_name, tool_input)
-                return None
+                if result is not None:
+                    tool_name = getattr(tool, "name", str(tool))
+                    logger.info(
+                        "Simulation intercepted ADK tool %s on %s",
+                        tool_name, agent_name,
+                    )
+                return result
 
-            return _composed
+            return _sim_before_tool
 
-        agent.before_tool_callback = _compose(orig, agent.name)
+        # Prepend the simulation callback so it runs first
+        agent.canonical_before_tool_callbacks.insert(
+            0, _make_sim_callback(sim_callback, agent.name)
+        )
         logger.debug("Simulation callback composed onto agent: %s", agent.name)
 
     _simulation_wired = True
@@ -448,6 +455,30 @@ def _reset_simulation_wiring() -> None:
     can wire a fresh callback from the new scenario's config.
     """
     global _simulation_wired
+
+    # Restore original canonical_before_tool_callbacks for all wired agents
+    agents_to_check = [
+        scenario_director,
+        timing_loop,
+        visual_director,
+        production_supervisor,
+        assembler_agent,
+    ]
+    expanded = []
+    for agent in agents_to_check:
+        expanded.append(agent)
+        if hasattr(agent, "sub_agents"):
+            for sub in agent.sub_agents:
+                expanded.append(sub)
+
+    for agent in expanded:
+        if agent.name in _original_callbacks and hasattr(
+            agent, "canonical_before_tool_callbacks"
+        ):
+            agent.canonical_before_tool_callbacks = list(
+                _original_callbacks[agent.name]
+            )
+
     _simulation_wired = False
 
 

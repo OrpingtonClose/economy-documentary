@@ -495,7 +495,8 @@ async def run_pipeline(topic: str, corpus_path: str, language: str = "dual_ru_en
 def main():
     parser = argparse.ArgumentParser(description="Run the documentary pipeline directly")
     parser.add_argument("--topic", required=True, help="Documentary topic")
-    parser.add_argument("--corpus", required=True, help="Path to research corpus file")
+    parser.add_argument("--corpus", default="",
+                        help="Path to research corpus file (auto-generated if not provided)")
     parser.add_argument("--language", default="dual_ru_en",
                         choices=["en", "ru", "dual_ru_en"],
                         help="Language mode (default: dual_ru_en)")
@@ -513,6 +514,31 @@ def main():
     os.makedirs("/tmp/documentary-pipeline/audio", exist_ok=True)
     os.makedirs("/tmp/documentary-pipeline/video", exist_ok=True)
     os.makedirs("/tmp/documentary-pipeline/assembly", exist_ok=True)
+    os.makedirs("/tmp/documentary-pipeline/corpus", exist_ok=True)
+
+    # Auto-generate corpus if not provided
+    if not args.corpus:
+        args.corpus = f"/tmp/documentary-pipeline/corpus/auto_{args.topic.lower().replace(' ', '_')[:30]}.md"
+        with open(args.corpus, "w") as f:
+            f.write(f"# {args.topic}\n\n")
+            f.write(f"Research corpus for documentary about: {args.topic}\n\n")
+            f.write("## Overview\n\n")
+            f.write(f"This documentary explores {args.topic} through multiple lenses — ")
+            f.write("historical context, current impact, and future implications.\n\n")
+            f.write("## Key Areas\n\n")
+            f.write(f"- The origins and history of {args.topic}\n")
+            f.write(f"- How {args.topic} affects people today\n")
+            f.write(f"- Expert perspectives on {args.topic}\n")
+            f.write(f"- What the future holds for {args.topic}\n")
+        logger.info("Auto-generated corpus at: %s", args.corpus)
+    elif not os.path.exists(args.corpus):
+        logger.error(
+            "Corpus file not found: %s\n\n"
+            "Either provide a valid path or omit --corpus to auto-generate one.\n"
+            "Example: python run_pipeline.py --topic \"My Topic\" --test-mode",
+            args.corpus,
+        )
+        sys.exit(1)
 
     # Ensure B2 credentials are available
     if not os.environ.get("B2_KEY_ID"):
@@ -521,6 +547,12 @@ def main():
         logger.warning("B2_APPLICATION_KEY not set -- B2 checkpointing will be disabled")
 
     logger.info("=== Documentary Pipeline Runner ===")
+
+    # ── Pre-flight: LLM API key check ─────────────────────────────
+    # Even test/simulation mode needs an LLM to generate the scenario
+    # script. Check early so the operator gets a clear error instead
+    # of a cryptic authentication failure 5 minutes into the run.
+    _preflight_check_llm_key()
 
     # ── Pre-flight checks ─────────────────────────────────────────
     # ARCHITECTURE INVARIANT: Every required worker must be healthy
@@ -578,6 +610,56 @@ def main():
         print(f"\nFailed to save state: {e}")
 
     print("=" * 60)
+
+
+def _preflight_check_llm_key() -> None:
+    """Verify that at least one LLM API key is available.
+
+    The pipeline needs an LLM even in test/simulation mode (to generate the
+    scenario script). Without one, the pipeline will fail with a cryptic
+    authentication error minutes into the run. This check catches it upfront
+    with a clear, actionable message.
+    """
+    model_name = os.environ.get("ADK_MODEL", "litellm/openai/gpt-4o")
+
+    # Gemini models need GOOGLE_API_KEY
+    if model_name.startswith("gemini"):
+        if os.environ.get("GOOGLE_API_KEY"):
+            logger.info("PRE-FLIGHT OK: GOOGLE_API_KEY is set (model: %s)", model_name)
+            return
+        logger.error(
+            "PRE-FLIGHT FAILED: ADK_MODEL is '%s' but GOOGLE_API_KEY is not set.\n\n"
+            "Fix: export GOOGLE_API_KEY=your-key\n"
+            "Get a free key at: https://aistudio.google.com/apikey\n\n"
+            "Or switch to OpenAI: export ADK_MODEL=litellm/openai/gpt-4o",
+            model_name,
+        )
+        sys.exit(1)
+
+    # LiteLLM/OpenAI models need OPENAI_API_KEY
+    if os.environ.get("OPENAI_API_KEY"):
+        logger.info("PRE-FLIGHT OK: OPENAI_API_KEY is set (model: %s)", model_name)
+        return
+
+    # Check for other common keys that might work
+    if os.environ.get("GOOGLE_API_KEY"):
+        logger.warning(
+            "ADK_MODEL is '%s' (needs OPENAI_API_KEY) but only GOOGLE_API_KEY is set. "
+            "Switching to gemini-2.5-flash automatically.",
+            model_name,
+        )
+        os.environ["ADK_MODEL"] = "gemini-2.5-flash"
+        return
+
+    logger.error(
+        "PRE-FLIGHT FAILED: No LLM API key found.\n\n"
+        "The pipeline needs an AI model to write the documentary script.\n"
+        "Set ONE of these environment variables:\n\n"
+        "  export GOOGLE_API_KEY=your-key    # Free: https://aistudio.google.com/apikey\n"
+        "  export OPENAI_API_KEY=your-key    # https://platform.openai.com/api-keys\n\n"
+        "Then run the pipeline again.",
+    )
+    sys.exit(1)
 
 
 def _preflight_check_dashboard() -> None:

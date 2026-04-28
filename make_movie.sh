@@ -1,0 +1,321 @@
+#!/usr/bin/env bash
+#
+# make_movie.sh — One command to make a documentary.
+#
+# Usage:
+#   ./make_movie.sh "The History of Coffee"
+#
+# That's it. Everything else is handled automatically.
+#
+# What this does (you don't need to understand this):
+#   1. Checks that Python and Poetry are installed
+#   2. Installs dependencies if needed
+#   3. Creates a .env file with safe defaults if one doesn't exist
+#   4. Runs the pipeline in test/simulation mode (no GPU needed)
+#   5. Tells you where your output is
+#
+# Options:
+#   ./make_movie.sh "Topic"                    # Test mode (no GPU, simulated media)
+#   ./make_movie.sh "Topic" --corpus file.md   # Use your own research file
+#   ./make_movie.sh "Topic" --production       # Real mode (needs GPU workers)
+#   ./make_movie.sh "Topic" --quick            # Quick test (2 scenes, ~1 min)
+#
+set -euo pipefail
+
+# ── Color helpers ──────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+ok()   { echo -e "${GREEN}OK${NC} $1"; }
+info() { echo -e "${BLUE}>>>${NC} $1"; }
+warn() { echo -e "${YELLOW}WARNING${NC} $1"; }
+fail() { echo -e "${RED}ERROR${NC} $1"; exit 1; }
+step() { echo -e "\n${BOLD}Step $1${NC}: $2"; }
+
+# ── Parse arguments ────────────────────────────────────────────
+TOPIC=""
+CORPUS=""
+PRODUCTION=false
+QUICK=false
+LANGUAGE="en"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --corpus)
+            CORPUS="$2"
+            shift 2
+            ;;
+        --production)
+            PRODUCTION=true
+            shift
+            ;;
+        --quick)
+            QUICK=true
+            shift
+            ;;
+        --language)
+            LANGUAGE="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: ./make_movie.sh \"Your Topic\" [options]"
+            echo ""
+            echo "Options:"
+            echo "  --corpus FILE     Use your own research file (default: auto-generated)"
+            echo "  --production      Real mode with GPU workers (default: test/simulation)"
+            echo "  --quick           Quick test: 2 scenes, ~1 min total"
+            echo "  --language LANG   en, ru, or dual_ru_en (default: en)"
+            echo "  --help            Show this message"
+            exit 0
+            ;;
+        -*)
+            fail "Unknown option: $1 (run with --help to see options)"
+            ;;
+        *)
+            if [ -z "$TOPIC" ]; then
+                TOPIC="$1"
+            else
+                fail "Too many arguments. Topic should be in quotes: ./make_movie.sh \"My Topic\""
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [ -z "$TOPIC" ]; then
+    fail "Please provide a topic. Example: ./make_movie.sh \"The History of Coffee\""
+fi
+
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+SERVER_DIR="$REPO_DIR/server"
+
+echo -e "${BOLD}Documentary Pipeline${NC}"
+echo -e "Topic: ${GREEN}$TOPIC${NC}"
+echo ""
+
+# ── Step 1: Check Python ──────────────────────────────────────
+step 1 "Checking Python..."
+
+if command -v python3 &>/dev/null; then
+    PYTHON_VERSION=$(python3 --version 2>&1)
+    ok "$PYTHON_VERSION"
+else
+    fail "Python 3 is not installed. Please install Python 3.12 or later."
+fi
+
+# Check version is 3.12+
+PYTHON_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+if [ "$PYTHON_MINOR" -lt 12 ]; then
+    fail "Python 3.12+ is required. You have Python 3.$PYTHON_MINOR. Please upgrade."
+fi
+
+# ── Step 2: Check/Install Poetry ──────────────────────────────
+step 2 "Checking Poetry..."
+
+if command -v poetry &>/dev/null; then
+    ok "Poetry is installed"
+else
+    info "Poetry not found. Installing it now..."
+    curl -sSL https://install.python-poetry.org | python3 -
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v poetry &>/dev/null; then
+        ok "Poetry installed successfully"
+    else
+        fail "Poetry installation failed. Install manually: https://python-poetry.org/docs/#installation"
+    fi
+fi
+
+# ── Step 3: Install dependencies ──────────────────────────────
+step 3 "Installing dependencies..."
+
+cd "$SERVER_DIR"
+if [ -f "poetry.lock" ] && poetry check --quiet 2>/dev/null; then
+    ok "Dependencies already installed"
+else
+    info "Running poetry install (this may take a minute)..."
+    poetry install --no-interaction 2>&1 | tail -5
+    ok "Dependencies installed"
+fi
+
+# ── Step 4: Set up .env ──────────────────────────────────────
+step 4 "Checking configuration..."
+
+if [ ! -f "$SERVER_DIR/.env" ]; then
+    info "Creating .env with defaults..."
+    # Detect which LLM key is available and set the model accordingly
+    if [ -n "${GOOGLE_API_KEY:-}" ]; then
+        AUTO_MODEL="gemini-2.5-flash"
+    elif [ -n "${OPENAI_API_KEY:-}" ]; then
+        AUTO_MODEL="litellm/openai/gpt-4o"
+    else
+        AUTO_MODEL="gemini-2.5-flash"
+    fi
+    cat > "$SERVER_DIR/.env" <<ENVFILE
+# Auto-generated by make_movie.sh
+# For production mode, add GPU and B2 keys below.
+
+ADK_MODEL=$AUTO_MODEL
+DOCUMENTARY_TEST_MODE=false
+MAX_CONCURRENT_LLM=2
+MAX_CONTEXT_TOKENS=128000
+TOOL_RESULT_MAX_CHARS=25000
+CONTEXT_INVOCATIONS_TO_KEEP=2
+TOOL_MAX_RETRIES=2
+ENVFILE
+    ok ".env created (model: $AUTO_MODEL)"
+else
+    ok ".env already exists"
+fi
+
+# ── Step 5: Validate environment ─────────────────────────────
+step 5 "Validating environment..."
+
+# Both test and production modes need an LLM API key
+HAS_LLM_KEY=false
+if [ -n "${GOOGLE_API_KEY:-}" ]; then
+    HAS_LLM_KEY=true
+    ok "Found GOOGLE_API_KEY in environment"
+elif [ -n "${OPENAI_API_KEY:-}" ]; then
+    HAS_LLM_KEY=true
+    ok "Found OPENAI_API_KEY in environment"
+elif grep -q "^GOOGLE_API_KEY=.\+" "$SERVER_DIR/.env" 2>/dev/null; then
+    HAS_LLM_KEY=true
+    ok "Found GOOGLE_API_KEY in .env"
+elif grep -q "^OPENAI_API_KEY=.\+" "$SERVER_DIR/.env" 2>/dev/null; then
+    HAS_LLM_KEY=true
+    ok "Found OPENAI_API_KEY in .env"
+fi
+
+if [ "$HAS_LLM_KEY" = false ]; then
+    echo -e "${RED}ERROR${NC} An LLM API key is required (even for test mode)."
+    echo ""
+    echo "The pipeline needs an AI model to write the documentary script."
+    echo "Set ONE of these:"
+    echo "  export GOOGLE_API_KEY=your-key    # Free tier: https://aistudio.google.com/apikey"
+    echo "  export OPENAI_API_KEY=your-key    # https://platform.openai.com/api-keys"
+    echo ""
+    echo "Or add it to $SERVER_DIR/.env"
+    exit 1
+fi
+
+if [ "$PRODUCTION" = true ]; then
+    if [ -z "${VAST_API_KEY:-}" ]; then
+        if ! grep -q "^VAST_API_KEY=.\+" "$SERVER_DIR/.env" 2>/dev/null; then
+            echo -e "${RED}ERROR${NC} Production mode also requires VAST_API_KEY for GPU provisioning."
+            echo "Set it: export VAST_API_KEY=your-key"
+            exit 1
+        fi
+    fi
+    ok "Production environment looks good"
+else
+    ok "Test mode — LLM key found, no GPU keys needed"
+fi
+
+# ── Step 6: Prepare corpus ───────────────────────────────────
+step 6 "Preparing research corpus..."
+
+if [ -n "$CORPUS" ]; then
+    if [ ! -f "$CORPUS" ]; then
+        fail "Corpus file not found: $CORPUS"
+    fi
+    ok "Using corpus: $CORPUS"
+else
+    # Auto-generate a minimal corpus from the topic
+    CORPUS_DIR="/tmp/documentary-pipeline/corpus"
+    mkdir -p "$CORPUS_DIR"
+    CORPUS="$CORPUS_DIR/auto_corpus.md"
+    cat > "$CORPUS" <<CORPUS_EOF
+# $TOPIC
+
+This is an automatically generated research stub for the documentary topic: $TOPIC
+
+The pipeline will use this as a starting point. In production mode, you would
+replace this with your actual research material — transcripts, articles,
+data, analysis, etc.
+
+## Key Points
+
+- The documentary will explore: $TOPIC
+- The pipeline will generate ADHD-friendly content with multiple voice styles
+- Each scene will be under 45 seconds with visual variety
+
+## Research Notes
+
+(This is a placeholder. For better results, provide a real corpus file with
+your research using: ./make_movie.sh "$TOPIC" --corpus your_research.md)
+CORPUS_EOF
+    ok "Auto-generated corpus for: $TOPIC"
+    info "For better results, provide your own research: --corpus your_file.md"
+fi
+
+# ── Step 7: Create output directories ────────────────────────
+step 7 "Preparing output directories..."
+
+mkdir -p /tmp/documentary-pipeline/{timelines,audio,video,assembly,output,corpus}
+ok "Output directories ready"
+
+# ── Step 8: Run the pipeline ─────────────────────────────────
+step 8 "Running the pipeline..."
+echo ""
+
+PIPELINE_ARGS=(
+    "run_pipeline.py"
+    "--topic" "$TOPIC"
+    "--corpus" "$CORPUS"
+    "--language" "$LANGUAGE"
+)
+
+if [ "$PRODUCTION" = false ]; then
+    PIPELINE_ARGS+=("--test-mode")
+    info "Running in TEST MODE (simulated media, no GPU needed)"
+    info "This validates the full pipeline without real media generation."
+else
+    info "Running in PRODUCTION MODE (real TTS + video generation)"
+fi
+
+if [ "$QUICK" = true ]; then
+    PIPELINE_ARGS+=("--quick-test")
+    info "Quick mode: 2 scenes, ~15 seconds each"
+fi
+
+echo ""
+echo -e "${BOLD}Starting pipeline now...${NC}"
+echo "────────────────────────────────────────────────────"
+
+cd "$SERVER_DIR"
+poetry run python "${PIPELINE_ARGS[@]}"
+PIPELINE_EXIT=$?
+
+echo "────────────────────────────────────────────────────"
+
+if [ $PIPELINE_EXIT -eq 0 ]; then
+    echo ""
+    echo -e "${GREEN}${BOLD}Pipeline completed successfully!${NC}"
+    echo ""
+    echo "Output files:"
+    echo "  State:     /tmp/documentary-pipeline/output/pipeline_state.json"
+    echo "  Timelines: /tmp/documentary-pipeline/timelines/"
+    echo "  Audio:     /tmp/documentary-pipeline/audio/"
+    echo "  Video:     /tmp/documentary-pipeline/video/"
+    echo "  Final:     /tmp/documentary-pipeline/output/"
+    echo ""
+    if [ "$PRODUCTION" = false ]; then
+        echo "This was a TEST run. Media files are simulated."
+        echo "To make a real documentary, run:"
+        echo "  ./make_movie.sh \"$TOPIC\" --corpus your_research.md --production"
+    fi
+else
+    echo ""
+    echo -e "${RED}${BOLD}Pipeline failed (exit code $PIPELINE_EXIT).${NC}"
+    echo ""
+    echo "Check the output above for error messages."
+    echo "Common issues:"
+    echo "  - Missing API key  → Add it to server/.env"
+    echo "  - Poetry error     → Run: cd server && poetry install"
+    echo "  - Python version   → Need Python 3.12+"
+    exit $PIPELINE_EXIT
+fi
