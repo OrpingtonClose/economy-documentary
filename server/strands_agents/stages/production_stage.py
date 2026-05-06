@@ -637,20 +637,35 @@ def submit_gpu_production_job(
         phrase_idx=phrase_idx,
     )
 
-    # In production, the GPU protocol is injected via state.
-    # For now, return a placeholder.
-    logger.info(
-        "job_type=<%s>, scene_num=<%d>, phrase_idx=<%d> | "
-        "GPU job submitted (placeholder)",
-        job_type,
-        scene_num,
-        phrase_idx,
-    )
-    return {
-        "job_id": f"gpu-{scene_num}-{phrase_idx}",
-        "status": "pending",
-        "output_path": "",
-    }
+    # Try to use the real GPU protocol from state, or fall back to MockGPUProtocol
+    gpu_protocol = None
+    if tool_context and hasattr(tool_context, 'state') and tool_context.state:
+        gpu_protocol = tool_context.state.get("gpu_protocol")
+
+    if gpu_protocol is not None:
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        result = loop.run_until_complete(gpu_protocol.submit(request))
+        return {
+            "job_id": result.job_id,
+            "status": result.status.value,
+            "output_path": result.output_path,
+            "cost_usd": result.cost_usd,
+        }
+    else:
+        # Fallback: placeholder when no GPU protocol is available
+        logger.info(
+            "job_type=<%s>, scene_num=<%d>, phrase_idx=<%d> | "
+            "GPU job submitted (no protocol, placeholder)",
+            job_type,
+            scene_num,
+            phrase_idx,
+        )
+        return {
+            "job_id": f"gpu-{scene_num}-{phrase_idx}",
+            "status": "pending",
+            "output_path": "",
+        }
 
 
 @tool
@@ -663,12 +678,28 @@ def check_gpu_production_job(job_id: str) -> dict[str, Any]:
     Returns:
         Dict with ``job_id``, ``status``, ``output_path``.
     """
-    logger.info("job_id=<%s> | checking GPU job status (placeholder)", job_id)
-    return {
-        "job_id": job_id,
-        "status": "completed",
-        "output_path": f"/tmp/output/{job_id}.mp4",
-    }
+    logger.info("job_id=<%s> | checking GPU job status", job_id)
+    # Try to use the real GPU protocol from state
+    gpu_protocol = None
+    if tool_context and hasattr(tool_context, 'state') and tool_context.state:
+        gpu_protocol = tool_context.state.get("gpu_protocol")
+
+    if gpu_protocol is not None:
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        result = loop.run_until_complete(gpu_protocol.check(job_id))
+        return {
+            "job_id": result.job_id,
+            "status": result.status.value,
+            "output_path": result.output_path,
+        }
+    else:
+        # Fallback: placeholder
+        return {
+            "job_id": job_id,
+            "status": "completed",
+            "output_path": f"/tmp/output/{job_id}.mp4",
+        }
 
 
 # ---------------------------------------------------------------------------/
