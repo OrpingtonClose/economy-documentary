@@ -1615,13 +1615,29 @@ def escalate_pipeline_error(
             )
             return agent_decision
         elif action == "abort":
-            logger.warning(
-                "Agent ladder decided to abort '%s' at L%s (agent=%s)",
-                operation_name,
-                agent_decision.get("level", "?"),
-                agent_decision.get("agent", "?"),
-            )
-            return {"action": "abort", **agent_decision}
+            # When default_action is set (e.g. "fallback"), the caller
+            # expects a resolution — not a raw abort from a low-level agent
+            # that couldn't reach its LLM.  Fall through to supervisor and
+            # auto-approve instead of short-circuiting.
+            if default_action and default_action != "abort":
+                logger.warning(
+                    "Agent ladder decided abort for '%s' at L%s (agent=%s) "
+                    "but default_action='%s' is set — falling through to "
+                    "supervisor/auto-approve instead of short-circuiting",
+                    operation_name,
+                    agent_decision.get("level", "?"),
+                    agent_decision.get("agent", "?"),
+                    default_action,
+                )
+                # Don't return — fall through to supervisor + auto-approve
+            else:
+                logger.warning(
+                    "Agent ladder decided to abort '%s' at L%s (agent=%s)",
+                    operation_name,
+                    agent_decision.get("level", "?"),
+                    agent_decision.get("agent", "?"),
+                )
+                return {"action": "abort", **agent_decision}
 
     # ── Step 1.5: Consult the Production Supervisor LLM ──────────────
     # The agent ladder returned "escalate" (or no agents were available).
