@@ -71,7 +71,7 @@ async def run_documentary(
         Dict with pipeline result, OTIO state, and execution summary.
     """
     # Set up model
-    model = AnthropicModel(model_id=model_id or _MODEL_ID)
+    model = AnthropicModel(model_id=model_id or _MODEL_ID, max_tokens=8192)
 
     # Set up OTIO state manager
     otio_manager = OTIOStateManager(output_dir=output_dir)
@@ -101,6 +101,7 @@ async def run_documentary(
         otio_manager=otio_manager,
         hooks=hooks,
         max_node_executions=max_node_executions,
+        model=model,
     )
 
     # Build the recovery shell

@@ -69,7 +69,7 @@ def _make_placeholder_agent(stage: str) -> Agent:
     )
 
 
-def _try_build_stage(stage: str, otio_manager=None) -> Agent | None:
+def _try_build_stage(stage: str, otio_manager=None, model=None) -> Agent | None:
     """Try to build a real stage agent; return None if not available."""
     try:
         from strands_agents.stages import (
@@ -88,7 +88,7 @@ def _try_build_stage(stage: str, otio_manager=None) -> Agent | None:
         }
         builder = builders.get(stage)
         if builder:
-            return builder(otio_manager=otio_manager)
+            return builder(otio_manager=otio_manager, model=model)
     except (ImportError, Exception) as exc:
         logger.debug("Stage '%s' builder not available: %s", stage, exc)
     return None
@@ -99,19 +99,30 @@ def _try_build_stage(stage: str, otio_manager=None) -> Agent | None:
 # ---------------------------------------------------------------------------
 
 
-def _needs_scenario_retry(state: dict[str, Any]) -> bool:
+def _needs_scenario_retry(state) -> bool:
     """Backward edge: audio → scenario when timing fails."""
-    return state.get("_recovery_target") == SCENARIO
+    # GraphState is a dataclass, not a dict. Recovery is handled
+    # by unit agents internally — no backward edges needed for now.
+    try:
+        return state.get("_recovery_target") == SCENARIO if hasattr(state, "get") else False
+    except Exception:
+        return False
 
 
-def _needs_visual_retry(state: dict[str, Any]) -> bool:
+def _needs_visual_retry(state) -> bool:
     """Backward edge: production → visual when clips fail QA."""
-    return state.get("_recovery_target") == VISUAL
+    try:
+        return state.get("_recovery_target") == VISUAL if hasattr(state, "get") else False
+    except Exception:
+        return False
 
 
-def _needs_audio_retry(state: dict[str, Any]) -> bool:
+def _needs_audio_retry(state) -> bool:
     """Backward edge: visual → audio when alignment is off."""
-    return state.get("_recovery_target") == AUDIO
+    try:
+        return state.get("_recovery_target") == AUDIO if hasattr(state, "get") else False
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +135,7 @@ def build_documentary_graph(
     hooks: list[HookProvider] | None = None,
     max_node_executions: int = 50,
     otio_manager: Any | None = None,
+    model: Any | None = None,
 ) -> Graph:
     """Construct the 5-node documentary pipeline Graph.
 
@@ -145,7 +157,7 @@ def build_documentary_graph(
     # Fill missing stages with real agents (preferred) or placeholders
     for stage in STAGE_ORDER:
         if stage not in agents:
-            real_agent = _try_build_stage(stage, otio_manager=otio_manager)
+            real_agent = _try_build_stage(stage, otio_manager=otio_manager, model=model)
             agents[stage] = real_agent if real_agent else _make_placeholder_agent(stage)
 
     # Build nodes
