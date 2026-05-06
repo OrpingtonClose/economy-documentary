@@ -147,8 +147,7 @@ def add_narration_to_timeline(
 def align_narration_audio(
     wav_path: str,
     text: str,
-    scene_num: int,
-    voice: str,
+    language: str = "en",
 ) -> str:
     """Run WhisperX alignment on a narration clip.
 
@@ -157,8 +156,7 @@ def align_narration_audio(
     Args:
         wav_path: Path to the WAV file.
         text: Original narration text.
-        scene_num: Scene number.
-        voice: Voice role.
+        language: Language code (default: "en").
 
     Returns:
         JSON with alignment data.
@@ -166,18 +164,23 @@ def align_narration_audio(
     try:
         from tools.whisperx_tools import align_narration
 
+        class _ToolCtx:
+            def __init__(self):
+                self.state = {
+                    "pipeline_phase": "audio",
+                    "_output_dir": os.environ.get("_output_dir", "/tmp/documentary-pipeline"),
+                }
+
         result = align_narration(
             wav_path=wav_path,
             text=text,
-            scene_num=scene_num,
-            voice=voice,
+            language=language,
+            tool_context=_ToolCtx(),
         )
         return result
     except ImportError:
         logger.warning("WhisperX tools not available — returning placeholder alignment")
         return json.dumps({
-            "scene_num": scene_num,
-            "voice": voice,
             "alignment": "placeholder",
             "note": "WhisperX not installed",
         })

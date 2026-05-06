@@ -51,6 +51,7 @@ from strands.hooks import (
 
 from contracts import VISUAL_DIRECTION_CONTRACT
 from strands_agents.hooks import ContractEnforcer, RevisionTagger
+from strands_agents.hooks.otio_contracts import OTIOContractEnforcer
 from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.otio_tools import otio_read, otio_write
 
@@ -1141,7 +1142,7 @@ def build_visual_agent(
 
     # Contract enforcement
     if enforce_contract:
-        hooks.append(ContractEnforcer(VISUAL_DIRECTION_CONTRACT))
+        hooks.append(OTIOContractEnforcer(VISUAL_DIRECTION_CONTRACT))
 
     # Revision tagging
     if tag_revisions:

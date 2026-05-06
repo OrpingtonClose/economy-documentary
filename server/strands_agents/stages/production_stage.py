@@ -53,6 +53,7 @@ from strands_agents.gpu_protocol import (
     MockGPUProtocol,
 )
 from strands_agents.hooks import ContractEnforcer, RevisionTagger
+from strands_agents.hooks.otio_contracts import OTIOContractEnforcer
 from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.otio_tools import otio_read, otio_write
 
@@ -887,7 +888,7 @@ def build_production_agent(
     # Contract enforcement
     if enforce_contract:
         try:
-            hooks.append(ContractEnforcer(PRODUCTION_CONTRACT))
+            hooks.append(OTIOContractEnforcer(PRODUCTION_CONTRACT))
         except Exception:
             # PRODUCTION_CONTRACT may not be defined yet in the
             # contracts module — skip gracefully.

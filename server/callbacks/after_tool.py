@@ -12,7 +12,10 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-from google.adk.tools import ToolContext
+try:
+    from google.adk.tools import ToolContext
+except ImportError:
+    ToolContext = None  # type: ignore[assignment,misc]
 
 from callbacks.before_tool import _provider_semaphores
 from dashboard import get_active_collector
@@ -72,7 +75,7 @@ def _maybe_truncate_result(tool_name: str, result_text: str) -> str:
 def after_tool_callback(
     tool: Any,
     args: Dict[str, Any],
-    tool_context: ToolContext,
+    tool_context: Any,
     tool_response: Any,
 ) -> Optional[Dict[str, Any]]:
     """ADK after_tool_callback."""

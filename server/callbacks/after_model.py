@@ -12,7 +12,10 @@ import logging
 import os
 from typing import Any, Optional
 
-from google.adk.agents.callback_context import CallbackContext
+try:
+    from google.adk.agents.callback_context import CallbackContext
+except ImportError:
+    CallbackContext = None  # type: ignore[assignment,misc]
 
 from callbacks.before_model import release_llm_semaphore_if_held
 from dashboard import get_active_collector
@@ -25,7 +28,7 @@ _VISUAL_STYLE_BACKUP = os.path.join(_TIMELINE_DIR, "_visual_style_backup.json")
 
 
 def after_model_callback(
-    callback_context: CallbackContext, llm_response: Any
+    callback_context: Any, llm_response: Any
 ) -> Optional[Any]:
     """ADK after_model_callback.
 

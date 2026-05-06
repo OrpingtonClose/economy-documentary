@@ -185,6 +185,11 @@ class OTIOStateManager:
                     kind = "video" if track_name == TRACK_V1 else "audio"
                     track = otio.schema.Track(name=track_name, kind=kind)
                     self._timeline.tracks.append(track)
+
+                # Write to disk so contract enforcers and tools can find it
+                os.makedirs(self._timeline_dir, exist_ok=True)
+                otio.adapters.write_to_file(self._timeline, self._timeline_path)
+                logger.info("Timeline written to %s", self._timeline_path)
             except ImportError:
                 # Lightweight fallback for environments without OTIO
                 logger.debug("opentimelineio not available, using dict timeline")
@@ -306,9 +311,21 @@ class OTIOStateManager:
                         if metadata:
                             clip.metadata["documentary"] = metadata
                         t.append(clip)
+                        # Write to disk after each clip addition
+                        self._write_timeline()
                         break
                 else:
                     logger.warning("Track '%s' not found in timeline", track)
+
+    def _write_timeline(self) -> None:
+        """Write the current timeline to disk."""
+        try:
+            import opentimelineio as otio
+            if isinstance(self._timeline, otio.schema.Timeline) and self._timeline_path:
+                os.makedirs(os.path.dirname(self._timeline_path), exist_ok=True)
+                otio.adapters.write_to_file(self._timeline, self._timeline_path)
+        except Exception as exc:
+            logger.warning("Failed to write timeline: %s", exc)
 
     # -----------------------------------------------------------------------
     # Checkpoints

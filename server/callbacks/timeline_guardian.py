@@ -25,7 +25,10 @@ import logging
 import os
 from typing import Optional
 
-from google.adk.agents.callback_context import CallbackContext
+try:
+    from google.adk.agents.callback_context import CallbackContext
+except ImportError:
+    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
@@ -407,7 +410,7 @@ _VALIDATORS = {
 
 
 def timeline_guardian_callback(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """After-agent callback that validates the OTIO timeline.
 

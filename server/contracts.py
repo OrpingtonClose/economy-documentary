@@ -317,6 +317,7 @@ PRODUCTION_CONTRACT = StageContract(
             name="Video worker",
             env_var="VIDEO_WORKER_URLS",
             capability="ltx",
+            required=False,  # provisioner provisions on demand
         ),
     ],
     required_state=["scenes", "whisperx_alignment", "visual_concepts"],

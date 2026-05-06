@@ -32,8 +32,13 @@ import logging
 import os
 from typing import Any, Optional
 
-from google.adk.agents.callback_context import CallbackContext
-from google.genai import types as genai_types
+# ADK is optional — only needed for the ADK callback, not for guards
+try:
+    from google.adk.agents.callback_context import CallbackContext
+    from google.genai import types as genai_types
+except ImportError:
+    CallbackContext = None
+    genai_types = None
 
 logger = logging.getLogger(__name__)
 
@@ -358,8 +363,8 @@ def guard_authoritative_mutation(
 
 
 def authoritative_transition_callback(
-    callback_context: CallbackContext,
-) -> Optional[genai_types.Content]:
+    callback_context: Any,
+) -> Any:
     """``after_agent_callback`` that crystallises the timeline to authoritative.
 
     Wired onto the audio stage's reconciliation agent (``audio_agent``

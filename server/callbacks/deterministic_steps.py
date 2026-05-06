@@ -23,7 +23,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from google.adk.agents.callback_context import CallbackContext
+try:
+    from google.adk.agents.callback_context import CallbackContext
+except ImportError:
+    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 from callbacks.state_manager import safe_state_dict
@@ -322,7 +325,7 @@ def extract_json_object(text: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def clean_scenes_after_scenario(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """After scenario_director: extract clean JSON from state['scenes'] and state['visual_style'].
 
@@ -585,7 +588,7 @@ def _trim_text_to_budget(text: str, actual_duration: float, budget: float) -> st
 # ---------------------------------------------------------------------------
 
 def deterministic_audio_callback(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """Before audio_agent: generate all narration deterministically.
 
@@ -1682,7 +1685,7 @@ def _normalize_concept_durations(
 
 
 def write_visual_metadata_to_otio(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """After visual_director: write prompt/LoRA metadata to OTIO gaps.
 
@@ -1867,7 +1870,7 @@ def write_visual_metadata_to_otio(
 # ---------------------------------------------------------------------------
 
 def deterministic_production_callback(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """Before production_supervisor: generate all video clips deterministically.
 
@@ -2599,7 +2602,7 @@ def deterministic_production_callback(
 # ---------------------------------------------------------------------------
 
 def deterministic_assembly_callback(
-    callback_context: CallbackContext,
+    callback_context: Any,
 ) -> Optional[genai_types.Content]:
     """Before assembler_agent: assemble the final documentary deterministically.
 

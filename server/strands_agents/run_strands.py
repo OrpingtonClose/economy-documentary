@@ -77,6 +77,10 @@ async def run_documentary(
     otio_manager = OTIOStateManager(output_dir=output_dir)
     otio_manager.create_timeline("documentary_draft")
 
+    # Set the timeline path in the environment so tools can find it
+    if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
+        os.environ["_timeline_path"] = otio_manager._timeline_path
+
     # Set up GPU protocol
     if gpu_protocol is None:
         gpu_protocol = MockGPUProtocol()

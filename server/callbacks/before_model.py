@@ -14,7 +14,10 @@ import logging
 import os
 from typing import Any, List, Optional
 
-from google.adk.agents.callback_context import CallbackContext
+try:
+    from google.adk.agents.callback_context import CallbackContext
+except ImportError:
+    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 from dashboard import get_active_collector
@@ -63,7 +66,7 @@ def _estimate_tokens(contents: List[genai_types.Content]) -> int:
 
 
 async def before_model_callback(
-    callback_context: CallbackContext, llm_request: Any
+    callback_context: Any, llm_request: Any
 ) -> Optional[genai_types.Content]:
     """ADK before_model_callback (async).
 

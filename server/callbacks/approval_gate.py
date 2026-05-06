@@ -21,7 +21,10 @@ import os
 import time
 from typing import Any, MutableMapping, Optional
 
-from google.adk.agents.callback_context import CallbackContext
+try:
+    from google.adk.agents.callback_context import CallbackContext
+except ImportError:
+    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
@@ -335,7 +338,7 @@ def make_after_stage_callback(stage: str):
     the dashboard sees one plain-english line per stage boundary without
     each agent having to wire it up by hand.
     """
-    def _after_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
+    def _after_callback(callback_context: Any) -> Optional[genai_types.Content]:
         mark_stage_ready(stage)
         # ARCH-H5 (issue #160): stage_end digest.  The state mapping is
         # the ADK session state so cross-stage consumers reading
@@ -367,7 +370,7 @@ def make_before_stage_callback(requires_stage: str):
     actually know the identity of the stage being entered
     (see :func:`dashboard.reasoning_digest.emit_digest`).
     """
-    def _before_callback(callback_context: CallbackContext) -> Optional[genai_types.Content]:
+    def _before_callback(callback_context: Any) -> Optional[genai_types.Content]:
         if not is_stage_approved(requires_stage):
             logger.info(
                 "Stage requires '%s' approval — waiting...", requires_stage

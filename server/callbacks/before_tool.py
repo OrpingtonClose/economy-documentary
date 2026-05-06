@@ -13,7 +13,10 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from google.adk.tools import ToolContext
+try:
+    from google.adk.tools import ToolContext
+except ImportError:
+    ToolContext = None  # type: ignore[assignment,misc]
 
 from callbacks.media_immutability import check_media_immutability
 from dashboard import get_active_collector
@@ -50,7 +53,7 @@ def _get_provider(tool_name: str) -> Optional[str]:
 
 
 def before_tool_callback(
-    tool: Any, args: Dict[str, Any], tool_context: ToolContext
+    tool: Any, args: Dict[str, Any], tool_context: Any
 ) -> Optional[Dict[str, Any]]:
     """ADK before_tool_callback.
 
