@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Optional
 
 from google.adk.agents import Agent, SequentialAgent
@@ -327,12 +328,24 @@ def _timing_loop_before_with_gate(callback_context):
         logger.info("TTS worker ready — timing loop proceeding")
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
-        return genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(
-                text=f"ERROR: TTS worker provisioning failed: {exc}"
-            )],
+        # Escalate through the recovery system so the escalation ladder
+        # runs its full course (env assessment → human escalation).
+        from recovery import escalate_pipeline_error
+        escalate_pipeline_error(
+            operation_name="tts_worker_provisioning",
+            error_msg=str(exc),
+            severity="high",
+            default_action="fallback",
+            diagnosis_hint="TTS GPU worker could not be provisioned. "
+                          "Falling back to edge-tts for real audio generation.",
+            agent_policy_type="tts",
         )
+        # Set TTS_FALLBACK=edge-tts so tts_tools.py can use edge-tts
+        # This produces real audio with real durations — satisfies the
+        # architectural invariant that downstream timing depends on
+        # actual narration length.
+        os.environ["TTS_FALLBACK"] = "edge-tts"
+        logger.info("TTS_FALLBACK=edge-tts set — audio stage will use edge-tts")
 
     # CONTRACT: validate preconditions AFTER TTS worker is ready.
     # AUDIO_CONTRACT includes service health checks that require the
@@ -516,12 +529,18 @@ def _production_before_with_gate(callback_context):
         logger.info("Video worker ready — production stage proceeding")
     except Exception as exc:
         logger.error("Video worker not available: %s", exc)
-        return genai_types.Content(
-            role="model",
-            parts=[genai_types.Part(
-                text=f"ERROR: Video worker provisioning failed: {exc}"
-            )],
+        # Escalate through the recovery system
+        from recovery import escalate_pipeline_error
+        escalate_pipeline_error(
+            operation_name="video_worker_provisioning",
+            error_msg=str(exc),
+            severity="high",
+            default_action="fallback",
+            diagnosis_hint="Video GPU worker could not be provisioned.",
+            agent_policy_type="video",
         )
+        os.environ["VIDEO_FALLBACK"] = "local"
+        logger.info("VIDEO_FALLBACK=local set — production stage will use local GPU")
 
     # CONTRACT: validate preconditions AFTER video worker is ready.
     # PRODUCTION_CONTRACT includes service health checks that require the
