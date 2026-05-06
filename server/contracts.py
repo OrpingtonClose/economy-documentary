@@ -527,7 +527,9 @@ def validate_preconditions(contract: StageContract, state: dict) -> None:
 
     # -- Upstream state validation --
     for key in contract.required_state:
-        val = state.get(key, "")
+        val = state.get(key) if hasattr(state, "get") else ""
+        if val is None:
+            val = ""
         val_str = str(val).strip() if val is not None else ""
         if val_str in _PLACEHOLDER_VALUES:
             errors.append(

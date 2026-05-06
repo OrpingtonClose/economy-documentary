@@ -493,7 +493,7 @@ def generate_visual_concepts(
         raw = state.get("content_analysis")
         ca = raw if isinstance(raw, dict) else {}
         if not ca:
-            raw_json = state.get("content_analysis_json", "")
+            raw_json = state.get("content_analysis_json") or ""
             try:
                 ca = json.loads(raw_json) if raw_json.strip() else {}
             except (json.JSONDecodeError, TypeError):
@@ -512,7 +512,7 @@ def generate_visual_concepts(
         vs = raw if isinstance(raw, dict) else {}
         if not vs:
             try:
-                vs = json.loads(str(state.get("visual_style", ""))) if state.get("visual_style") else {}
+                vs = json.loads(str(state.get("visual_style") or "")) if state.get("visual_style") else {}
             except (json.JSONDecodeError, TypeError):
                 vs = {}
 
@@ -1047,7 +1047,7 @@ class ChunkingHook(HookProvider):
         if state.get("_vc_chunking_done"):
             return
 
-        raw_ca = state.get("content_analysis", "")
+        raw_ca = state.get("content_analysis") or ""
         try:
             ca = json.loads(str(raw_ca)) if str(raw_ca).strip() else {}
         except (json.JSONDecodeError, TypeError):

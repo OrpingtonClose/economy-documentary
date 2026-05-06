@@ -64,7 +64,13 @@ class ContractEnforcer(HookProvider):
 
     def _extract_state(self, event: BeforeInvocationEvent | AfterInvocationEvent) -> dict[str, Any]:
         raw = event.agent.state
-        dumped = raw.get() if hasattr(raw, "get") else raw
+        # AgentState.get() returns a dict when called with no args.
+        # But some state implementations (JSONSerializableDict) don't
+        # support .get(key, default) — so we always convert to plain dict.
+        try:
+            dumped = raw.get() if hasattr(raw, "get") else raw
+        except TypeError:
+            dumped = {}
         if not isinstance(dumped, dict):
             dumped = {}
         if self.state_key is None:

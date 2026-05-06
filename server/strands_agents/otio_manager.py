@@ -276,8 +276,6 @@ class OTIOStateManager:
         """Add a clip to the specified track. Guarded when authoritative."""
         self.guard_mutation("add_clip")
         with self._lock:
-            # Implementation depends on OTIO availability
-            # For now, store in the dict fallback
             if isinstance(self._timeline, dict):
                 tracks = self._timeline.setdefault("tracks", {})
                 track_clips = tracks.setdefault(track, [])
@@ -291,8 +289,26 @@ class OTIOStateManager:
                 }
                 track_clips.append(clip)
             else:
-                # Real OTIO — will be implemented in Step 8-11
-                logger.debug("OTIO clip addition for real timeline (TBD in stage ports)")
+                # Real OTIO timeline — add clip to the matching track
+                import opentimelineio as otio
+                for t in self._timeline.tracks:
+                    if t.name == track:
+                        clip = otio.schema.Clip(
+                            name=f"scene_{scene_num}_phrase_{phrase_idx}",
+                            source_range=otio.opentime.TimeRange(
+                                start_time=otio.opentime.RationalTime(0, 24),
+                                duration=otio.opentime.RationalTime.from_seconds(duration, 24),
+                            ),
+                        )
+                        clip.media_reference = otio.schema.ExternalReference(
+                            target_url=clip_path,
+                        )
+                        if metadata:
+                            clip.metadata["documentary"] = metadata
+                        t.append(clip)
+                        break
+                else:
+                    logger.warning("Track '%s' not found in timeline", track)
 
     # -----------------------------------------------------------------------
     # Checkpoints
@@ -339,6 +355,13 @@ class OTIOStateManager:
         if isinstance(self._timeline, dict):
             for track_name, clips in self._timeline.get("tracks", {}).items():
                 counts[track_name] = len(clips)
+        else:
+            # Real OTIO timeline
+            import opentimelineio as otio
+            for track in self._timeline.tracks:
+                clip_count = sum(1 for item in track if isinstance(item, otio.schema.Clip))
+                if track.name:
+                    counts[track.name] = clip_count
         return counts
 
     # -----------------------------------------------------------------------

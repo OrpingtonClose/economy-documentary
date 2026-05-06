@@ -19,7 +19,10 @@ import json
 import logging
 import os
 
-from google.adk.tools import FunctionTool
+try:
+    from google.adk.tools import FunctionTool
+except ImportError:
+    FunctionTool = None
 
 logger = logging.getLogger(__name__)
 
@@ -172,5 +175,8 @@ def align_narration(
         ) from e
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-align_narration_tool = FunctionTool(align_narration)
+# -- ADK FunctionTool wrappers (optional) ------------------------------------
+if FunctionTool is not None:
+    align_narration_tool = FunctionTool(align_narration)
+else:
+    align_narration_tool = None

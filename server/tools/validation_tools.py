@@ -19,7 +19,10 @@ import logging
 import os
 from typing import Optional
 
-from google.adk.tools import FunctionTool
+try:
+    from google.adk.tools import FunctionTool
+except ImportError:
+    FunctionTool = None
 
 logger = logging.getLogger(__name__)
 
@@ -319,6 +322,11 @@ def validate_media_files(
 
 
 # Export as ADK FunctionTools
-validate_stage_output_tool = FunctionTool(validate_stage_output)
-validate_otio_compliance_tool = FunctionTool(validate_otio_compliance)
-validate_media_files_tool = FunctionTool(validate_media_files)
+if FunctionTool is not None:
+    validate_stage_output_tool = FunctionTool(validate_stage_output)
+    validate_otio_compliance_tool = FunctionTool(validate_otio_compliance)
+    validate_media_files_tool = FunctionTool(validate_media_files)
+
+    validation_tools = [validate_stage_output_tool, validate_otio_compliance_tool, validate_media_files_tool]
+else:
+    validation_tools = []

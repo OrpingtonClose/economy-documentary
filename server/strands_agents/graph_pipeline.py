@@ -33,8 +33,14 @@ import logging
 from typing import Any
 
 from strands import Agent
-from strands.hooks import HookProvider
-from strands.multiagent.graph import Graph, GraphEdge, GraphNode
+from strands.hooks import HookProvider, HookRegistry
+from strands.multiagent.graph import (
+    AfterNodeCallEvent,
+    BeforeNodeCallEvent,
+    Graph,
+    GraphEdge,
+    GraphNode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +132,116 @@ def _needs_audio_retry(state) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# State propagation — carry agent state between graph nodes
+# ---------------------------------------------------------------------------
+
+
+# Keys to propagate from one stage's agent state to the next.
+# These are the contract-required keys that downstream stages need.
+_PROPAGATE_KEYS = frozenset({
+    "scenes",
+    "whisperx_alignment",
+    "visual_concepts",
+    "visual_concepts_json",
+    "visual_style",
+    "content_analysis",
+    "content_analysis_json",
+    "visual_coherence_passed",
+    "coherence_evaluation",
+})
+
+
+class StatePropagationHook(HookProvider):
+    """Propagate agent state between graph nodes.
+
+    Strands Graph nodes run as independent agents with separate state.
+    The Graph passes text output between nodes but doesn't share state.
+    This hook copies designated keys from the completed agent's state
+    into invocation_state, then injects them into the next agent's
+    state before it runs.
+
+    This is how contract-required keys (scenes, whisperx_alignment,
+    visual_concepts) flow between stages.
+    """
+
+    def __init__(self) -> None:
+        self._shared_state: dict[str, Any] = {}
+
+    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
+        registry.add_callback(AfterNodeCallEvent, self._on_after_node)
+        registry.add_callback(BeforeNodeCallEvent, self._on_before_node)
+
+    def _on_after_node(self, event: AfterNodeCallEvent) -> None:
+        """After a node completes, harvest its agent state."""
+        node = self._find_node(event.source, event.node_id)
+        if node is None or not isinstance(node.executor, Agent):
+            return
+
+        agent_state = node.executor.state
+        harvested = {}
+        for key in _PROPAGATE_KEYS:
+            try:
+                val = agent_state.get(key)
+                if val is not None:
+                    harvested[key] = val
+            except Exception:
+                pass
+
+        if harvested:
+            self._shared_state.update(harvested)
+            logger.info(
+                "node_id=<%s>, keys=<%s> | harvested state",
+                event.node_id,
+                list(harvested.keys()),
+            )
+
+    def _on_before_node(self, event: BeforeNodeCallEvent) -> None:
+        """Before a node starts, inject shared state into its agent."""
+        if not self._shared_state:
+            return
+
+        node = self._find_node(event.source, event.node_id)
+        if node is None or not isinstance(node.executor, Agent):
+            return
+
+        agent_state = node.executor.state
+        injected = {}
+        for key, val in self._shared_state.items():
+            try:
+                existing = agent_state.get(key)
+                if not existing:
+                    agent_state.set(key, val)
+                    injected[key] = key
+            except Exception:
+                try:
+                    agent_state.set(key, val)
+                    injected[key] = key
+                except Exception:
+                    pass
+
+        if injected:
+            logger.info(
+                "node_id=<%s>, keys=<%s> | injected state",
+                event.node_id,
+                list(injected.keys()),
+            )
+
+    @staticmethod
+    def _find_node(source, node_id: str):
+        """Find a GraphNode by ID from the source's nodes dict."""
+        nodes = getattr(source, "nodes", None)
+        if nodes is None:
+            return None
+        if isinstance(nodes, dict):
+            return nodes.get(node_id)
+        # Fallback: iterate as a set/list
+        for n in nodes:
+            if isinstance(n, GraphNode) and n.node_id == node_id:
+                return n
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
 
@@ -198,13 +314,17 @@ def build_documentary_graph(
 
     edges = forward_edges | backward_edges
 
+    # Always add state propagation hook
+    all_hooks = list(hooks) if hooks else []
+    all_hooks.append(StatePropagationHook())
+
     return Graph(
         nodes=nodes,
         edges=edges,
         entry_points={nodes[SCENARIO]},
         max_node_executions=max_node_executions,
         reset_on_revisit=True,
-        hooks=hooks,
+        hooks=all_hooks,
         id="documentary_pipeline",
     )
 

@@ -14,7 +14,11 @@ import wave
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-from google.adk.tools import FunctionTool
+# ADK is optional — only needed for legacy ADK wrappers at the bottom
+try:
+    from google.adk.tools import FunctionTool
+except ImportError:
+    FunctionTool = None
 
 logger = logging.getLogger(__name__)
 
@@ -419,7 +423,9 @@ def _generate_narration_edge_tts(
         )
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-generate_narration_tool = FunctionTool(generate_narration)
-
-tts_tools = [generate_narration_tool]
+# -- ADK FunctionTool wrappers (optional) ------------------------------------
+if FunctionTool is not None:
+    generate_narration_tool = FunctionTool(generate_narration)
+    tts_tools = [generate_narration_tool]
+else:
+    tts_tools = []

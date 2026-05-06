@@ -13,7 +13,10 @@ import logging
 import os
 from typing import List, Optional
 
-from google.adk.tools import FunctionTool
+try:
+    from google.adk.tools import FunctionTool
+except ImportError:
+    FunctionTool = None
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +151,10 @@ def get_lora_details(lora_id: str, tool_context=None) -> str:
 
 
 # -- ADK FunctionTool wrappers -------------------------------------------------
-query_lora_catalog_tool = FunctionTool(query_lora_catalog)
-get_lora_details_tool = FunctionTool(get_lora_details)
+if FunctionTool is not None:
+    query_lora_catalog_tool = FunctionTool(query_lora_catalog)
+    get_lora_details_tool = FunctionTool(get_lora_details)
 
-lora_tools = [query_lora_catalog_tool, get_lora_details_tool]
+    lora_tools = [query_lora_catalog_tool, get_lora_details_tool]
+else:
+    lora_tools = []
