@@ -1654,14 +1654,28 @@ def escalate_pipeline_error(
         agent_chain=(agent_decision or {}).get("agent_chain"),
     )
     if supervisor_decision is not None:
-        logger.info(
-            "Supervisor LLM resolved '%s': caller_action=%s (canonical=%s, level=L%s)",
-            operation_name,
-            supervisor_decision.get("action"),
-            supervisor_decision.get("canonical_action"),
-            supervisor_decision.get("level"),
-        )
-        return supervisor_decision
+        sup_action = supervisor_decision.get("action", "")
+        # When a default_action is set, the supervisor's "abort" should
+        # not short-circuit — fall through to auto-approve which will
+        # apply the default. This handles the case where the supervisor
+        # can't reach its LLM (e.g. no GOOGLE_API_KEY) and falls back
+        # to the abort_run default.
+        if sup_action == "abort" and default_action and default_action != "abort":
+            logger.warning(
+                "Supervisor decided abort for '%s' but default_action='%s' "
+                "is set — falling through to auto-approve",
+                operation_name, default_action,
+            )
+            # Fall through to Step 2 (auto-approve / human)
+        else:
+            logger.info(
+                "Supervisor LLM resolved '%s': caller_action=%s (canonical=%s, level=L%s)",
+                operation_name,
+                supervisor_decision.get("action"),
+                supervisor_decision.get("canonical_action"),
+                supervisor_decision.get("level"),
+            )
+            return supervisor_decision
 
     # ── Step 2: Agent ladder exhausted — fall back to human (L4) ─────
     if proposed_actions is None:
