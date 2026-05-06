@@ -950,6 +950,88 @@ _RETRY_TOOLS = [
     ),
 ]
 
+# Provisioner tools — available to all unit-maintaining agents.
+# These give the agent direct control over GPU worker provisioning:
+# search for offers, create instances, check status, read the trace.
+try:
+    from tools.provisioner_tools import (
+        search_offers,
+        create_instance,
+        check_vm_status,
+        get_provision_trace,
+    )
+    _PROVISIONER_TOOLS = [
+        AgentTool(
+            name="search_offers",
+            description=(
+                "Search Vast.ai for GPU offers. Returns full offer catalog "
+                "with GPU, VRAM, price, reliability, bandwidth, location. "
+                "You decide which offer to try — use create_instance to provision it."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "min_vram_gb": {"type": "integer", "description": "Min VRAM in GB (hard floor)"},
+                    "max_price": {"type": "number", "description": "Max price per hour USD"},
+                    "min_disk_gb": {"type": "integer", "description": "Min disk in GB"},
+                    "gpu_type": {"type": "string", "description": "Exact GPU name (empty=any)"},
+                    "reliability_floor": {"type": "number", "description": "Min reliability (0-1)"},
+                    "inet_down_floor": {"type": "integer", "description": "Min download Mbps"},
+                },
+                "required": [],
+            },
+            fn=search_offers,
+        ),
+        AgentTool(
+            name="create_instance",
+            description=(
+                "Create a Vast.ai instance from a specific offer. "
+                "You pick the offer_id from search_offers results."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "offer_id": {"type": "integer", "description": "Offer ID from search_offers"},
+                    "role": {"type": "string", "enum": ["tts", "video"]},
+                    "disk_gb": {"type": "integer", "description": "Disk size GB"},
+                    "worker_mode": {"type": "string", "enum": ["tts", "ltx", "both"]},
+                },
+                "required": ["offer_id"],
+            },
+            fn=create_instance,
+        ),
+        AgentTool(
+            name="check_vm_status",
+            description="Check a VM's status, connection details, and health endpoint.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "vm_id": {"type": "string", "description": "Instance ID from create_instance"},
+                },
+                "required": ["vm_id"],
+            },
+            fn=check_vm_status,
+        ),
+        AgentTool(
+            name="get_provision_trace",
+            description=(
+                "Get the full provision trace for a role — every search query, "
+                "every offer, every constraint, every failure. This is your "
+                "complete observation log for reasoning about what happened."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "role": {"type": "string", "enum": ["tts", "video"]},
+                },
+                "required": ["role"],
+            },
+            fn=get_provision_trace,
+        ),
+    ]
+except ImportError:
+    _PROVISIONER_TOOLS = []
+
 
 class RetryAgent(RecoveryAgent):
     """Level 1 — intelligent retry agent.
@@ -968,16 +1050,20 @@ class RetryAgent(RecoveryAgent):
                 "Your job is to decide if RETRYING the operation makes sense.\n\n"
                 "STRATEGY:\n"
                 "1. Check the health of relevant services (tts, video_worker, llm, etc.)\n"
-                "2. Analyse the error pattern (transient vs persistent vs degrading)\n"
-                "3. If transient: action='retry' (the operation will be retried as-is)\n"
-                "4. If persistent/degrading: action='escalate' to Level 2\n\n"
+                "2. Read the provision trace if a worker failed to provision\n"
+                "3. Analyse the error pattern (transient vs persistent vs degrading)\n"
+                "4. If the issue is worker provisioning: use search_offers to find "
+                "alternatives, create_instance to provision a new VM\n"
+                "5. If transient: action='retry' (the operation will be retried as-is)\n"
+                "6. If persistent/degrading: action='escalate' to Level 2\n\n"
                 "RULES:\n"
                 "- Only recommend retry if the error looks transient\n"
-                "- If a service is down, escalate (retry won't help)\n"
+                "- If a service is down AND you can provision a replacement, do it\n"
                 "- If the same error repeated 3+ times, it's persistent — escalate\n"
-                "- You can suggest parameter adjustments in state_patches (e.g. timeout increase)"
+                "- You can suggest parameter adjustments in state_patches\n"
+                "- Qwen3-TTS and LTX-2.3 are hard requirements — never substitute models"
             ),
-            tools=_RETRY_TOOLS,
+            tools=_RETRY_TOOLS + _PROVISIONER_TOOLS,
             max_tool_rounds=4,
         )
 
@@ -1103,19 +1189,27 @@ class CreativeAgent(RecoveryAgent):
                 "a CREATIVE ALTERNATIVE approach to achieve the same goal.\n\n"
                 "STRATEGY:\n"
                 "1. Review what's been tried and why it failed\n"
-                "2. Brainstorm alternatives: different model, different params, restructured input\n"
-                "3. Check what models/resources are available\n"
-                "4. Return a fix with the alternative approach in state_patches\n\n"
+                "2. Read the provision trace with get_provision_trace to understand "
+                "what offers were available, what constraints were applied, and what failed\n"
+                "3. If worker provisioning failed: search for offers with relaxed "
+                "constraints (higher price, lower reliability, different GPU types) "
+                "using search_offers, then create_instance with the best available offer\n"
+                "4. If the problem is different: brainstorm alternatives — different "
+                "parameters, restructured input, different approach\n\n"
                 "EXAMPLES:\n"
-                "- TTS keeps timing out → switch to edge-tts as fallback\n"
-                "- Video prompt keeps producing bad output → simplify the prompt radically\n"
-                "- LLM max_tokens → reduce input size or switch to model with larger context\n\n"
+                "- TTS worker provision failed (no_such_ask) → search_offers with "
+                "higher max_price, try a different offer from the catalog\n"
+                "- No A100 offers → search with gpu_type='' (any GPU) and min_vram_gb=48\n"
+                "- Video worker won't start → check_vm_status, read trace, "
+                "destroy and re-provision with a different offer\n\n"
                 "RULES:\n"
+                "- Qwen3-TTS and LTX-2.3 are hard requirements — do NOT substitute "
+                "different models (no edge-tts, no other TTS)\n"
                 "- Be bold — you're the creative option, not the safe one\n"
                 "- The alternative should be DIFFERENT, not just retry with small changes\n"
                 "- If you truly can't think of an alternative, escalate to Level 3"
             ),
-            tools=_CREATIVE_TOOLS,
+            tools=_CREATIVE_TOOLS + _PROVISIONER_TOOLS,
             max_tool_rounds=4,
         )
 
