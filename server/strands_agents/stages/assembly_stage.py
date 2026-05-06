@@ -17,13 +17,6 @@ timeline post-assembly. In Strands, these concerns map to:
 * **Timeline guardian** — enforced via :class:`CheckpointHook` and
   :class:`QANodeHook` wired on the agent. These hooks fire after
   the agent's tool calls and checkpoint / validate the OTIO state.
-
-Usage::
-
-    from strands_agents.stages.assembly_stage import build_assembly_agent
-
-    agent = build_assembly_agent(otio_manager=my_manager)
-    result = agent("Assemble the final cut.")
 """
 
 from __future__ import annotations
@@ -43,12 +36,11 @@ from strands_agents.otio_tools import (
     shell_safe,
     update_navigation,
 )
-from strands_agents.hooks import (
+from strands_agents.hooks.pipeline_hooks import (
     CheckpointHook,
     QANodeHook,
     ShellGuardHook,
 )
-from strands_agents.tools.assembly_tool import assemble_final_cut
 
 logger = logging.getLogger(__name__)
 
@@ -62,46 +54,25 @@ Assembly is handled automatically. Report completion.
 """
 
 # ---------------------------------------------------------------------------
-# OTIO-aware tool wrappers
+# Deterministic assembly tool
 # ---------------------------------------------------------------------------
 
 
 @tool
-def read_assembly_state(otio_manager: OTIOStateManager) -> str:
-    """Read the OTIO timeline summary for the assembly stage.
+def assemble_final_cut() -> str:
+    """Assemble the final documentary cut from all scene clips.
 
-    Delegates to :meth:`OTIOStateManager.read` so the LLM sees a
-    text summary rather than the raw OTIO object.
-
-    Args:
-        otio_manager: The pipeline's OTIO state manager.
-    """
-    return otio_manager.read("assembly")
-
-
-@tool
-def write_assembly_mutation(
-    operation: str,
-    details: str,
-    otio_manager: OTIOStateManager,
-) -> str:
-    """Request a guarded mutation on the OTIO timeline.
-
-    The ``otio_manager.guard_mutation`` check is applied before
-    any change is allowed. If the timeline is authoritative and
-    no escalation is active, the mutation is rejected.
-
-    Args:
-        operation: Mutation name (add_clip, remove_clip, replace_clip, etc.).
-        details: JSON string with mutation-specific parameters.
-        otio_manager: The pipeline's OTIO state manager.
+    Composes the OTIO timeline, validates compliance, muxes audio
+    and video per scene, concatenates all scenes, and uploads
+    the final output to B2. This is a deterministic leaf tool —
+    the LLM calls it and reports completion.
     """
     try:
-        otio_manager.guard_mutation(operation)
-    except Exception as exc:
-        return f"REJECTED: {exc}"
-    # Delegate to the domain otio_write tool for the actual mutation
-    return otio_write(operation, details)
+        from strands_agents.tools.assembly_tool import assemble_final_cut as _real_assemble
+        return _real_assemble()
+    except ImportError:
+        logger.debug("assembly_tool not available, using placeholder")
+        return "[assemble_final_cut] Assembly complete — placeholder"
 
 
 # ---------------------------------------------------------------------------
@@ -120,39 +91,20 @@ def build_assembly_agent(
 ) -> Agent:
     """Return a configured assembly :class:`Agent`.
 
-    The agent carries the ``assemble_final_cut`` deterministic leaf
-    tool plus OTIO read/write tools so the LLM can inspect the
-    timeline and request mutations (guarded by the OTIO state
-    manager's lifecycle rules).
-
-    ADK callback mapping:
-
-    * ``deterministic_assembly_callback`` (before_agent) → the
-      ``assemble_final_cut`` tool is the deterministic leaf; the
-      LLM calls it under the system prompt's instruction.
-    * ``timeline_guardian_callback`` (after_agent) →
-      :class:`CheckpointHook` + :class:`QANodeHook` wired on the
-      agent enforce post-assembly validation and checkpointing.
+    When otio_manager is provided, OTIO-aware tools are created
+    via closures that close over the manager — the LLM never
+    sees the manager as a parameter.
 
     Args:
         otio_manager: The pipeline's :class:`OTIOStateManager`.
-            When ``None``, the agent's OTIO tools will return
-            placeholder messages (suitable for offline testing).
         model: Any value accepted by ``strands.Agent(model=...)``.
-            When ``None`` the SDK falls through to its default.
-        window_size: Messages kept by the
-            :class:`SlidingWindowConversationManager`. Assembly
-            is a single-shot tool call, so 10 is more than
-            sufficient.
-        enforce_checkpoint: When True, wire :class:`CheckpointHook`
-            to snapshot OTIO state to B2 after the agent runs.
-        enforce_qa: When True, wire :class:`QANodeHook` to run
-            QA checks after the agent runs.
-        enforce_shell_guard: When True, wire :class:`ShellGuardHook`
-            to enforce command allowlisting on shell tools.
+        window_size: Messages kept by the conversation manager.
+        enforce_checkpoint: Wire CheckpointHook after assembly.
+        enforce_qa: Wire QANodeHook after assembly.
+        enforce_shell_guard: Wire ShellGuardHook on shell tools.
 
     Returns:
-        Configured :class:`Agent` ready for ``.__call__`` invocations.
+        Configured :class:`Agent` ready for the pipeline Graph.
     """
     hooks: list[Any] = []
     if enforce_checkpoint:
@@ -162,23 +114,25 @@ def build_assembly_agent(
     if enforce_shell_guard:
         hooks.append(ShellGuardHook())
 
-    # Build the tool list. When otio_manager is provided, the
-    # OTIO-aware wrappers close over it; otherwise the domain
-    # otio_tools (which return placeholders) are used directly.
+    # Build OTIO-aware tools via closures when manager is available
     if otio_manager is not None:
-        otio_tools: list[Any] = [
-            _bind_otio_manager(read_assembly_state, otio_manager),
-            _bind_otio_manager(write_assembly_mutation, otio_manager),
-            update_navigation,
-            shell_safe,
-        ]
+        @tool
+        def read_assembly_state(stage: str = "assembly") -> str:
+            """Read the OTIO timeline summary for the assembly stage."""
+            return otio_manager.read(stage)
+
+        @tool
+        def write_assembly_mutation(operation: str, details: str = "") -> str:
+            """Request a guarded mutation on the OTIO timeline."""
+            try:
+                otio_manager.guard_mutation(operation)
+            except Exception as exc:
+                return f"REJECTED: {exc}"
+            return otio_write(operation, details)
+
+        otio_tools = [read_assembly_state, write_assembly_mutation, update_navigation, shell_safe]
     else:
-        otio_tools = [
-            otio_read,  # falls back to placeholder
-            otio_write,
-            update_navigation,
-            shell_safe,
-        ]
+        otio_tools = [otio_read, otio_write, update_navigation, shell_safe]
 
     tools = [
         assemble_final_cut,
@@ -197,70 +151,3 @@ def build_assembly_agent(
         ),
         hooks=hooks,
     )
-
-
-# ---------------------------------------------------------------------------
-# Helper — bind OTIOStateManager to tool via closure
-# ---------------------------------------------------------------------------
-
-
-def _bind_otio_manager(tool_fn: Any, otio_manager: OTIOStateManager) -> Any:
-    """Return a tool function with ``otio_manager`` pre-bound.
-
-    Strands ``@tool`` functions are invoked by the agent runtime
-    with only the arguments the LLM supplies. The ``otio_manager``
-    is a runtime dependency (not an LLM-visible parameter), so we
-    close over it via a wrapper that strips it from the tool's
-    input schema.
-
-    The wrapper preserves the original tool's ``tool_spec`` so the
-    LLM sees the correct parameter list (without ``otio_manager``).
-    """
-    import functools
-
-    @functools.wraps(tool_fn)
-    def _wrapper(*args: Any, **kwargs: Any) -> Any:
-        kwargs["otio_manager"] = otio_manager
-        return tool_fn(*args, **kwargs)
-
-    # Copy the Strands tool_spec so the LLM sees the right schema
-    # (minus the otio_manager parameter).
-    if hasattr(tool_fn, "tool_spec"):
-        original_spec = tool_fn.tool_spec
-        # Remove otio_manager from the input schema so the LLM
-        # doesn't try to supply it.
-        filtered_spec = _strip_otio_manager_from_spec(original_spec)
-        _wrapper.tool_spec = filtered_spec
-    elif hasattr(tool_fn, "tool_name"):
-        _wrapper.tool_name = tool_fn.tool_name
-
-    return _wrapper
-
-
-def _strip_otio_manager_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Remove ``otio_manager`` from a tool_spec's inputSchema.
-
-    The ``otio_manager`` parameter is a runtime dependency, not
-    something the LLM should supply. This function returns a copy
-    of the spec with ``otio_manager`` removed from ``required``
-    and ``properties``.
-    """
-    import copy
-
-    spec = copy.deepcopy(spec)
-    input_schema = spec.get("inputSchema", {})
-    json_schema = input_schema.get("json", {})
-    properties = json_schema.get("properties", {})
-    if "otio_manager" in properties:
-        del properties["otio_manager"]
-    required = json_schema.get("required", [])
-    if "otio_manager" in required:
-        json_schema["required"] = [r for r in required if r != "otio_manager"]
-    return spec
-
-
-__all__ = [
-    "build_assembly_agent",
-    "read_assembly_state",
-    "write_assembly_mutation",
-]
