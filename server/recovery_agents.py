@@ -1399,11 +1399,250 @@ class CollaborativeAgent(RecoveryAgent):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Unit Maintainer Agents — one per unit, owns the domain completely
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Escalation tools — shared by all unit agents
+def _tool_escalate_to_scenario(reason: str, trace_summary: str = "") -> str:
+    """Escalate to the scenario unit agent (the unit above)."""
+    return json.dumps({
+        "action": "escalate_to_scenario",
+        "reason": reason,
+        "trace_summary": trace_summary,
+    })
+
+
+def _tool_escalate_to_human(reason: str, trace_summary: str = "") -> str:
+    """Escalate to the human — the terminal failure mode."""
+    return json.dumps({
+        "action": "escalate_to_human",
+        "reason": reason,
+        "trace_summary": trace_summary,
+    })
+
+
+def _tool_suggest_provisioning_strategy(trace_analysis: str) -> str:
+    """Provide domain-specific insight about what the provisioner should try.
+
+    The unit agent reads the provision trace and provides context that
+    helps the provisioner make better decisions. For example:
+    'Qwen3-TTS is a 22B model that needs 48GB VRAM with
+    expandable_segments. The trace shows OOM at 40GB — fragmentation
+    is the issue. Try a GPU with 80GB.'
+    """
+    return json.dumps({
+        "action": "suggest_strategy",
+        "analysis": trace_analysis,
+    })
+
+
+_ESCALATION_TOOLS = [
+    AgentTool(
+        name="get_provision_trace",
+        description=(
+            "Read the full provision trace for a role — every search query, "
+            "every offer, every constraint, every failure. This is your "
+            "complete observation log for reasoning about what happened."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "role": {"type": "string", "enum": ["tts", "video"]},
+            },
+            "required": ["role"],
+        },
+        fn=lambda role="tts": _get_provision_trace_fn(role),
+    ),
+    AgentTool(
+        name="suggest_provisioning_strategy",
+        description=(
+            "Provide domain-specific insight about what the provisioner "
+            "should try. Read the trace first, then suggest based on your "
+            "domain knowledge (e.g. model VRAM requirements, GPU compatibility)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "trace_analysis": {
+                    "type": "string",
+                    "description": "Your analysis of the trace and suggested strategy",
+                },
+            },
+            "required": ["trace_analysis"],
+        },
+        fn=_tool_suggest_provisioning_strategy,
+    ),
+    AgentTool(
+        name="escalate_to_scenario",
+        description=(
+            "Escalate to the scenario unit agent. Use when you cannot "
+            "resolve the problem within the TTS/video domain — for example, "
+            "if TTS simply can't work with available resources, the scenario "
+            "agent may reduce the number of voices or shorten scenes."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Why you're escalating"},
+                "trace_summary": {"type": "string", "description": "Summary of what was tried"},
+            },
+            "required": ["reason"],
+        },
+        fn=_tool_escalate_to_scenario,
+    ),
+    AgentTool(
+        name="escalate_to_human",
+        description=(
+            "Escalate to the human — the terminal failure mode. Use when "
+            "neither you nor the scenario agent can resolve the problem."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Why you're escalating to human"},
+                "trace_summary": {"type": "string", "description": "Summary of what was tried"},
+            },
+            "required": ["reason"],
+        },
+        fn=_tool_escalate_to_human,
+    ),
+]
+
+
+def _get_provision_trace_fn(role: str) -> str:
+    """Get provision trace from the provisioner."""
+    try:
+        from worker_provisioner import get_provisioner
+        prov = get_provisioner()
+        if role == "tts" and hasattr(prov, "tts_spec"):
+            spec = prov.tts_spec
+        elif role == "video" and hasattr(prov, "video_spec"):
+            spec = prov.video_spec
+        else:
+            return json.dumps({"role": role, "entries": 0, "trace": []})
+        return json.dumps({
+            "role": role,
+            "entries": len(spec.provision_trace),
+            "trace": spec.provision_trace,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "trace": []})
+
+
+class TTSUnitAgent(RecoveryAgent):
+    """TTS Unit Maintainer — owns the TTS unit completely.
+
+    Handles BOTH content quality (timing drift, narration rewriting) AND
+    infrastructure debugging (provisioner escalation). When the provisioner's
+    local escalation fails, this agent reads the trace and provides domain
+    context to help the provisioner make better decisions.
+
+    Escalation chain:
+    1. Content problem → rewrite narration, check timing
+    2. Infrastructure problem → read trace, suggest provisioning strategy
+    3. Can't resolve → escalate to scenario agent
+    4. Scenario can't help → escalate to human
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="tts_unit_agent",
+            instruction=(
+                "You are the TTS Unit Agent — you maintain the TTS unit.\n\n"
+                "Your domain: narration quality, timing, and TTS infrastructure.\n\n"
+                "CONTENT QUALITY (most common):\n"
+                "When narration timing drifts, use analyse_timing and rewrite_narration\n"
+                "to fix the text. Apply amendments so the pipeline regenerates audio.\n\n"
+                "INFRASTRUCTURE (when provisioner fails):\n"
+                "When the TTS worker is unreachable and the provisioner's local\n"
+                "escalation fails, you provide domain context:\n"
+                "1. Read the provision trace with get_provision_trace\n"
+                "2. Understand what the provisioner tried and what failed\n"
+                "3. Use suggest_provisioning_strategy with your domain knowledge:\n"
+                "   - Qwen3-TTS is a 22B model needing 48GB+ VRAM\n"
+                "   - CUDA OOM often means fragmentation, not total VRAM\n"
+                "   - Try 80GB GPU if 48GB shows OOM\n"
+                "   - NEVER suggest substituting edge-tts or other models\n\n"
+                "ESCALATION:\n"
+                "If you can't resolve: escalate_to_scenario (e.g. 'reduce voice count')\n"
+                "If scenario can't help: escalate_to_human (terminal failure mode)\n\n"
+                "RULES:\n"
+                "- Qwen3-TTS is a hard requirement — never substitute\n"
+                "- Content quality is your default domain\n"
+                "- Infrastructure context is only needed when tools fail\n"
+                "- You own the entire TTS unit — no one else fixes it"
+            ),
+            tools=_AUDIO_TIMING_TOOLS + _ESCALATION_TOOLS,
+            max_tool_rounds=6,
+        )
+
+
+class VideoUnitAgent(RecoveryAgent):
+    """Video Unit Maintainer — owns the video unit completely.
+
+    Handles visual prompt quality, video coherence, and video infrastructure.
+    When the provisioner's local escalation fails, this agent provides domain
+    context about LTX-2.3 requirements.
+
+    Escalation chain:
+    1. Content problem → adjust prompt, check coherence
+    2. Infrastructure problem → read trace, suggest provisioning strategy
+    3. Can't resolve → escalate to scenario agent
+    4. Scenario can't help → escalate to human
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            name="video_unit_agent",
+            instruction=(
+                "You are the Video Unit Agent — you maintain the video unit.\n\n"
+                "Your domain: visual quality, prompt engineering, and video\n"
+                "infrastructure.\n\n"
+                "CONTENT QUALITY (most common):\n"
+                "When video clips have quality issues, use adjust_visual_prompt\n"
+                "and check_coherence to fix the prompts.\n\n"
+                "INFRASTRUCTURE (when provisioner fails):\n"
+                "When the video worker is unreachable and the provisioner's\n"
+                "local escalation fails, provide domain context:\n"
+                "1. Read the provision trace with get_provision_trace\n"
+                "2. Understand what the provisioner tried and what failed\n"
+                "3. Use suggest_provisioning_strategy with your domain knowledge:\n"
+                "   - LTX-2.3 is a 22B model needing ~46GB for inference\n"
+                "   - expandable_segments is critical for memory management\n"
+                "   - Try 80GB GPU if 48GB shows OOM\n"
+                "   - NEVER suggest substituting a different video model\n\n"
+                "ESCALATION:\n"
+                "If you can't resolve: escalate_to_scenario\n"
+                "If scenario can't help: escalate_to_human\n\n"
+                "RULES:\n"
+                "- LTX-2.3 is a hard requirement — never substitute\n"
+                "- Content quality is your default domain\n"
+                "- Infrastructure context is only needed when tools fail\n"
+                "- You own the entire video unit — no one else fixes it"
+            ),
+            tools=_VISUAL_PROMPT_TOOLS + _ESCALATION_TOOLS,
+            max_tool_rounds=6,
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Pre-built agent configurations (policies with agents)
 # ═══════════════════════════════════════════════════════════════════════════
 
 # These are ready-to-use agent sets for common operation types.
 # Wire them into RecoveryPolicy.agents when creating policies.
+
+# ── Unit maintainer configurations (new architecture) ──
+
+AUDIO_UNIT_AGENTS = {
+    0: TTSUnitAgent(),
+}
+
+VIDEO_UNIT_AGENTS = {
+    0: VideoUnitAgent(),
+}
+
+# ── Legacy level-based configurations (backward compat) ──
 
 AUDIO_AGENTS = {
     0: AudioTimingAgent(),

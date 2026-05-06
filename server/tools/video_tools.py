@@ -24,6 +24,7 @@ import os
 import subprocess
 import threading
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from google.adk.tools import FunctionTool
 
@@ -258,7 +259,38 @@ def generate_video_clip(
             "stg_blocks": stg_blocks if stg_blocks is not None else [28],
         }).encode("utf-8")
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
-        with urlopen(req_inner, timeout=3600) as resp:  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
+        try:
+            resp_ctx = urlopen(req_inner, timeout=3600)  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
+        except URLError as e:
+            # Service unavailable — provisioner must fix before we retry.
+            logger.warning("Video worker unreachable at %s: %s", url, e)
+            from worker_provisioner import get_provisioner, ProvisionerEscalationFailed
+            try:
+                prov = get_provisioner()
+                prov.ensure_available("video")
+                new_url_base = os.environ.get("GPU_WORKER_URL", 
+                    os.environ.get("VIDEO_WORKER_URL", ""))
+                url = f"{new_url_base.rstrip('/')}/video"
+                retry_payload = json.dumps({
+                    "prompt": prompt, "negative_prompt": negative_prompt,
+                    "visual_style": visual_style, "duration_sec": duration_sec,
+                    "width": 512, "height": 320, "num_frames": num_frames,
+                    "seed": seed, "num_inference_steps": num_inference_steps,
+                    "guidance_scale": guidance_scale, "stg_scale": stg_scale,
+                    "modality_scale": modality_scale,
+                    "guidance_rescale": guidance_rescale,
+                    "stg_blocks": stg_blocks if stg_blocks is not None else [28],
+                }).encode("utf-8")
+                retry_req = Request(url, data=retry_payload,
+                    headers={"Content-Type": "application/json"})
+                resp_ctx = urlopen(retry_req, timeout=3600)
+            except ProvisionerEscalationFailed:
+                raise
+            except Exception as prov_err:
+                raise RuntimeError(
+                    f"Video worker unreachable and provisioner failed: {prov_err}"
+                ) from e
+        with resp_ctx as resp:
             result_bytes = resp.read()
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
             qa_reason_raw = resp.headers.get("X-QA-Reason", "")

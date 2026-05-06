@@ -426,10 +426,10 @@ def _make_audio_agent_policy() -> RecoveryPolicy:
     authoritative OTIO is born — starving L0 of attempts would starve
     the timeline of narration, so low tiers are deliberately generous.
     """
-    from recovery_agents import AUDIO_AGENTS
+    from recovery_agents import AUDIO_UNIT_AGENTS
     config = _ladder_config_audio()
     return RecoveryPolicy(
-        agents=AUDIO_AGENTS,
+        agents=AUDIO_UNIT_AGENTS,
         ladder_config=config,
         # D1 back-compat: keep ``level_budget_labels`` populated so any
         # dashboard wiring that reads it directly still sees the
@@ -451,10 +451,10 @@ def _make_video_agent_policy() -> RecoveryPolicy:
     (ARCH-D3) and enforced at runtime by
     ``RecoveryPolicy._is_strict_one_shot``; no numeric overrides here.
     """
-    from recovery_agents import VIDEO_AGENTS
+    from recovery_agents import VIDEO_UNIT_AGENTS
     config = _ladder_config_video()
     return RecoveryPolicy(
-        agents=VIDEO_AGENTS,
+        agents=VIDEO_UNIT_AGENTS,
         ladder_config=config,
         level_budget_labels=dict(config.budgets),
         retry_backoff_base=5.0,

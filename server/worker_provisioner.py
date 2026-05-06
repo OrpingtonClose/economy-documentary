@@ -143,6 +143,20 @@ class WorkerSpec:
     provision_trace: list = field(default_factory=list)
 
 
+class ProvisionerEscalationFailed(Exception):
+    """Provisioner exhausted local escalation attempts.
+
+    The full provision trace is attached so the interested-party stage
+    (media agents, scenario agents, human) can reason about what happened
+    and what was tried.
+    """
+
+    def __init__(self, message: str, role: str, trace: list):
+        super().__init__(message)
+        self.role = role
+        self.trace = trace
+
+
 def _trace(spec: WorkerSpec, phase: str, data: dict) -> None:
     """Append a structured trace entry to the worker's provision log.
 
@@ -1760,6 +1774,197 @@ class WorkerProvisioner:
                 if spec.role == role:
                     return spec
         return None
+
+    # ------------------------------------------------------------------
+    # Smart re-provisioning — called by media tools on service failure
+    # ------------------------------------------------------------------
+
+    def ensure_available(
+        self,
+        role: str,
+        max_price: float | None = None,
+        min_vram_gb: int | None = None,
+        gpu_type: str | None = None,
+        reliability_floor: float | None = None,
+        max_attempts: int = 3,
+    ) -> WorkerSpec:
+        """Fix the worker for the given role. Local escalation only.
+
+        This is the provisioner's internal escalation — called by media
+        tools (generate_narration, generate_video_clip) when the worker
+        is unreachable. The agent never calls this directly.
+
+        Strategy:
+        1. Is there a healthy VM? → return immediately
+        2. VM exists but unhealthy? → try to fix (restart, reconnect)
+        3. VM stuck / model won't load? → destroy + re-provision
+        4. No VM? → full lifecycle
+        5. On failure: relax constraints and retry
+        6. After max_attempts: raise ProvisionerEscalationFailed
+
+        Every attempt appends to provision_trace.
+        """
+        spec = self._get_spec(role)
+        if spec is None:
+            # No spec exists — create one
+            spec = WorkerSpec(
+                role=role,
+                env_var="TTS_WORKER_URL" if role == "tts" else "GPU_WORKER_URL",
+                local_port=TTS_SPEC.local_port if role == "tts" else VIDEO_SPEC.local_port,
+                remote_port=TTS_SPEC.remote_port if role == "tts" else VIDEO_SPEC.remote_port,
+                capability="tts" if role == "tts" else "ltx",
+                gpu_type=gpu_type or (TTS_SPEC.gpu_type if role == "tts" else VIDEO_SPEC.gpu_type),
+                min_vram_gb=min_vram_gb or (TTS_SPEC.min_vram_gb if role == "tts" else VIDEO_SPEC.min_vram_gb),
+                max_price=max_price or (TTS_SPEC.max_price if role == "tts" else VIDEO_SPEC.max_price),
+                min_disk_gb=TTS_SPEC.min_disk_gb if role == "tts" else VIDEO_SPEC.min_disk_gb,
+                disk_gb=TTS_SPEC.disk_gb if role == "tts" else VIDEO_SPEC.disk_gb,
+                worker_mode="tts" if role == "tts" else "ltx",
+            )
+            with self._lock:
+                self._specs = [s for s in self._specs if s.role != role] + [spec]
+
+        _trace(spec, "ensure_available_start", {
+            "max_attempts": max_attempts,
+            "max_price": max_price or spec.max_price,
+            "min_vram_gb": min_vram_gb or spec.min_vram_gb,
+            "gpu_type": gpu_type or spec.gpu_type,
+            "reliability_floor": reliability_floor,
+        })
+
+        # Step 1: Check if already healthy
+        if spec.status == "healthy" and spec.worker_url:
+            try:
+                if check_worker_health(spec.worker_url, spec.capability):
+                    _trace(spec, "ensure_available_healthy", {
+                        "worker_url": spec.worker_url,
+                    })
+                    return spec
+            except Exception:
+                pass  # Not actually healthy, proceed to fix
+
+        # Step 2: If VM exists but unhealthy, try to verify status
+        if spec.vm_id and spec.status not in ("healthy", "pending"):
+            _trace(spec, "ensure_available_vm_exists", {
+                "vm_id": spec.vm_id,
+                "status": spec.status,
+            })
+            try:
+                vm_info = _vast_cmd(["show", "instance", spec.vm_id, "--raw"])
+                if isinstance(vm_info, dict):
+                    actual = vm_info.get("actual_status", "unknown")
+                    if actual == "running":
+                        # VM running but service unhealthy — check health
+                        _trace(spec, "ensure_available_vm_running", {
+                            "vm_id": spec.vm_id,
+                            "actual_status": actual,
+                        })
+                        # Try health endpoint
+                        try:
+                            _url = spec.worker_url or f"http://localhost:{spec.local_port}"
+                            if check_worker_health(_url, spec.capability):
+                                spec.status = "healthy"
+                                spec.ready_event.set()
+                                _trace(spec, "ensure_available_recovered", {
+                                    "vm_id": spec.vm_id,
+                                    "worker_url": _url,
+                                })
+                                return spec
+                        except Exception:
+                            pass
+                        # VM running but service won't come up — destroy
+                        _trace(spec, "ensure_available_destroy_stuck", {
+                            "vm_id": spec.vm_id,
+                            "reason": "VM running but service unhealthy",
+                        })
+                        try:
+                            from tools.vastai_tools import terminate_vm
+                            terminate_vm(spec.vm_id)
+                        except Exception:
+                            pass
+                        spec.vm_id = ""
+                        spec.status = "pending"
+            except Exception as e:
+                _trace(spec, "ensure_available_vm_check_failed", {
+                    "vm_id": spec.vm_id,
+                    "error": str(e),
+                })
+
+        # Step 3: Apply constraint overrides
+        if max_price is not None:
+            spec.max_price = max_price
+        if min_vram_gb is not None:
+            spec.min_vram_gb = min_vram_gb
+        if gpu_type is not None:
+            spec.gpu_type = gpu_type
+
+        # Step 4: Attempt provisioning with escalating constraint relaxation
+        _excluded: set[int] = set()
+        for attempt in range(max_attempts):
+            _trace(spec, "ensure_available_attempt", {
+                "attempt": attempt + 1,
+                "max_attempts": max_attempts,
+                "max_price": spec.max_price,
+                "gpu_type": spec.gpu_type,
+                "min_vram_gb": spec.min_vram_gb,
+            })
+            try:
+                spec.status = "provisioning"
+                spec.error = ""
+                self._provision_and_connect(spec, timeout=2400)
+                spec.status = "healthy"
+                new_url = spec.worker_url or f"http://localhost:{spec.local_port}"
+                os.environ[spec.env_var] = new_url
+                _trace(spec, "ensure_available_success", {
+                    "attempt": attempt + 1,
+                    "vm_id": spec.vm_id,
+                    "worker_url": new_url,
+                })
+                return spec
+            except Exception as exc:
+                _trace(spec, "ensure_available_attempt_failed", {
+                    "attempt": attempt + 1,
+                    "error": str(exc),
+                    "error_type": (
+                        "no_such_ask" if "no_such_ask" in str(exc).lower()
+                        else "other"
+                    ),
+                })
+                # Clean up failed VM
+                if spec.vm_id:
+                    try:
+                        from tools.vastai_tools import terminate_vm
+                        terminate_vm(spec.vm_id)
+                    except Exception:
+                        pass
+                    spec.vm_id = ""
+                spec.status = "pending"
+                spec.error = str(exc)
+                _excluded.update({int(o.get("id", 0)) for o in []})  # nothing to exclude yet
+
+                # Relax constraints for next attempt
+                if attempt < max_attempts - 1:
+                    spec.max_price = min(spec.max_price * 1.5, 10.0)
+                    if spec.gpu_type:
+                        spec.gpu_type = ""  # broaden to any GPU
+                    _trace(spec, "ensure_available_relaxing", {
+                        "new_max_price": spec.max_price,
+                        "new_gpu_type": spec.gpu_type or "(any)",
+                    })
+
+        # All attempts exhausted — raise with full trace
+        _trace(spec, "ensure_available_escalation_failed", {
+            "attempts": max_attempts,
+            "final_max_price": spec.max_price,
+            "final_gpu_type": spec.gpu_type,
+        })
+        raise ProvisionerEscalationFailed(
+            message=(
+                f"Provisioner exhausted {max_attempts} local attempts for "
+                f"{role} worker. Last error: {spec.error}"
+            ),
+            role=role,
+            trace=list(spec.provision_trace),
+        )
 
     # ------------------------------------------------------------------
     # Legacy blocking API (backward compat)

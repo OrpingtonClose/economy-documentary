@@ -381,7 +381,41 @@ def _timing_loop_before_with_gate(callback_context):
     # AUDIO_CONTRACT includes service health checks that require the
     # worker to be reachable — running this earlier would cause a
     # ContractViolation that silently skips the entire timing loop.
-    abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
+    try:
+        abort = _validate_preconditions_or_abort(AUDIO_CONTRACT, callback_context)
+    except Exception as exc:
+        # Catch ProvisionerEscalationFailed from media tools — this is
+        # the "local escalation failed, ask interested parties" stage.
+        from worker_provisioner import ProvisionerEscalationFailed
+        if isinstance(exc, ProvisionerEscalationFailed):
+            logger.error("TTS provisioner escalation failed: %s", exc)
+            _trace = exc.trace if hasattr(exc, "trace") else []
+            decision = escalate_pipeline_error(
+                operation_name="tts_provisioner_escalation_failed",
+                error_msg=str(exc),
+                severity="critical",
+                default_action="escalate",
+                diagnosis_hint=(
+                    "The TTS provisioner exhausted local escalation. "
+                    "The TTS Unit Agent should read the provision trace "
+                    "and provide domain context to help the provisioner "
+                    "make better decisions. If it can't help, escalate "
+                    "to the scenario agent. If that fails, ask the human."
+                ),
+                agent_policy_type="tts",
+                diagnostic_data={"provision_trace": _trace},
+            )
+            action = decision.get("action", "abort") if decision else "abort"
+            if action not in ("retry_with_fix", "retry"):
+                return genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(
+                        text=f"FATAL: TTS provisioning failed after full "
+                             f"escalation chain. Decision: {action}. "
+                             f"Trace has {len(_trace)} entries."
+                    )],
+                )
+        raise
     if abort is not None:
         return abort
 

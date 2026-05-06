@@ -12,6 +12,7 @@ import logging
 import os
 import wave
 from urllib.request import Request, urlopen
+from urllib.error import URLError
 
 from google.adk.tools import FunctionTool
 
@@ -176,15 +177,51 @@ def generate_narration(
             "scene_num": scene_num,
         }).encode("utf-8")
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
-        with urlopen(req_inner, timeout=300) as resp:  # 5 min: first call loads model
-            result_bytes = resp.read()
-            return {
-                "wav_bytes": result_bytes,
-                "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
-                "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
-                "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
-                "actual_text": text,  # track what text was actually sent (may differ after amendment)
-            }
+        try:
+            with urlopen(req_inner, timeout=300) as resp:  # 5 min: first call loads model
+                result_bytes = resp.read()
+                return {
+                    "wav_bytes": result_bytes,
+                    "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
+                    "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
+                    "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+                    "actual_text": text,
+                }
+        except URLError as e:
+            # Service unavailable — provisioner must fix before we retry.
+            # This is NOT a tool error — it's a pipeline failure unless
+            # the provisioner can re-provision the TTS worker.
+            logger.warning("TTS worker unreachable at %s: %s", url, e)
+            from worker_provisioner import get_provisioner, ProvisionerEscalationFailed
+            try:
+                prov = get_provisioner()
+                prov.ensure_available("tts")
+                # Re-provisioned — update URL and retry once
+                new_url = os.environ.get("TTS_WORKER_URL", url)
+                retry_payload = json.dumps({
+                    "text": text, "voice": voice,
+                    "language": language, "scene_num": scene_num,
+                }).encode("utf-8")
+                retry_req = Request(
+                    f"{new_url.rstrip('/')}/tts",
+                    data=retry_payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urlopen(retry_req, timeout=300) as resp:
+                    result_bytes = resp.read()
+                    return {
+                        "wav_bytes": result_bytes,
+                        "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
+                        "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
+                        "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+                        "actual_text": text,
+                    }
+            except ProvisionerEscalationFailed:
+                raise  # Propagates — triggers interested-party stage
+            except Exception as prov_err:
+                raise RuntimeError(
+                    f"TTS worker unreachable and provisioner failed: {prov_err}"
+                ) from e
 
     from recovery import execute_with_recovery, TTS_POLICY
     tts_result = execute_with_recovery(
