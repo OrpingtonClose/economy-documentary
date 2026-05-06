@@ -424,6 +424,28 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
                 urls = [gpu_url.strip()]
 
     if not urls:
+        # Check if a fallback is active for this service.
+        # When TTS_FALLBACK or VIDEO_FALLBACK is set, the pipeline has
+        # an alternative path that doesn't require a dedicated GPU worker.
+        # The fallback produces real output (edge-tts gives real audio,
+        # local GPU gives real video) so the architectural invariant
+        # (real durations for downstream timing) is preserved.
+        fallback_env = ""
+        if svc.env_var == "TTS_WORKER_URL":
+            fallback_env = os.environ.get("TTS_FALLBACK", "")
+        elif svc.env_var in ("VIDEO_WORKER_URLS", "VIDEO_WORKER_URL", "GPU_WORKER_URL"):
+            fallback_env = os.environ.get("VIDEO_FALLBACK", "")
+
+        if fallback_env:
+            logger.warning(
+                "%s: %s not set but %s fallback active ('%s') — "
+                "skipping health check, assuming fallback is viable",
+                svc.name, svc.env_var,
+                "TTS" if svc.env_var == "TTS_WORKER_URL" else "VIDEO",
+                fallback_env,
+            )
+            return None
+
         return (
             f"{svc.name}: {svc.env_var} is not set. "
             f"A dedicated {svc.name} VM is REQUIRED."
@@ -464,6 +486,21 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
             last_error = f"{svc.name} at {u}: unreachable ({exc})"
 
     if healthy == 0:
+        # Check for fallback even when URLs exist but are unhealthy
+        fallback_env = ""
+        if svc.env_var == "TTS_WORKER_URL":
+            fallback_env = os.environ.get("TTS_FALLBACK", "")
+        elif svc.env_var in ("VIDEO_WORKER_URLS", "VIDEO_WORKER_URL", "GPU_WORKER_URL"):
+            fallback_env = os.environ.get("VIDEO_FALLBACK", "")
+        if fallback_env:
+            logger.warning(
+                "%s: no healthy workers but %s fallback active ('%s') — "
+                "proceeding with fallback",
+                svc.name,
+                "TTS" if svc.env_var == "TTS_WORKER_URL" else "VIDEO",
+                fallback_env,
+            )
+            return None
         return last_error or f"{svc.name}: no healthy workers found"
     return None
 

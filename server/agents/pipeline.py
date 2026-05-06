@@ -331,7 +331,7 @@ def _timing_loop_before_with_gate(callback_context):
         # Escalate through the recovery system so the escalation ladder
         # runs its full course (env assessment → human escalation).
         from recovery import escalate_pipeline_error
-        escalate_pipeline_error(
+        decision = escalate_pipeline_error(
             operation_name="tts_worker_provisioning",
             error_msg=str(exc),
             severity="high",
@@ -340,6 +340,17 @@ def _timing_loop_before_with_gate(callback_context):
                           "Falling back to edge-tts for real audio generation.",
             agent_policy_type="tts",
         )
+        # Act on the escalation decision
+        action = decision.get("action", "fallback") if decision else "fallback"
+        if action == "abort":
+            logger.error("Escalation decided abort — stopping pipeline")
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text=f"ABORT: TTS worker provisioning failed and escalation "
+                         f"decided to abort: {decision.get('comment', '')}"
+                )],
+            )
         # Set TTS_FALLBACK=edge-tts so tts_tools.py can use edge-tts
         # This produces real audio with real durations — satisfies the
         # architectural invariant that downstream timing depends on
@@ -531,7 +542,7 @@ def _production_before_with_gate(callback_context):
         logger.error("Video worker not available: %s", exc)
         # Escalate through the recovery system
         from recovery import escalate_pipeline_error
-        escalate_pipeline_error(
+        decision = escalate_pipeline_error(
             operation_name="video_worker_provisioning",
             error_msg=str(exc),
             severity="high",
@@ -539,6 +550,16 @@ def _production_before_with_gate(callback_context):
             diagnosis_hint="Video GPU worker could not be provisioned.",
             agent_policy_type="video",
         )
+        action = decision.get("action", "fallback") if decision else "fallback"
+        if action == "abort":
+            logger.error("Escalation decided abort — stopping pipeline")
+            return genai_types.Content(
+                role="model",
+                parts=[genai_types.Part(
+                    text=f"ABORT: Video worker provisioning failed and escalation "
+                         f"decided to abort: {decision.get('comment', '')}"
+                )],
+            )
         os.environ["VIDEO_FALLBACK"] = "local"
         logger.info("VIDEO_FALLBACK=local set — production stage will use local GPU")
 
