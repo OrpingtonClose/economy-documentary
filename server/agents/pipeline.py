@@ -329,34 +329,53 @@ def _timing_loop_before_with_gate(callback_context):
     except Exception as exc:
         logger.error("TTS worker not available: %s", exc)
         # Escalate through the recovery system so the escalation ladder
-        # runs its full course (env assessment → human escalation).
+        # can attempt re-provisioning with broader constraints.
+        # Qwen3-TTS is a hard requirement — no model substitution.
         from recovery import escalate_pipeline_error
+        # Include the full provision trace so the agent has complete
+        # observations to reason over — every search query, every
+        # offer, every constraint, every failure.
+        _tts_trace = []
+        try:
+            from worker_provisioner import get_provisioner
+            _prov = get_provisioner()
+            if _prov and hasattr(_prov, "tts_spec"):
+                _tts_trace = _prov.tts_spec.provision_trace
+        except Exception:
+            pass
         decision = escalate_pipeline_error(
             operation_name="tts_worker_provisioning",
             error_msg=str(exc),
             severity="high",
-            default_action="fallback",
-            diagnosis_hint="TTS GPU worker could not be provisioned. "
-                          "Falling back to edge-tts for real audio generation.",
+            default_action="abort",
+            diagnosis_hint=(
+                "TTS GPU worker could not be provisioned. "
+                "The escalation ladder should attempt re-provisioning "
+                "with broader search constraints (lower reliability, "
+                "higher price ceiling, more GPU types). "
+                "Qwen3-TTS is a hard requirement — do not substitute "
+                "a different TTS model."
+            ),
             agent_policy_type="tts",
+            diagnostic_data={
+                "provision_trace": _tts_trace,
+            },
         )
-        # Act on the escalation decision
-        action = decision.get("action", "fallback") if decision else "fallback"
-        if action == "abort":
-            logger.error("Escalation decided abort — stopping pipeline")
+        action = decision.get("action", "abort") if decision else "abort"
+        if action not in ("retry_with_fix", "retry"):
+            logger.error(
+                "TTS worker provisioning failed and escalation decided %s "
+                "— pipeline cannot proceed without Qwen3-TTS",
+                action,
+            )
             return genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(
-                    text=f"ABORT: TTS worker provisioning failed and escalation "
-                         f"decided to abort: {decision.get('comment', '')}"
+                    text=f"FATAL: TTS worker provisioning failed — "
+                         f"Qwen3-TTS is required. Escalation decision: "
+                         f"{action}. {decision.get('comment', '')}"
                 )],
             )
-        # Set TTS_FALLBACK=edge-tts so tts_tools.py can use edge-tts
-        # This produces real audio with real durations — satisfies the
-        # architectural invariant that downstream timing depends on
-        # actual narration length.
-        os.environ["TTS_FALLBACK"] = "edge-tts"
-        logger.info("TTS_FALLBACK=edge-tts set — audio stage will use edge-tts")
 
     # CONTRACT: validate preconditions AFTER TTS worker is ready.
     # AUDIO_CONTRACT includes service health checks that require the
@@ -540,28 +559,49 @@ def _production_before_with_gate(callback_context):
         logger.info("Video worker ready — production stage proceeding")
     except Exception as exc:
         logger.error("Video worker not available: %s", exc)
-        # Escalate through the recovery system
+        # Escalate through the recovery system. LTX-2.3 is a hard
+        # requirement — no model substitution.
         from recovery import escalate_pipeline_error
+        _video_trace = []
+        try:
+            from worker_provisioner import get_provisioner
+            _prov = get_provisioner()
+            if _prov and hasattr(_prov, "video_spec"):
+                _video_trace = _prov.video_spec.provision_trace
+        except Exception:
+            pass
         decision = escalate_pipeline_error(
             operation_name="video_worker_provisioning",
             error_msg=str(exc),
             severity="high",
-            default_action="fallback",
-            diagnosis_hint="Video GPU worker could not be provisioned.",
+            default_action="abort",
+            diagnosis_hint=(
+                "Video GPU worker could not be provisioned. "
+                "The escalation ladder should attempt re-provisioning "
+                "with broader search constraints. "
+                "LTX-2.3 is a hard requirement — do not substitute "
+                "a different video model."
+            ),
             agent_policy_type="video",
+            diagnostic_data={
+                "provision_trace": _video_trace,
+            },
         )
-        action = decision.get("action", "fallback") if decision else "fallback"
-        if action == "abort":
-            logger.error("Escalation decided abort — stopping pipeline")
+        action = decision.get("action", "abort") if decision else "abort"
+        if action not in ("retry_with_fix", "retry"):
+            logger.error(
+                "Video worker provisioning failed and escalation decided %s "
+                "— pipeline cannot proceed without LTX-2.3",
+                action,
+            )
             return genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(
-                    text=f"ABORT: Video worker provisioning failed and escalation "
-                         f"decided to abort: {decision.get('comment', '')}"
+                    text=f"FATAL: Video worker provisioning failed — "
+                         f"LTX-2.3 is required. Escalation decision: "
+                         f"{action}. {decision.get('comment', '')}"
                 )],
             )
-        os.environ["VIDEO_FALLBACK"] = "local"
-        logger.info("VIDEO_FALLBACK=local set — production stage will use local GPU")
 
     # CONTRACT: validate preconditions AFTER video worker is ready.
     # PRODUCTION_CONTRACT includes service health checks that require the

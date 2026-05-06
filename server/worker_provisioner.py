@@ -134,6 +134,31 @@ class WorkerSpec:
     # the worker failed, not just that it did.
     bootstrap_error: str = ""
     bootstrap_error_category: str = ""  # "auth", "network", "disk", "missing_file", "runtime"
+    # Provisioning trace — PRIMARY data for autonomous agent decisions.
+    # Every decision point in the provisioning flow appends a structured
+    # entry here.  The agent reads the full trace to understand what
+    # happened, what was tried, what alternatives exist, and what
+    # constraints shaped the outcome.  This is not a summary — it is
+    # the complete observation log that the agent reasons over.
+    provision_trace: list = field(default_factory=list)
+
+
+def _trace(spec: WorkerSpec, phase: str, data: dict) -> None:
+    """Append a structured trace entry to the worker's provision log.
+
+    This is the PRIMARY mechanism by which autonomous agents observe
+    what the provisioner did.  Every decision point, every constraint,
+    every observation should be traced so the agent has full context
+    for reasoning about next steps.
+    """
+    entry = {
+        "ts": time.time(),
+        "phase": phase,
+        "role": spec.role,
+        **data,
+    }
+    spec.provision_trace.append(entry)
+    logger.debug("PROVISION-TRACE [%s/%s]: %s", spec.role, phase, data)
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +512,15 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         spec.role, spec.gpu_type, spec.min_vram_gb, spec.max_price,
         spec.min_disk_gb, spec.disk_gb,
     )
+    _trace(spec, "provision_start", {
+        "gpu_type": spec.gpu_type,
+        "min_vram_gb": spec.min_vram_gb,
+        "max_price": spec.max_price,
+        "min_disk_gb": spec.min_disk_gb,
+        "disk_gb": spec.disk_gb,
+        "worker_mode": spec.worker_mode,
+        "excluded_offer_ids": sorted(excluded_offer_ids) if excluded_offer_ids else [],
+    })
 
     # Search for offers — VRAM is a hard floor, never compromised.
     # Use query-string filter format for vastai CLI.
@@ -505,6 +539,12 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         f"inet_down>200 "
         f"disk_space>={spec.min_disk_gb}"
     )
+    _trace(spec, "search_query", {
+        "query_string": query,
+        "search_type": "exact_gpu",
+        "reliability_floor": 0.95,
+        "inet_down_floor": 200,
+    })
 
     search_result = _vast_cmd([
         "search", "offers",
@@ -515,9 +555,15 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
     ])
 
     offers = search_result if isinstance(search_result, list) else []
+    _trace(spec, "search_result", {
+        "query_type": "exact_gpu",
+        "raw_count": len(offers) if isinstance(offers, list) else 0,
+        "query_string": query,
+    })
 
     # If no offers for exact GPU type, broaden to ANY GPU that meets the
     # VRAM floor.  Never lower VRAM — that would force quantisation.
+    broadened = False
     if not offers:
         logger.warning(
             "No %s offers found, broadening search to any GPU with >=%dGB VRAM",
@@ -531,6 +577,13 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             f"inet_down>100 "
             f"disk_space>={spec.min_disk_gb}"
         )
+        _trace(spec, "search_query", {
+            "query_string": query,
+            "search_type": "broadened_any_gpu",
+            "reason": f"No exact {spec.gpu_type} offers found",
+            "reliability_floor": 0.90,
+            "inet_down_floor": 100,
+        })
         search_result = _vast_cmd([
             "search", "offers",
             "--type", "on-demand",
@@ -539,20 +592,30 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             query,
         ])
         offers = search_result if isinstance(search_result, list) else []
+        broadened = True
+        _trace(spec, "search_result", {
+            "query_type": "broadened_any_gpu",
+            "raw_count": len(offers) if isinstance(offers, list) else 0,
+        })
 
     # Python-side filtering as safety net (CLI filters can be unreliable)
     if offers:
         filtered = []
+        excluded_by_filter = {"vram": 0, "price": 0, "disk": 0}
         for o in offers:
             o_vram = float(o.get("gpu_ram", 0))
             o_price = float(o.get("dph_total", 999))
             o_disk = float(o.get("disk_space", 0))
-            if (
-                o_vram >= vram_mb
-                and o_price <= spec.max_price
-                and o_disk >= spec.min_disk_gb
-            ):
-                filtered.append(o)
+            if o_vram < vram_mb:
+                excluded_by_filter["vram"] += 1
+                continue
+            if o_price > spec.max_price:
+                excluded_by_filter["price"] += 1
+                continue
+            if o_disk < spec.min_disk_gb:
+                excluded_by_filter["disk"] += 1
+                continue
+            filtered.append(o)
         if len(filtered) < len(offers):
             logger.info(
                 "Python-side filter: %d/%d offers passed "
@@ -560,6 +623,16 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
                 len(filtered), len(offers),
                 vram_mb, spec.max_price, spec.min_disk_gb,
             )
+            _trace(spec, "post_filter", {
+                "before": len(offers),
+                "after": len(filtered),
+                "excluded_by": excluded_by_filter,
+                "filters_applied": {
+                    "vram_mb": vram_mb,
+                    "max_price": spec.max_price,
+                    "min_disk_gb": spec.min_disk_gb,
+                },
+            })
         offers = filtered
 
     # Exclude previously-tried offers (e.g. slow hosts during retry)
@@ -571,6 +644,11 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
                 "Excluded %d previously-tried offer(s); %d remain",
                 before - len(offers), len(offers),
             )
+            _trace(spec, "exclude_previous", {
+                "excluded_count": before - len(offers),
+                "remaining": len(offers),
+                "excluded_ids": sorted(excluded_offer_ids),
+            })
 
     if not offers:
         from recovery import escalate_pipeline_error
@@ -603,6 +681,33 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         offers,
         key=lambda o: (-float(o.get("inet_down", 0)), float(o.get("dph_total", 999))),
     )
+
+    # Full offer catalog for the agent — every viable offer, not just
+    # the one we picked.  The agent decides if a different offer would
+    # be better on retry.
+    _trace(spec, "offers_sorted", {
+        "total_offers": len(sorted_offers),
+        "broadened_search": broadened,
+        "offers": [
+            {
+                "id": int(o.get("id", 0)),
+                "gpu_name": o.get("gpu_name", "unknown"),
+                "gpu_ram_gb": round(float(o.get("gpu_ram", 0)) / 1024, 1),
+                "num_gpus": o.get("num_gpus", 1),
+                "dph_total": round(float(o.get("dph_total", 0)), 4),
+                "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
+                "inet_down": round(float(o.get("inet_down", 0)), 0),
+                "inet_up": round(float(o.get("inet_up", 0)), 0),
+                "reliability": round(float(o.get("reliability", 0)), 3),
+                "rentable": o.get("rentable", False),
+                "verified": o.get("verified", False),
+                "country": o.get("country", ""),
+                "host_id": o.get("host_id", ""),
+            }
+            for o in sorted_offers[:20]  # cap at 20 for tractability
+        ],
+    })
+
     best = sorted_offers[0]
     offer_id = int(best.get("id", 0))
 
@@ -615,6 +720,17 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         float(best.get("dph_total", 0)),
         float(best.get("disk_space", 0)),
     )
+    _trace(spec, "offer_selected", {
+        "offer_id": offer_id,
+        "gpu_name": best.get("gpu_name", "unknown"),
+        "gpu_ram_gb": round(float(best.get("gpu_ram", 0)) / 1024, 1),
+        "num_gpus": best.get("num_gpus", 1),
+        "dph_total": round(float(best.get("dph_total", 0)), 4),
+        "disk_space_gb": round(float(best.get("disk_space", 0)), 0),
+        "inet_down": round(float(best.get("inet_down", 0)), 0),
+        "reliability": round(float(best.get("reliability", 0)), 3),
+        "sort_key": "inet_down_desc_then_price_asc",
+    })
 
     # Create instance with bootstrap onstart
     b2_key_id = os.environ.get("B2_KEY_ID", "")
@@ -731,17 +847,38 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         f"-p {spec.remote_port}:{spec.remote_port} "
         f"-p {_HEALTH_CONTROL_PORT}:{_HEALTH_CONTROL_PORT}"
     )
-    create_result = _vast_cmd([
-        "create", "instance",
-        str(offer_id),
-        "--image", _docker_image,
-        "--disk", str(spec.disk_gb),
-        "--ssh",
-        "--direct",
-        "--env", _env_ports,
-        "--label", _label,  # GAP 2.3: VM labeling for identification
-        "--onstart-cmd", onstart,
-    ])
+    _trace(spec, "create_instance_attempt", {
+        "offer_id": offer_id,
+        "docker_image": _docker_image,
+        "disk_gb": spec.disk_gb,
+        "env_ports": _env_ports,
+        "label": _label,
+        "branch": _branch,
+        "worker_mode": spec.worker_mode,
+    })
+    try:
+        create_result = _vast_cmd([
+            "create", "instance",
+            str(offer_id),
+            "--image", _docker_image,
+            "--disk", str(spec.disk_gb),
+            "--ssh",
+            "--direct",
+            "--env", _env_ports,
+            "--label", _label,  # GAP 2.3: VM labeling for identification
+            "--onstart-cmd", onstart,
+        ])
+    except RuntimeError as create_err:
+        _trace(spec, "create_instance_failed", {
+            "offer_id": offer_id,
+            "error": str(create_err),
+            "error_type": (
+                "no_such_ask" if "no_such_ask" in str(create_err).lower()
+                else "not_available" if "not available" in str(create_err).lower()
+                else "other"
+            ),
+        })
+        raise
     logger.info("VM label: %s", _label)
 
     # Parse the response — could be dict (if CLI returns JSON) or a string
@@ -754,6 +891,11 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
+            _trace(spec, "create_instance_success", {
+                "offer_id": offer_id,
+                "vm_id": spec.vm_id,
+                "result_type": "dict",
+            })
             return offer_id
 
     # Try to extract new_contract from text response
@@ -765,11 +907,22 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
+            _trace(spec, "create_instance_success", {
+                "offer_id": offer_id,
+                "vm_id": spec.vm_id,
+                "result_type": "text_parsed",
+            })
             return offer_id
 
+    _trace(spec, "create_instance_unexpected_response", {
+        "offer_id": offer_id,
+        "result_type": type(create_result).__name__,
+        "result_preview": str(create_result)[:300],
+    })
     raise RuntimeError(
         f"Failed to provision {spec.role} VM: unexpected response: {create_result}"
     )
+
 
 
 def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
