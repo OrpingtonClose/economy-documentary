@@ -145,7 +145,9 @@ def build_model(
     if name.startswith("gemini"):
         return name
 
-    kwargs: dict = {"extra_body": extra}
+    kwargs: dict = {}
+    if extra:
+        kwargs["extra_body"] = extra
     if not parallel_tool_calls:
         kwargs["parallel_tool_calls"] = False
 
