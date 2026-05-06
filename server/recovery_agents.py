@@ -41,6 +41,19 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# OTIO Unit Agent — lazy import to avoid circular dependency
+# (otio_agent imports AgentTool from this module)
+_OTIO_UNIT_AGENT_CLASS = None
+
+
+def _get_otio_unit_agent_class():
+    global _OTIO_UNIT_AGENT_CLASS
+    if _OTIO_UNIT_AGENT_CLASS is None:
+        from agents.otio_agent import OTIOUnitAgent
+        _OTIO_UNIT_AGENT_CLASS = OTIOUnitAgent
+    return _OTIO_UNIT_AGENT_CLASS
+
+
 # LLM model for recovery agents (fast + cheap for quick decisions)
 # Honour RECOVERY_MODEL env var if set, otherwise use the same model
 # as the main pipeline (ADK_MODEL) or fall back to a fast default.
@@ -1641,6 +1654,17 @@ AUDIO_UNIT_AGENTS = {
 VIDEO_UNIT_AGENTS = {
     0: VideoUnitAgent(),
 }
+
+OTIO_UNIT_AGENTS = {
+    0: None,  # Lazy — resolved at first use via _get_otio_unit_agent_class
+}
+
+
+def _resolve_otio_unit_agents():
+    """Resolve the lazy OTIO_UNIT_AGENTS reference."""
+    if OTIO_UNIT_AGENTS[0] is None:
+        OTIO_UNIT_AGENTS[0] = _get_otio_unit_agent_class()()
+    return OTIO_UNIT_AGENTS
 
 # ── Legacy level-based configurations (backward compat) ──
 

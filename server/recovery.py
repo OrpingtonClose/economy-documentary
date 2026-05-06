@@ -474,10 +474,11 @@ def _make_production_agent_policy() -> RecoveryPolicy:
 
 
 def _make_otio_agent_policy() -> RecoveryPolicy:
-    """OTIO validation: L0 fixes timeline gaps and violations."""
-    from recovery_agents import OTIO_AGENTS
+    """OTIO validation: OTIO Unit Agent owns the timeline structure."""
+    from recovery_agents import OTIO_UNIT_AGENTS, _resolve_otio_unit_agents
+    agents = _resolve_otio_unit_agents()
     return RecoveryPolicy(
-        agents=OTIO_AGENTS,
+        agents=agents,
         level_budgets={0: 3, 1: 2, 2: 1, 3: 1},
         retry_backoff_base=2.0,
         escalate_to_human=True,
