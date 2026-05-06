@@ -72,7 +72,8 @@ def test_final_film_route_serves_allowed_file(tmp_path, monkeypatch):
     import importlib
 
     monkeypatch.setenv("PIPELINE_OUTPUT_DIR", str(tmp_path))
-    import agui
+    import agui, agui_events
+    importlib.reload(agui_events)
     importlib.reload(agui)
 
     (tmp_path / "final_documentary.mp4").write_bytes(b"fake-mp4-bytes")
@@ -93,7 +94,8 @@ def test_final_film_route_rejects_unknown_filename(tmp_path, monkeypatch):
     import importlib
 
     monkeypatch.setenv("PIPELINE_OUTPUT_DIR", str(tmp_path))
-    import agui
+    import agui, agui_events
+    importlib.reload(agui_events)
     importlib.reload(agui)
 
     from fastapi import FastAPI
@@ -110,7 +112,8 @@ def test_final_film_route_rejects_traversal(tmp_path, monkeypatch):
     import importlib
 
     monkeypatch.setenv("PIPELINE_OUTPUT_DIR", str(tmp_path))
-    import agui
+    import agui, agui_events
+    importlib.reload(agui_events)
     importlib.reload(agui)
 
     from fastapi import FastAPI
