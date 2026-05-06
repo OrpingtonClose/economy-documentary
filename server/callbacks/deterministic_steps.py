@@ -1306,6 +1306,51 @@ def deterministic_audio_callback(
                 f"GATEKEEPER REJECT (audio stage, {len(rejects)} reject(s) — "
                 f"audit report uploaded to B2): {reject_msgs}"
             )
+        # Apply state_patches from the recovery agent (e.g. audio_timing_fix
+        # which rewrites narration text to hit duration targets).
+        if response.get("action") == "retry_with_fix":
+            patches = response.get("state_patches", {})
+            amendments = patches.get("scenes_amendments", [])
+            if amendments:
+                logger.info(
+                    "Applying %d narration amendments from recovery agent",
+                    len(amendments),
+                )
+                scenes = json.loads(state.get("scenes", "[]"))
+                for amend in amendments:
+                    sn = amend.get("scene_num")
+                    voice = amend.get("voice")
+                    new_text = amend.get("new_text")
+                    if not (sn and voice and new_text):
+                        continue
+                    for scene in scenes:
+                        if scene.get("scene_num") != sn:
+                            continue
+                        # Scenes use "voices" list: [{"voice": "V1", "text": "..."}, ...]
+                        voices = scene.get("voices") or scene.get("voice_blocks") or []
+                        for vb in voices:
+                            if vb.get("voice") == voice:
+                                old_words = len(vb.get("text", "").split())
+                                vb["text"] = new_text
+                                logger.info(
+                                    "  Scene %d %s: %d→%d words",
+                                    sn, voice, old_words, len(new_text.split()),
+                                )
+                                break
+                state["scenes"] = json.dumps(scenes)
+                # Invalidate cached audio so TTS regenerates with new text
+                _audio_dir = os.environ.get(
+                    "TTS_OUTPUT_DIR", "/tmp/documentary-pipeline/audio"
+                )
+                for amend in amendments:
+                    sn = amend.get("scene_num", 0)
+                    voice = amend.get("voice", "")
+                    wav = os.path.join(_audio_dir, f"scene_{sn:03d}_{voice}.wav")
+                    sidecar = wav.replace(".wav", ".txt")
+                    for f in (wav, sidecar):
+                        if os.path.isfile(f):
+                            os.remove(f)
+                            logger.debug("  Removed cached %s for regen", f)
         logger.warning(
             "Audio gatekeeper rejection escalated and resolved with action=%s — continuing pipeline",
             response.get("action"),
