@@ -42,7 +42,14 @@ from typing import Any, Callable, Optional
 logger = logging.getLogger(__name__)
 
 # LLM model for recovery agents (fast + cheap for quick decisions)
-_RECOVERY_MODEL = "openrouter/google/gemini-2.5-flash"
+# Honour RECOVERY_MODEL env var if set, otherwise use the same model
+# as the main pipeline (ADK_MODEL) or fall back to a fast default.
+import os as _os
+_RECOVERY_MODEL = (
+    _os.environ.get("RECOVERY_MODEL", "")
+    or _os.environ.get("ADK_MODEL", "").removeprefix("litellm/")
+    or "openrouter/google/gemini-2.5-flash"
+)
 
 
 # ---------------------------------------------------------------------------
