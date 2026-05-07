@@ -1,7 +1,0 @@
-{
-  "error_class": "invariant_violation",
-  "error_message": "audio artifact missing for scene s2 before visual dispatch",
-  "invariant": "audio_before_visual",
-  "target": {"scope": "stage", "id": "production"},
-  "history": []
-}

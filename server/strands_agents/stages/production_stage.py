@@ -457,12 +457,12 @@ def execute_production_plan(
                 continue
 
             # In production, this dispatches to GPU workers via
-            # the GPUProtocol. For now, record as a placeholder.
+            # the GPUProtocol. No placeholder — real output only.
             batch_result["clip_results"].append({
                 "clip_id": task.get("clip_id", ""),
-                "status": "generated",
-                "qa_quality": "good",
-                "output_path": f"/tmp/output/{task.get('clip_id', 'unknown')}.mp4",
+                "status": "pending",
+                "qa_quality": "",
+                "output_path": "",
                 "actual_duration": task.get("duration", 5.0),
             })
 
@@ -676,11 +676,10 @@ def check_gpu_production_job(job_id: str) -> dict[str, Any]:
             "output_path": result.output_path,
         }
     else:
-        # Fallback: placeholder
         return {
-            "job_id": job_id,
-            "status": "completed",
-            "output_path": f"/tmp/output/{job_id}.mp4",
+            "job_id": "",
+            "status": "failed",
+            "error": "No GPU protocol available. The provisioner must allocate a GPU worker before the production stage can run.",
         }
 
 

@@ -1,8 +1,0 @@
-{
-  "error_class": "catastrophic_worker_crash",
-  "error_message": "all GPU workers unhealthy; worker pool empty",
-  "worker_crashed": true,
-  "workers_healthy": [],
-  "target": {"scope": "run", "id": "run_20251120_100000"},
-  "history": []
-}

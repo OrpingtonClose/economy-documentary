@@ -65,7 +65,7 @@ async def run_documentary(
         max_node_executions: Safety limit on node re-executions.
         max_retries: Recovery retries for the RecoveryShell.
         approval_mode: "auto_approve" (CI) or "manual" (dashboard).
-        gpu_protocol: GPUProtocol implementation (default: MockGPUProtocol).
+        gpu_protocol: Must be provided by the provisioner — no fallback exists.
 
     Returns:
         Dict with pipeline result, OTIO state, and execution summary.

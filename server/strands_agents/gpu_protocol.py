@@ -96,7 +96,6 @@ class GPUProtocol:
     Implementations:
       - VastAIProtocol (production — wraps Vast.ai API + Temporal)
       - LocalGPUProtocol (dev — runs on local GPU)
-      - MockGPUProtocol (testing — instant completion/failure)
     """
 
     async def submit(self, request: GPUJobRequest) -> GPUJobResult:
@@ -110,7 +109,3 @@ class GPUProtocol:
     async def cancel(self, job_id: str) -> GPUJobResult:
         """Cancel a running GPU job."""
         raise NotImplementedError
-
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
