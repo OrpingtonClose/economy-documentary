@@ -48,13 +48,14 @@ logger = logging.getLogger(__name__)
 # Stage node IDs
 # ---------------------------------------------------------------------------
 
+PREFLIGHT = "preflight"
 SCENARIO = "scenario"
 AUDIO = "audio"
 VISUAL = "visual"
 PRODUCTION = "production"
 ASSEMBLY = "assembly"
 
-STAGE_ORDER = [SCENARIO, AUDIO, VISUAL, PRODUCTION, ASSEMBLY]
+STAGE_ORDER = [PREFLIGHT, SCENARIO, AUDIO, VISUAL, PRODUCTION, ASSEMBLY]
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +69,10 @@ def _build_stage(stage: str, otio_manager=None, model=None) -> Agent:
     There is no placeholder fallback. If a stage agent cannot be built,
     the pipeline fails — it does not silently substitute a do-nothing agent.
     """
+    if stage == PREFLIGHT:
+        from strands_agents.stages.preflight import build_preflight_agent
+        return build_preflight_agent()
+
     from strands_agents.stages import (
         build_scenario_agent,
         build_audio_agent,
@@ -269,8 +274,9 @@ def build_documentary_graph(
         for stage in STAGE_ORDER
     }
 
-    # Forward edges: scenario → audio → visual → production → assembly
+    # Forward edges: preflight → scenario → audio → visual → production → assembly
     forward_edges = {
+        GraphEdge(from_node=nodes[PREFLIGHT], to_node=nodes[SCENARIO]),
         GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[AUDIO]),
         GraphEdge(from_node=nodes[AUDIO], to_node=nodes[VISUAL]),
         GraphEdge(from_node=nodes[VISUAL], to_node=nodes[PRODUCTION]),
@@ -308,7 +314,7 @@ def build_documentary_graph(
     return Graph(
         nodes=nodes,
         edges=edges,
-        entry_points={nodes[SCENARIO]},
+        entry_points={nodes[PREFLIGHT]},
         max_node_executions=max_node_executions,
         reset_on_revisit=True,
         hooks=all_hooks,
