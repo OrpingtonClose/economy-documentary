@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+source .env
+rm -rf /tmp/documentary-pipeline
+/opt/homebrew/bin/python3 -m strands_agents.run_strands "$@" --api-key "$API_KEY"

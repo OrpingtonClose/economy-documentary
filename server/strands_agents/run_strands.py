@@ -72,7 +72,16 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
         model_name = model_id
     else:
         model_name = model_id.split("/")[-1]
-    return OpenAIModel(client=client, model_id=model_name, params={"max_tokens": 8192})
+
+    # Kimi K2.6: disable thinking mode (reasoning_content not preserved by
+    # Strands in multi-turn tool calls → 400 from Moonshot API).
+    # Direct API requires temperature=0.6.
+    params = {"max_tokens": 8192}
+    if "kimi" in model_lower or "moonshot" in model_lower:
+        params["temperature"] = 0.6
+        params["extra_body"] = {"thinking": {"type": "disabled"}}
+
+    return OpenAIModel(client=client, model_id=model_name, params=params)
 
 
 def _create_timeline_file(timeline_path: str) -> None:
