@@ -25,7 +25,7 @@ from strands.models.anthropic import AnthropicModel
 
 from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
 from strands_agents.otio_manager import OTIOStateManager
-from strands_agents.gpu_protocol import MockGPUProtocol
+from worker_provisioner import VIDEO_SPEC, provision_vm, wait_for_worker_healthy
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
     CheckpointHook,
@@ -81,9 +81,24 @@ async def run_documentary(
     if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
         os.environ["_timeline_path"] = otio_manager._timeline_path
 
-    # Set up GPU protocol
+    # Provision GPU worker for video generation
     if gpu_protocol is None:
-        gpu_protocol = MockGPUProtocol()
+        logger.info("Provisioning GPU video worker...")
+        spec = VIDEO_SPEC
+        vm_id = provision_vm(spec)
+        if vm_id == 0:
+            raise RuntimeError("Failed to provision GPU video worker — no VMs available")
+        logger.info("GPU worker VM provisioned: vm_id=%d, waiting for healthy...", vm_id)
+        healthy = wait_for_worker_healthy(spec, timeout=900, poll_interval=15)
+        if not healthy:
+            raise RuntimeError(
+                f"GPU worker VM {vm_id} did not become healthy within 900s. "
+                f"Check worker_url={spec.worker_url}"
+            )
+        logger.info("GPU worker healthy at %s", spec.worker_url)
+        # The GPU protocol is the worker URL — the production agent will
+        # submit HTTP requests to it
+        os.environ["VIDEO_WORKER_URLS"] = spec.worker_url
 
     # Build hooks
     approval_stages = set() if approval_mode == "auto_approve" else {
