@@ -141,7 +141,8 @@ DO NOT ask for additional data. The visual concepts and scene data
 are already in the pipeline state. Use the tools you have.
 
 If the production stage was already completed in a B2 checkpoint,
-call skip_production_stage instead.
+the OTIO contract enforcer will detect existing video clips and
+allow the stage to pass.
 """
 
 
@@ -557,30 +558,6 @@ def finalize_production(
 # ---------------------------------------------------------------------------/
 
 
-@tool(context=True)
-def skip_production_stage(
-    reason: str,
-    tool_context: ToolContext,
-) -> dict[str, Any]:
-    """Signal that the production stage should be skipped (B2 checkpoint).
-
-    Sets ``production_complete = True`` on state so the Graph proceeds
-    to the assembly stage without re-running GPU dispatch.
-
-    Args:
-        reason: Why the stage is being skipped (e.g. "B2 checkpoint
-            restored").
-        tool_context: Framework-injected context.
-
-    Returns:
-        ``{"skipped": True, "reason": str}``.
-    """
-    state = tool_context.agent.state
-    state.set("production_complete", True)
-    logger.info("reason=<%s> | production stage skipped", reason)
-    return {"skipped": True, "reason": reason}
-
-
 # ---------------------------------------------------------------------------/
 # Tools — GPU job submission (wraps gpu_protocol)
 # ---------------------------------------------------------------------------/
@@ -626,28 +603,45 @@ def submit_gpu_production_job(
         phrase_idx=phrase_idx,
     )
 
-    # GPU protocol must be provided — no fallback, no mocks
-    gpu_protocol = None
-    if tool_context and hasattr(tool_context, 'state') and tool_context.state:
-        gpu_protocol = tool_context.state.get("gpu_protocol")
-
-    if gpu_protocol is None:
+    # Submit to GPU worker via HTTP
+    worker_url = os.environ.get("VIDEO_WORKER_URLS", "")
+    if not worker_url:
         return {
             "job_id": "",
             "status": "failed",
-            "error": "No GPU protocol available. The provisioner must allocate a GPU worker before the production stage can run.",
+            "error": "No GPU worker available. VIDEO_WORKER_URLS not set. The provisioner must allocate a GPU worker before the production stage can run.",
         }
 
-    import asyncio as _asyncio
-    loop = _asyncio.get_event_loop()
-    result = loop.run_until_complete(gpu_protocol.submit(request))
+    import urllib.request
+    import urllib.error
+    render_url = f"{worker_url.rstrip('/')}/video/render"
+    payload = json.dumps({
+        "scene_num": scene_num,
+        "phrase_idx": phrase_idx,
+        "job_type": job_type,
+        "params": params,
+    }).encode()
 
-    return {
-        "job_id": result.job_id,
-        "status": result.status.value,
-        "output_path": result.output_path,
-        "cost_usd": result.cost_usd,
-    }
+    try:
+        req = urllib.request.Request(
+            render_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            result = json.loads(resp.read().decode())
+        return {
+            "job_id": result.get("job_id", f"video-{scene_num}-{phrase_idx}"),
+            "status": result.get("status", "completed"),
+            "output_path": result.get("output_path", ""),
+            "duration_seconds": result.get("duration_seconds", 0),
+        }
+    except urllib.error.URLError as exc:
+        return {
+            "job_id": "",
+            "status": "failed",
+            "error": f"GPU worker request failed: {exc}",
+        }
 
 
 @tool
@@ -661,25 +655,31 @@ def check_gpu_production_job(job_id: str) -> dict[str, Any]:
         Dict with ``job_id``, ``status``, ``output_path``.
     """
     logger.info("job_id=<%s> | checking GPU job status", job_id)
-    # Try to use the real GPU protocol from state
-    gpu_protocol = None
-    if tool_context and hasattr(tool_context, 'state') and tool_context.state:
-        gpu_protocol = tool_context.state.get("gpu_protocol")
-
-    if gpu_protocol is not None:
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        result = loop.run_until_complete(gpu_protocol.check(job_id))
-        return {
-            "job_id": result.job_id,
-            "status": result.status.value,
-            "output_path": result.output_path,
-        }
-    else:
+    worker_url = os.environ.get("VIDEO_WORKER_URLS", "")
+    if not worker_url:
         return {
             "job_id": "",
             "status": "failed",
-            "error": "No GPU protocol available. The provisioner must allocate a GPU worker before the production stage can run.",
+            "error": "No GPU worker available. VIDEO_WORKER_URLS not set.",
+        }
+
+    import urllib.request
+    import urllib.error
+    check_url = f"{worker_url.rstrip('/')}/video/status/{job_id}"
+    try:
+        req = urllib.request.Request(check_url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+        return {
+            "job_id": result.get("job_id", job_id),
+            "status": result.get("status", "unknown"),
+            "output_path": result.get("output_path", ""),
+        }
+    except urllib.error.URLError as exc:
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": f"GPU worker status check failed: {exc}",
         }
 
 
@@ -713,7 +713,7 @@ class ProductionPhaseSetupHook(HookProvider):
         if "production" in stages_complete:
             logger.info(
                 "B2: production stage already complete, "
-                "agent should call skip_production_stage"
+                "OTIO contract will validate existing clips"
             )
             state.set("_b2_skip_production", True)
 
@@ -820,10 +820,8 @@ def build_production_agent(
     *,
     model: Any = None,
     window_size: int = 40,
-    enforce_contract: bool = True,
     tag_revisions: bool = False,
     otio_manager: OTIOStateManager | None = None,
-    gpu_protocol: Any = None,
 ) -> Agent:
     """Return a configured production-stage :class:`Agent`.
 
@@ -840,14 +838,10 @@ def build_production_agent(
             :class:`SlidingWindowConversationManager`. Forty covers a
             multi-batch production run without evicting the plan from
             context.
-        enforce_contract: When True, wire :class:`ContractEnforcer`
-            for :data:`PRODUCTION_CONTRACT`.
         tag_revisions: When True, wire :class:`RevisionTagger` for
             ``production_report``.
         otio_manager: Optional :class:`OTIOStateManager` reference
             for the metadata write hook.
-        gpu_protocol: GPU protocol implementation. Must be provided
-            by the provisioner — no fallback exists.
 
     Returns:
         Configured :class:`Agent` ready for ``.__call__`` invocations
@@ -858,14 +852,8 @@ def build_production_agent(
     # Phase setup — always wired
     hooks.append(ProductionPhaseSetupHook())
 
-    # Contract enforcement
-    if enforce_contract:
-        try:
-            hooks.append(OTIOContractEnforcer(PRODUCTION_CONTRACT))
-        except Exception:
-            # PRODUCTION_CONTRACT may not be defined yet in the
-            # contracts module — skip gracefully.
-            logger.debug("PRODUCTION_CONTRACT not available — skipping contract enforcer")
+    # Contract enforcement — always on, no opt-out
+    hooks.append(OTIOContractEnforcer(PRODUCTION_CONTRACT))
 
     # Revision tagging
     if tag_revisions:
@@ -895,8 +883,6 @@ def build_production_agent(
         # OTIO access
         otio_read,
         otio_write,
-        # B2 skip
-        skip_production_stage,
     ]
 
     return Agent(
@@ -921,6 +907,5 @@ __all__ = [
     "execute_production_plan",
     "finalize_production",
     "generate_production_plan",
-    "skip_production_stage",
     "submit_gpu_production_job",
 ]

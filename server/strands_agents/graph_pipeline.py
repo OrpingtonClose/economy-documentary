@@ -62,42 +62,30 @@ STAGE_ORDER = [SCENARIO, AUDIO, VISUAL, PRODUCTION, ASSEMBLY]
 # ---------------------------------------------------------------------------
 
 
-def _make_placeholder_agent(stage: str) -> Agent:
-    """Create a minimal Agent that echoes its stage name.
+def _build_stage(stage: str, otio_manager=None, model=None) -> Agent:
+    """Build a real stage agent. Raises if the builder fails.
 
-    Used as a fallback when real stage agents are not available.
+    There is no placeholder fallback. If a stage agent cannot be built,
+    the pipeline fails — it does not silently substitute a do-nothing agent.
     """
-    return Agent(
-        name=stage,
-        system_prompt=f"You are the {stage} stage of the documentary pipeline. "
-        f"Report that you have completed the {stage} stage.",
-        tools=[],
+    from strands_agents.stages import (
+        build_scenario_agent,
+        build_audio_agent,
+        build_visual_agent,
+        build_production_agent,
+        build_assembly_agent,
     )
-
-
-def _try_build_stage(stage: str, otio_manager=None, model=None) -> Agent | None:
-    """Try to build a real stage agent; return None if not available."""
-    try:
-        from strands_agents.stages import (
-            build_scenario_agent,
-            build_audio_agent,
-            build_visual_agent,
-            build_production_agent,
-            build_assembly_agent,
-        )
-        builders = {
-            SCENARIO: build_scenario_agent,
-            AUDIO: build_audio_agent,
-            VISUAL: build_visual_agent,
-            PRODUCTION: build_production_agent,
-            ASSEMBLY: build_assembly_agent,
-        }
-        builder = builders.get(stage)
-        if builder:
-            return builder(otio_manager=otio_manager, model=model)
-    except (ImportError, Exception) as exc:
-        logger.debug("Stage '%s' builder not available: %s", stage, exc)
-    return None
+    builders = {
+        SCENARIO: build_scenario_agent,
+        AUDIO: build_audio_agent,
+        VISUAL: build_visual_agent,
+        PRODUCTION: build_production_agent,
+        ASSEMBLY: build_assembly_agent,
+    }
+    builder = builders.get(stage)
+    if builder is None:
+        raise ValueError(f"Unknown stage: {stage}")
+    return builder(otio_manager=otio_manager, model=model)
 
 
 # ---------------------------------------------------------------------------
@@ -187,22 +175,6 @@ class StatePropagationHook(HookProvider):
             except Exception:
                 pass
 
-        # If the audio node didn't persist scenes/whisperx_alignment,
-        # inject placeholder data so the visual contract passes.
-        # The LLM agent doesn't always call persist_audio_state.
-        if event.node_id == AUDIO and "scenes" not in harvested:
-            harvested["scenes"] = [{"scene_num": i, "duration_sec": 30, "status": "processed"} for i in range(5)]
-            logger.info("Audio node did not persist scenes — injecting placeholder")
-        if event.node_id == AUDIO and "whisperx_alignment" not in harvested:
-            harvested["whisperx_alignment"] = {"status": "placeholder", "note": "alignment data from audio stage"}
-            logger.info("Audio node did not persist whisperx_alignment — injecting placeholder")
-
-        # If the visual node didn't persist visual_concepts,
-        # inject placeholder so the production contract passes.
-        if event.node_id == VISUAL and "visual_concepts" not in harvested:
-            harvested["visual_concepts"] = [{"scene_num": i, "phrase_idx": 0, "prompt": "documentary footage", "mood": "cinematic"} for i in range(5)]
-            logger.info("Visual node did not persist visual_concepts — injecting placeholder")
-
         if harvested:
             self._shared_state.update(harvested)
             logger.info(
@@ -286,11 +258,10 @@ def build_documentary_graph(
     if agents is None:
         agents = {}
 
-    # Fill missing stages with real agents (preferred) or placeholders
+    # Build all stage agents — no placeholders, no fallbacks
     for stage in STAGE_ORDER:
         if stage not in agents:
-            real_agent = _try_build_stage(stage, otio_manager=otio_manager, model=model)
-            agents[stage] = real_agent if real_agent else _make_placeholder_agent(stage)
+            agents[stage] = _build_stage(stage, otio_manager=otio_manager, model=model)
 
     # Build nodes
     nodes = {
