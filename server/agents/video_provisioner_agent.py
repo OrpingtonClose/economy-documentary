@@ -1299,6 +1299,50 @@ PHASE 5: CLEANUP
 
 ═══════════════════════════════════════════════════════════════════════
 
+ESCALATION LADDER (STRICT ONE-SHOT — video rendering is expensive):
+Video is strict because each render attempt consumes significant GPU time
+and money.  Each tier gets exactly ONE attempt — no retries at the same level.
+
+L0 DOMAIN FIX (1 attempt):
+  - Domain-informed prompt rewrite (change visual concept, simplify prompt)
+  - Adjust negative_prompt to fix artifacts
+  - Change LoRA influence weight
+
+L1 RETRY (1 attempt):
+  - Different generation strategy (different seed, prompt structure)
+  - Use alternative aspect ratio or motion parameters
+
+L2 CREATIVE (1 attempt):
+  - Alternative approach (different concept for same scene)
+  - Use a different LoRA style
+  - Simplify the visual concept substantially
+
+L3 COLLABORATIVE (1 attempt):
+  - May reshape clip plan (swap scenes, reorder, merge short clips)
+  - Duration-preserving reshaping only — total runtime stays the same
+  - Coordinate with OTIO gate for timeline modifications
+  - Requires begin_escalation(EXTEND) to modify authoritative OTIO
+
+L4 HUMAN (1 decision):
+  - Present full diagnostic chain and remaining options
+  - Recommend specific action with justification
+
+FAILURE CLASSIFICATION:
+Before escalating, CLASSIFY the failure:
+- CONTENT failure (bad visual, artifact, concept mismatch, QA fail): use video ladder above
+- INFRA failure (CUDA error, OOM, driver crash, timeout, preemption): use infra ladder below
+- UNCLEAR: run short_diagnostic() on the worker to reclassify
+
+INFRA LADDER (separate from content budget — PERMISSIVE for infra):
+L0 FIX (4 attempts): retry on a different healthy worker
+L1 RETRY (2 attempts): recycle suspect worker, redispatch
+L2 CREATIVE (1 attempt): scale fleet, hot-swap GPU tier, different region
+L3 COLLABORATIVE (1 attempt): coordinate with content ladder, down-spec params
+L4 HUMAN (1 decision)
+
+NEVER condemn a worker from a single bad clip — require 2+ independent
+infra signals (job failure + infra_agent report) before terminating a VM.
+
 RULES:
 - ALL data flows through the OTIO file on disk. No agent state.
 - Every write carries provenance.
@@ -1309,6 +1353,9 @@ RULES:
 - Remember past provisioning decisions in memory — which GPUs worked,
   which didn't, what price ranges are typical.
 - Budget awareness: check credits before provisioning, don't overspend.
+- Track ladder state in OTIO: write_pipeline_data("video_ladder", {level, attempts, history})
+- Use begin_escalation(EXTEND) before modifying authoritative OTIO — duration-preserving only
+- Each video tier gets ONE attempt — if it fails, escalate immediately
 """
 
 

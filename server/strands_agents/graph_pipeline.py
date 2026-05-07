@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from strands import Agent
@@ -283,6 +284,94 @@ def _build_otio_gate_agent(model) -> Agent:
         state = _get(tp)
         return json.dumps({"state": state})
 
+    @tool
+    def begin_escalation(escalation_type: str, reason: str, opened_by: str) -> str:
+        """Open an escalation window on the OTIO timeline.
+
+        Allows modifying authoritative OTIO under controlled conditions.
+        escalation_type must be 'REPLACE' or 'EXTEND'.
+        """
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import begin_escalation as _begin
+        tp = resolve_timeline_path()
+        return _begin(tp, escalation_type, reason, opened_by)
+
+    @tool
+    def end_escalation() -> str:
+        """Close the escalation window on the OTIO timeline."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import end_escalation as _end
+        tp = resolve_timeline_path()
+        return _end(tp)
+
+    @tool
+    def read_ladder_state(stage: str) -> str:
+        """Read escalation ladder state for a stage (audio/video)."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        key = f"{stage}_ladder"
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({"stage": stage, "ladder_active": False, "level": 0, "attempts": 0})
+        return json.dumps({"stage": stage, "ladder_active": True, **val})
+
+    @tool
+    def write_critique_record(stage: str, verdict: str, details_json: str = "{}") -> str:
+        """Write a critique record for a stage validation result.
+
+        Fire-and-forget — never blocks the pipeline.  The critique store
+        is QA infrastructure, not a gate.
+        """
+        from critique.record import QaVerdict
+        from critique.store import get_critique_store
+        try:
+            store = get_critique_store()
+            store.append_qa(
+                artifact_type="timeline",
+                artifact_id=f"{stage}_gate",
+                verdict=QaVerdict(
+                    check_name=f"gate_{stage}",
+                    status=verdict,  # "pass", "warn", "fail"
+                    detail=json.loads(details_json) if details_json else {},
+                    source="otio_gate",
+                ),
+            )
+            return json.dumps({"written": True, "stage": stage, "verdict": verdict})
+        except Exception as e:
+            # Critique store is best-effort — never block the pipeline
+            return json.dumps({"written": False, "error": str(e)})
+
+    @tool
+    def trigger_preview(stage: str) -> str:
+        """Trigger a preview build after a stage validation.
+
+        Fire-and-forget — the preview is a QA artifact, not a gate.
+        The builder reads the OTIO file directly and produces an MP4
+        with honest placeholders for any missing slots.
+        """
+        from previews.builder import build_preview
+        try:
+            from tools.otio_file_ops import resolve_timeline_path
+            tp = resolve_timeline_path()
+            pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+            # Build a minimal state dict for the legacy builder API
+            state = {"_timeline_path": tp}
+            manifest = build_preview(
+                state=state,
+                trigger_reason=f"gate_{stage}",
+                output_dir=os.path.join(pipeline_dir, "previews"),
+            )
+            return json.dumps({
+                "triggered": True,
+                "stage": stage,
+                "preview_path": manifest.output_path if hasattr(manifest, "output_path") else None,
+                "slot_count": len(manifest.slots) if hasattr(manifest, "slots") else 0,
+            })
+        except Exception as e:
+            # Preview is best-effort — never block the pipeline
+            return json.dumps({"triggered": False, "error": str(e)})
+
     return Agent(
         name="otio_gate",
         system_prompt=(
@@ -292,22 +381,28 @@ def _build_otio_gate_agent(model) -> Agent:
             "2. Validate the previous stage's output\n"
             "3. If validation fails: write gate_result to OTIO with errors, and the graph will route backward\n"
             "4. If validation passes: write gate_result to OTIO, summarize what the next stage needs\n"
-            "5. After audio stage validation passes: call transition_to_authoritative\n\n"
+            "5. After audio stage validation passes: call transition_to_authoritative\n"
+            "6. After every validation (pass OR fail): write_critique_record + trigger_preview\n\n"
             "WORKFLOW:\n"
             "- After scenario: call validate_scenario(). If valid, next is audio.\n"
             "- After audio: call validate_audio(). If valid, call transition_to_authoritative, next is video.\n"
-            "- After video: call validate_video(). If valid, pipeline is complete.\n\n"
+            "- After video: call validate_video(). If valid, pipeline is complete.\n"
+            "- After EVERY validation: write_critique_record(stage, verdict, details) + trigger_preview(stage)\n\n"
             "RULES:\n"
             "- You NEVER generate content. You only validate and enforce.\n"
             "- Read ALL data from the OTIO file. All results go TO the OTIO file.\n"
             "- If validation fails, write the error to OTIO and report it clearly.\n"
             "- The draft→authoritative transition happens ONLY after audio validation passes.\n"
+            "- Critique records and previews are fire-and-forget QA artifacts. They never block the pipeline.\n"
         ),
         tools=[
             read_pipeline_data, read_timeline,
             validate_scenario, validate_audio, validate_video,
             transition_to_authoritative, write_gate_result,
             get_otio_lifecycle_state,
+            begin_escalation, end_escalation,
+            read_ladder_state,
+            write_critique_record, trigger_preview,
         ],
         model=model,
     )
@@ -491,6 +586,43 @@ def _build_audio_agent(model) -> Agent:
         from agents.audio_provisioner_agent import _tool_evaluate_narration_quality
         return _tool_evaluate_narration_quality()
 
+    @tool
+    def begin_escalation(escalation_type: str, reason: str) -> str:
+        """Open an escalation window to modify authoritative OTIO.
+        escalation_type: 'REPLACE' or 'EXTEND'.
+        """
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import begin_escalation as _begin
+        tp = resolve_timeline_path()
+        return _begin(tp, escalation_type, reason, "audio")
+
+    @tool
+    def end_escalation() -> str:
+        """Close the escalation window on the OTIO timeline."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import end_escalation as _end
+        tp = resolve_timeline_path()
+        return _end(tp)
+
+    @tool
+    def classify_failure(error_msg: str) -> str:
+        """Classify a pipeline failure as content, infra, or unclear."""
+        from diagnostic_classifier import classify_failure as _classify, build_signals_from_error
+        signals = build_signals_from_error(error_msg)
+        result = _classify(error_msg, signals)
+        return json.dumps({"failure_class": result.name if hasattr(result, "name") else str(result)})
+
+    @tool
+    def write_ladder_state(level: int, attempts: int, history_json: str = "[]") -> str:
+        """Write audio ladder state to OTIO for tracking."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, "audio_ladder", {
+            "level": level, "attempts": attempts,
+            "history": json.loads(history_json),
+        }, provenance={"agent": "audio"})
+
     return Agent(
         name="audio",
         system_prompt=(
@@ -521,6 +653,7 @@ def _build_audio_agent(model) -> Agent:
             check_worker_health, terminate_vm, list_active_vms,
             get_account_credits,
             generate_narration, align_narration, evaluate_narration_quality,
+            begin_escalation, end_escalation, classify_failure, write_ladder_state,
         ],
         model=model,
     )
@@ -677,6 +810,43 @@ def _build_video_agent(model) -> Agent:
         from agents.video_provisioner_agent import _tool_check_clip
         return _tool_check_clip(job_id, worker_url)
 
+    @tool
+    def begin_escalation(escalation_type: str, reason: str) -> str:
+        """Open an escalation window to modify authoritative OTIO.
+        escalation_type: 'REPLACE' or 'EXTEND'. Duration-preserving only for video.
+        """
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import begin_escalation as _begin
+        tp = resolve_timeline_path()
+        return _begin(tp, escalation_type, reason, "video")
+
+    @tool
+    def end_escalation() -> str:
+        """Close the escalation window on the OTIO timeline."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import end_escalation as _end
+        tp = resolve_timeline_path()
+        return _end(tp)
+
+    @tool
+    def classify_failure(error_msg: str) -> str:
+        """Classify a pipeline failure as content, infra, or unclear."""
+        from diagnostic_classifier import classify_failure as _classify, build_signals_from_error
+        signals = build_signals_from_error(error_msg)
+        result = _classify(error_msg, signals)
+        return json.dumps({"failure_class": result.name if hasattr(result, "name") else str(result)})
+
+    @tool
+    def write_ladder_state(level: int, attempts: int, history_json: str = "[]") -> str:
+        """Write video ladder state to OTIO for tracking."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, "video_ladder", {
+            "level": level, "attempts": attempts,
+            "history": json.loads(history_json),
+        }, provenance={"agent": "video"})
+
     return Agent(
         name="video",
         system_prompt=(
@@ -709,6 +879,7 @@ def _build_video_agent(model) -> Agent:
             search_gpu_offers, provision_vm, check_vm_status,
             check_worker_health, terminate_vm, list_active_vms, get_account_credits,
             render_clip, check_clip,
+            begin_escalation, end_escalation, classify_failure, write_ladder_state,
         ],
         model=model,
     )

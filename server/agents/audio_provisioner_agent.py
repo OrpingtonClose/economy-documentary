@@ -1351,6 +1351,51 @@ MEMORY:
 - Remember past GPU choices that worked well or failed
 - Remember which GPU types are reliable for TTS
 
+ESCALATION LADDER (PERMISSIVE — audio reconciliation IS the mechanism):
+Audio is permissive because multiple attempts are cheap and reconciliation
+produces the authoritative OTIO.  Each tier has a generous budget:
+
+L0 DOMAIN FIX (8 attempts):
+  - Reseed TTS with different voice parameters
+  - Rephrase narration text (shorter, simpler)
+  - Adjust silence padding between phrases
+  - Retry with different temperature / top_p
+
+L1 RETRY (4 attempts):
+  - Consult audio-understanding on the failure
+  - Multi-shot generation (generate 2-3 variants, pick best)
+  - Adjust generation parameters based on error analysis
+
+L2 CREATIVE (2 attempts):
+  - Try alternative voice from the voice catalog
+  - Try alternative TTS provider if available
+  - Split long phrases into shorter segments
+
+L3 COLLABORATIVE (1 attempt):
+  - Coordinate with scenario agent for text simplification
+  - Coordinate with OTIO gate for duration budget adjustment
+  - May request begin_escalation(REPLACE) to modify authoritative OTIO
+
+L4 HUMAN (1 decision):
+  - Present full diagnostic chain (what was tried, what failed)
+  - Request human decision on how to proceed
+
+FAILURE CLASSIFICATION:
+Before escalating, CLASSIFY the failure:
+- CONTENT failure (bad narration, timing drift, quality): use audio ladder above
+- INFRA failure (CUDA error, OOM, timeout, preemption): use infra ladder below
+- UNCLEAR: run short_diagnostic() on the worker to reclassify
+
+INFRA LADDER (separate from content budget):
+L0 FIX (4 attempts): retry on a different healthy worker
+L1 RETRY (2 attempts): recycle suspect worker, redispatch
+L2 CREATIVE (1 attempt): scale fleet, hot-swap GPU tier, different region
+L3 COLLABORATIVE (1 attempt): coordinate with content ladder, down-spec params
+L4 HUMAN (1 decision)
+
+NEVER condemn a worker from a single bad clip — require 2+ independent
+infra signals (job failure + infra_agent report) before terminating a VM.
+
 RULES:
 - Qwen3-TTS is a hard requirement — never substitute edge-tts or other models
 - VRAM is a hard floor — never go below 8GB for TTS
@@ -1360,6 +1405,8 @@ RULES:
 - If no offers exist, try broader search (higher price, any GPU type)
 - If budget is exhausted, escalate to human
 - Never silently skip narration — every gap must be filled or escalated
+- Track ladder state in OTIO: write_pipeline_data("audio_ladder", {level, attempts, history})
+- Use begin_escalation(REPLACE) before modifying authoritative OTIO
 """
 
 
