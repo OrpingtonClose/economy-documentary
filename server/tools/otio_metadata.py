@@ -19,6 +19,22 @@ from typing import Any
 from tools.otio_file_ops import otio_read, otio_read_modify_write
 
 
+def _to_native(value: Any) -> Any:
+    """Convert OTIO container types to native Python types.
+
+    OTIO's AnyDictionary and AnyVector survive copy.deepcopy, so we
+    need explicit conversion for isinstance checks to work correctly.
+    We check for mapping/sequence duck-typing rather than exact types.
+    """
+    # OTIO AnyDictionary — has .items()
+    if hasattr(value, 'items') and hasattr(value, 'get'):
+        return {k: _to_native(v) for k, v in value.items()}
+    # OTIO AnyVector — iterable but not a string/bytes
+    if hasattr(value, '__iter__') and not isinstance(value, (str, bytes)):
+        return [_to_native(item) for item in value]
+    return value
+
+
 def read_pipeline_metadata(
     timeline_path: str,
     key: str,
@@ -40,7 +56,7 @@ def read_pipeline_metadata(
     """
     timeline = otio_read(timeline_path)
     doc = timeline.metadata.get("documentary", {})
-    return copy.deepcopy(doc.get(key, default))
+    return _to_native(doc.get(key, default))
 
 
 def write_pipeline_metadata(
@@ -89,7 +105,7 @@ def read_all_metadata(timeline_path: str) -> dict:
         Returns an empty dict when the namespace does not exist.
     """
     timeline = otio_read(timeline_path)
-    return copy.deepcopy(dict(timeline.metadata.get("documentary", {})))
+    return _to_native(dict(timeline.metadata.get("documentary", {})))
 
 
 def metadata_key_exists(timeline_path: str, key: str) -> bool:
