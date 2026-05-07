@@ -14,9 +14,8 @@ import os
 import sys
 import time
 import uuid
-from typing import Any, AsyncIterator
+from typing import Any
 
-import httpx
 import opentimelineio as otio
 
 from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
@@ -45,73 +44,29 @@ DEFAULTS = {
 # =============================================================================
 
 
-class DirectModel:
-    """Direct API caller — Anthropic or OpenAI-compatible endpoints."""
+def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
+    """Return a Strands-compatible model instance.
 
-    def __init__(self, model_id: str, api_key: str, base_url: str | None = None, max_tokens: int = 8192):
-        self.model_id = model_id
-        self.max_tokens = max_tokens
-        self.api_key = api_key
-        self._client = httpx.AsyncClient(timeout=httpx.Timeout(300.0))
+    Uses Strands' built-in model classes — no litellm.
+    - Claude models → AnthropicModel
+    - Everything else → OpenAIModel with custom base_url (Kimi, DeepSeek, Qwen, local, etc.)
+    """
+    model_lower = model_id.lower()
 
-        model_lower = model_id.lower()
-        if model_lower.startswith("claude-") or model_lower.startswith("anthropic/"):
-            self.provider = "anthropic"
-            self.base_url = base_url or "https://api.anthropic.com"
-        else:
-            self.provider = "openai"
-            self.base_url = base_url or "https://api.openai.com/v1"
+    if model_lower.startswith("claude-") or model_lower.startswith("anthropic/"):
+        from strands.models.anthropic import AnthropicModel
+        return AnthropicModel(model_id=model_id, params={"max_tokens": 8192})
 
-    async def stream(self, messages: list[dict], tools: list[dict] | None = None) -> AsyncIterator[dict]:
-        if self.provider == "anthropic":
-            async for event in self._stream_anthropic(messages, tools):
-                yield event
-        else:
-            async for event in self._stream_openai(messages, tools):
-                yield event
+    # OpenAI-compatible: Kimi, Moonshot, DeepSeek, Qwen, local, etc.
+    from openai import AsyncOpenAI
+    from strands.models.openai import OpenAIModel
 
-    async def _stream_anthropic(self, messages: list[dict], tools: list[dict] | None) -> AsyncIterator[dict]:
-        url = f"{self.base_url}/v1/messages"
-        headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-        payload = {"model": self.model_id.split("/")[-1], "max_tokens": self.max_tokens, "messages": messages, "stream": True}
-        if tools:
-            payload["tools"] = tools
-
-        async with self._client.stream("POST", url, headers=headers, json=payload) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    yield json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-    async def _stream_openai(self, messages: list[dict], tools: list[dict] | None) -> AsyncIterator[dict]:
-        url = f"{self.base_url}/chat/completions"
-        headers = {"Authorization": f"Bearer {self.api_key}", "content-type": "application/json"}
-        payload = {"model": self.model_id.split("/")[-1], "max_tokens": self.max_tokens, "messages": messages, "stream": True}
-        if tools:
-            payload["tools"] = tools
-
-        async with self._client.stream("POST", url, headers=headers, json=payload) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data: "):
-                    continue
-                data = line[6:]
-                if data == "[DONE]":
-                    break
-                try:
-                    yield json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-
-    async def close(self) -> None:
-        await self._client.aclose()
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=base_url or DEFAULTS["base_url"],
+    )
+    bare_model = model_id.split("/")[-1]  # strip any prefix like moonshotai/
+    return OpenAIModel(client=client, model_id=bare_model, params={"max_tokens": 8192})
 
 
 def _create_timeline_file(timeline_path: str) -> None:
@@ -151,7 +106,7 @@ async def run_documentary(
     max_retries: int = DEFAULTS["max_retries"],
     approval_mode: str = DEFAULTS["approval"],
 ) -> dict[str, Any]:
-    model = DirectModel(model_id, api_key=api_key, base_url=base_url)
+    model = _get_model(model_id, api_key, base_url)
 
     report = run_preflight(output_dir=output_dir)
     if not report.passed:
@@ -182,8 +137,6 @@ async def run_documentary(
         return {"status": "completed", "otio_state": get_otio_lifecycle_state(timeline_path), "timeline_path": timeline_path}
     except Exception as exc:
         return {"status": "failed", "error": str(exc), "timeline_path": timeline_path}
-    finally:
-        await model.close()
 
 
 def main():
@@ -191,7 +144,7 @@ def main():
     parser.add_argument("brief", nargs="+", help="Documentary brief")
     parser.add_argument("--model", "-m", default=DEFAULTS["model"], help=f"Model ID (default: {DEFAULTS['model']})")
     parser.add_argument("--api-key", "-k", required=True, help="API key")
-    parser.add_argument("--base-url", default=DEFAULTS.get("base_url"), help=f"Base URL (default: {DEFAULTS.get('base_url', 'none')})")
+    parser.add_argument("--base-url", default=DEFAULTS.get("base_url"), help=f"Base URL (default: {DEFAULTS.get('base_url')})")
     parser.add_argument("--output-dir", "-o", default=DEFAULTS["output_dir"], help=f"Output dir (default: {DEFAULTS['output_dir']})")
     parser.add_argument("--budget", "-b", type=float, default=DEFAULTS["budget"], help=f"Budget USD (default: {DEFAULTS['budget']})")
     parser.add_argument("--max-nodes", type=int, default=DEFAULTS["max_nodes"], help=f"Max node executions (default: {DEFAULTS['max_nodes']})")
