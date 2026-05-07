@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "moonshotai/kimi-k2.6",
-    "base_url": "https://openrouter.ai/api/v1",
+    "model": "kimi-k2.6",
+    "base_url": "https://api.moonshot.ai/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,
     "max_nodes": 50,
