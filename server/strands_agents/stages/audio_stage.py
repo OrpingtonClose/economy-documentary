@@ -365,9 +365,17 @@ def build_audio_agent(
 
         tools.extend([read_audio_state, write_audio_mutation])
 
-    return Agent(
+    agent = Agent(
         name="audio",
         system_prompt=_AUDIO_INSTRUCTION,
         tools=tools,
         model=model,
     )
+
+    if otio_manager is not None:
+        try:
+            agent.state.set("_otio_manager", otio_manager)
+        except Exception:
+            pass
+
+    return agent

@@ -1221,7 +1221,7 @@ def build_visual_agent(
         skip_visual_stage,
     ]
 
-    return Agent(
+    agent = Agent(
         name="visual_director",
         model=model,
         system_prompt=_VISUAL_STAGE_SYSTEM_PROMPT,
@@ -1231,6 +1231,14 @@ def build_visual_agent(
         ),
         hooks=hooks,
     )
+
+    if otio_manager is not None:
+        try:
+            agent.state.set("_otio_manager", otio_manager)
+        except Exception:
+            pass
+
+    return agent
 
 
 __all__ = [

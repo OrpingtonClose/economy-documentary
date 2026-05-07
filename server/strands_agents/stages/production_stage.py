@@ -895,7 +895,7 @@ def build_production_agent(
         otio_write,
     ]
 
-    return Agent(
+    agent = Agent(
         name="production_supervisor",
         model=model,
         system_prompt=_PRODUCTION_STAGE_SYSTEM_PROMPT,
@@ -905,6 +905,14 @@ def build_production_agent(
         ),
         hooks=hooks,
     )
+
+    if otio_manager is not None:
+        try:
+            agent.state.set("_otio_manager", otio_manager)
+        except Exception:
+            pass
+
+    return agent
 
 
 __all__ = [

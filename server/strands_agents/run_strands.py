@@ -28,13 +28,9 @@ from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.stages.preflight import run_preflight, PreflightError
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
-    CheckpointHook,
-    QANodeHook,
     ApprovalGateHook,
     ImmutabilityHook,
     ShellGuardHook,
-    StageContractHook,
-    ScopeHook,
 )
 from strands_agents.sse_bridge import SSEBridge
 
@@ -86,6 +82,11 @@ async def run_documentary(
     otio_manager = OTIOStateManager(output_dir=output_dir)
     otio_manager.create_timeline("documentary_draft")
 
+    # Set the OTIO manager on the OTIO Agent module so pipeline
+    # metadata tools can access it
+    from agents.otio_agent import set_otio_manager
+    set_otio_manager(otio_manager)
+
     # Set the timeline path in the environment so tools can find it
     if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
         os.environ["_timeline_path"] = otio_manager._timeline_path
@@ -97,18 +98,15 @@ async def run_documentary(
     # Worker URLs are set as env vars by the provisioner when workers
     # are ready.
 
-    # Build hooks
+    # Build hooks — only safety invariants, no contract hooks
+    # (OTIO agent enforces contracts at read/write boundaries)
     approval_stages = set() if approval_mode == "auto_approve" else {
-        "scenario", "audio", "visual", "production", "assembly"
+        "scenario", "audio", "video"
     }
     hooks = [
-        StageContractHook(),
         ImmutabilityHook(),
         BudgetHook(budget_usd=budget_usd),
         ApprovalGateHook(gated_stages=approval_stages),
-        ScopeHook(),
-        QANodeHook(),
-        CheckpointHook(),
         ShellGuardHook(),
     ]
 

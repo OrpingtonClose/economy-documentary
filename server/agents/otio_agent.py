@@ -100,6 +100,94 @@ def _tool_read_timeline(tool_context=None) -> str:
         return json.dumps({"error": str(e)})
 
 
+# ── Module-level OTIOStateManager ────────────────────────────────────
+
+_otio_state_manager = None
+
+
+def set_otio_manager(mgr):
+    """Set the OTIOStateManager instance for pipeline metadata tools."""
+    global _otio_state_manager
+    _otio_state_manager = mgr
+
+
+# ── Pipeline metadata tools ──────────────────────────────────────────
+
+def _tool_read_pipeline_data(key: str, tool_context=None) -> str:
+    """Read pipeline metadata from the OTIO timeline.
+
+    If the key doesn't exist, returns an error — that IS the contract
+    violation. The upstream stage has not produced this data.
+    """
+    try:
+        from strands_agents.otio_manager import OTIOStateManager
+        mgr = _otio_state_manager
+        if not isinstance(mgr, OTIOStateManager):
+            return json.dumps({"error": "OTIO manager not available"})
+        val = mgr.get_pipeline_metadata(key)
+        if val is None:
+            return json.dumps({
+                "error": f"Key '{key}' not found in OTIO timeline",
+                "contract_violation": True,
+                "reason": f"Upstream stage has not produced '{key}'",
+            })
+        return json.dumps({"key": key, "value": val})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def _tool_write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}", tool_context=None) -> str:
+    """Write pipeline metadata to the OTIO timeline with provenance.
+
+    Creation and persistence are atomic — even on error, the partial
+    data is written. The OTIO Agent validates the write.
+    """
+    try:
+        from strands_agents.otio_manager import OTIOStateManager
+        mgr = _otio_state_manager
+        if not isinstance(mgr, OTIOStateManager):
+            return json.dumps({"error": "OTIO manager not available"})
+
+        try:
+            value = json.loads(value_json)
+        except (json.JSONDecodeError, TypeError):
+            value = value_json
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        mgr.set_pipeline_metadata(key, value, provenance=provenance)
+        return json.dumps({"written": True, "key": key})
+    except Exception as e:
+        # Even on error, try to persist the error
+        try:
+            mgr.set_pipeline_metadata(f"{key}_error", str(e))
+        except Exception:
+            pass
+        return json.dumps({"error": str(e), "key": key})
+
+
+def _tool_add_clip(track: str, scene_num: int, phrase_idx: int, clip_path: str, duration: float, provenance_json: str = "{}", tool_context=None) -> str:
+    """Add a clip to the OTIO timeline with provenance."""
+    try:
+        from strands_agents.otio_manager import OTIOStateManager
+        mgr = _otio_state_manager
+        if not isinstance(mgr, OTIOStateManager):
+            return json.dumps({"error": "OTIO manager not available"})
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        mgr.add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance=provenance)
+        return json.dumps({"added": True, "track": track, "scene_num": scene_num, "phrase_idx": phrase_idx})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
 def _tool_validate_timeline(phase: str, tool_context=None) -> str:
     """Validate timeline structural integrity for a given pipeline phase.
 
@@ -381,6 +469,97 @@ def _tool_get_otio_state(tool_context=None) -> str:
 
 _OTIO_AGENT_TOOLS = [
     AgentTool(
+        name="read_pipeline_data",
+        description=(
+            "Read pipeline metadata from the OTIO timeline. This is how "
+            "agents access intermediate data (scenes, whisperx_alignment, "
+            "visual_concepts, visual_style, style_lock, content_analysis). "
+            "If the key doesn't exist, returns an error — that IS the "
+            "contract violation. The upstream stage has not produced this data."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Pipeline metadata key (scenes, whisperx_alignment, visual_concepts, visual_style, style_lock, content_analysis)",
+                },
+            },
+            "required": ["key"],
+        },
+        fn=lambda key, tool_context=None: _tool_read_pipeline_data(key, tool_context),
+    ),
+    AgentTool(
+        name="write_pipeline_data",
+        description=(
+            "Write pipeline metadata to the OTIO timeline with provenance. "
+            "This is how agents persist intermediate data. Creation and "
+            "persistence are atomic — even on error, the partial data is "
+            "written. The OTIO Agent validates the write."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "Pipeline metadata key",
+                },
+                "value_json": {
+                    "type": "string",
+                    "description": "JSON string of the value to write",
+                },
+                "provenance_json": {
+                    "type": "string",
+                    "description": "JSON string of the ArtifactProvenance record",
+                },
+            },
+            "required": ["key", "value_json"],
+        },
+        fn=lambda key, value_json, provenance_json="{}", tool_context=None: _tool_write_pipeline_data(
+            key, value_json, provenance_json, tool_context
+        ),
+    ),
+    AgentTool(
+        name="add_clip",
+        description=(
+            "Add a clip to the OTIO timeline with provenance. The OTIO Agent "
+            "validates the clip before adding it."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "track": {
+                    "type": "string",
+                    "description": "Track name (V1_Video, A1_Narration, A2_Music)",
+                },
+                "scene_num": {
+                    "type": "integer",
+                    "description": "Scene number",
+                },
+                "phrase_idx": {
+                    "type": "integer",
+                    "description": "Phrase index within scene",
+                },
+                "clip_path": {
+                    "type": "string",
+                    "description": "Path to the clip file",
+                },
+                "duration": {
+                    "type": "number",
+                    "description": "Duration in seconds",
+                },
+                "provenance_json": {
+                    "type": "string",
+                    "description": "JSON string of the ArtifactProvenance record",
+                },
+            },
+            "required": ["track", "scene_num", "phrase_idx", "clip_path", "duration"],
+        },
+        fn=lambda track, scene_num, phrase_idx, clip_path, duration, provenance_json="{}", tool_context=None: _tool_add_clip(
+            track, scene_num, phrase_idx, clip_path, duration, provenance_json, tool_context
+        ),
+    ),
+    AgentTool(
         name="read_timeline",
         description=(
             "Read the full OTIO timeline structure — tracks, clips, "
@@ -510,20 +689,31 @@ class OTIOUnitAgent(RecoveryAgent):
                 "plane of the documentary pipeline.\n\n"
                 "THE TIMELINE IS YOUR DOMAIN.\n\n"
                 "Your responsibilities:\n"
-                "1. STRUCTURAL INTEGRITY: Every timeline mutation goes through you. "
+                "1. PIPELINE DATA: All intermediate data (scenes, alignment, "
+                "visual_concepts, visual_style, style_lock) flows through you. "
+                "Agents write to you with write_pipeline_data. Agents read from "
+                "you with read_pipeline_data. If requested data doesn't exist, "
+                "return an error — that IS the contract violation.\n"
+                "2. STRUCTURAL INTEGRITY: Every timeline mutation goes through you. "
                 "Validate before writing. Reject invalid mutations aggressively.\n"
-                "2. DURATION CONSERVATION: Total timeline duration is preserved. "
+                "3. DURATION CONSERVATION: Total timeline duration is preserved. "
                 "If a scene needs more time, another scene must give it up.\n"
-                "3. MINIMUM DURATIONS: No scene below 2.0 seconds.\n"
-                "4. STATE MACHINE: Enforce draft→authoritative transitions. "
+                "4. MINIMUM DURATIONS: No scene below 2.0 seconds.\n"
+                "5. STATE MACHINE: Enforce draft→authoritative transitions. "
                 "Once authoritative, mutations are BLOCKED unless an escalation "
-                "is open.\n\n"
+                "is open.\n"
+                "6. PROVENANCE: Every write carries provenance. Never discard it.\n"
+                "7. CHECKPOINTING: Persist to disk and B2 after every write.\n\n"
+                "CONTRACT ENFORCEMENT:\n"
+                "You ARE the contract enforcer. When an agent reads data that "
+                "doesn't exist, you say so. When an agent writes invalid data, "
+                "you reject it. No separate hooks needed.\n\n"
                 "PARTICIPATING IN ESCALATION:\n"
-                "When the TTS Unit Agent reports timing drift, propose a fix:\n"
+                "When the Audio Agent reports timing drift, propose a fix:\n"
                 "- Use propose_duration_fix to calculate where slack exists\n"
                 "- Use rebalance_durations to redistribute time\n"
                 "- If no slack exists, escalate to the scenario agent\n\n"
-                "When the Video Unit Agent can't fill a slot:\n"
+                "When the Video Agent can't fill a slot:\n"
                 "- Check if the slot can be widened\n"
                 "- If widening requires redistribution, propose it\n\n"
                 "RULES:\n"

@@ -141,7 +141,7 @@ def build_assembly_agent(
         *otio_tools,
     ]
 
-    return Agent(
+    agent = Agent(
         name="assembler_agent",
         model=model,
         system_prompt=_SYSTEM_PROMPT,
@@ -151,3 +151,11 @@ def build_assembly_agent(
         ),
         hooks=hooks,
     )
+
+    if otio_manager is not None:
+        try:
+            agent.state.set("_otio_manager", otio_manager)
+        except Exception:
+            pass
+
+    return agent

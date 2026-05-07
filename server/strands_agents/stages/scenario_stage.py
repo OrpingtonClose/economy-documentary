@@ -342,9 +342,19 @@ def build_scenario_agent(
 
         tools.extend([read_scenario_state, write_scenario_mutation])
 
-    return Agent(
+    agent = Agent(
         name="scenario",
         system_prompt=_SCENARIO_INSTRUCTION,
         tools=tools,
         model=model,
     )
+
+    # OTIO manager on agent state — the contract enforcer and other
+    # agents find it through the agent-to-agent conversation
+    if otio_manager is not None:
+        try:
+            agent.state.set("_otio_manager", otio_manager)
+        except Exception:
+            pass
+
+    return agent
