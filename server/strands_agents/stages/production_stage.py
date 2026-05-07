@@ -59,6 +59,9 @@ from strands_agents.otio_tools import otio_read, otio_write
 
 logger = logging.getLogger(__name__)
 
+# OTIO manager — set by build_production_agent
+_otio_manager: OTIOStateManager | None = None
+
 
 # ---------------------------------------------------------------------------/
 # System prompts — preserved verbatim from ADK production_agent.py
@@ -177,8 +180,10 @@ def generate_production_plan(
     """
     state = tool_context.agent.state if tool_context else None
 
-    # Read visual concepts from state
-    concepts = _read_state_list(state, "visual_concepts")
+    # Read visual concepts from OTIO — not from agent state
+    concepts = []
+    if _otio_manager is not None:
+        concepts = _otio_manager.get_pipeline_metadata("visual_concepts", [])
     if not concepts:
         return {
             "plan": None,
@@ -717,8 +722,10 @@ class ProductionPhaseSetupHook(HookProvider):
             )
             state.set("_b2_skip_production", True)
 
-        # Verify visual concepts exist
-        concepts = state.get("visual_concepts")
+        # Verify visual concepts exist — read from OTIO
+        concepts = None
+        if self._otio_manager is not None:
+            concepts = self._otio_manager.get_pipeline_metadata("visual_concepts")
         if not concepts:
             logger.warning("No visual_concepts on state — production may fail")
 
@@ -824,6 +831,9 @@ def build_production_agent(
     otio_manager: OTIOStateManager | None = None,
 ) -> Agent:
     """Return a configured production-stage :class:`Agent`.
+
+    global _otio_manager
+    _otio_manager = otio_manager
 
     The agent replaces the ADK ``ProductionAgent(BaseAgent)`` which
     wrapped the ProductionOrchestrator. In the Strands architecture,

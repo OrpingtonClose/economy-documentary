@@ -136,11 +136,11 @@ def generate_narration(
     # fails honestly.
     gpu_worker_url = os.environ.get("TTS_WORKER_URL", "")
     if not gpu_worker_url:
-        return {
+        return json.dumps({
             "scene_num": scene_num,
             "status": "failed",
             "error": "No TTS worker available. TTS_WORKER_URL not set. The provisioner must allocate a TTS worker.",
-        }
+        })
 
     # Determine language: explicit param takes priority, then suffix convention
     voice = voice_role

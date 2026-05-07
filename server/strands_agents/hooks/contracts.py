@@ -63,10 +63,38 @@ class ContractEnforcer(HookProvider):
             registry.add_callback(AfterInvocationEvent, self._on_after)
 
     def _extract_state(self, event: BeforeInvocationEvent | AfterInvocationEvent) -> dict[str, Any]:
+        """Extract state for contract validation.
+
+        Checks OTIO timeline metadata first (the ground truth), then
+        falls back to agent.state for ephemeral runtime data. Pipeline
+        data (scenes, alignment, visual_concepts) lives in OTIO.
+        """
+        # Check OTIO first — the ground truth
+        otio_data = {}
+        try:
+            from strands_agents.otio_manager import OTIOStateManager
+            # Try to get the OTIO manager from the agent's state
+            mgr = getattr(event.agent, '_otio_manager', None)
+            if mgr is None:
+                # Try to find it on the agent's tools or state
+                raw = event.agent.state
+                try:
+                    dumped = raw.get() if hasattr(raw, "get") else raw
+                    if isinstance(dumped, dict):
+                        mgr = dumped.get("_otio_manager")
+                except (TypeError, AttributeError):
+                    pass
+            if isinstance(mgr, OTIOStateManager):
+                for key in ("scenes", "whisperx_alignment", "visual_concepts",
+                           "visual_style", "style_lock", "content_analysis"):
+                    val = mgr.get_pipeline_metadata(key)
+                    if val is not None:
+                        otio_data[key] = val
+        except Exception:
+            pass
+
+        # Then agent.state for ephemeral runtime data
         raw = event.agent.state
-        # AgentState.get() returns a dict when called with no args.
-        # But some state implementations (JSONSerializableDict) don't
-        # support .get(key, default) — so we always convert to plain dict.
         try:
             dumped = raw.get() if hasattr(raw, "get") else raw
         except TypeError:
@@ -74,9 +102,14 @@ class ContractEnforcer(HookProvider):
         if not isinstance(dumped, dict):
             dumped = {}
         if self.state_key is None:
-            return dumped
-        nested = dumped.get(self.state_key) or {}
-        return nested if isinstance(nested, dict) else {}
+            agent_data = dumped
+        else:
+            nested = dumped.get(self.state_key) or {}
+            agent_data = nested if isinstance(nested, dict) else {}
+
+        # OTIO data takes precedence over agent state
+        merged = {**agent_data, **otio_data}
+        return merged
 
     def _on_before(self, event: BeforeInvocationEvent) -> None:
         state = self._extract_state(event)

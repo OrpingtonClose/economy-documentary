@@ -57,6 +57,9 @@ from strands_agents.otio_tools import otio_read, otio_write
 
 logger = logging.getLogger(__name__)
 
+# OTIO manager — set by build_visual_agent
+_otio_manager: OTIOStateManager | None = None
+
 
 # ---------------------------------------------------------------------------/
 # System prompts — preserved verbatim from ADK visual_director.py
@@ -671,25 +674,26 @@ def _generate_deterministic_concepts(
 # ---------------------------------------------------------------------------/
 
 
-@tool(context=True)
+@tool
 def persist_visual_concepts(
     visual_concepts_json: str,
-    tool_context: ToolContext,
 ) -> dict[str, Any]:
-    """Commit the visual concepts onto the agent's state.
+    """Commit visual concepts to the OTIO timeline with provenance.
 
-    Writes both the structured list and a JSON string form so
-    downstream components (production supervisor, coherence evaluator)
-    consume it through the same blackboard.
+    Writes visual concepts to OTIO timeline metadata. The production
+    stage reads from OTIO — not from agent state. Includes full
+    provenance. Even on error, the partial data is persisted to
+    disk, B2, and OTIO.
 
     Args:
         visual_concepts_json: JSON string of the visual concepts list.
-        tool_context: Framework-injected context.
 
     Returns:
         ``{"persisted": True, "concept_count": int}``.
     """
-    state = tool_context.agent.state
+    import time as _time
+    from strands_agents.artifact_provenance import ArtifactProvenance
+
     try:
         parsed = json.loads(visual_concepts_json)
     except (json.JSONDecodeError, TypeError):
@@ -697,14 +701,39 @@ def persist_visual_concepts(
     if not isinstance(parsed, list):
         parsed = []
 
-    state.set("visual_concepts", parsed)
-    state.set(
-        "visual_concepts_json",
-        json.dumps(parsed, ensure_ascii=False),
+    prov = ArtifactProvenance(
+        artifact_type="visual_concepts",
+        creator_agent="visual",
+        creator_tool="persist_visual_concepts",
+        created_at=_time.time(),
+        prompt="visual_concepts_data",
+        parent_artifacts=["state/scenes.json", "state/whisperx_alignment.json"],
+        upstream_stage="audio",
+        status="valid" if parsed else "error",
+        error="" if parsed else "No visual concepts produced",
+        content_meta={"concept_count": len(parsed)},
     )
 
+    if _otio_manager is not None:
+        try:
+            _otio_manager.set_pipeline_metadata("visual_concepts", parsed, provenance=prov.to_dict())
+        except Exception as exc:
+            prov.status = "error"
+            prov.error = str(exc)
+            try:
+                _otio_manager.set_pipeline_metadata("visual_concepts_error", str(exc), provenance=prov.to_dict())
+            except Exception:
+                pass
+
+        # Upload to B2 immediately
+        try:
+            from tools.b2_checkpoint import upload_visual_concepts
+            upload_visual_concepts(json.dumps(parsed))
+        except Exception as b2_err:
+            logger.warning("B2 upload failed for visual concepts: %s", b2_err)
+
     logger.info(
-        "concept_count=<%d> | visual concepts persisted",
+        "concept_count=<%d> | visual concepts persisted to OTIO",
         len(parsed),
     )
     return {"persisted": True, "concept_count": len(parsed)}
@@ -1108,6 +1137,9 @@ def build_visual_agent(
     chunk_size: int = 3,
 ) -> Agent:
     """Return a configured visual-stage :class:`Agent`.
+
+    global _otio_manager
+    _otio_manager = otio_manager
 
     The agent replaces the ADK ``LoopAgent("visual_director")`` with
     its three sub-agents (content_analyst, visual_concepter,

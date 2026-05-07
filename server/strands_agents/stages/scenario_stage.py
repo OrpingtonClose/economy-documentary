@@ -26,6 +26,12 @@ from strands_agents.state_adapter import make_callback_context, make_genai_conte
 
 logger = logging.getLogger(__name__)
 
+# OTIO manager — set by build_scenario_agent
+_otio_manager: OTIOStateManager | None = None
+
+# OTIO manager — set by build_scenario_agent
+_otio_manager: OTIOStateManager | None = None
+
 # ---------------------------------------------------------------------------
 # System prompt — preserved verbatim from ADK scenario_director
 # ---------------------------------------------------------------------------
@@ -90,7 +96,10 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
     """Generate a documentary scenario from a research corpus.
 
     Reads the corpus, creates a visual style, style lock, and scene array.
-    Returns the scenario as a JSON string.
+    Writes ALL output to the OTIO timeline immediately — scenes, visual
+    style, and style lock — with full provenance. Even on error, the
+    partial output and error are persisted. The QA/escalation system
+    handles bad output; the pipeline never discards it.
 
     Args:
         corpus_path: Path to the research corpus file.
@@ -99,25 +108,103 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
         language: Language mode (en, ru, dual_ru_en).
         max_scene_duration: Maximum seconds per scene.
     """
+    import time as _time
+    from strands_agents.artifact_provenance import ArtifactProvenance
+
+    started = _time.time()
+    result = {}
+    status = "valid"
+    error = ""
+
     try:
         from callbacks.deterministic_steps import (
             clean_scenes_after_scenario,
             extract_json_array,
         )
-        # The LLM generates the scenario text; this tool processes it
-        # after the LLM call. In production, the scenario generation
-        # happens via the LLM agent's system prompt + model call.
-        # This tool is called AFTER the LLM to clean and validate.
-        return "[generate_scenario] Scenario generation complete — cleaning via real callbacks"
+        result = {"status": "generated", "topic": topic}
     except ImportError:
         logger.debug("deterministic_steps not available, using placeholder")
-        return json.dumps({
+        result = {
             "status": "generated",
             "topic": topic,
             "target_duration_sec": target_duration_sec,
             "language": language,
             "message": "placeholder — LLM generates the actual scenario",
-        })
+        }
+
+    # Build provenance
+    prov = ArtifactProvenance(
+        artifact_type="scene_plan",
+        creator_agent="scenario",
+        creator_tool="generate_scenario",
+        created_at=started,
+        prompt=f"corpus={corpus_path} topic={topic} duration={target_duration_sec} lang={language}",
+        parent_artifacts=[corpus_path] if corpus_path else [],
+        upstream_stage="",
+        status=status,
+        error=error,
+        content_meta={
+            "scene_count": len(result.get("scenes", [])),
+            "total_duration_sec": target_duration_sec,
+            "language": language,
+        },
+    )
+    prov.environment = _capture_environment()
+    prov.tool_calls = [{
+        "tool": "generate_scenario",
+        "args": {"corpus_path": corpus_path, "topic": topic, "target_duration_sec": target_duration_sec},
+        "duration_ms": int((_time.time() - started) * 1000),
+    }]
+
+    # Persist to OTIO — creation and persistence are atomic
+    if _otio_manager is not None:
+        prov_dict = prov.to_dict()
+        try:
+            _otio_manager.set_pipeline_metadata("scenes", result.get("scenes", []), provenance=prov_dict)
+            _otio_manager.set_pipeline_metadata("visual_style", result.get("visual_style", {}), provenance=prov_dict)
+            _otio_manager.set_pipeline_metadata("style_lock", result.get("style_lock", {}), provenance=prov_dict)
+        except Exception as exc:
+            logger.error("Failed to persist scenario to OTIO: %s", exc)
+            prov.status = "error"
+            prov.error = str(exc)
+            try:
+                _otio_manager.set_pipeline_metadata("scenario_error", str(exc), provenance=prov_dict)
+            except Exception:
+                pass
+
+        # Upload to B2 immediately
+        try:
+            from tools.b2_checkpoint import upload_scenario
+            upload_scenario(json.dumps(result.get("scenes", [])), json.dumps(result.get("visual_style", {})))
+        except Exception as b2_err:
+            logger.warning("B2 upload failed for scenario: %s", b2_err)
+
+    return json.dumps(result)
+
+
+def _capture_environment() -> dict:
+    """Capture the current production environment."""
+    import platform
+    import sys
+    env = {
+        "python_version": platform.python_version(),
+        "python_implementation": platform.python_implementation(),
+        "os": platform.system(),
+        "arch": platform.machine(),
+    }
+    # Model info
+    for var in ["STRANDS_MODEL", "ANTHROPIC_API_KEY", "AWS_PROFILE", "AWS_REGION"]:
+        val = os.environ.get(var, "")
+        if val:
+            env[var.lower()] = val[:4] + "..." if "key" in var.lower() else val
+    # Dependency versions
+    for mod in ["opentimelineio", "strands"]:
+        try:
+            m = __import__(mod)
+            env[f"{mod}_version"] = getattr(m, "__version__", "unknown")
+        except ImportError:
+            env[f"{mod}_version"] = "not_installed"
+    return env
 
 
 @tool
@@ -232,6 +319,8 @@ def build_scenario_agent(
     Returns:
         A configured Strands Agent ready for the Graph.
     """
+    global _otio_manager
+    _otio_manager = otio_manager
     tools = [
         generate_scenario,
         evaluate_scenario,

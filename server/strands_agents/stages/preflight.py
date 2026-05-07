@@ -218,40 +218,77 @@ def _check_python_module(module_name: str, description: str) -> CheckResult:
 # ---------------------------------------------------------------------------
 
 def _check_llm_access() -> CheckResult:
-    """Check that LLM API credentials are available."""
-    # AWS Bedrock
+    """Check that LLM credentials are valid and the model is reachable.
+
+    Merged credentials + reachability. Lightweight: for Bedrock, uses
+    list_foundation_models (read-only, no inference cost). For Anthropic,
+    uses GET /v1/models (no tokens consumed).
+    """
+    import urllib.request
+    import urllib.error
+
+    model_id = os.environ.get("STRANDS_MODEL", "claude-sonnet-4-20250514")
+
+    # Try Bedrock
     aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
     aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
     aws_profile = os.environ.get("AWS_PROFILE", "")
-    if aws_access and aws_secret:
-        return CheckResult(
-            name="llm_access", passed=True, category="credentials",
-            message="AWS credentials: configured",
-        )
-    if aws_profile:
-        return CheckResult(
-            name="llm_access", passed=True, category="credentials",
-            message=f"AWS profile: {aws_profile}",
-        )
     aws_config = os.path.expanduser("~/.aws/credentials")
-    if os.path.exists(aws_config):
-        return CheckResult(
-            name="llm_access", passed=True, category="credentials",
-            message="AWS credentials file: found",
-        )
+    has_aws = bool(aws_access and aws_secret) or aws_profile or os.path.exists(aws_config)
 
-    # Direct Anthropic API
+    if has_aws:
+        try:
+            import boto3
+            session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
+            client = session.client("bedrock", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+            client.list_foundation_models()
+            return CheckResult(
+                name="llm_access", passed=True, category="credentials",
+                message=f"Bedrock: valid, model {model_id}",
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="llm_access", passed=False, category="credentials",
+                message=f"Bedrock: credentials found but failed — {str(exc)[:200]}",
+                remedy="Check AWS credentials, region, and permissions",
+            )
+
+    # Try Anthropic
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if anthropic_key:
-        return CheckResult(
-            name="llm_access", passed=True, category="credentials",
-            message="Anthropic API key: configured",
-        )
+        try:
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/models",
+                headers={"x-api-key": anthropic_key, "anthropic-version": "2023-06-01"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return CheckResult(
+                    name="llm_access", passed=True, category="credentials",
+                    message=f"Anthropic: valid, model {model_id}",
+                )
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                return CheckResult(
+                    name="llm_access", passed=True, category="credentials",
+                    message=f"Anthropic: valid (rate limited), model {model_id}",
+                )
+            return CheckResult(
+                name="llm_access", passed=False, category="credentials",
+                message=f"Anthropic: API key rejected — HTTP {exc.code}",
+                remedy=f"Check ANTHROPIC_API_KEY. Error: HTTP {exc.code}",
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="llm_access", passed=False, category="credentials",
+                message=f"Anthropic: unreachable — {exc}",
+                remedy="Check network access and ANTHROPIC_API_KEY",
+            )
 
     return CheckResult(
         name="llm_access", passed=False, category="credentials",
         message="No LLM credentials found",
-        remedy="Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (for Bedrock) or ANTHROPIC_API_KEY",
+        remedy="Set AWS credentials (for Bedrock) or ANTHROPIC_API_KEY",
     )
 
 
@@ -283,89 +320,6 @@ def _check_tts_worker() -> CheckResult:
     return result
 
 
-def _check_model_availability() -> CheckResult:
-    """Check that the LLM model is reachable.
-
-    Makes a minimal API call to verify the model accepts requests.
-    This catches: wrong model ID, rate limits, region restrictions,
-    quota exhaustion — all things that would crash the first stage.
-    """
-    import urllib.request
-    import urllib.error
-
-    model_id = os.environ.get("STRANDS_MODEL", "claude-sonnet-4-20250514")
-
-    # Try Bedrock first
-    aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    aws_profile = os.environ.get("AWS_PROFILE", "")
-    aws_config = os.path.expanduser("~/.aws/credentials")
-
-    if aws_access and aws_secret or aws_profile or os.path.exists(aws_config):
-        try:
-            import boto3
-            session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
-            client = session.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-            # Minimal request — just enough to verify the model exists
-            response = client.invoke_model(
-                modelId=model_id,
-                body=json.dumps({"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}),
-                contentType="application/json",
-                accept="application/json",
-            )
-            return CheckResult(
-                name="model_access", passed=True, category="model",
-                message=f"Bedrock model {model_id}: reachable",
-            )
-        except Exception as exc:
-            error_msg = str(exc)[:200]
-            return CheckResult(
-                name="model_access", passed=False, category="model",
-                message=f"Bedrock model {model_id}: {error_msg}",
-                remedy=f"Check model ID, region, and permissions. Error: {error_msg}",
-            )
-
-    # Try direct Anthropic API
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if anthropic_key:
-        try:
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=json.dumps({
-                    "model": model_id,
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "hi"}],
-                }).encode(),
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                return CheckResult(
-                    name="model_access", passed=True, category="model",
-                    message=f"Anthropic model {model_id}: reachable",
-                )
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode()[:200] if exc.fp else ""
-            return CheckResult(
-                name="model_access", passed=False, category="model",
-                message=f"Anthropic model {model_id}: HTTP {exc.code} — {body}",
-                remedy=f"Check model ID and API key. Error: HTTP {exc.code}",
-            )
-        except Exception as exc:
-            return CheckResult(
-                name="model_access", passed=False, category="model",
-                message=f"Anthropic model {model_id}: {exc}",
-                remedy=f"Check network access and API key. Error: {exc}",
-            )
-
-    return CheckResult(
-        name="model_access", passed=False, category="model",
-        message="Cannot check model — no credentials",
-        remedy="Set AWS credentials (Bedrock) or ANTHROPIC_API_KEY",
-    )
 
 
 def _check_otio() -> CheckResult:
@@ -406,7 +360,6 @@ def run_preflight(
 
     checks = [
         _check_llm_access(),
-        _check_model_availability(),
         _check_video_worker(),
         _check_tts_worker(),
         _check_otio(),

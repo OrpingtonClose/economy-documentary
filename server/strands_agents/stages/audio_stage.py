@@ -28,10 +28,14 @@ from strands_agents.otio_manager import OTIOStateManager
 
 logger = logging.getLogger(__name__)
 
+# OTIO manager — set by build_audio_agent
+_otio_manager: OTIOStateManager | None = None
+
 _AUDIO_INSTRUCTION = """\
 You are the Audio Agent for a documentary pipeline.
 
-Your job is to generate narration audio for every scene. For each scene,
+Your job is to generate narration audio for every scene. First read the
+scenes from the OTIO timeline with read_scenes_from_otio. For each scene,
 for each voice (V1, V2, V3), call generate_scene_narration. Then add
 each clip to the OTIO timeline with add_narration_to_timeline.
 
@@ -39,10 +43,11 @@ After all narration is generated, run WhisperX alignment with
 align_narration_audio for each clip. Then evaluate timing with
 evaluate_audio_timing.
 
-CRITICAL: After all audio processing is complete, you MUST call
-persist_audio_state to write the scenes and whisperx_alignment data
-to agent state. The visual stage cannot proceed without these keys.
-This is not optional — it is a contract requirement.
+CRITICAL: After all audio processing, call persist_audio_to_otio to
+write alignment data to the OTIO timeline. The visual stage reads
+from OTIO — not from agent state. Creation and persistence are one
+operation: every clip gets written to disk, B2, and OTIO immediately
+with full provenance, even on error.
 
 If timing drift exceeds 15%, the pipeline will loop back to adjust
 scenes. You don't need to handle that — just report the results.
@@ -227,69 +232,96 @@ def evaluate_audio_timing(
         return json.dumps({"verdict": "fail", "reason": str(exc)})
 
 
-@tool(context=True)
-def persist_audio_state(
-    scenes_json: str,
-    whisperx_alignment_json: str = "",
-    tool_context: ToolContext | None = None,
-) -> str:
-    """Persist audio results to agent state for downstream contracts.
+@tool
+def read_scenes_from_otio() -> str:
+    """Read the scene plan from the OTIO timeline.
 
-    The visual stage requires 'scenes' and 'whisperx_alignment' keys in
-    state. Call this after all audio processing is complete.
-
-    Args:
-        scenes_json: JSON array of scene data with durations.
-        whisperx_alignment_json: JSON alignment data from WhisperX.
-        tool_context: Framework-injected context.
+    The scenario stage writes scenes to OTIO metadata. This tool
+    reads them back so the audio stage knows what to narrate.
 
     Returns:
-        JSON with confirmation.
+        JSON string with the scenes array.
     """
-    if tool_context is None:
-        return json.dumps({"error": "no tool_context"})
+    if _otio_manager is None:
+        return json.dumps({"error": "No OTIO manager available"})
+    scenes = _otio_manager.get_pipeline_metadata("scenes", [])
+    if not scenes:
+        return json.dumps({"error": "No scenes found in OTIO timeline. The scenario stage must run first."})
+    return json.dumps(scenes)
 
-    state = tool_context.agent.state
 
-    try:
-        scenes = json.loads(scenes_json) if isinstance(scenes_json, str) else scenes_json
-    except (json.JSONDecodeError, TypeError):
-        scenes = []
-    state.set("scenes", scenes)
+@tool
+def persist_audio_to_otio(
+    whisperx_alignment_json: str = "",
+) -> str:
+    """Persist audio results to the OTIO timeline.
+
+    Writes whisperx_alignment to OTIO timeline metadata. The visual
+    stage reads from OTIO — not from agent state. Includes full
+    provenance. Even on error, the partial data is persisted.
+
+    Args:
+        whisperx_alignment_json: JSON alignment data from WhisperX.
+    """
+    import time as _time
+    from strands_agents.artifact_provenance import ArtifactProvenance
+
+    if _otio_manager is None:
+        return json.dumps({"error": "No OTIO manager available"})
 
     try:
         alignment = json.loads(whisperx_alignment_json) if isinstance(whisperx_alignment_json, str) else whisperx_alignment_json
     except (json.JSONDecodeError, TypeError):
-        alignment = {"status": "placeholder", "note": "no alignment data available"}
-    state.set("whisperx_alignment", alignment)
+        alignment = {"status": "error", "note": "alignment data could not be parsed"}
 
-    logger.info("scenes_count=<%d> | audio state persisted", len(scenes) if isinstance(scenes, list) else 0)
-    return json.dumps({"persisted": True, "scenes_count": len(scenes) if isinstance(scenes, list) else 0})
+    prov = ArtifactProvenance(
+        artifact_type="alignment",
+        creator_agent="audio",
+        creator_tool="persist_audio_to_otio",
+        created_at=_time.time(),
+        prompt="whisperx_alignment_data",
+        parent_artifacts=["state/scenes.json"],
+        upstream_stage="scenario",
+        status="valid" if alignment.get("status") != "error" else "error",
+        error=alignment.get("note", ""),
+        content_meta={"alignment_count": len(alignment.get("alignments", []))} if isinstance(alignment, dict) else {},
+    )
+    prov.environment = _capture_audio_environment()
 
-
-@tool
-def read_pipeline_state(key: str = "") -> str:
-    """Read a key from the pipeline state.
-
-    Args:
-        key: State key to read. Empty string reads all.
-
-    Returns:
-        JSON string with the state value.
-    """
     try:
-        from tools.otio_tools import get_timeline_status
-
-        class _ToolCtx:
-            def __init__(self):
-                self.state = {
-                    "_timeline_path": os.environ.get("_timeline_path", ""),
-                    "pipeline_phase": "audio",
-                }
-
-        return get_timeline_status(tool_context=_ToolCtx())
+        _otio_manager.set_pipeline_metadata("whisperx_alignment", alignment, provenance=prov.to_dict())
     except Exception as exc:
-        return json.dumps({"error": str(exc)})
+        logger.error("Failed to persist alignment to OTIO: %s", exc)
+        prov.status = "error"
+        prov.error = str(exc)
+        try:
+            _otio_manager.set_pipeline_metadata("alignment_error", str(exc), provenance=prov.to_dict())
+        except Exception:
+            pass
+
+    # Upload to B2 immediately
+    try:
+        from tools.b2_checkpoint import upload_json
+        upload_json(json.dumps(alignment), "state/whisperx_alignment.json")
+    except Exception as b2_err:
+        logger.warning("B2 upload failed for alignment: %s", b2_err)
+
+    return json.dumps({"persisted": True, "status": prov.status})
+
+
+def _capture_audio_environment() -> dict:
+    """Capture the audio production environment."""
+    import platform
+    env = {
+        "python_version": platform.python_version(),
+        "os": platform.system(),
+        "arch": platform.machine(),
+    }
+    for var in ["TTS_WORKER_URL", "STRANDS_MODEL"]:
+        val = os.environ.get(var, "")
+        if val:
+            env[var.lower()] = val
+    return env
 
 
 # ── Agent factory ──────────────────────────────────────────────────
@@ -307,13 +339,16 @@ def build_audio_agent(
     Returns:
         A configured Strands Agent ready for the Graph.
     """
+    global _otio_manager
+    _otio_manager = otio_manager
+
     tools = [
         generate_scene_narration,
         add_narration_to_timeline,
         align_narration_audio,
         evaluate_audio_timing,
-        persist_audio_state,
-        read_pipeline_state,
+        read_scenes_from_otio,
+        persist_audio_to_otio,
     ]
 
     if otio_manager is not None:

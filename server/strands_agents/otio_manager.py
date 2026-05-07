@@ -277,9 +277,18 @@ class OTIOStateManager:
         )
 
     def add_clip(self, track: str, scene_num: int, phrase_idx: int,
-                 clip_path: str, duration: float, metadata: dict | None = None) -> None:
-        """Add a clip to the specified track. Guarded when authoritative."""
+                 clip_path: str, duration: float, metadata: dict | None = None,
+                 provenance: dict | None = None) -> None:
+        """Add a clip to the specified track. Guarded when authoritative.
+
+        Provenance is stored alongside the clip metadata. Even if the
+        clip is partial or has errors, it gets added with full provenance.
+        """
         self.guard_mutation("add_clip")
+        clip_meta = metadata or {}
+        if provenance:
+            clip_meta["_provenance"] = provenance
+
         with self._lock:
             if isinstance(self._timeline, dict):
                 tracks = self._timeline.setdefault("tracks", {})
@@ -289,12 +298,11 @@ class OTIOStateManager:
                     "phrase_idx": phrase_idx,
                     "path": clip_path,
                     "duration": duration,
-                    "metadata": metadata or {},
+                    "metadata": clip_meta,
                     "added_at": time.time(),
                 }
                 track_clips.append(clip)
             else:
-                # Real OTIO timeline — add clip to the matching track
                 import opentimelineio as otio
                 for t in self._timeline.tracks:
                     if t.name == track:
@@ -308,10 +316,8 @@ class OTIOStateManager:
                         clip.media_reference = otio.schema.ExternalReference(
                             target_url=clip_path,
                         )
-                        if metadata:
-                            clip.metadata["documentary"] = metadata
+                        clip.metadata["documentary"] = clip_meta
                         t.append(clip)
-                        # Write to disk after each clip addition
                         self._write_timeline()
                         break
                 else:
@@ -326,6 +332,63 @@ class OTIOStateManager:
                 otio.adapters.write_to_file(self._timeline, self._timeline_path)
         except Exception as exc:
             logger.warning("Failed to write timeline: %s", exc)
+
+    # -----------------------------------------------------------------------
+    # Pipeline metadata — intermediate data stored on the timeline
+    # -----------------------------------------------------------------------
+
+    def set_pipeline_metadata(self, key: str, value: Any,
+                               provenance: dict | None = None) -> None:
+        """Write pipeline metadata to the timeline with provenance.
+
+        This is how intermediate pipeline data (scenes, alignment,
+        visual concepts) flows between stages. The OTIO timeline is
+        the shared data structure — no separate state dict.
+
+        Metadata is stored under timeline.metadata["documentary"][key].
+        Provenance is stored under timeline.metadata["documentary"]["_provenance"][key].
+
+        Even on error, the value and provenance are persisted. The
+        pipeline does not discard output because it's imperfect.
+        """
+        self.guard_mutation(f"set_pipeline_metadata:{key}")
+        with self._lock:
+            if isinstance(self._timeline, dict):
+                meta = self._timeline.setdefault("metadata", {})
+                doc = meta.setdefault("documentary", {})
+                doc[key] = value
+                if provenance:
+                    prov = doc.setdefault("_provenance", {})
+                    prov[key] = provenance
+            else:
+                import opentimelineio as otio
+                if isinstance(self._timeline, otio.schema.Timeline):
+                    meta = self._timeline.metadata
+                    if "documentary" not in meta:
+                        meta["documentary"] = {}
+                    meta["documentary"][key] = value
+                    if provenance:
+                        meta["documentary"].setdefault("_provenance", {})[key] = provenance
+                    self._write_timeline()
+            logger.info("Pipeline metadata set: %s", key)
+
+    def get_pipeline_metadata(self, key: str, default: Any = None) -> Any:
+        """Read pipeline metadata from the timeline.
+
+        Returns None if the key doesn't exist.
+        """
+        with self._lock:
+            if isinstance(self._timeline, dict):
+                meta = self._timeline.get("metadata", {})
+                doc = meta.get("documentary", {})
+                return doc.get(key, default)
+            else:
+                import opentimelineio as otio
+                if isinstance(self._timeline, otio.schema.Timeline):
+                    meta = self._timeline.metadata
+                    doc = meta.get("documentary", {}) if isinstance(meta, dict) else {}
+                    return doc.get(key, default)
+        return default
 
     # -----------------------------------------------------------------------
     # Checkpoints
