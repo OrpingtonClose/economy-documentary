@@ -1,7 +1,7 @@
 """
 Documentary pipeline — Strands Graph orchestration.
 
-4 agent nodes: Scenario → Audio → Video, with OTIO as hub.
+4 agent nodes: Scenario → OTIO Gate → Audio → OTIO Gate → Video → OTIO Gate
 
 Architecture::
 
@@ -11,17 +11,17 @@ Architecture::
       └─ Re-invokes Graph with recovery context
 
     Strands Graph (pipeline orchestration)
-      ├─ 4 nodes: scenario → audio → video
-      ├─ OTIO agent: accessible to all nodes (hub)
-      ├─ Forward edges: deterministic stage ordering
-      ├─ Backward edges: conditional recovery ladder
-      └─ Data flows through OTIO agent conversations
+      ├─ 4 nodes: scenario → otio → audio → otio → video → otio
+      ├─ OTIO gate node: validation between stages, draft→authoritative
+      ├─ Forward edges: deterministic stage ordering via gates
+      ├─ Backward edges: conditional recovery from OTIO file
+      └─ Data flows through OTIO file on disk (stateless)
 
 Agents:
-    - Scenario agent (agents/scenario_director.py)
-    - Audio agent (agents/audio_agent.py)
-    - Video agent (agents/video_agent.py) — visual + production
-    - OTIO agent (agents/otio_agent.py) — timeline, contracts, data
+    - Scenario agent (generates scenes, visual style, style lock)
+    - Audio+Provisioner agent (TTS + GPU workers, owns narration end-to-end)
+    - Video+Provisioner agent (visual planning + rendering, owns clips end-to-end)
+    - OTIO gate agent (validation, lifecycle enforcement, escalation management)
 """
 
 from __future__ import annotations
@@ -60,59 +60,67 @@ STAGE_ORDER = [SCENARIO, AUDIO, VIDEO]
 def build_documentary_graph(
     hooks: list[HookProvider] | None = None,
     max_node_executions: int = 50,
-    otio_manager: Any | None = None,
     model: Any | None = None,
 ) -> Graph:
     """Construct the documentary pipeline Graph.
 
-    3 stage nodes + 1 OTIO hub node. Data flows through OTIO
-    conversations. No state propagation. No contract hooks.
-    The OTIO agent enforces contracts at read/write boundaries.
+    3 stage nodes + 1 OTIO gate node. Data flows through the OTIO
+    file on disk (stateless). No shared Python state. No contract hooks.
+
+    The OTIO gate node validates each stage's output before the next
+    stage runs. It enforces the draft→authoritative lifecycle transition
+    after the audio stage passes validation.
 
     Args:
         hooks: Safety hooks (ImmutabilityHook, BudgetHook, etc.)
         max_node_executions: Safety limit on node re-executions.
-        otio_manager: OTIOStateManager (internal to OTIO agent).
         model: Optional model configuration.
 
     Returns:
         A :class:`Graph` ready for ``invoke_async`` or ``stream_async``.
     """
-    # Build the OTIO agent — shared service for all nodes
-    from agents.otio_agent import OTIOUnitAgent
-    otio_unit = OTIOUnitAgent()
-
-    # Build stage agents as Strands Agents with OTIO agent tools
-    scenario_agent = _build_scenario_agent(otio_unit, otio_manager, model)
-    audio_agent = _build_audio_agent(otio_unit, otio_manager, model)
-    video_agent = _build_video_agent(otio_unit, otio_manager, model)
+    # Build stage agents as Strands Agents with stateless OTIO tools
+    scenario_agent = _build_scenario_agent(model)
+    audio_agent = _build_audio_agent(model)
+    video_agent = _build_video_agent(model)
+    otio_gate_agent = _build_otio_gate_agent(model)
 
     # Build nodes
     nodes = {
         SCENARIO: GraphNode(node_id=SCENARIO, executor=scenario_agent),
+        OTIO: GraphNode(node_id=OTIO, executor=otio_gate_agent),
         AUDIO: GraphNode(node_id=AUDIO, executor=audio_agent),
         VIDEO: GraphNode(node_id=VIDEO, executor=video_agent),
     }
 
-    # Forward edges: scenario → audio → video
+    # Forward edges: scenario → otio → audio → otio → video → otio
     forward_edges = {
-        GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[AUDIO]),
-        GraphEdge(from_node=nodes[AUDIO], to_node=nodes[VIDEO]),
+        GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[OTIO]),
+        GraphEdge(from_node=nodes[OTIO], to_node=nodes[AUDIO]),
+        GraphEdge(from_node=nodes[AUDIO], to_node=nodes[OTIO]),
+        GraphEdge(from_node=nodes[OTIO], to_node=nodes[VIDEO]),
+        GraphEdge(from_node=nodes[VIDEO], to_node=nodes[OTIO]),
     }
 
-    # Backward edges: recovery via OTIO agent conversations
+    # Backward edges: recovery — routes read from OTIO file
     backward_edges = {
-        # Timing loop: audio → scenario
+        # OTIO gate → scenario (when scenario output fails validation)
         GraphEdge(
-            from_node=nodes[AUDIO],
+            from_node=nodes[OTIO],
             to_node=nodes[SCENARIO],
             condition=_needs_scenario_retry,
         ),
-        # Video → audio when alignment is off
+        # OTIO gate → audio (when audio output fails validation)
         GraphEdge(
-            from_node=nodes[VIDEO],
+            from_node=nodes[OTIO],
             to_node=nodes[AUDIO],
             condition=_needs_audio_retry,
+        ),
+        # OTIO gate → video (when video output fails validation)
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[VIDEO],
+            condition=_needs_video_retry,
         ),
     }
 
@@ -132,67 +140,256 @@ def build_documentary_graph(
 
 
 # ---------------------------------------------------------------------------
+# OTIO gate agent — validation between stages
+# ---------------------------------------------------------------------------
+
+
+def _build_otio_gate_agent(model) -> Agent:
+    """Build the OTIO gate agent — the structural authority.
+
+    The gate sits between every stage transition. It:
+    1. Reads the OTIO file to get current state
+    2. Validates the previous stage's output
+    3. If validation fails, writes error to OTIO (backward edge routes)
+    4. If validation passes, summarizes what the next stage needs
+    5. After audio: transitions timeline from draft → authoritative
+    """
+    from strands import tool
+
+    @tool
+    def read_pipeline_data(key: str) -> str:
+        """Read pipeline metadata from the OTIO file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({"error": f"Key '{key}' not found", "contract_violation": True})
+        return json.dumps({"key": key, "value": val})
+
+    @tool
+    def read_timeline() -> str:
+        """Read the full OTIO timeline structure."""
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        # Return summary of tracks and clips
+        summary = {}
+        for track in timeline.tracks:
+            clips = []
+            for item in track:
+                clips.append({
+                    "name": item.name,
+                    "duration": float(item.duration().value) if hasattr(item.duration(), 'value') else 0,
+                    "type": type(item).__name__,
+                })
+            summary[track.name] = {"clip_count": len(clips), "clips": clips}
+        return json.dumps(summary)
+
+    @tool
+    def validate_scenario() -> str:
+        """Validate scenario output: scenes must exist and be well-formed."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import metadata_key_exists, read_pipeline_metadata
+        tp = resolve_timeline_path()
+        errors = []
+        if not metadata_key_exists(tp, "scenes"):
+            errors.append("Missing 'scenes' in OTIO metadata")
+        if not metadata_key_exists(tp, "visual_style"):
+            errors.append("Missing 'visual_style' in OTIO metadata")
+        if not metadata_key_exists(tp, "style_lock"):
+            errors.append("Missing 'style_lock' in OTIO metadata")
+        if errors:
+            return json.dumps({"valid": False, "errors": errors, "recovery_target": SCENARIO})
+        return json.dumps({"valid": True, "next_stage": AUDIO})
+
+    @tool
+    def validate_audio() -> str:
+        """Validate audio output: narration clips must exist, timing within tolerance."""
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        from tools.otio_metadata import metadata_key_exists
+        tp = resolve_timeline_path()
+        errors = []
+        if not metadata_key_exists(tp, "whisperx_alignment"):
+            errors.append("Missing 'whisperx_alignment' in OTIO metadata")
+        # Check A1_Narration track for clips
+        try:
+            timeline = otio_read(tp)
+            a1_track = None
+            for track in timeline.tracks:
+                if track.name == "A1_Narration":
+                    a1_track = track
+                    break
+            if a1_track is None:
+                errors.append("No A1_Narration track found")
+            elif len(list(a1_track)) == 0:
+                errors.append("A1_Narration track is empty — no narration clips")
+        except Exception as e:
+            errors.append(f"Error reading timeline: {e}")
+        if errors:
+            return json.dumps({"valid": False, "errors": errors, "recovery_target": AUDIO})
+        return json.dumps({"valid": True, "next_stage": VIDEO})
+
+    @tool
+    def validate_video() -> str:
+        """Validate video output: clips must exist, no gaps."""
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        tp = resolve_timeline_path()
+        errors = []
+        try:
+            timeline = otio_read(tp)
+            v1_track = None
+            for track in timeline.tracks:
+                if track.name == "V1_Video":
+                    v1_track = track
+                    break
+            if v1_track is None:
+                errors.append("No V1_Video track found")
+            elif len(list(v1_track)) == 0:
+                errors.append("V1_Video track is empty — no video clips")
+        except Exception as e:
+            errors.append(f"Error reading timeline: {e}")
+        if errors:
+            return json.dumps({"valid": False, "errors": errors, "recovery_target": VIDEO})
+        return json.dumps({"valid": True, "pipeline_complete": True})
+
+    @tool
+    def transition_to_authoritative() -> str:
+        """Transition OTIO from draft to authoritative after audio validation."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import set_otio_lifecycle_state
+        tp = resolve_timeline_path()
+        return set_otio_lifecycle_state(tp, "authoritative", "end_of_audio_reconciliation")
+
+    @tool
+    def write_gate_result(stage: str, valid: bool, errors_json: str = "[]") -> str:
+        """Write gate validation result to OTIO metadata."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        result = {
+            "stage": stage,
+            "valid": valid,
+            "errors": json.loads(errors_json) if errors_json else [],
+        }
+        return write_pipeline_metadata(tp, f"gate_{stage}", result, provenance={"agent": "otio_gate"})
+
+    @tool
+    def get_otio_lifecycle_state() -> str:
+        """Read the current OTIO lifecycle state (draft/authoritative)."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_lifecycle import get_otio_lifecycle_state as _get
+        tp = resolve_timeline_path()
+        state = _get(tp)
+        return json.dumps({"state": state})
+
+    return Agent(
+        name="otio_gate",
+        system_prompt=(
+            "You are the OTIO Gate Agent — the structural authority of the documentary pipeline.\n\n"
+            "You sit between every stage transition. Your job:\n"
+            "1. Read the OTIO file to get the current state\n"
+            "2. Validate the previous stage's output\n"
+            "3. If validation fails: write gate_result to OTIO with errors, and the graph will route backward\n"
+            "4. If validation passes: write gate_result to OTIO, summarize what the next stage needs\n"
+            "5. After audio stage validation passes: call transition_to_authoritative\n\n"
+            "WORKFLOW:\n"
+            "- After scenario: call validate_scenario(). If valid, next is audio.\n"
+            "- After audio: call validate_audio(). If valid, call transition_to_authoritative, next is video.\n"
+            "- After video: call validate_video(). If valid, pipeline is complete.\n\n"
+            "RULES:\n"
+            "- You NEVER generate content. You only validate and enforce.\n"
+            "- Read ALL data from the OTIO file. All results go TO the OTIO file.\n"
+            "- If validation fails, write the error to OTIO and report it clearly.\n"
+            "- The draft→authoritative transition happens ONLY after audio validation passes.\n"
+        ),
+        tools=[
+            read_pipeline_data, read_timeline,
+            validate_scenario, validate_audio, validate_video,
+            transition_to_authoritative, write_gate_result,
+            get_otio_lifecycle_state,
+        ],
+        model=model,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Agent builders — wrap existing agents as Strands Agents
 # ---------------------------------------------------------------------------
 
 
-def _build_scenario_agent(otio_unit, otio_manager, model) -> Agent:
+def _build_scenario_agent(model) -> Agent:
     """Build a Strands Agent for the scenario stage.
 
-    Uses the existing OTIO agent's write_pipeline_data tool
-    to persist scenes, visual_style, and style_lock.
+    Uses stateless OTIO file ops to persist scenes, visual_style,
+    and style_lock to the OTIO file on disk.
     """
     from strands import tool
 
     @tool
     def write_scenes(scenes_json: str, provenance_json: str = "{}") -> str:
-        """Write scenes to the OTIO agent."""
-        from agents.otio_agent import _tool_write_pipeline_data
-        return _tool_write_pipeline_data("scenes", scenes_json, provenance_json)
+        """Write scenes to the OTIO timeline file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, "scenes", json.loads(scenes_json),
+                                       provenance=json.loads(provenance_json))
 
     @tool
     def write_visual_style(style_json: str, provenance_json: str = "{}") -> str:
-        """Write visual style to the OTIO agent."""
-        from agents.otio_agent import _tool_write_pipeline_data
-        return _tool_write_pipeline_data("visual_style", style_json, provenance_json)
+        """Write visual style to the OTIO timeline file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, "visual_style", json.loads(style_json),
+                                       provenance=json.loads(provenance_json))
 
     @tool
     def write_style_lock(lock_json: str, provenance_json: str = "{}") -> str:
-        """Write style lock to the OTIO agent."""
-        from agents.otio_agent import _tool_write_pipeline_data
-        return _tool_write_pipeline_data("style_lock", lock_json, provenance_json)
+        """Write style lock to the OTIO timeline file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, "style_lock", json.loads(lock_json),
+                                       provenance=json.loads(provenance_json))
 
     return Agent(
         name="scenario",
         system_prompt=(
             "You are the Scenario Agent for a documentary pipeline.\n\n"
             "Your job is to generate a documentary scenario: scenes, visual "
-            "style, and style lock. Write ALL output to the OTIO agent "
+            "style, and style lock. Write ALL output to the OTIO file "
             "using write_scenes, write_visual_style, and write_style_lock.\n\n"
             "RULES:\n"
-            "- ALL data goes through the OTIO agent. No agent state.\n"
+            "- ALL data goes to the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
-            "- Persist immediately, even on error. The OTIO agent stores it.\n"
+            "- Persist immediately, even on error.\n"
         ),
         tools=[write_scenes, write_visual_style, write_style_lock],
         model=model,
     )
 
 
-def _build_audio_agent(otio_unit, otio_manager, model) -> Agent:
+def _build_audio_agent(model) -> Agent:
     """Build a Strands Agent for the audio stage.
 
     Uses the AudioProvisionerAgent — merged audio + provisioner.
     The agent owns TTS end-to-end: allocate workers, generate
     narration, evaluate quality, scale workers.
+    All OTIO operations are stateless — read/write the OTIO file directly.
     """
     from strands import tool
 
     @tool
     def read_pipeline_data(key: str) -> str:
-        """Read pipeline metadata from the OTIO agent."""
-        from agents.otio_agent import _tool_read_pipeline_data
-        return _tool_read_pipeline_data(key)
+        """Read pipeline metadata from the OTIO file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({"error": f"Key '{key}' not found", "contract_violation": True})
+        return json.dumps({"key": key, "value": val})
 
     @tool
     def find_narration_gaps() -> str:
@@ -203,27 +400,30 @@ def _build_audio_agent(otio_unit, otio_manager, model) -> Agent:
     @tool
     def get_scene_durations() -> str:
         """Get per-scene duration budgets from OTIO."""
-        from agents.otio_agent import _tool_get_scene_durations
+        from agents.audio_provisioner_agent import _tool_get_scene_durations
         return _tool_get_scene_durations()
 
     @tool
     def write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
-        """Write pipeline metadata to the OTIO agent."""
-        from agents.otio_agent import _tool_write_pipeline_data
-        return _tool_write_pipeline_data(key, value_json, provenance_json)
+        """Write pipeline metadata to the OTIO file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, key, json.loads(value_json),
+                                       provenance=json.loads(provenance_json))
 
     @tool
     def add_clip(track: str, scene_num: int, phrase_idx: int,
                  clip_path: str, duration: float,
                  provenance_json: str = "{}") -> str:
         """Add a clip to the OTIO timeline."""
-        from agents.otio_agent import _tool_add_clip
+        from agents.audio_provisioner_agent import _tool_add_clip
         return _tool_add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
 
     @tool
     def validate_timeline(phase: str) -> str:
         """Validate timeline structural integrity."""
-        from agents.otio_agent import _tool_validate_timeline
+        from agents.audio_provisioner_agent import _tool_validate_timeline
         return _tool_validate_timeline(phase)
 
     @tool
@@ -308,7 +508,7 @@ def _build_audio_agent(otio_unit, otio_manager, model) -> Agent:
             "PHASE 5: EVALUATE — evaluate_narration_quality, rebalance if needed\n"
             "PHASE 6: CLEANUP — terminate_vm to stop billing\n\n"
             "RULES:\n"
-            "- ALL data flows through OTIO. No agent state.\n"
+            "- ALL data flows through the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
             "- If scenes are missing, report error — that's a contract violation.\n"
             "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
@@ -326,31 +526,48 @@ def _build_audio_agent(otio_unit, otio_manager, model) -> Agent:
     )
 
 
-def _build_video_agent(otio_unit, otio_manager, model) -> Agent:
+def _build_video_agent(model) -> Agent:
     """Build a Strands Agent for the video stage.
 
     Uses the VideoProvisionerAgent — merged video + provisioner.
     The agent owns rendering end-to-end: visual planning, allocate
     GPU workers, render clips, evaluate quality, scale fleet.
+    All OTIO operations are stateless — read/write the OTIO file directly.
     """
     from strands import tool
 
     @tool
     def read_timeline() -> str:
         """Read the full OTIO timeline structure."""
-        from agents.otio_agent import _tool_read_timeline
-        return _tool_read_timeline()
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        summary = {}
+        for track in timeline.tracks:
+            clips = []
+            for item in track:
+                clips.append({
+                    "name": item.name,
+                    "type": type(item).__name__,
+                })
+            summary[track.name] = {"clip_count": len(clips), "clips": clips}
+        return json.dumps(summary)
 
     @tool
     def read_pipeline_data(key: str) -> str:
-        """Read pipeline metadata from the OTIO agent."""
-        from agents.otio_agent import _tool_read_pipeline_data
-        return _tool_read_pipeline_data(key)
+        """Read pipeline metadata from the OTIO file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({"error": f"Key '{key}' not found", "contract_violation": True})
+        return json.dumps({"key": key, "value": val})
 
     @tool
     def get_scene_durations() -> str:
         """Get per-scene duration budgets from OTIO."""
-        from agents.otio_agent import _tool_get_scene_durations
+        from agents.video_provisioner_agent import _tool_get_scene_durations
         return _tool_get_scene_durations()
 
     @tool
@@ -361,28 +578,31 @@ def _build_video_agent(otio_unit, otio_manager, model) -> Agent:
 
     @tool
     def write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
-        """Write pipeline metadata to the OTIO agent."""
-        from agents.otio_agent import _tool_write_pipeline_data
-        return _tool_write_pipeline_data(key, value_json, provenance_json)
+        """Write pipeline metadata to the OTIO file."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, key, json.loads(value_json),
+                                       provenance=json.loads(provenance_json))
 
     @tool
     def add_clip(track: str, scene_num: int, phrase_idx: int,
                  clip_path: str, duration: float,
                  provenance_json: str = "{}") -> str:
         """Add a clip to the OTIO timeline."""
-        from agents.otio_agent import _tool_add_clip
+        from agents.video_provisioner_agent import _tool_add_clip
         return _tool_add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
 
     @tool
     def validate_timeline(phase: str) -> str:
         """Validate timeline structural integrity."""
-        from agents.otio_agent import _tool_validate_timeline
+        from agents.video_provisioner_agent import _tool_validate_timeline
         return _tool_validate_timeline(phase)
 
     @tool
     def rebalance_durations(adjustments_json: str, reason: str) -> str:
         """Redistribute time between scenes."""
-        from agents.otio_agent import _tool_rebalance_durations
+        from agents.video_provisioner_agent import _tool_rebalance_durations
         return _tool_rebalance_durations(adjustments_json, reason)
 
     @tool
@@ -475,7 +695,7 @@ def _build_video_agent(otio_unit, otio_manager, model) -> Agent:
             "check_clip, add_clip to OTIO. Scale fleet if needed.\n"
             "PHASE 5: CLEANUP — validate_timeline, terminate_vm\n\n"
             "RULES:\n"
-            "- ALL data flows through OTIO. No agent state.\n"
+            "- ALL data flows through the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
             "- If data is missing, report error — that's a contract violation.\n"
             "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
@@ -495,12 +715,22 @@ def _build_video_agent(otio_unit, otio_manager, model) -> Agent:
 
 
 # ---------------------------------------------------------------------------
-# Recovery conditions for backward edges
+# Recovery conditions for backward edges — read from OTIO file
 # ---------------------------------------------------------------------------
 
 
 def _needs_scenario_retry(state) -> bool:
-    """Backward edge: audio → scenario when timing fails."""
+    """Backward edge: otio gate → scenario when scenario validation fails."""
+    try:
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        gate = read_pipeline_metadata(tp, "gate_scenario")
+        if gate and isinstance(gate, dict) and not gate.get("valid", True):
+            return gate.get("recovery_target") == SCENARIO
+    except Exception:
+        pass
+    # Fallback to state dict
     try:
         return state.get("_recovery_target") == SCENARIO if hasattr(state, "get") else False
     except Exception:
@@ -508,9 +738,35 @@ def _needs_scenario_retry(state) -> bool:
 
 
 def _needs_audio_retry(state) -> bool:
-    """Backward edge: video → audio when alignment is off."""
+    """Backward edge: otio gate → audio when audio validation fails."""
+    try:
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        gate = read_pipeline_metadata(tp, "gate_audio")
+        if gate and isinstance(gate, dict) and not gate.get("valid", True):
+            return gate.get("recovery_target") == AUDIO
+    except Exception:
+        pass
     try:
         return state.get("_recovery_target") == AUDIO if hasattr(state, "get") else False
+    except Exception:
+        return False
+
+
+def _needs_video_retry(state) -> bool:
+    """Backward edge: otio gate → video when video validation fails."""
+    try:
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        gate = read_pipeline_metadata(tp, "gate_video")
+        if gate and isinstance(gate, dict) and not gate.get("valid", True):
+            return gate.get("recovery_target") == VIDEO
+    except Exception:
+        pass
+    try:
+        return state.get("_recovery_target") == VIDEO if hasattr(state, "get") else False
     except Exception:
         return False
 
@@ -533,9 +789,9 @@ class RecoveryShell:
         self.max_retries = max_retries
         self._recovery_count = 0
 
-    async def run(self, task: str) -> dict[str, Any]:
+    async def run(self, task: str, initial_state: dict[str, Any] | None = None) -> dict[str, Any]:
         """Execute the graph with automatic recovery on failure."""
-        state_overrides: dict[str, Any] = {}
+        state_overrides: dict[str, Any] = initial_state or {}
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -565,9 +821,6 @@ class RecoveryShell:
     @staticmethod
     def _classify_failure(exc: RuntimeError) -> str:
         """Extract the failed node name from a Graph RuntimeError."""
-        from contracts import ContractViolation
-        if isinstance(exc, ContractViolation):
-            return exc.stage
         msg = str(exc)
         for stage in STAGE_ORDER:
             if stage in msg:

@@ -2,9 +2,9 @@
 Strands pipeline entry point — replaces server/run_pipeline.py for Strands mode.
 
 This is what ``PIPELINE_BACKEND=strands`` activates. It:
-1. Builds the 5-node Graph with real stage agents
-2. Attaches the OTIO state manager
-3. Attaches the pipeline hooks
+1. Creates the OTIO timeline file on disk (stateless — no in-memory manager)
+2. Writes the pipeline manifest for cross-process discovery
+3. Builds the 4-node Graph with gate validation
 4. Runs the Graph via RecoveryShell
 5. Streams events to the AG-UI bus via SSEBridge
 
@@ -16,15 +16,18 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
+import time
+import uuid
 from typing import Any
 
+import opentimelineio as otio
 from strands.models.anthropic import AnthropicModel
 
 from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
-from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.stages.preflight import run_preflight, PreflightError
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
@@ -38,6 +41,53 @@ logger = logging.getLogger(__name__)
 
 # Default model
 _MODEL_ID = os.environ.get("STRANDS_MODEL", "claude-sonnet-4-20250514")
+
+
+def _create_timeline_file(timeline_path: str) -> None:
+    """Create the OTIO timeline file on disk with initial structure.
+
+    This is the ONLY shared state in the pipeline. Every agent reads
+    from and writes to this file. No in-memory manager needed.
+    """
+    from tools.otio_file_ops import TRACK_V1, TRACK_A1, TRACK_A2, otio_write
+
+    timeline = otio.schema.Timeline(name="documentary_draft")
+
+    # Create tracks
+    timeline.tracks.append(otio.schema.Track(name=TRACK_V1, kind="video"))
+    timeline.tracks.append(otio.schema.Track(name=TRACK_A1, kind="audio"))
+    timeline.tracks.append(otio.schema.Track(name=TRACK_A2, kind="audio"))
+
+    # Initialize pipeline metadata
+    timeline.metadata["documentary"] = {
+        "state": "draft",
+        "state_reason": "timeline_created",
+        "state_history": [
+            {"from": None, "to": "draft", "reason": "timeline_created", "timestamp": time.time()}
+        ],
+    }
+
+    otio_write(timeline_path, timeline)
+    logger.info("Timeline written to %s", timeline_path)
+
+
+def _write_pipeline_manifest(pipeline_dir: str, timeline_path: str) -> None:
+    """Write the pipeline manifest for cross-process timeline discovery.
+
+    The manifest is a small JSON file at a well-known location.
+    Every tool function reads it to discover the timeline path.
+    No env-var passing needed (except PIPELINE_DIR set once before forking).
+    """
+    manifest = {
+        "timeline_path": timeline_path,
+        "pipeline_dir": pipeline_dir,
+        "run_id": os.environ.get("DOCUMENTARY_RUN_ID", uuid.uuid4().hex[:8]),
+        "created_at": time.time(),
+    }
+    manifest_path = os.path.join(pipeline_dir, "pipeline_manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+    logger.info("Pipeline manifest written to %s", manifest_path)
 
 
 async def run_documentary(
@@ -78,28 +128,28 @@ async def run_documentary(
         raise PreflightError(report)
     logger.info("Preflight: all checks passed")
 
-    # Set up OTIO state manager
-    otio_manager = OTIOStateManager(output_dir=output_dir)
-    otio_manager.create_timeline("documentary_draft")
+    # Create pipeline directory structure
+    pipeline_dir = output_dir
+    timeline_dir = os.path.join(pipeline_dir, "timelines")
+    os.makedirs(timeline_dir, exist_ok=True)
+    timeline_path = os.path.join(timeline_dir, "documentary_draft.otio")
 
-    # Set the OTIO manager on the OTIO Agent module so pipeline
-    # metadata tools can access it
-    from agents.otio_agent import set_otio_manager
-    set_otio_manager(otio_manager)
+    # Create the OTIO timeline file on disk (stateless)
+    _create_timeline_file(timeline_path)
 
-    # Set the timeline path in the environment so tools can find it
-    if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
-        os.environ["_timeline_path"] = otio_manager._timeline_path
+    # Write the pipeline manifest for cross-process discovery
+    _write_pipeline_manifest(pipeline_dir, timeline_path)
 
-    # Provisioning is NOT done at startup. The provisioner receives the
-    # task list from the pipeline stages (audio tells the provisioner
-    # what TTS jobs it needs, production tells it what video jobs it
-    # needs). The provisioner optimizes once it sees the full picture.
-    # Worker URLs are set as env vars by the provisioner when workers
-    # are ready.
+    # Set PIPELINE_DIR so resolve_timeline_path() can find the manifest
+    os.environ["PIPELINE_DIR"] = pipeline_dir
+
+    # Provisioning is NOT done at startup. The merged agents
+    # (Audio+Provisioner, Video+Provisioner) provision workers when
+    # they need them. They search Vast.ai, read results, reason about
+    # which GPU to pick, and remember past decisions in Letta memory.
 
     # Build hooks — only safety invariants, no contract hooks
-    # (OTIO agent enforces contracts at read/write boundaries)
+    # (OTIO gate node enforces contracts at stage boundaries)
     approval_stages = set() if approval_mode == "auto_approve" else {
         "scenario", "audio", "video"
     }
@@ -110,9 +160,8 @@ async def run_documentary(
         ShellGuardHook(),
     ]
 
-    # Build the Graph
+    # Build the Graph (no more otio_manager parameter)
     graph = build_documentary_graph(
-        otio_manager=otio_manager,
         hooks=hooks,
         max_node_executions=max_node_executions,
         model=model,
@@ -127,14 +176,20 @@ async def run_documentary(
     logger.info("  Approval: %s", approval_mode)
 
     try:
-        result = await shell.run(brief)
+        result = await shell.run(
+            brief,
+            initial_state={"_timeline_path": timeline_path},
+        )
+        # Read final state from the OTIO file
+        from tools.otio_lifecycle import get_otio_lifecycle_state
+        from tools.otio_file_ops import otio_read
+        timeline = otio_read(timeline_path)
+        doc_meta = timeline.metadata.get("documentary", {})
         summary = {
             "status": "completed",
             "backend": "strands",
-            "otio_state": otio_manager.state,
-            "checkpoints": len(otio_manager.checkpoints),
-            "history": otio_manager.history,
-            "cost": otio_manager.cost,
+            "otio_state": get_otio_lifecycle_state(timeline_path),
+            "timeline_path": timeline_path,
         }
         logger.info("Pipeline completed: %s", summary)
         return summary
@@ -144,8 +199,7 @@ async def run_documentary(
             "status": "failed",
             "backend": "strands",
             "error": str(exc),
-            "otio_state": otio_manager.state,
-            "checkpoints": len(otio_manager.checkpoints),
+            "timeline_path": timeline_path,
         }
 
 

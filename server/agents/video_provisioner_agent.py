@@ -17,7 +17,8 @@ Architecture:
     4. PRODUCTION — Render clips on GPU workers
     5. CLEANUP — Validate timeline, destroy VMs
 
-All cross-unit communication goes through the OTIO agent tools.
+All OTIO operations use stateless file primitives (tools.otio_file_ops,
+tools.otio_metadata, tools.otio_lifecycle) — no agent-to-agent delegation.
 """
 
 from __future__ import annotations
@@ -29,7 +30,18 @@ from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+import opentimelineio as otio
+
 from recovery_agents import AgentTool, RecoveryAgent
+from tools.otio_file_ops import (
+    resolve_timeline_path,
+    otio_read,
+    otio_read_modify_write,
+    TRACK_V1,
+    TRACK_A1,
+)
+from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
+from tools.otio_lifecycle import guard_mutation, get_otio_lifecycle_state
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +53,52 @@ logger = logging.getLogger(__name__)
 def _tool_read_timeline() -> str:
     """Read the full OTIO timeline structure."""
     try:
-        from agents.otio_agent import _tool_read_timeline as _read
-        return _read()
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+
+        tracks_info = []
+        for track in timeline.tracks:
+            items = []
+            for item in track:
+                entry = {
+                    "name": item.name,
+                    "type": type(item).__name__,
+                }
+                if isinstance(item, otio.schema.Clip) and item.source_range:
+                    entry["duration_sec"] = round(
+                        item.source_range.duration.to_seconds(), 3
+                    )
+                    if item.media_reference and hasattr(
+                        item.media_reference, "target_url"
+                    ):
+                        entry["media"] = item.media_reference.target_url
+                elif isinstance(item, otio.schema.Gap) and item.source_range:
+                    entry["duration_sec"] = round(
+                        item.source_range.duration.to_seconds(), 3
+                    )
+                doc_meta = item.metadata.get("documentary", {})
+                if doc_meta:
+                    entry["metadata"] = dict(doc_meta)
+                items.append(entry)
+
+            total_dur = sum(
+                i.source_range.duration.to_seconds()
+                for i in track
+                if i.source_range
+            )
+            tracks_info.append({
+                "name": track.name,
+                "kind": str(track.kind),
+                "items": items,
+                "total_duration_sec": round(total_dur, 3),
+            })
+
+        doc_meta = timeline.metadata.get("documentary", {})
+        return json.dumps({
+            "name": timeline.name,
+            "state": doc_meta.get("state", "unknown"),
+            "tracks": tracks_info,
+        }, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -50,8 +106,11 @@ def _tool_read_timeline() -> str:
 def _tool_read_pipeline_data(key: str) -> str:
     """Read pipeline metadata from the OTIO timeline."""
     try:
-        from agents.otio_agent import _tool_read_pipeline_data as _read
-        return _read(key)
+        tp = resolve_timeline_path()
+        value = read_pipeline_metadata(tp, key)
+        if value is None:
+            return json.dumps({"error": f"Key '{key}' not found in pipeline metadata"})
+        return json.dumps({"key": key, "value": value})
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -59,8 +118,37 @@ def _tool_read_pipeline_data(key: str) -> str:
 def _tool_get_scene_durations() -> str:
     """Get per-scene duration budgets."""
     try:
-        from agents.otio_agent import _tool_get_scene_durations as _read
-        return _read()
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+
+        scenes: dict = {}
+        for track in timeline.tracks:
+            for item in track:
+                doc_meta = item.metadata.get("documentary", {})
+                scene_num = doc_meta.get("scene_num", 0)
+                if not scene_num:
+                    continue
+                if scene_num not in scenes:
+                    scenes[scene_num] = {
+                        "narration_sec": 0,
+                        "video_sec": 0,
+                        "narration_clips": 0,
+                        "video_clips": 0,
+                    }
+                dur = 0.0
+                if item.source_range:
+                    dur = item.source_range.duration.to_seconds()
+                if track.name == TRACK_A1 and isinstance(item, otio.schema.Clip):
+                    scenes[scene_num]["narration_sec"] += dur
+                    scenes[scene_num]["narration_clips"] += 1
+                elif track.name == TRACK_V1:
+                    if isinstance(item, otio.schema.Clip):
+                        scenes[scene_num]["video_sec"] += dur
+                        scenes[scene_num]["video_clips"] += 1
+                    elif isinstance(item, otio.schema.Gap) and dur > 0:
+                        scenes[scene_num]["video_sec"] += dur
+
+        return json.dumps({"scenes": scenes}, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -73,29 +161,20 @@ def _tool_find_video_gaps() -> str:
     status (needs_visual_concept or needs_render).
     """
     try:
-        import opentimelineio as otio
-        from tools.otio_tools import _otio_lock, _timeline_path, TRACK_V1
-
-        tp = os.environ.get("_TIMELINE_PATH", _timeline_path())
-        if not tp or not os.path.exists(tp):
-            return json.dumps({"error": "Timeline not found"})
-
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
 
         # Read visual_concepts metadata
         visual_concepts: dict = {}
         try:
-            from agents.otio_agent import _tool_read_pipeline_data
-            vc_raw = _tool_read_pipeline_data("visual_concepts")
-            vc_data = json.loads(vc_raw)
-            if "value" in vc_data:
-                visual_concepts = vc_data["value"] if isinstance(vc_data["value"], dict) else {}
-                # If it's a list, index by scene_num/phrase_idx later
-                if isinstance(vc_data["value"], list):
+            vc_value = read_pipeline_metadata(tp, "visual_concepts")
+            if vc_value is not None:
+                if isinstance(vc_value, dict):
+                    visual_concepts = vc_value
+                elif isinstance(vc_value, list):
                     visual_concepts = {
                         f"{v.get('scene_num', '')}-{v.get('phrase_idx', '')}": v
-                        for v in vc_data["value"]
+                        for v in vc_value
                         if isinstance(v, dict)
                     }
         except Exception:
@@ -150,8 +229,10 @@ def _tool_find_video_gaps() -> str:
 def _tool_write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
     """Write pipeline metadata to the OTIO timeline with provenance."""
     try:
-        from agents.otio_agent import _tool_write_pipeline_data as _write
-        return _write(key, value_json, provenance_json)
+        tp = resolve_timeline_path()
+        value = json.loads(value_json)
+        provenance = json.loads(provenance_json) if provenance_json else None
+        return write_pipeline_metadata(tp, key, value, provenance)
     except Exception as e:
         return json.dumps({"error": str(e)})
 
@@ -161,28 +242,221 @@ def _tool_add_clip(track: str, scene_num: int, phrase_idx: int,
                    provenance_json: str = "{}") -> str:
     """Add a clip to the OTIO timeline with provenance."""
     try:
-        from agents.otio_agent import _tool_add_clip as _add
-        return _add(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
+        tp = resolve_timeline_path()
+
+        # Mutation guard — raises OtioStateViolation if blocked.
+        guard_mutation(tp, operation="add_clip", allow_escalation=True)
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        def _mutate(timeline: otio.schema.Timeline) -> dict:
+            # Find the target track
+            target_track = None
+            for t in timeline.tracks:
+                if t.name == track:
+                    target_track = t
+                    break
+
+            if target_track is None:
+                return {"error": f"Track '{track}' not found"}
+
+            # Build clip name
+            clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+
+            # Idempotency: skip if clip already exists
+            for item in target_track:
+                if isinstance(item, otio.schema.Clip) and item.name == clip_name:
+                    return {
+                        "status": "already_exists",
+                        "clip_name": clip_name,
+                        "message": "Clip already exists, skipping duplicate",
+                    }
+
+            # Create the clip
+            clip = otio.schema.Clip(
+                name=clip_name,
+                media_reference=otio.schema.ExternalReference(
+                    target_url=clip_path,
+                ),
+                source_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0, 24),
+                    duration=otio.opentime.RationalTime(duration * 24, 24),
+                ),
+            )
+            clip.metadata["documentary"] = {
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+                "type": "clip",
+            }
+            if provenance:
+                clip.metadata["documentary"]["provenance"] = provenance
+
+            target_track.append(clip)
+            return {
+                "added": True,
+                "track": track,
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+            }
+
+        result = otio_read_modify_write(tp, _mutate)
+        return json.dumps(result)
     except Exception as e:
+        from tools.otio_lifecycle import OtioStateViolation
+        if isinstance(e, OtioStateViolation):
+            return json.dumps({
+                "error": f"Mutation blocked: {e}",
+                "hint": "Open a REPLACE/EXTEND escalation first",
+            })
         return json.dumps({"error": str(e)})
 
 
 def _tool_validate_timeline(phase: str) -> str:
     """Validate timeline structural integrity for a given pipeline phase."""
     try:
-        from agents.otio_agent import _tool_validate_timeline as _validate
-        return _validate(phase)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+
+        from callbacks.timeline_guardian import _VALIDATORS
+
+        validator = _VALIDATORS.get(phase)
+        if not validator:
+            return json.dumps({
+                "valid": False,
+                "error": f"Unknown phase: {phase}",
+            })
+
+        # Validators take (timeline, state) but in the stateless world
+        # we pass an empty dict — the file is the source of truth.
+        error = validator(timeline, {})
+        if error:
+            return json.dumps({"valid": False, "phase": phase, "errors": error})
+
+        return json.dumps({
+            "valid": True,
+            "phase": phase,
+            "message": "All checks passed",
+        })
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"valid": False, "error": str(e)})
 
 
 def _tool_rebalance_durations(adjustments_json: str, reason: str) -> str:
     """Rebalance scene duration budgets."""
     try:
-        from agents.otio_agent import _tool_rebalance_durations as _rebalance
-        return _rebalance(adjustments_json, reason)
+        tp = resolve_timeline_path()
+
+        # Mutation guard — raises OtioStateViolation if blocked.
+        try:
+            guard_mutation(
+                tp,
+                operation="rebalance_durations",
+                allow_escalation=True,
+            )
+        except Exception as e:
+            from tools.otio_lifecycle import OtioStateViolation
+            if isinstance(e, OtioStateViolation):
+                return json.dumps({
+                    "success": False,
+                    "error": f"Mutation blocked: {e}",
+                    "hint": "Open a REPLACE/EXTEND escalation first",
+                })
+            raise
+
+        adjustments = json.loads(adjustments_json)
+        if not isinstance(adjustments, dict):
+            return json.dumps({
+                "success": False,
+                "error": "adjustments must be a JSON dict {scene_num: duration_sec}",
+            })
+
+        def _mutate(timeline: otio.schema.Timeline) -> dict:
+            # Calculate total before
+            total_before = 0.0
+            for track in timeline.tracks:
+                if track.name == TRACK_V1:
+                    for item in track:
+                        if item.source_range:
+                            total_before += item.source_range.duration.to_seconds()
+
+            # Apply adjustments
+            applied = {}
+            for track in timeline.tracks:
+                if track.name != TRACK_V1:
+                    continue
+                for item in track:
+                    doc_meta = item.metadata.get("documentary", {})
+                    scene_num = doc_meta.get("scene_num", 0)
+                    if scene_num and str(scene_num) in adjustments:
+                        new_dur = float(adjustments[str(scene_num)])
+                        if new_dur < 2.0:
+                            return {
+                                "success": False,
+                                "error": (
+                                    f"Scene {scene_num}: duration "
+                                    f"{new_dur}s below minimum 2.0s"
+                                ),
+                            }
+                        if item.source_range:
+                            old_dur = item.source_range.duration.to_seconds()
+                            item.source_range = otio.opentime.TimeRange(
+                                start_time=otio.opentime.RationalTime(0, 24),
+                                duration=otio.opentime.RationalTime.from_seconds(
+                                    new_dur, 24
+                                ),
+                            )
+                            applied[scene_num] = {
+                                "old_dur": round(old_dur, 3),
+                                "new_dur": round(new_dur, 3),
+                            }
+
+            # Calculate total after
+            total_after = 0.0
+            for track in timeline.tracks:
+                if track.name == TRACK_V1:
+                    for item in track:
+                        if item.source_range:
+                            total_after += item.source_range.duration.to_seconds()
+
+            # Record rebalance history in metadata
+            doc_meta = timeline.metadata.setdefault("documentary", {})
+            doc_meta.setdefault("rebalance_history", []).append({
+                "adjustments": adjustments,
+                "reason": reason,
+                "applied": applied,
+                "total_before": round(total_before, 3),
+                "total_after": round(total_after, 3),
+            })
+
+            return {
+                "applied": applied,
+                "total_before": round(total_before, 3),
+                "total_after": round(total_after, 3),
+            }
+
+        result = otio_read_modify_write(tp, _mutate)
+
+        # If the mutation returned a failure (e.g. below-minimum duration),
+        # propagate it directly.
+        if result.get("success") is False:
+            return json.dumps(result)
+
+        return json.dumps({
+            "success": True,
+            "applied": result.get("applied", {}),
+            "total_before": result.get("total_before", 0),
+            "total_after": result.get("total_after", 0),
+            "conservation_check": (
+                "PASS"
+                if abs(result.get("total_before", 0) - result.get("total_after", 0)) < 0.1
+                else "FAIL"
+            ),
+        })
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({"success": False, "error": str(e)})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1026,7 +1300,7 @@ PHASE 5: CLEANUP
 ═══════════════════════════════════════════════════════════════════════
 
 RULES:
-- ALL data flows through the OTIO agent. No agent state.
+- ALL data flows through the OTIO file on disk. No agent state.
 - Every write carries provenance.
 - LTX-2.3 is a hard requirement — never substitute a different model.
 - VRAM is a hard floor — never pick a GPU below 48GB.

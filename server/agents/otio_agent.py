@@ -17,23 +17,38 @@ The OTIO Agent is contacted by other agents through the escalation
 chain. When the TTS Unit Agent can't hit timing, it may ask the OTIO
 Agent to rebalance scene durations. When the video agent can't fill a
 slot, the OTIO Agent may widen the gap or redistribute time.
+
+Stateless design:
+    All tool functions resolve the timeline path from the pipeline
+    manifest on disk (via ``resolve_timeline_path()``) and read/write
+    the OTIO file directly.  No module-level singletons, no
+    ``tool_context.state`` dicts, no ``os.environ`` reads for the
+    timeline path.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Optional
+from typing import Any
 
 import opentimelineio as otio
 
-from tools.otio_tools import (
-    _otio_lock,
-    _timeline_path,
+from tools.otio_file_ops import (
+    resolve_timeline_path,
+    otio_read,
+    otio_read_modify_write,
     TRACK_V1,
     TRACK_A1,
     TRACK_A2,
+)
+from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
+from tools.otio_lifecycle import (
+    get_otio_lifecycle_state,
+    guard_mutation,
+    OtioStateViolation,
+    begin_escalation,
+    end_escalation,
 )
 from recovery_agents import RecoveryAgent, AgentTool, _ESCALATION_TOOLS
 
@@ -42,16 +57,147 @@ logger = logging.getLogger(__name__)
 
 # ── OTIO Agent tools ─────────────────────────────────────────────────
 
-def _tool_read_timeline(tool_context=None) -> str:
+
+def _tool_read_pipeline_data(key: str) -> str:
+    """Read pipeline metadata from the OTIO timeline.
+
+    If the key doesn't exist, returns an error — that IS the contract
+    violation. The upstream stage has not produced this data.
+    """
+    try:
+        tp = resolve_timeline_path()
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({
+                "error": f"Key '{key}' not found in OTIO timeline",
+                "contract_violation": True,
+                "reason": f"Upstream stage has not produced '{key}'",
+            })
+        return json.dumps({"key": key, "value": val})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def _tool_write_pipeline_data(
+    key: str,
+    value_json: str,
+    provenance_json: str = "{}",
+) -> str:
+    """Write pipeline metadata to the OTIO timeline with provenance.
+
+    Creation and persistence are atomic — even on error, the partial
+    data is written. The OTIO Agent validates the write.
+    """
+    try:
+        tp = resolve_timeline_path()
+
+        try:
+            value = json.loads(value_json)
+        except (json.JSONDecodeError, TypeError):
+            value = value_json
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        return write_pipeline_metadata(tp, key, value, provenance=provenance)
+    except Exception as e:
+        # Even on error, try to persist the error
+        try:
+            tp = resolve_timeline_path()
+            write_pipeline_metadata(tp, f"{key}_error", str(e))
+        except Exception:
+            pass
+        return json.dumps({"error": str(e), "key": key})
+
+
+def _tool_add_clip(
+    track: str,
+    scene_num: int,
+    phrase_idx: int,
+    clip_path: str,
+    duration: float,
+    provenance_json: str = "{}",
+) -> str:
+    """Add a clip to the OTIO timeline with provenance."""
+    try:
+        tp = resolve_timeline_path()
+
+        # Mutation guard — raises OtioStateViolation if blocked.
+        guard_mutation(tp, operation="add_clip", allow_escalation=True)
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        def _mutate(timeline: otio.schema.Timeline) -> dict:
+            # Find the target track
+            target_track = None
+            for t in timeline.tracks:
+                if t.name == track:
+                    target_track = t
+                    break
+
+            if target_track is None:
+                return {"error": f"Track '{track}' not found"}
+
+            # Build clip name
+            clip_name = f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}"
+
+            # Idempotency: skip if clip already exists
+            for item in target_track:
+                if isinstance(item, otio.schema.Clip) and item.name == clip_name:
+                    return {
+                        "status": "already_exists",
+                        "clip_name": clip_name,
+                        "message": "Clip already exists, skipping duplicate",
+                    }
+
+            # Create the clip
+            clip = otio.schema.Clip(
+                name=clip_name,
+                media_reference=otio.schema.ExternalReference(
+                    target_url=clip_path,
+                ),
+                source_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0, 24),
+                    duration=otio.opentime.RationalTime(duration * 24, 24),
+                ),
+            )
+            clip.metadata["documentary"] = {
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+                "type": "clip",
+            }
+            if provenance:
+                clip.metadata["documentary"]["provenance"] = provenance
+
+            target_track.append(clip)
+            return {
+                "added": True,
+                "track": track,
+                "scene_num": scene_num,
+                "phrase_idx": phrase_idx,
+            }
+
+        result = otio_read_modify_write(tp, _mutate)
+        return json.dumps(result)
+    except OtioStateViolation as e:
+        return json.dumps({
+            "error": f"Mutation blocked: {e}",
+            "hint": "Open a REPLACE/EXTEND escalation first",
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def _tool_read_timeline() -> str:
     """Read the full timeline structure — tracks, clips, gaps, durations."""
     try:
-        state = tool_context.state if tool_context else {}
-        tp = state.get("_timeline_path", "")
-        if not tp or not os.path.exists(tp):
-            return json.dumps({"error": "Timeline not found"})
-
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
 
         tracks_info = []
         for track in timeline.tracks:
@@ -100,95 +246,7 @@ def _tool_read_timeline(tool_context=None) -> str:
         return json.dumps({"error": str(e)})
 
 
-# ── Module-level OTIOStateManager ────────────────────────────────────
-
-_otio_state_manager = None
-
-
-def set_otio_manager(mgr):
-    """Set the OTIOStateManager instance for pipeline metadata tools."""
-    global _otio_state_manager
-    _otio_state_manager = mgr
-
-
-# ── Pipeline metadata tools ──────────────────────────────────────────
-
-def _tool_read_pipeline_data(key: str, tool_context=None) -> str:
-    """Read pipeline metadata from the OTIO timeline.
-
-    If the key doesn't exist, returns an error — that IS the contract
-    violation. The upstream stage has not produced this data.
-    """
-    try:
-        from strands_agents.otio_manager import OTIOStateManager
-        mgr = _otio_state_manager
-        if not isinstance(mgr, OTIOStateManager):
-            return json.dumps({"error": "OTIO manager not available"})
-        val = mgr.get_pipeline_metadata(key)
-        if val is None:
-            return json.dumps({
-                "error": f"Key '{key}' not found in OTIO timeline",
-                "contract_violation": True,
-                "reason": f"Upstream stage has not produced '{key}'",
-            })
-        return json.dumps({"key": key, "value": val})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-
-def _tool_write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}", tool_context=None) -> str:
-    """Write pipeline metadata to the OTIO timeline with provenance.
-
-    Creation and persistence are atomic — even on error, the partial
-    data is written. The OTIO Agent validates the write.
-    """
-    try:
-        from strands_agents.otio_manager import OTIOStateManager
-        mgr = _otio_state_manager
-        if not isinstance(mgr, OTIOStateManager):
-            return json.dumps({"error": "OTIO manager not available"})
-
-        try:
-            value = json.loads(value_json)
-        except (json.JSONDecodeError, TypeError):
-            value = value_json
-
-        try:
-            provenance = json.loads(provenance_json) if provenance_json else {}
-        except (json.JSONDecodeError, TypeError):
-            provenance = {}
-
-        mgr.set_pipeline_metadata(key, value, provenance=provenance)
-        return json.dumps({"written": True, "key": key})
-    except Exception as e:
-        # Even on error, try to persist the error
-        try:
-            mgr.set_pipeline_metadata(f"{key}_error", str(e))
-        except Exception:
-            pass
-        return json.dumps({"error": str(e), "key": key})
-
-
-def _tool_add_clip(track: str, scene_num: int, phrase_idx: int, clip_path: str, duration: float, provenance_json: str = "{}", tool_context=None) -> str:
-    """Add a clip to the OTIO timeline with provenance."""
-    try:
-        from strands_agents.otio_manager import OTIOStateManager
-        mgr = _otio_state_manager
-        if not isinstance(mgr, OTIOStateManager):
-            return json.dumps({"error": "OTIO manager not available"})
-
-        try:
-            provenance = json.loads(provenance_json) if provenance_json else {}
-        except (json.JSONDecodeError, TypeError):
-            provenance = {}
-
-        mgr.add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance=provenance)
-        return json.dumps({"added": True, "track": track, "scene_num": scene_num, "phrase_idx": phrase_idx})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-
-def _tool_validate_timeline(phase: str, tool_context=None) -> str:
+def _tool_validate_timeline(phase: str) -> str:
     """Validate timeline structural integrity for a given pipeline phase.
 
     Checks: correct track structure, no missing clips, no zero-duration
@@ -196,26 +254,42 @@ def _tool_validate_timeline(phase: str, tool_context=None) -> str:
     video clips have media references.
     """
     try:
-        from tools.otio_tools import validate_timeline
-        return validate_timeline(phase, tool_context=tool_context)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+
+        from callbacks.timeline_guardian import _VALIDATORS
+
+        validator = _VALIDATORS.get(phase)
+        if not validator:
+            return json.dumps({
+                "valid": False,
+                "error": f"Unknown phase: {phase}",
+            })
+
+        # Validators take (timeline, state) but in the stateless world
+        # we pass an empty dict — the file is the source of truth.
+        error = validator(timeline, {})
+        if error:
+            return json.dumps({"valid": False, "phase": phase, "errors": error})
+
+        return json.dumps({
+            "valid": True,
+            "phase": phase,
+            "message": "All checks passed",
+        })
     except Exception as e:
         return json.dumps({"valid": False, "error": str(e)})
 
 
-def _tool_get_scene_durations(tool_context=None) -> str:
+def _tool_get_scene_durations() -> str:
     """Get per-scene duration budgets — narration vs video vs total.
 
     Returns a scene-by-scene breakdown showing how much time each
     scene has, how much narration fills, and how much video needs.
     """
     try:
-        state = tool_context.state if tool_context else {}
-        tp = state.get("_timeline_path", "")
-        if not tp or not os.path.exists(tp):
-            return json.dumps({"error": "Timeline not found"})
-
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
 
         scenes = {}
         for track in timeline.tracks:
@@ -252,7 +326,6 @@ def _tool_get_scene_durations(tool_context=None) -> str:
 def _tool_rebalance_durations(
     adjustments_json: str,
     reason: str,
-    tool_context=None,
 ) -> str:
     """Rebalance scene duration budgets.
 
@@ -269,18 +342,16 @@ def _tool_rebalance_durations(
         reason: Why the rebalance is needed (audit trail)
     """
     try:
-        state = tool_context.state if tool_context else {}
-        tp = state.get("_timeline_path", "")
+        tp = resolve_timeline_path()
 
-        # Check mutation guard
-        from callbacks.otio_state import guard_authoritative_mutation
+        # Mutation guard — raises OtioStateViolation if blocked.
         try:
-            guard_authoritative_mutation(
-                state,
+            guard_mutation(
+                tp,
                 operation="rebalance_durations",
                 allow_escalation=True,
             )
-        except Exception as e:
+        except OtioStateViolation as e:
             return json.dumps({
                 "success": False,
                 "error": f"Mutation blocked: {e}",
@@ -289,11 +360,12 @@ def _tool_rebalance_durations(
 
         adjustments = json.loads(adjustments_json)
         if not isinstance(adjustments, dict):
-            return json.dumps({"success": False, "error": "adjustments must be a JSON dict {scene_num: duration_sec}"})
+            return json.dumps({
+                "success": False,
+                "error": "adjustments must be a JSON dict {scene_num: duration_sec}",
+            })
 
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
-
+        def _mutate(timeline: otio.schema.Timeline) -> dict:
             # Calculate total before
             total_before = 0.0
             for track in timeline.tracks:
@@ -313,14 +385,17 @@ def _tool_rebalance_durations(
                     if scene_num and str(scene_num) in adjustments:
                         new_dur = float(adjustments[str(scene_num)])
                         if new_dur < 2.0:
-                            return json.dumps({
+                            # Raise to signal failure — the RMW will
+                            # still write but the error is returned.
+                            return {
                                 "success": False,
-                                "error": f"Scene {scene_num}: duration {new_dur}s below minimum 2.0s",
-                            })
+                                "error": (
+                                    f"Scene {scene_num}: duration "
+                                    f"{new_dur}s below minimum 2.0s"
+                                ),
+                            }
                         if item.source_range:
                             old_dur = item.source_range.duration.to_seconds()
-                            # Update video gap/clip duration
-                            from tools.otio_tools import _ensure_dir
                             item.source_range = otio.opentime.TimeRange(
                                 start_time=otio.opentime.RationalTime(0, 24),
                                 duration=otio.opentime.RationalTime.from_seconds(
@@ -332,7 +407,7 @@ def _tool_rebalance_durations(
                                 "new_dur": round(new_dur, 3),
                             }
 
-            # Calculate total after — must be conserved
+            # Calculate total after
             total_after = 0.0
             for track in timeline.tracks:
                 if track.name == TRACK_V1:
@@ -340,26 +415,39 @@ def _tool_rebalance_durations(
                         if item.source_range:
                             total_after += item.source_range.duration.to_seconds()
 
-            # Write the updated timeline
-            otio.adapters.write_to_file(timeline, tp)
+            # Record rebalance history in metadata
+            doc_meta = timeline.metadata.setdefault("documentary", {})
+            doc_meta.setdefault("rebalance_history", []).append({
+                "adjustments": adjustments,
+                "reason": reason,
+                "applied": applied,
+                "total_before": round(total_before, 3),
+                "total_after": round(total_after, 3),
+            })
 
-        doc_meta = timeline.metadata.get("documentary", {})
-        doc_meta.setdefault("rebalance_history", []).append({
-            "adjustments": adjustments,
-            "reason": reason,
-            "applied": applied,
-            "total_before": round(total_before, 3),
-            "total_after": round(total_after, 3),
-        })
-        with _otio_lock:
-            otio.adapters.write_to_file(timeline, tp)
+            return {
+                "applied": applied,
+                "total_before": round(total_before, 3),
+                "total_after": round(total_after, 3),
+            }
+
+        result = otio_read_modify_write(tp, _mutate)
+
+        # If the mutation returned a failure (e.g. below-minimum duration),
+        # propagate it directly.
+        if result.get("success") is False:
+            return json.dumps(result)
 
         return json.dumps({
             "success": True,
-            "applied": applied,
-            "total_before": round(total_before, 3),
-            "total_after": round(total_after, 3),
-            "conservation_check": "PASS" if abs(total_before - total_after) < 0.1 else "FAIL",
+            "applied": result.get("applied", {}),
+            "total_before": result.get("total_before", 0),
+            "total_after": result.get("total_after", 0),
+            "conservation_check": (
+                "PASS"
+                if abs(result.get("total_before", 0) - result.get("total_after", 0)) < 0.1
+                else "FAIL"
+            ),
         })
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
@@ -369,7 +457,6 @@ def _tool_propose_duration_fix(
     scene_num: int,
     current_duration: float,
     target_duration: float,
-    tool_context=None,
 ) -> str:
     """Propose a duration fix for a scene that's over/under budget.
 
@@ -381,13 +468,8 @@ def _tool_propose_duration_fix(
     redistributed, and the resulting durations.
     """
     try:
-        state = tool_context.state if tool_context else {}
-        tp = state.get("_timeline_path", "")
-        if not tp or not os.path.exists(tp):
-            return json.dumps({"error": "Timeline not found"})
-
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
 
         deficit = target_duration - current_duration
         if deficit <= 0:
@@ -451,17 +533,30 @@ def _tool_propose_duration_fix(
         return json.dumps({"error": str(e)})
 
 
-def _tool_get_otio_state(tool_context=None) -> str:
-    """Get the current OTIO lifecycle state (draft or authoritative)."""
+def _tool_get_otio_state() -> str:
+    """Get the current OTIO lifecycle state (draft or authoritative).
+
+    Reads the lifecycle state and escalation status directly from the
+    OTIO file on disk — no in-memory state, no blackboard.
+    """
     try:
-        state = tool_context.state if tool_context else {}
-        from callbacks.otio_state import get_otio_state, _current_escalation
-        current = get_otio_state(state)
-        escalation = _current_escalation(state)
+        tp = resolve_timeline_path()
+        current = get_otio_lifecycle_state(tp)
+
+        # Read escalation directly from the timeline file — avoids
+        # importing get_escalation (which is a convenience wrapper
+        # around the same otio_read + metadata lookup).
+        timeline = otio_read(tp)
+        doc_meta = timeline.metadata.get("documentary", {})
+        escalation = doc_meta.get("escalation")
+        if escalation is not None:
+            import copy
+            escalation = copy.deepcopy(dict(escalation))
+
         return json.dumps({
             "state": current,
             "escalation": escalation,
-            "timeline_path": state.get("_timeline_path", ""),
+            "timeline_path": tp,
         })
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -487,7 +582,7 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["key"],
         },
-        fn=lambda key, tool_context=None: _tool_read_pipeline_data(key, tool_context),
+        fn=lambda key: _tool_read_pipeline_data(key),
     ),
     AgentTool(
         name="write_pipeline_data",
@@ -515,8 +610,8 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["key", "value_json"],
         },
-        fn=lambda key, value_json, provenance_json="{}", tool_context=None: _tool_write_pipeline_data(
-            key, value_json, provenance_json, tool_context
+        fn=lambda key, value_json, provenance_json="{}": _tool_write_pipeline_data(
+            key, value_json, provenance_json
         ),
     ),
     AgentTool(
@@ -555,8 +650,8 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["track", "scene_num", "phrase_idx", "clip_path", "duration"],
         },
-        fn=lambda track, scene_num, phrase_idx, clip_path, duration, provenance_json="{}", tool_context=None: _tool_add_clip(
-            track, scene_num, phrase_idx, clip_path, duration, provenance_json, tool_context
+        fn=lambda track, scene_num, phrase_idx, clip_path, duration, provenance_json="{}": _tool_add_clip(
+            track, scene_num, phrase_idx, clip_path, duration, provenance_json
         ),
     ),
     AgentTool(
@@ -570,7 +665,7 @@ _OTIO_AGENT_TOOLS = [
             "type": "object",
             "properties": {},
         },
-        fn=lambda tool_context=None: _tool_read_timeline(tool_context),
+        fn=lambda: _tool_read_timeline(),
     ),
     AgentTool(
         name="validate_timeline",
@@ -590,7 +685,7 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["phase"],
         },
-        fn=lambda phase="audio", tool_context=None: _tool_validate_timeline(phase, tool_context),
+        fn=lambda phase="audio": _tool_validate_timeline(phase),
     ),
     AgentTool(
         name="get_scene_durations",
@@ -603,7 +698,7 @@ _OTIO_AGENT_TOOLS = [
             "type": "object",
             "properties": {},
         },
-        fn=lambda tool_context=None: _tool_get_scene_durations(tool_context),
+        fn=lambda: _tool_get_scene_durations(),
     ),
     AgentTool(
         name="rebalance_durations",
@@ -626,8 +721,8 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["adjustments_json", "reason"],
         },
-        fn=lambda adjustments_json, reason, tool_context=None: _tool_rebalance_durations(
-            adjustments_json, reason, tool_context
+        fn=lambda adjustments_json, reason: _tool_rebalance_durations(
+            adjustments_json, reason
         ),
     ),
     AgentTool(
@@ -646,8 +741,8 @@ _OTIO_AGENT_TOOLS = [
             },
             "required": ["scene_num", "current_duration", "target_duration"],
         },
-        fn=lambda scene_num, current_duration, target_duration, tool_context=None: _tool_propose_duration_fix(
-            scene_num, current_duration, target_duration, tool_context
+        fn=lambda scene_num, current_duration, target_duration: _tool_propose_duration_fix(
+            scene_num, current_duration, target_duration
         ),
     ),
     AgentTool(
@@ -660,7 +755,7 @@ _OTIO_AGENT_TOOLS = [
             "type": "object",
             "properties": {},
         },
-        fn=lambda tool_context=None: _tool_get_otio_state(tool_context),
+        fn=lambda: _tool_get_otio_state(),
     ),
 ]
 

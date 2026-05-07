@@ -34,6 +34,15 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from recovery_agents import AgentTool, RecoveryAgent
+from tools.otio_file_ops import (
+    resolve_timeline_path,
+    otio_read,
+    otio_read_modify_write,
+    TRACK_A1,
+    TRACK_V1,
+)
+from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
+from tools.otio_lifecycle import guard_mutation, get_otio_lifecycle_state
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +54,20 @@ logger = logging.getLogger(__name__)
 def _tool_read_pipeline_data(key: str) -> str:
     """Read pipeline metadata from the OTIO timeline.
 
-    Delegates to agents.otio_agent._tool_read_pipeline_data.
+    Uses the stateless file-based metadata API.
     """
-    from agents.otio_agent import _tool_read_pipeline_data as _read
-    return _read(key)
+    try:
+        tp = resolve_timeline_path()
+        val = read_pipeline_metadata(tp, key)
+        if val is None:
+            return json.dumps({
+                "error": f"Key '{key}' not found in OTIO timeline",
+                "contract_violation": True,
+                "reason": f"Upstream stage has not produced '{key}'",
+            })
+        return json.dumps({"key": key, "value": val})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _tool_find_narration_gaps() -> str:
@@ -62,18 +81,17 @@ def _tool_find_narration_gaps() -> str:
     gap_duration_sec.
     """
     import opentimelineio as otio
-    from tools.otio_tools import _otio_lock, _timeline_path, TRACK_A1
 
     try:
+        tp = resolve_timeline_path()
+
         # Read scenes metadata for cross-reference
-        scenes_raw = _tool_read_pipeline_data("scenes")
-        scenes_data = json.loads(scenes_raw)
-        if "error" in scenes_data:
+        scenes = read_pipeline_metadata(tp, "scenes")
+        if scenes is None:
             return json.dumps({
-                "error": f"Cannot read scenes metadata: {scenes_data['error']}",
+                "error": "Cannot read scenes metadata: key not found",
                 "gaps": [],
             })
-        scenes = scenes_data.get("value", [])
         if isinstance(scenes, str):
             scenes = json.loads(scenes)
         if not isinstance(scenes, list):
@@ -94,12 +112,7 @@ def _tool_find_narration_gaps() -> str:
                     }
 
         # Read the OTIO timeline
-        tp = os.environ.get("_timeline_path", _timeline_path)
-        if not tp or not os.path.exists(tp):
-            return json.dumps({"error": "Timeline not found", "gaps": []})
-
-        with _otio_lock:
-            timeline = otio.adapters.read_from_file(tp)
+        timeline = otio_read(tp)
 
         # Find Gaps in A1_Narration
         gaps = []
@@ -140,16 +153,44 @@ def _tool_find_narration_gaps() -> str:
 def _tool_get_scene_durations() -> str:
     """Get per-scene duration budgets — narration vs video vs total.
 
-    Delegates to agents.otio_agent._tool_get_scene_durations.
+    Reads the OTIO timeline directly and computes per-scene breakdowns.
     """
-    from agents.otio_agent import _tool_get_scene_durations as _get
-    return _get_get_scene_durations()
+    import opentimelineio as otio
 
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
 
-def _get_get_scene_durations() -> str:
-    """Actual implementation — avoids circular import at module level."""
-    from agents.otio_agent import _tool_get_scene_durations as _fn
-    return _fn()
+        scenes: dict = {}
+        for track in timeline.tracks:
+            for item in track:
+                doc_meta = item.metadata.get("documentary", {})
+                scene_num = doc_meta.get("scene_num", 0)
+                if not scene_num:
+                    continue
+                if scene_num not in scenes:
+                    scenes[scene_num] = {
+                        "narration_sec": 0,
+                        "video_sec": 0,
+                        "narration_clips": 0,
+                        "video_clips": 0,
+                    }
+                dur = 0.0
+                if item.source_range:
+                    dur = item.source_range.duration.to_seconds()
+                if track.name == TRACK_A1 and isinstance(item, otio.schema.Clip):
+                    scenes[scene_num]["narration_sec"] += dur
+                    scenes[scene_num]["narration_clips"] += 1
+                elif track.name == TRACK_V1:
+                    if isinstance(item, otio.schema.Clip):
+                        scenes[scene_num]["video_sec"] += dur
+                        scenes[scene_num]["video_clips"] += 1
+                    elif isinstance(item, otio.schema.Gap) and dur > 0:
+                        scenes[scene_num]["video_sec"] += dur
+
+        return json.dumps({"scenes": scenes}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -159,10 +200,24 @@ def _get_get_scene_durations() -> str:
 def _tool_write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
     """Write pipeline metadata to the OTIO timeline with provenance.
 
-    Delegates to agents.otio_agent._tool_write_pipeline_data.
+    Uses the stateless file-based metadata API.
     """
-    from agents.otio_agent import _tool_write_pipeline_data as _write
-    return _write(key, value_json, provenance_json)
+    try:
+        tp = resolve_timeline_path()
+
+        try:
+            value = json.loads(value_json)
+        except (json.JSONDecodeError, TypeError):
+            value = value_json
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else None
+        except (json.JSONDecodeError, TypeError):
+            provenance = None
+
+        return write_pipeline_metadata(tp, key, value, provenance)
+    except Exception as e:
+        return json.dumps({"error": str(e), "key": key})
 
 
 def _tool_add_clip(
@@ -175,19 +230,71 @@ def _tool_add_clip(
 ) -> str:
     """Add a clip to the OTIO timeline with provenance.
 
-    Delegates to agents.otio_agent._tool_add_clip.
+    Uses guard_mutation() for lifecycle enforcement and
+    otio_read_modify_write() for atomic read-modify-write.
     """
-    from agents.otio_agent import _tool_add_clip as _add
-    return _add(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
+    import opentimelineio as otio
+
+    try:
+        tp = resolve_timeline_path()
+        guard_mutation(tp, "add_clip")
+
+        try:
+            provenance = json.loads(provenance_json) if provenance_json else {}
+        except (json.JSONDecodeError, TypeError):
+            provenance = {}
+
+        clip_meta: dict = {}
+        if provenance:
+            clip_meta["_provenance"] = provenance
+
+        def _add_clip_mutate(timeline: otio.schema.Timeline) -> None:
+            for t in timeline.tracks:
+                if t.name == track:
+                    clip = otio.schema.Clip(
+                        name=f"scene_{scene_num}_phrase_{phrase_idx}",
+                        source_range=otio.opentime.TimeRange(
+                            start_time=otio.opentime.RationalTime(0, 24),
+                            duration=otio.opentime.RationalTime.from_seconds(duration, 24),
+                        ),
+                    )
+                    clip.media_reference = otio.schema.ExternalReference(
+                        target_url=clip_path,
+                    )
+                    clip.metadata["documentary"] = clip_meta
+                    t.append(clip)
+                    break
+            else:
+                logger.warning("Track '%s' not found in timeline", track)
+
+        otio_read_modify_write(tp, _add_clip_mutate)
+        return json.dumps({"added": True, "track": track, "scene_num": scene_num, "phrase_idx": phrase_idx})
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 
 def _tool_validate_timeline(phase: str) -> str:
     """Validate timeline structural integrity for a given pipeline phase.
 
-    Delegates to agents.otio_agent._tool_validate_timeline.
+    Reads the timeline via otio_read() and delegates to the
+    phase-specific validators from callbacks.timeline_guardian.
     """
-    from agents.otio_agent import _tool_validate_timeline as _validate
-    return _validate(phase)
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+
+        from callbacks.timeline_guardian import _VALIDATORS
+        validator = _VALIDATORS.get(phase)
+        if not validator:
+            return json.dumps({"valid": False, "error": f"Unknown phase: {phase}"})
+
+        error = validator(timeline, {})
+        if error:
+            return json.dumps({"valid": False, "phase": phase, "errors": error})
+
+        return json.dumps({"valid": True, "phase": phase, "message": "All checks passed"})
+    except Exception as e:
+        return json.dumps({"valid": False, "error": str(e)})
 
 
 # ---------------------------------------------------------------------------
@@ -719,29 +826,27 @@ def _tool_evaluate_narration_quality() -> str:
     budgets.  Returns the ratio and a verdict.
     """
     try:
+        tp = resolve_timeline_path()
+
         # Read alignment data
-        alignment_raw = _tool_read_pipeline_data("whisperx_alignment")
-        alignment_data = json.loads(alignment_raw)
-        if "error" in alignment_data:
+        alignment = read_pipeline_metadata(tp, "whisperx_alignment")
+        if alignment is None:
             return json.dumps({
-                "error": f"Cannot read alignment: {alignment_data['error']}",
+                "error": "Cannot read alignment: key not found",
                 "ratio": 0.0,
                 "verdict": "no_data",
             })
-        alignment = alignment_data.get("value", {})
         if isinstance(alignment, str):
             alignment = json.loads(alignment)
 
         # Read scenes for target total
-        scenes_raw = _tool_read_pipeline_data("scenes")
-        scenes_data = json.loads(scenes_raw)
-        if "error" in scenes_data:
+        scenes = read_pipeline_metadata(tp, "scenes")
+        if scenes is None:
             return json.dumps({
-                "error": f"Cannot read scenes: {scenes_data['error']}",
+                "error": "Cannot read scenes: key not found",
                 "ratio": 0.0,
                 "verdict": "no_data",
             })
-        scenes = scenes_data.get("value", [])
         if isinstance(scenes, str):
             scenes = json.loads(scenes)
 
@@ -847,7 +952,7 @@ _AUDIO_PROVISIONER_TOOLS = [
             "type": "object",
             "properties": {},
         },
-        fn=lambda: _get_get_scene_durations(),
+        fn=lambda: _tool_get_scene_durations(),
     ),
 
     # -- OTIO writing tools --
