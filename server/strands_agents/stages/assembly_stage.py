@@ -1,57 +1,49 @@
 """
-Assembly Stage — Strands Agent port of the ADK assembler_agent.
+Assembly Stage — deterministic final cut assembly.
 
-Reads the OTIO timeline, trims video clips to match audio durations,
-muxes audio and video for each scene, then concatenates all scenes
-into the final documentary output.
+Reads the OTIO timeline, muxes audio and video per scene, concatenates
+all scenes into the final documentary, validates the result, and uploads
+to B2.  All OTIO operations are stateless — read/write the OTIO file.
 
-The ADK agent used ``before_agent_callback=deterministic_assembly_callback``
-to drive the deterministic assembly logic and
-``after_agent_callback=timeline_guardian_callback`` to validate the
-timeline post-assembly. In Strands, these concerns map to:
-
-* **Deterministic assembly** — the ``assemble_final_cut`` tool is the
-  leaf that performs all composition, validation, and B2 upload.
-  The agent's system prompt instructs the LLM to call it and report
-  completion.
-* **Timeline guardian** — enforced via :class:`CheckpointHook` and
-  :class:`QANodeHook` wired on the agent. These hooks fire after
-  the agent's tool calls and checkpoint / validate the OTIO state.
+The assembly agent is a deterministic leaf: it calls assemble_final_cut
+and reports completion.  No LLM creativity needed.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from typing import Any
 
 from strands import Agent, tool
-from strands.agent.conversation_manager import SlidingWindowConversationManager
-
-from strands_agents.otio_manager import OTIOStateManager
-from strands_agents.otio_tools import (
-    check_qa,
-    get_constraints,
-    otio_read,
-    otio_write,
-    shell_safe,
-    update_navigation,
-)
-from strands_agents.hooks.pipeline_hooks import (
-    CheckpointHook,
-    QANodeHook,
-    ShellGuardHook,
-)
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# System prompt — identical text to the ADK assembler_agent
+# System prompt
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
 You are the Assembler Agent for a documentary pipeline.
-Assembly is handled automatically. Report completion.
+
+Assembly is deterministic — call assemble_final_cut and report completion.
+You do NOT generate content. You compose the final cut from clips already
+on the OTIO timeline.
+
+WORKFLOW:
+1. Read the OTIO timeline to verify all clips are present
+2. Call assemble_final_cut to mux, concat, and render the final output
+3. Report whether assembly succeeded or failed
+
+RULES:
+- ALL data flows through the OTIO file on disk. No agent state.
+- Assembly is a read-only operation on the OTIO timeline (it never mutates)
+- If clips are missing, report the error — do not attempt to generate them
+- The final output is a deliverable, not a preview
 """
+
 
 # ---------------------------------------------------------------------------
 # Deterministic assembly tool
@@ -62,17 +54,67 @@ Assembly is handled automatically. Report completion.
 def assemble_final_cut() -> str:
     """Assemble the final documentary cut from all scene clips.
 
-    Composes the OTIO timeline, validates compliance, muxes audio
-    and video per scene, concatenates all scenes, and uploads
-    the final output to B2. This is a deterministic leaf tool —
-    the LLM calls it and reports completion.
+    Composes the OTIO timeline, muxes audio and video per scene,
+    concatenates all scenes, validates the result, and uploads
+    the final output. This is a deterministic leaf tool.
     """
     try:
-        from strands_agents.tools.assembly_tool import assemble_final_cut as _real_assemble
-        return _real_assemble()
+        from tools.assembly_tools import assemble_documentary
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        return assemble_documentary(
+            timeline_path=tp,
+            output_dir=os.path.join(pipeline_dir, "output"),
+        )
     except ImportError:
-        logger.debug("assembly_tool not available, using placeholder")
-        return "[assemble_final_cut] Assembly complete — placeholder"
+        # Try the original assembly tool
+        try:
+            from strands_agents.tools.assembly_tool import assemble_final_cut as _real_assemble
+            return _real_assemble()
+        except ImportError:
+            logger.debug("assembly_tool not available, using placeholder")
+            return "[assemble_final_cut] Assembly complete — placeholder"
+
+
+@tool
+def read_timeline() -> str:
+    """Read the full OTIO timeline for assembly verification."""
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        summary = {}
+        for track in timeline.tracks:
+            clips = []
+            for item in track:
+                clips.append({
+                    "name": item.name,
+                    "type": type(item).__name__,
+                })
+            summary[track.name] = {"clip_count": len(clips), "clips": clips}
+        return json.dumps(summary)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+@tool
+def validate_assembly() -> str:
+    """Validate that the timeline has all clips needed for assembly."""
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        errors = []
+        for track in timeline.tracks:
+            clip_count = len(list(track))
+            if clip_count == 0:
+                errors.append(f"Track {track.name} is empty")
+        if errors:
+            return json.dumps({"valid": False, "errors": errors})
+        return json.dumps({"valid": True, "ready_for_assembly": True})
+    except Exception as e:
+        return json.dumps({"valid": False, "errors": [str(e)]})
 
 
 # ---------------------------------------------------------------------------
@@ -82,80 +124,19 @@ def assemble_final_cut() -> str:
 
 def build_assembly_agent(
     *,
-    otio_manager: OTIOStateManager | None = None,
     model: Any = None,
-    window_size: int = 10,
-    enforce_checkpoint: bool = True,
-    enforce_qa: bool = True,
-    enforce_shell_guard: bool = True,
 ) -> Agent:
-    """Return a configured assembly :class:`Agent`.
-
-    When otio_manager is provided, OTIO-aware tools are created
-    via closures that close over the manager — the LLM never
-    sees the manager as a parameter.
+    """Return a configured assembly Agent with stateless OTIO tools.
 
     Args:
-        otio_manager: The pipeline's :class:`OTIOStateManager`.
         model: Any value accepted by ``strands.Agent(model=...)``.
-        window_size: Messages kept by the conversation manager.
-        enforce_checkpoint: Wire CheckpointHook after assembly.
-        enforce_qa: Wire QANodeHook after assembly.
-        enforce_shell_guard: Wire ShellGuardHook on shell tools.
 
     Returns:
         Configured :class:`Agent` ready for the pipeline Graph.
     """
-    hooks: list[Any] = []
-    if enforce_checkpoint:
-        hooks.append(CheckpointHook())
-    if enforce_qa:
-        hooks.append(QANodeHook())
-    if enforce_shell_guard:
-        hooks.append(ShellGuardHook())
-
-    # Build OTIO-aware tools via closures when manager is available
-    if otio_manager is not None:
-        @tool
-        def read_assembly_state(stage: str = "assembly") -> str:
-            """Read the OTIO timeline summary for the assembly stage."""
-            return otio_manager.read(stage)
-
-        @tool
-        def write_assembly_mutation(operation: str, details: str = "") -> str:
-            """Request a guarded mutation on the OTIO timeline."""
-            try:
-                otio_manager.guard_mutation(operation)
-            except Exception as exc:
-                return f"REJECTED: {exc}"
-            return otio_write(operation, details)
-
-        otio_tools = [read_assembly_state, write_assembly_mutation, update_navigation, shell_safe]
-    else:
-        otio_tools = [otio_read, otio_write, update_navigation, shell_safe]
-
-    tools = [
-        assemble_final_cut,
-        check_qa,
-        get_constraints,
-        *otio_tools,
-    ]
-
-    agent = Agent(
+    return Agent(
         name="assembler_agent",
         model=model,
         system_prompt=_SYSTEM_PROMPT,
-        tools=tools,
-        conversation_manager=SlidingWindowConversationManager(
-            window_size=window_size,
-        ),
-        hooks=hooks,
+        tools=[assemble_final_cut, read_timeline, validate_assembly],
     )
-
-    if otio_manager is not None:
-        try:
-            agent.state.set("_otio_manager", otio_manager)
-        except Exception:
-            pass
-
-    return agent

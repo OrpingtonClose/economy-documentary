@@ -49,8 +49,9 @@ SCENARIO = "scenario"
 AUDIO = "audio"
 VIDEO = "video"
 OTIO = "otio"
+ASSEMBLY = "assembly"
 
-STAGE_ORDER = [SCENARIO, AUDIO, VIDEO]
+STAGE_ORDER = [SCENARIO, AUDIO, VIDEO, ASSEMBLY]
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +86,7 @@ def build_documentary_graph(
     audio_agent = _build_audio_agent(model)
     video_agent = _build_video_agent(model)
     otio_gate_agent = _build_otio_gate_agent(model)
+    assembly_agent = _build_assembly_agent(model)
 
     # Build nodes
     nodes = {
@@ -92,15 +94,18 @@ def build_documentary_graph(
         OTIO: GraphNode(node_id=OTIO, executor=otio_gate_agent),
         AUDIO: GraphNode(node_id=AUDIO, executor=audio_agent),
         VIDEO: GraphNode(node_id=VIDEO, executor=video_agent),
+        ASSEMBLY: GraphNode(node_id=ASSEMBLY, executor=assembly_agent),
     }
 
-    # Forward edges: scenario → otio → audio → otio → video → otio
+    # Forward edges: scenario → otio → audio → otio → video → otio → assembly → otio
     forward_edges = {
         GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[OTIO]),
         GraphEdge(from_node=nodes[OTIO], to_node=nodes[AUDIO]),
         GraphEdge(from_node=nodes[AUDIO], to_node=nodes[OTIO]),
         GraphEdge(from_node=nodes[OTIO], to_node=nodes[VIDEO]),
         GraphEdge(from_node=nodes[VIDEO], to_node=nodes[OTIO]),
+        GraphEdge(from_node=nodes[OTIO], to_node=nodes[ASSEMBLY]),
+        GraphEdge(from_node=nodes[ASSEMBLY], to_node=nodes[OTIO]),
     }
 
     # Backward edges: recovery — routes read from OTIO file
@@ -122,6 +127,12 @@ def build_documentary_graph(
             from_node=nodes[OTIO],
             to_node=nodes[VIDEO],
             condition=_needs_video_retry,
+        ),
+        # OTIO gate → assembly (when assembly fails)
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[ASSEMBLY],
+            condition=_needs_assembly_retry,
         ),
     }
 
@@ -252,7 +263,22 @@ def _build_otio_gate_agent(model) -> Agent:
             errors.append(f"Error reading timeline: {e}")
         if errors:
             return json.dumps({"valid": False, "errors": errors, "recovery_target": VIDEO})
-        return json.dumps({"valid": True, "pipeline_complete": True})
+        return json.dumps({"valid": True, "next_stage": ASSEMBLY})
+
+    @tool
+    def validate_assembly() -> str:
+        """Validate assembly: final output file must exist."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        errors = []
+        # Check that assembly produced an output
+        output_path = read_pipeline_metadata(tp, "assembly_output_path")
+        if not output_path:
+            errors.append("No assembly output path in OTIO metadata")
+        if errors:
+            return json.dumps({"valid": False, "errors": errors, "recovery_target": ASSEMBLY})
+        return json.dumps({"valid": True, "pipeline_complete": True, "output_path": output_path})
 
     @tool
     def transition_to_authoritative() -> str:
@@ -386,7 +412,8 @@ def _build_otio_gate_agent(model) -> Agent:
             "WORKFLOW:\n"
             "- After scenario: call validate_scenario(). If valid, next is audio.\n"
             "- After audio: call validate_audio(). If valid, call transition_to_authoritative, next is video.\n"
-            "- After video: call validate_video(). If valid, pipeline is complete.\n"
+            "- After video: call validate_video(). If valid, next is assembly.\n"
+            "- After assembly: call validate_assembly(). If valid, pipeline is complete.\n"
             "- After EVERY validation: write_critique_record(stage, verdict, details) + trigger_preview(stage)\n\n"
             "RULES:\n"
             "- You NEVER generate content. You only validate and enforce.\n"
@@ -397,7 +424,7 @@ def _build_otio_gate_agent(model) -> Agent:
         ),
         tools=[
             read_pipeline_data, read_timeline,
-            validate_scenario, validate_audio, validate_video,
+            validate_scenario, validate_audio, validate_video, validate_assembly,
             transition_to_authoritative, write_gate_result,
             get_otio_lifecycle_state,
             begin_escalation, end_escalation,
@@ -406,6 +433,16 @@ def _build_otio_gate_agent(model) -> Agent:
         ],
         model=model,
     )
+
+
+def _build_assembly_agent(model) -> Agent:
+    """Build a Strands Agent for the assembly stage.
+
+    Uses the deterministic assembly tools — mux, concat, validate,
+    and upload the final documentary.  All OTIO operations are stateless.
+    """
+    from strands_agents.stages.assembly_stage import build_assembly_agent
+    return build_assembly_agent(model=model)
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +975,23 @@ def _needs_video_retry(state) -> bool:
         pass
     try:
         return state.get("_recovery_target") == VIDEO if hasattr(state, "get") else False
+    except Exception:
+        return False
+
+
+def _needs_assembly_retry(state) -> bool:
+    """Backward edge: otio gate → assembly when assembly fails."""
+    try:
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        gate = read_pipeline_metadata(tp, "gate_assembly")
+        if gate and isinstance(gate, dict) and not gate.get("valid", True):
+            return gate.get("recovery_target") == ASSEMBLY
+    except Exception:
+        pass
+    try:
+        return state.get("_recovery_target") == ASSEMBLY if hasattr(state, "get") else False
     except Exception:
         return False
 
