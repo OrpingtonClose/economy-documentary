@@ -130,23 +130,17 @@ def generate_narration(
     # Downstream timing (visual direction, video generation) depends on real
     # narration durations.  Silent audio is NEVER acceptable.
     #
-    # When TTS_WORKER_URL is set: call the dedicated Qwen3-TTS GPU worker.
-    # When TTS_WORKER_URL is NOT set: fall back to edge-tts (Microsoft Edge
-    # neural TTS) which produces real audio with correct durations.  Edge-tts
-    # satisfies the architectural invariant — real narration, real durations —
-    # while enabling runs on machines without a dedicated TTS GPU worker.
+    # TTS must use the Qwen3-TTS GPU worker. No edge-tts fallback.
+    # The provisioner allocates a TTS worker when it receives the task
+    # list from the audio stage. If no worker is available, the tool
+    # fails honestly.
     gpu_worker_url = os.environ.get("TTS_WORKER_URL", "")
     if not gpu_worker_url:
-        return _generate_narration_edge_tts(
-            scene_num=scene_num,
-            voice_role=voice_role,
-            text=text,
-            wav_path=wav_path,
-            duration=duration,
-            sidecar_path=sidecar_path,
-            text_hash=text_hash,
-            out_dir=out_dir,
-        )
+        return {
+            "scene_num": scene_num,
+            "status": "failed",
+            "error": "No TTS worker available. TTS_WORKER_URL not set. The provisioner must allocate a TTS worker.",
+        }
 
     # Determine language: explicit param takes priority, then suffix convention
     voice = voice_role
@@ -290,137 +284,6 @@ def generate_narration(
             "gen_time": round(gen_time, 2),
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# Edge-TTS fallback — real audio when no GPU worker is available
-# ---------------------------------------------------------------------------
-
-# Voice mapping: pipeline voice roles → edge-tts voice names
-_EDGE_TTS_VOICES: dict[str, str] = {
-    "V1": "en-US-GuyNeural",          # Hook — authoritative, warm
-    "V2": "en-US-ChristopherNeural",   # Expert — clear, informative
-    "V3": "en-US-AvaNeural",          # Storyteller — expressive, engaging
-    "V1_RU": "ru-RU-DmitriNeural",
-    "V2_RU": "ru-RU-DmitriNeural",
-    "V3_RU": "ru-RU-SvetlanaNeural",
-}
-
-
-def _generate_narration_edge_tts(
-    scene_num: int,
-    voice_role: str,
-    text: str,
-    wav_path: str,
-    duration: float,
-    sidecar_path: str,
-    text_hash: str,
-    out_dir: str,
-) -> str:
-    """Generate narration using edge-tts (Microsoft Edge neural TTS).
-
-    Produces real audio with real durations — satisfies the architectural
-    invariant that downstream timing depends on actual narration length.
-    Used as fallback when TTS_WORKER_URL is not set (no dedicated GPU worker).
-    """
-    import asyncio
-    import subprocess
-
-    edge_voice = _EDGE_TTS_VOICES.get(voice_role, "en-US-GuyNeural")
-    # Strip _RU/_EN suffix for lookup if not in the map
-    base_voice = voice_role.replace("_RU", "").replace("_EN", "")
-    if voice_role not in _EDGE_TTS_VOICES and base_voice in _EDGE_TTS_VOICES:
-        edge_voice = _EDGE_TTS_VOICES[base_voice]
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    # edge-tts outputs mp3; convert to wav via ffmpeg
-    mp3_path = wav_path.replace(".wav", ".mp3")
-
-    try:
-        cmd = [
-            "edge-tts",
-            "--voice", edge_voice,
-            "--text", text,
-            "--write-media", mp3_path,
-        ]
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode != 0:
-            logger.error("edge-tts failed: %s", result.stderr[:300])
-            raise RuntimeError(f"edge-tts failed: {result.stderr[:200]}")
-
-        # Convert mp3 → wav at 24kHz mono (match Qwen3-TTS output format)
-        ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", mp3_path,
-            "-ar", str(_SAMPLE_RATE),
-            "-ac", "1",
-            "-acodec", "pcm_s16le",
-            wav_path,
-        ]
-        ffmpeg_result = subprocess.run(
-            ffmpeg_cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        if ffmpeg_result.returncode != 0:
-            logger.error("ffmpeg mp3→wav failed: %s", ffmpeg_result.stderr[:300])
-            raise RuntimeError(f"ffmpeg conversion failed: {ffmpeg_result.stderr[:200]}")
-
-        # Read actual duration from WAV header
-        actual_duration = duration
-        actual_sample_rate = _SAMPLE_RATE
-        try:
-            with wave.open(wav_path, "r") as wf:
-                actual_duration = wf.getnframes() / wf.getframerate()
-                actual_sample_rate = wf.getframerate()
-        except wave.Error:
-            pass
-
-        # Write sidecar for caching
-        with open(sidecar_path, "w") as f:
-            f.write(text_hash)
-
-        # Clean up mp3
-        try:
-            os.remove(mp3_path)
-        except OSError:
-            pass
-
-        logger.info(
-            "Generated narration via edge-tts %s (%.2fs, %d words, voice=%s)",
-            wav_path, actual_duration, len(text.split()), edge_voice,
-        )
-
-        # Upload to B2
-        try:
-            from tools.b2_checkpoint import upload_tts_clip
-            upload_tts_clip(wav_path, sidecar_path)
-        except Exception as b2_err:
-            logger.warning("B2 upload failed for TTS clip %s: %s", wav_path, b2_err)
-
-        return json.dumps({
-            "status": "generated",
-            "mode": "edge-tts",
-            "wav_path": wav_path,
-            "duration": round(actual_duration, 2),
-            "sample_rate": actual_sample_rate,
-            "text_length": len(text),
-            "word_count": len(text.split()),
-            "gen_time": 0.0,
-            "voice": edge_voice,
-        })
-
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"edge-tts not installed (needed when TTS_WORKER_URL is not set). "
-            f"Install with: pip install edge-tts. Error: {exc}"
-        )
 
 
 # -- ADK FunctionTool wrappers (optional) ------------------------------------

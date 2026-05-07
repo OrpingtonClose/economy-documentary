@@ -26,7 +26,6 @@ from strands.models.anthropic import AnthropicModel
 from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
 from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.stages.preflight import run_preflight, PreflightError
-from worker_provisioner import VIDEO_SPEC, provision_vm, wait_for_worker_healthy
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
     CheckpointHook,
@@ -91,30 +90,12 @@ async def run_documentary(
     if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
         os.environ["_timeline_path"] = otio_manager._timeline_path
 
-    # Provision GPU worker if possible — but don't block pipeline startup.
-    # The production stage will fail honestly if no worker is available.
-    # This allows the first 4 stages (preflight, scenario, audio, visual)
-    # to run without a GPU worker.
-    if gpu_protocol is None and not os.environ.get("VIDEO_WORKER_URLS"):
-        try:
-            logger.info("Provisioning GPU video worker...")
-            spec = VIDEO_SPEC
-            vm_id = provision_vm(spec)
-            if vm_id == 0:
-                logger.warning("No GPU VMs available — production stage will fail")
-            else:
-                logger.info("GPU worker VM provisioned: vm_id=%d, waiting for healthy...", vm_id)
-                healthy = wait_for_worker_healthy(spec, timeout=900, poll_interval=15)
-                if not healthy:
-                    logger.warning(
-                        "GPU worker VM %d did not become healthy — production stage will fail",
-                        vm_id,
-                    )
-                else:
-                    logger.info("GPU worker healthy at %s", spec.worker_url)
-                    os.environ["VIDEO_WORKER_URLS"] = spec.worker_url
-        except Exception as exc:
-            logger.warning("GPU provisioning failed: %s — production stage will fail", exc)
+    # Provisioning is NOT done at startup. The provisioner receives the
+    # task list from the pipeline stages (audio tells the provisioner
+    # what TTS jobs it needs, production tells it what video jobs it
+    # needs). The provisioner optimizes once it sees the full picture.
+    # Worker URLs are set as env vars by the provisioner when workers
+    # are ready.
 
     # Build hooks
     approval_stages = set() if approval_mode == "auto_approve" else {

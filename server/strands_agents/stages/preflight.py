@@ -269,12 +269,103 @@ def _check_video_worker() -> CheckResult:
     return result
 
 
-def _check_tts_engine() -> CheckResult:
-    result = _check_python_module("edge_tts", "edge-tts (narration TTS)")
-    result.category = "dependencies"
-    if not result.passed:
-        result.remedy = "pip install edge-tts"
+def _check_tts_worker() -> CheckResult:
+    """Soft check — TTS worker needed for audio stage."""
+    url = os.environ.get("TTS_WORKER_URL", "")
+    if not url:
+        return CheckResult(
+            name="tts_worker", passed=False, soft=True, category="workers",
+            message="No TTS worker configured",
+            remedy="Set TTS_WORKER_URL or let the provisioner allocate one",
+        )
+    result = _check_http_reachable(f"{url.rstrip('/')}/health", "TTS worker")
+    result.category = "workers"
     return result
+
+
+def _check_model_availability() -> CheckResult:
+    """Check that the LLM model is reachable.
+
+    Makes a minimal API call to verify the model accepts requests.
+    This catches: wrong model ID, rate limits, region restrictions,
+    quota exhaustion — all things that would crash the first stage.
+    """
+    import urllib.request
+    import urllib.error
+
+    model_id = os.environ.get("STRANDS_MODEL", "claude-sonnet-4-20250514")
+
+    # Try Bedrock first
+    aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    aws_profile = os.environ.get("AWS_PROFILE", "")
+    aws_config = os.path.expanduser("~/.aws/credentials")
+
+    if aws_access and aws_secret or aws_profile or os.path.exists(aws_config):
+        try:
+            import boto3
+            session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
+            client = session.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+            # Minimal request — just enough to verify the model exists
+            response = client.invoke_model(
+                modelId=model_id,
+                body=json.dumps({"anthropic_version": "bedrock-2023-05-31", "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}),
+                contentType="application/json",
+                accept="application/json",
+            )
+            return CheckResult(
+                name="model_access", passed=True, category="model",
+                message=f"Bedrock model {model_id}: reachable",
+            )
+        except Exception as exc:
+            error_msg = str(exc)[:200]
+            return CheckResult(
+                name="model_access", passed=False, category="model",
+                message=f"Bedrock model {model_id}: {error_msg}",
+                remedy=f"Check model ID, region, and permissions. Error: {error_msg}",
+            )
+
+    # Try direct Anthropic API
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if anthropic_key:
+        try:
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=json.dumps({
+                    "model": model_id,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                }).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return CheckResult(
+                    name="model_access", passed=True, category="model",
+                    message=f"Anthropic model {model_id}: reachable",
+                )
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode()[:200] if exc.fp else ""
+            return CheckResult(
+                name="model_access", passed=False, category="model",
+                message=f"Anthropic model {model_id}: HTTP {exc.code} — {body}",
+                remedy=f"Check model ID and API key. Error: HTTP {exc.code}",
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="model_access", passed=False, category="model",
+                message=f"Anthropic model {model_id}: {exc}",
+                remedy=f"Check network access and API key. Error: {exc}",
+            )
+
+    return CheckResult(
+        name="model_access", passed=False, category="model",
+        message="Cannot check model — no credentials",
+        remedy="Set AWS credentials (Bedrock) or ANTHROPIC_API_KEY",
+    )
 
 
 def _check_otio() -> CheckResult:
@@ -315,8 +406,9 @@ def run_preflight(
 
     checks = [
         _check_llm_access(),
+        _check_model_availability(),
         _check_video_worker(),
-        _check_tts_engine(),
+        _check_tts_worker(),
         _check_otio(),
         _check_output_dir(output_dir),
         _check_disk(),
