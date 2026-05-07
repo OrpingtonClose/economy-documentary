@@ -25,6 +25,7 @@ from strands.models.anthropic import AnthropicModel
 
 from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
 from strands_agents.otio_manager import OTIOStateManager
+from strands_agents.stages.preflight import run_preflight, PreflightError
 from worker_provisioner import VIDEO_SPEC, provision_vm, wait_for_worker_healthy
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
@@ -73,6 +74,15 @@ async def run_documentary(
     # Set up model
     model = AnthropicModel(model_id=model_id or _MODEL_ID, max_tokens=8192)
 
+    # Preflight — check all resources before doing any work
+    report = run_preflight(output_dir=output_dir)
+    if not report.passed:
+        logger.error("Preflight failed — pipeline cannot start:")
+        for f in report.failures:
+            logger.error("  %s: %s", f.name, f.message)
+        raise PreflightError(report)
+    logger.info("Preflight: all checks passed")
+
     # Set up OTIO state manager
     otio_manager = OTIOStateManager(output_dir=output_dir)
     otio_manager.create_timeline("documentary_draft")
@@ -81,24 +91,30 @@ async def run_documentary(
     if hasattr(otio_manager, "_timeline_path") and otio_manager._timeline_path:
         os.environ["_timeline_path"] = otio_manager._timeline_path
 
-    # Provision GPU worker for video generation
-    if gpu_protocol is None:
-        logger.info("Provisioning GPU video worker...")
-        spec = VIDEO_SPEC
-        vm_id = provision_vm(spec)
-        if vm_id == 0:
-            raise RuntimeError("Failed to provision GPU video worker — no VMs available")
-        logger.info("GPU worker VM provisioned: vm_id=%d, waiting for healthy...", vm_id)
-        healthy = wait_for_worker_healthy(spec, timeout=900, poll_interval=15)
-        if not healthy:
-            raise RuntimeError(
-                f"GPU worker VM {vm_id} did not become healthy within 900s. "
-                f"Check worker_url={spec.worker_url}"
-            )
-        logger.info("GPU worker healthy at %s", spec.worker_url)
-        # The GPU protocol is the worker URL — the production agent will
-        # submit HTTP requests to it
-        os.environ["VIDEO_WORKER_URLS"] = spec.worker_url
+    # Provision GPU worker if possible — but don't block pipeline startup.
+    # The production stage will fail honestly if no worker is available.
+    # This allows the first 4 stages (preflight, scenario, audio, visual)
+    # to run without a GPU worker.
+    if gpu_protocol is None and not os.environ.get("VIDEO_WORKER_URLS"):
+        try:
+            logger.info("Provisioning GPU video worker...")
+            spec = VIDEO_SPEC
+            vm_id = provision_vm(spec)
+            if vm_id == 0:
+                logger.warning("No GPU VMs available — production stage will fail")
+            else:
+                logger.info("GPU worker VM provisioned: vm_id=%d, waiting for healthy...", vm_id)
+                healthy = wait_for_worker_healthy(spec, timeout=900, poll_interval=15)
+                if not healthy:
+                    logger.warning(
+                        "GPU worker VM %d did not become healthy — production stage will fail",
+                        vm_id,
+                    )
+                else:
+                    logger.info("GPU worker healthy at %s", spec.worker_url)
+                    os.environ["VIDEO_WORKER_URLS"] = spec.worker_url
+        except Exception as exc:
+            logger.warning("GPU provisioning failed: %s — production stage will fail", exc)
 
     # Build hooks
     approval_stages = set() if approval_mode == "auto_approve" else {

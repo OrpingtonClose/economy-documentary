@@ -29,6 +29,7 @@ class CheckResult:
     name: str
     passed: bool
     message: str = ""
+    soft: bool = False  # Soft failure: warn but don't block pipeline
 
 
 @dataclass
@@ -37,11 +38,19 @@ class PreflightReport:
 
     @property
     def passed(self) -> bool:
-        return all(c.passed for c in self.checks)
+        return all(c.passed for c in self.checks if not c.soft)
 
     @property
     def failures(self) -> list[CheckResult]:
         return [c for c in self.checks if not c.passed]
+
+    @property
+    def hard_failures(self) -> list[CheckResult]:
+        return [c for c in self.checks if not c.passed and not c.soft]
+
+    @property
+    def warnings(self) -> list[CheckResult]:
+        return [c for c in self.checks if not c.passed and c.soft]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -126,18 +135,50 @@ def _check_python_module(module_name: str, description: str) -> CheckResult:
 # ---------------------------------------------------------------------------
 
 def _check_llm_access() -> CheckResult:
-    """Check that the LLM API key is set."""
-    return _check_env_var("ANTHROPIC_API_KEY", "Anthropic API key (for Claude)")
+    """Check that LLM API credentials are available.
+
+    Strands uses AWS Bedrock by default. Check for AWS credentials.
+    Also accept ANTHROPIC_API_KEY for direct Anthropic model usage.
+    """
+    # Check AWS credentials (Bedrock)
+    aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
+    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
+    aws_profile = os.environ.get("AWS_PROFILE", "")
+    if aws_access and aws_secret:
+        return CheckResult(name="llm_access", passed=True, message="AWS credentials: configured")
+    if aws_profile:
+        return CheckResult(name="llm_access", passed=True, message=f"AWS profile: {aws_profile}")
+    # Check AWS config file
+    aws_config = os.path.expanduser("~/.aws/credentials")
+    if os.path.exists(aws_config):
+        return CheckResult(name="llm_access", passed=True, message="AWS credentials file: found")
+
+    # Fallback: direct Anthropic API
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if anthropic_key:
+        return CheckResult(name="llm_access", passed=True, message="Anthropic API key: configured")
+
+    return CheckResult(
+        name="llm_access",
+        passed=False,
+        message="No LLM credentials. Need AWS credentials (for Bedrock) or ANTHROPIC_API_KEY.",
+    )
 
 
 def _check_video_worker() -> CheckResult:
-    """Check that a GPU video worker is available."""
+    """Check that a GPU video worker is available.
+
+    This is a soft check — the pipeline can run the first 4 stages
+    without a GPU worker. Production will fail if no worker is
+    available by then.
+    """
     url = os.environ.get("VIDEO_WORKER_URLS", "")
     if not url:
         return CheckResult(
             name="video_worker",
             passed=False,
-            message="No GPU video worker. Set VIDEO_WORKER_URLS or run the provisioner first.",
+            soft=True,
+            message="No GPU video worker. Stages 0-3 will run, but production will fail. Set VIDEO_WORKER_URLS or run the provisioner.",
         )
     return _check_http_reachable(f"{url.rstrip('/')}/health", "GPU video worker")
 
@@ -204,37 +245,3 @@ class PreflightError(Exception):
         self.report = report
         failures = "\n".join(f"  {f.name}: {f.message}" for f in report.failures)
         super().__init__(f"Preflight checks failed:\n{failures}")
-
-
-# ---------------------------------------------------------------------------
-# Agent builder — deterministic, no LLM needed
-# ---------------------------------------------------------------------------
-
-def build_preflight_agent(output_dir: str = "/tmp/documentary-pipeline") -> Any:
-    """Build the preflight stage agent.
-
-    This is a deterministic agent: it runs checks, returns a report,
-    and does not need an LLM. It uses a single tool that runs all
-    preflight checks and returns the result.
-    """
-    from strands import Agent, tool
-
-    @tool
-    def verify_pipeline_readiness() -> dict[str, Any]:
-        """Run all preflight checks and return a structured report.
-
-        Checks: API keys, GPU worker, TTS engine, OTIO, output dir,
-        disk space. If any check fails, the pipeline must not start.
-        """
-        report = run_preflight(output_dir=output_dir)
-        return report.as_dict()
-
-    return Agent(
-        name="preflight",
-        system_prompt=(
-            "You are the preflight stage. Call verify_pipeline_readiness "
-            "exactly once. If the report shows any failures, state them "
-            "clearly. If all checks pass, confirm readiness."
-        ),
-        tools=[verify_pipeline_readiness],
-    )
