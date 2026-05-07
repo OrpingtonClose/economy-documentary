@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "moonshot-v1-8k",
-    "base_url": "https://api.moonshot.cn/v1",
+    "model": "deepseek-chat",
+    "base_url": "https://api.deepseek.com/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,
     "max_nodes": 50,
