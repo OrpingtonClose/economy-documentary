@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "deepseek-chat",
-    "base_url": "https://api.deepseek.com/v1",
+    "model": "moonshotai/kimi-k2.6",
+    "base_url": "https://openrouter.ai/api/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,
     "max_nodes": 50,
@@ -58,6 +58,8 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
         return AnthropicModel(model_id=model_id, params={"max_tokens": 8192})
 
     # OpenAI-compatible: Kimi, Moonshot, DeepSeek, Qwen, local, etc.
+    # OpenRouter requires the full prefix (e.g. moonshotai/kimi-k2.6)
+    # Direct providers (DeepSeek, Moonshot direct) use bare model IDs
     from openai import AsyncOpenAI
     from strands.models.openai import OpenAIModel
 
@@ -65,8 +67,12 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
         api_key=api_key,
         base_url=base_url or DEFAULTS["base_url"],
     )
-    bare_model = model_id.split("/")[-1]  # strip any prefix like moonshotai/
-    return OpenAIModel(client=client, model_id=bare_model, params={"max_tokens": 8192})
+    # Keep full model ID for OpenRouter; strip prefix only for direct providers
+    if "openrouter" in (base_url or DEFAULTS["base_url"]):
+        model_name = model_id
+    else:
+        model_name = model_id.split("/")[-1]
+    return OpenAIModel(client=client, model_id=model_name, params={"max_tokens": 8192})
 
 
 def _create_timeline_file(timeline_path: str) -> None:
