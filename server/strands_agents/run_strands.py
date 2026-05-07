@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "claude-sonnet-4-20250514",
+    "model": "moonshot-v1-8k",
+    "base_url": "https://api.moonshot.cn/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,
     "max_nodes": 50,
@@ -190,7 +191,7 @@ def main():
     parser.add_argument("brief", nargs="+", help="Documentary brief")
     parser.add_argument("--model", "-m", default=DEFAULTS["model"], help=f"Model ID (default: {DEFAULTS['model']})")
     parser.add_argument("--api-key", "-k", required=True, help="API key")
-    parser.add_argument("--base-url", help="Base URL (for OpenAI-compatible providers)")
+    parser.add_argument("--base-url", default=DEFAULTS.get("base_url"), help=f"Base URL (default: {DEFAULTS.get('base_url', 'none')})")
     parser.add_argument("--output-dir", "-o", default=DEFAULTS["output_dir"], help=f"Output dir (default: {DEFAULTS['output_dir']})")
     parser.add_argument("--budget", "-b", type=float, default=DEFAULTS["budget"], help=f"Budget USD (default: {DEFAULTS['budget']})")
     parser.add_argument("--max-nodes", type=int, default=DEFAULTS["max_nodes"], help=f"Max node executions (default: {DEFAULTS['max_nodes']})")
