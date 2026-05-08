@@ -19,6 +19,12 @@ const nextConfig = {
         source: "/playground/:path*",
         destination: `${target}/playground/:path*`,
       },
+      // AG-UI transport — CopilotKit communicates with the Strands
+      // agent via this endpoint.
+      {
+        source: "/agui/:path*",
+        destination: `${target}/agui/:path*`,
+      },
     ];
   },
 };

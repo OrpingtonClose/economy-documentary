@@ -1,10 +1,10 @@
 """Minimal FastAPI entrypoint for the Component Playground staging VM.
 
-``server.server:app`` mounts the full ADK pipeline (dashboard, agui,
-fleet, agents, google-adk, ag-ui) — none of which the playground needs.
-This module exposes only the ``/playground`` router plus a ``/health``
-check so the sealed inspection workbench can run on a CPU-only VM
-without dragging in GPU/TTS/B2/dashboard dependencies.
+``server.server:app`` mounts the full pipeline (dashboard, fleet,
+agents) — none of which the playground needs. This module exposes
+only the ``/playground`` router, the ``/agui`` AG-UI transport,
+and a ``/health`` check so the sealed inspection workbench can run
+on a CPU-only VM without dragging in GPU/TTS/B2/dashboard dependencies.
 
 Used by ``scripts/playground_staging_bootstrap.sh`` — the supervisor
 config points uvicorn at ``playground_server:app``.
@@ -79,6 +79,38 @@ except ImportError as _imp_err:  # pragma: no cover - diagnostic path
     _logging.getLogger(__name__).warning(
         "playground router unavailable — /playground endpoints disabled: %s",
         _imp_err,
+    )
+
+
+# AG-UI transport — bridges the playground's RunStream to the AG-UI
+# wire protocol so CopilotKit and other AG-UI consumers can subscribe
+# to playground events without custom SSE parsing.
+try:
+    from agui_transport import add_playground_agui_endpoint  # noqa: E402
+
+    add_playground_agui_endpoint(app, path="/agui")
+except ImportError as _agui_err:  # pragma: no cover - diagnostic path
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "AG-UI transport unavailable — /agui endpoints disabled: %s",
+        _agui_err,
+    )
+
+
+# AG-UI events bridge — forwards the legacy agui_events pub/sub bus
+# (used by the production pipeline: agents, gatekeeper, recovery) to
+# the AG-UI wire so CopilotKit can consume those events too.
+try:
+    from agui_bridge import add_agui_events_endpoint  # noqa: E402
+
+    add_agui_events_endpoint(app, path="/agui")
+except ImportError as _bridge_err:  # pragma: no cover - diagnostic path
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "AG-UI events bridge unavailable — /agui/events disabled: %s",
+        _bridge_err,
     )
 
 

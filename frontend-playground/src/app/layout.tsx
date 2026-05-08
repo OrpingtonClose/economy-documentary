@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import { CopilotProvider } from "./copilot/CopilotProvider";
+import { PlaygroundCopilotSidebar } from "./copilot/PlaygroundCopilotSidebar";
 
 export const metadata: Metadata = {
   title: "Documentary Playground",
@@ -16,7 +18,10 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en" className="bg-pg-bg text-pg-text">
       <body className="min-h-screen bg-pg-bg text-pg-text antialiased">
-        {children}
+        <CopilotProvider>
+          {children}
+          <PlaygroundCopilotSidebar />
+        </CopilotProvider>
       </body>
     </html>
   );

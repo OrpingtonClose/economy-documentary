@@ -1,0 +1,10 @@
+{
+  "error_type": "timing_loop_stuck",
+  "tool": "timing_loop",
+  "stage": "timing",
+  "iterations": 15,
+  "max_iterations": 10,
+  "error_message": "Timing loop exceeded max iterations without convergence",
+  "recoverable": false,
+  "severity": "high"
+}

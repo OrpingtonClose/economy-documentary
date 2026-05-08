@@ -112,7 +112,7 @@ fi
 # missing, the dedicated-model reachability probe will surface it as a
 # MODEL_UNREACHABLE red dot, which is the fail-closed contract.
 uv pip install --system --python "$PY" \
-    'fastapi>=0.100.0' \
+    'fastapi>=0.115.12' \
     'uvicorn[standard]>=0.20.0' \
     'pydantic>=2.0.0' \
     'python-dotenv>=1.0.0' \
@@ -127,7 +127,9 @@ uv pip install --system --python "$PY" \
     'strands-agents-evals==0.1.15' \
     'deepagents==0.5.3' \
     'langchain-core' \
-    'langgraph'
+    'langgraph' \
+    'ag-ui-protocol>=0.1.18' \
+    'ag_ui_strands>=0.1.7'
 
 # ---------------------------------------------------------------------------
 # Frontend (build for production)
@@ -175,7 +177,7 @@ for var in \
     OPENROUTER_API_KEY DEEPSEEK_API_KEY GLM_API_KEY MISTRAL_API_KEY \
     B2_KEY_ID B2_APPLICATION_KEY \
     PLAYGROUND_USER_CASES_DIR \
-    ADK_MODEL OPENAI_API_BASE \
+    OPENAI_API_BASE \
     MAX_CONCURRENT_LLM MAX_CONTEXT_TOKENS
 do
     val="${!var:-}"
@@ -248,6 +250,18 @@ server {
     location /playground/ {
         proxy_pass http://127.0.0.1:8000/playground/;
         proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_read_timeout 86400;
+    }
+
+    # AG-UI transport — CopilotKit and AG-UI consumers hit this.
+    location /agui/ {
+        proxy_pass http://127.0.0.1:8000/agui/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;

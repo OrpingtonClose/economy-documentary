@@ -166,14 +166,17 @@ echo "ltx-2 venv interpreter: $LTX_VIDEO_LTX2_PYTHON"
 }
 
 # ---------------------------------------------------------------------------
-# Pre-download pinned model weights (snapshots, not symlinks-only).
+# Pre-download pinned model weights.
 #
-# ``HF_ENDPOINT`` defaults to hf-mirror.com because some Vast.ai
-# datacenter IP blocks have no TCP egress to huggingface.co. The mirror
-# serves identical bytes for these manifests. Both repos are public /
-# non-gated (LTX-2.3 + Lightricks' Gemma-3 mirror), so no HF_TOKEN is
-# required — but we forward it if the operator chooses to set one.
+# Primary source: Backblaze B2 (fast, reliable, no HF mirror dependency).
+# Fallback: HuggingFace via hf-mirror.com (some Vast.ai datacenters block
+# direct HF access). The B2 bucket is private, so B2_APPLICATION_KEY_ID
+# and B2_APPLICATION_KEY must be set. If they're not set, the script
+# falls back to the HF download path.
 # ---------------------------------------------------------------------------
+B2_BUCKET="${B2_BUCKET:-ltx2-models-orpington}"
+B2_APPLICATION_KEY_ID="${B2_APPLICATION_KEY_ID:-}"
+B2_APPLICATION_KEY="${B2_APPLICATION_KEY:-}"
 HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 HF_HUB_ENABLE_HF_TRANSFER="${HF_HUB_ENABLE_HF_TRANSFER:-0}"
 export HF_ENDPOINT HF_HUB_ENABLE_HF_TRANSFER
@@ -181,25 +184,87 @@ if [ -n "${HF_TOKEN:-}" ]; then
     export HF_TOKEN
 fi
 
-echo "Pre-downloading $LTX_VIDEO_HF_REPO at $LTX_VIDEO_HF_REVISION ..."
-"$VENV_DIR/bin/python" - <<PY
+# Resolve model cache directory
+HF_CACHE_DIR="${HF_CACHE_DIR:-$HOME/.cache/huggingface/hub}"
+LTX_MODEL_DIR="$HF_CACHE_DIR/models--Lightricks--LTX-2.3"
+GEMMA_MODEL_DIR="$HF_CACHE_DIR/models--Lightricks--gemma-3-12b-it-qat-q4_0-unquantized"
+
+# Expected SHA256 for the LTX-2.3 base checkpoint (matches _model_pin.py)
+LTX_BLOB_SHA="7ab7225325bc403448ea84b6db2269811a880e5118cd2ee2b6282a93d585016f"
+
+download_from_b2() {
+    # Download a file from B2 to a local path.
+    # Public bucket: no auth needed. Private: uses B2 credentials.
+    local b2_key="$1"    # e.g. "ltx-2.3/ltx-2.3-22b-dev.safetensors"
+    local dest="$2"     # local file path
+    local b2_url="https://f004.backblazeb2.com/file/${B2_BUCKET}/${b2_key}"
+    echo "Downloading from B2: $b2_key -> $dest"
+    if [ -n "$B2_APPLICATION_KEY_ID" ] && [ -n "$B2_APPLICATION_KEY" ]; then
+        curl -fSL --progress-bar \
+            -o "$dest" \
+            "${b2_url}?Authorization=${B2_APPLICATION_KEY_ID}:${B2_APPLICATION_KEY}"
+    else
+        curl -fSL --progress-bar \
+            -o "$dest" \
+            "$b2_url"
+    fi \
+    && echo "B2 download complete: $b2_key" \
+    || { echo "B2 download failed: $b2_key"; return 1; }
+}
+
+# --- LTX-2.3 base checkpoint ---
+LTX_BLOB_PATH="$LTX_MODEL_DIR/blobs/$LTX_BLOB_SHA"
+if [ -f "$LTX_BLOB_PATH" ]; then
+    echo "LTX-2.3 checkpoint already cached at $LTX_BLOB_PATH"
+else
+    echo "Downloading LTX-2.3 from B2 ($B2_BUCKET) ..."
+    mkdir -p "$LTX_MODEL_DIR/blobs"
+    mkdir -p "$LTX_MODEL_DIR/refs"
+    echo "$LTX_VIDEO_HF_REVISION" > "$LTX_MODEL_DIR/refs/main"
+    if download_from_b2 "ltx-2.3/ltx-2.3-22b-dev.safetensors" "$LTX_BLOB_PATH"; then
+        # Create snapshot symlink so huggingface_hub / verify_pin finds the model
+        SNAP_DIR="$LTX_MODEL_DIR/snapshots/$LTX_VIDEO_HF_REVISION"
+        mkdir -p "$SNAP_DIR"
+        [ -L "$SNAP_DIR/ltx-2.3-22b-dev.safetensors" ] || ln -sf "$LTX_BLOB_PATH" "$SNAP_DIR/ltx-2.3-22b-dev.safetensors"
+    else
+        echo "B2 download failed, falling back to HuggingFace ..."
+        rm -f "$LTX_BLOB_PATH"
+        "$VENV_DIR/bin/python" - <<PY
 import os
 from huggingface_hub import snapshot_download
-# BASIC pipeline reads the full base checkpoint only; distilled
-# checkpoints / spatial-temporal upscalers / distilled LoRAs are not
-# loaded by ``ti2vid_one_stage`` so we skip downloading them.
 snapshot_download(
     repo_id="$LTX_VIDEO_HF_REPO",
     revision="$LTX_VIDEO_HF_REVISION",
-    allow_patterns=[
-        "ltx-2.3-22b-dev.safetensors",
-    ],
+    allow_patterns=["ltx-2.3-22b-dev.safetensors"],
     token=os.environ.get("HF_TOKEN"),
 )
 PY
+    fi
+fi
 
-echo "Pre-downloading $LTX_VIDEO_GEMMA_HF_REPO at $LTX_VIDEO_GEMMA_HF_REVISION ..."
-"$VENV_DIR/bin/python" - <<PY
+# --- Gemma text encoder ---
+if [ -d "$GEMMA_MODEL_DIR/snapshots" ]; then
+    echo "Gemma text encoder already cached"
+else
+    echo "Downloading Gemma text encoder from B2 ($B2_BUCKET) ..."
+    GEMMA_SNAP_DIR="$GEMMA_MODEL_DIR/snapshots/$LTX_VIDEO_GEMMA_HF_REVISION"
+    mkdir -p "$GEMMA_SNAP_DIR"
+    mkdir -p "$GEMMA_MODEL_DIR/blobs"
+    mkdir -p "$GEMMA_MODEL_DIR/refs"
+    echo "$LTX_VIDEO_GEMMA_HF_REVISION" > "$GEMMA_MODEL_DIR/refs/main"
+    GEMMA_FILES="model-00001-of-00005.safetensors model-00002-of-00005.safetensors model-00003-of-00005.safetensors model-00004-of-00005.safetensors model-00005-of-00005.safetensors"
+    B2_GEMMA_OK=true
+    for gf in $GEMMA_FILES; do
+        if ! download_from_b2 "ltx-2.3/gemma/$gf" "$GEMMA_SNAP_DIR/$gf"; then
+            B2_GEMMA_OK=false
+            echo "B2 download failed for $gf"
+            break
+        fi
+    done
+    if [ "$B2_GEMMA_OK" = "false" ]; then
+        echo "B2 Gemma download failed, falling back to HuggingFace ..."
+        rm -f "$GEMMA_SNAP_DIR"/model-*.safetensors
+        "$VENV_DIR/bin/python" - <<PY
 import os
 from huggingface_hub import snapshot_download
 snapshot_download(
@@ -208,6 +273,8 @@ snapshot_download(
     token=os.environ.get("HF_TOKEN"),
 )
 PY
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Resolve advertised endpoint + VRAM

@@ -10,7 +10,6 @@ include = [
     "fleet*",
     "agents*",
     "plugins*",
-    "adk_eval*",
     "critique*",
     "previews*",
     "callbacks*",
@@ -25,12 +24,10 @@ name = "documentary-pipeline"
 version = "0.1.0"
 requires-python = ">=3.12,<3.15"
 dependencies = [
-    "google-adk>=1.0.0",
     "python-dotenv",
     "litellm",
     "aiosqlite",
-    "ag-ui-adk>=0.5.0",
-    "fastapi>=0.100.0",
+    "fastapi>=0.115.12",
     "uvicorn>=0.20.0",
     "duckdb>=1.4.0,<1.5.0",
     "agentops>=0.4.21",
@@ -40,32 +37,21 @@ dependencies = [
     "vastai",
     "b2sdk (>=2.10.4,<3.0.0)",
     "pytest>=8.0",
+    "strands-agents (==1.36.0)",
+    "strands-agents-evals (==0.1.15)",
+    "deepagents (==0.5.3)",
+    "ag-ui-protocol (>=0.1.18)",
+    "ag_ui_strands (>=0.1.7)",
 ]
 
 [dependency-groups]
 dev = [
     "pytest (>=9.0.3,<10.0.0)",
-    # ``pytest-asyncio`` is needed by ``test_playground_events.py`` —
-    # the event-stream tests drive ``RunStream`` / ``wait_for_after``
-    # directly as coroutines. ``asyncio_mode = "auto"`` below lets us
-    # write ``async def test_...`` without per-test decorators.
     "pytest-asyncio (>=0.23,<2.0)",
-    # Pin the ADK version used for the eval harness so CI is deterministic.
-    # The production install (``google-adk >= 1.0.0`` above) stays unpinned.
-    "google-adk (==1.29.0)",
-]
-# Strands reimplementation lives behind its own dep group so ADK installs
-# stay unchanged. Enable with ``poetry install --with strands``. Exact
-# pins match docs/strands-migration/ expectations; bumping a minor
-# requires a bake week.
-strands = [
-    "strands-agents (==1.36.0)",
-    "strands-agents-evals (==0.1.15)",
-    "deepagents (==0.5.3)",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "adk_eval", "strands_agents/tests"]
+testpaths = ["strands_agents/tests"]
 pythonpath = ["."]
 # ``auto`` mode lets ``async def test_...`` work without a per-test
 # ``@pytest.mark.asyncio`` decorator. The event-stream tests need it;

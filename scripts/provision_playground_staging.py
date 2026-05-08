@@ -63,7 +63,6 @@ FORWARDED_ENV_VARS: tuple[str, ...] = (
     "B2_KEY_ID",
     "B2_APPLICATION_KEY",
     # Tuning knobs.
-    "ADK_MODEL",
     "OPENAI_API_BASE",
     "MAX_CONCURRENT_LLM",
     "MAX_CONTEXT_TOKENS",
