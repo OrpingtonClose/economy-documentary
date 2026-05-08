@@ -19,11 +19,6 @@ import json
 import logging
 import os
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
-
 logger = logging.getLogger(__name__)
 
 _SECONDS_PER_WORD = 0.3
@@ -174,9 +169,3 @@ def align_narration(
             f"WhisperX worker."
         ) from e
 
-
-# -- ADK FunctionTool wrappers (optional) ------------------------------------
-if FunctionTool is not None:
-    align_narration_tool = FunctionTool(align_narration)
-else:
-    align_narration_tool = None

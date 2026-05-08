@@ -3,7 +3,7 @@
 Two consumer lanes for preview assemblies:
 
 1. **Agent lane** — :func:`evaluate_preview` is a plain callable a
-   coherence critic agent can call as a :mod:`google.adk` tool.  It
+   coherence critic agent can call as a tool.  It
    reads the latest preview manifest, derives structured findings
    (missing-slot counts, failed-slot reasons, in-progress rungs,
    honest-placeholder ratios), and routes any concerns to the

@@ -123,57 +123,11 @@ async def get_reasoning_traces_raw(
         limit:      max rows (default 50)
         since:      only rows after this Unix timestamp (for polling)
     """
-    try:
-        from plugins.reasoning_trace import _REASONING_DB
-        import sqlite3 as _sqlite3
-
-        conn = _sqlite3.connect(_REASONING_DB, timeout=5)
-        conn.row_factory = _sqlite3.Row
-
-        query = "SELECT * FROM reasoning_log WHERE 1=1"
-        params: list = []
-
-        if agent:
-            query += " AND agent_name = ?"
-            params.append(agent)
-        if event_type:
-            query += " AND event_type = ?"
-            params.append(event_type)
-        if since:
-            query += " AND timestamp > ?"
-            params.append(since)
-
-        query += " ORDER BY id DESC LIMIT ?"
-        params.append(limit)
-
-        try:
-            rows = conn.execute(query, params).fetchall()
-        finally:
-            conn.close()
-
-        traces = []
-        for row in rows:
-            traces.append({
-                "id": row["id"],
-                "timestamp": row["timestamp"],
-                "event_type": row["event_type"],
-                "agent_name": row["agent_name"],
-                "model": row["model"],
-                "content": row["content"],
-                "tokens_in": row["tokens_in"],
-                "tokens_out": row["tokens_out"],
-                "metadata": json.loads(row["metadata"]) if row["metadata"] else {},
-            })
-
-        # Return in chronological order (query was DESC for LIMIT)
-        traces.reverse()
-        return JSONResponse({"traces": traces, "count": len(traces)})
-
-    except Exception as e:
-        return JSONResponse(
-            {"traces": [], "count": 0, "error": str(e)},
-            status_code=200,
-        )
+    # reasoning_trace plugin removed (ADK pipeline deleted)
+    return JSONResponse(
+        {"traces": [], "count": 0, "error": "reasoning_trace plugin removed"},
+        status_code=200,
+    )
 
 
 # ---------------------------------------------------------------------------

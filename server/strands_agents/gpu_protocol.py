@@ -1,7 +1,7 @@
 """
 GPU protocol — extracted interface for GPU job submission and monitoring.
 
-Decouples GPU job management from the ADK FunctionTool wrappers in
+Decouples GPU job management from the tool wrappers in
 ``server/tools/vastai_tools.py`` and ``server/tools/video_tools.py``.
 In the Strands architecture, GPU jobs are submitted via Temporal
 workflows for durability (heartbeat, retry, VM preemption handling).

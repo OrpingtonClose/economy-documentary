@@ -41,6 +41,50 @@ from strands.multiagent.graph import (
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Per-agent memory tools
+# ---------------------------------------------------------------------------
+
+def _make_memory_tools(agent_name: str) -> list:
+    """Create remember + recall_memory tools scoped to a specific agent."""
+    from strands import tool
+
+    @tool
+    def remember(text: str, category: str = "fact") -> str:
+        """Write a durable memory that survives across pipeline runs.
+
+        Use this when you learn something that future runs should know:
+        - GPU offers that failed (and why)
+        - Disk size requirements, boot times
+        - Tool bugs or workarounds
+        - What configurations actually worked
+        category: 'failure', 'success', or 'fact'
+        """
+        from agent_memory import remember as _remember
+        return _remember(agent_name, text, category)
+
+    # Rename to avoid collision when multiple agents exist
+    remember.__name__ = f"remember_{agent_name}"
+
+    @tool
+    def recall_memory(query: str = "", category: str = "", limit: int = 20) -> str:
+        """Recall memories from previous pipeline runs.
+
+        Searches your persistent memory by keyword match.
+        Use this at the start of your work to check what you've learned before.
+        query: search term (case-insensitive). Empty = return all.
+        category: 'failure', 'success', 'fact'. Empty = all.
+        limit: max results.
+        """
+        from agent_memory import recall_memory as _recall
+        return _recall(agent_name, query, category, limit)
+
+    recall_memory.__name__ = f"recall_memory_{agent_name}"
+
+    return [remember, recall_memory]
+
+
 # ---------------------------------------------------------------------------
 # Agent node IDs
 # ---------------------------------------------------------------------------
@@ -485,6 +529,8 @@ def _build_scenario_agent(model) -> Agent:
         return write_pipeline_metadata(tp, "style_lock", json.loads(lock_json),
                                        provenance=json.loads(provenance_json))
 
+    memory_tools = _make_memory_tools("scenario")
+
     return Agent(
         name="scenario",
         system_prompt=(
@@ -492,12 +538,15 @@ def _build_scenario_agent(model) -> Agent:
             "Your job is to generate a documentary scenario: scenes, visual "
             "style, and style lock. Write ALL output to the OTIO file "
             "using write_scenes, write_visual_style, and write_style_lock.\n\n"
+            "At the start of your work, call recall_memory to check what you've "
+            "learned from previous runs. When you discover something important "
+            "(a pattern, a gotcha, a preference), call remember to persist it.\n\n"
             "RULES:\n"
             "- ALL data goes to the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
             "- Persist immediately, even on error.\n"
         ),
-        tools=[write_scenes, write_visual_style, write_style_lock],
+        tools=[write_scenes, write_visual_style, write_style_lock] + memory_tools,
         model=model,
     )
 
@@ -575,15 +624,15 @@ def _build_audio_agent(model) -> Agent:
 
     @tool
     def check_vm_status(vm_id: str) -> str:
-        """Check if a VM is running and healthy."""
-        from agents.audio_provisioner_agent import _tool_check_vm_status
-        return _tool_check_vm_status(vm_id)
+        """Check if a VM is running and healthy. Rate-limited per VM."""
+        from agent_memory import _rate_limited_check_vm_status
+        return _rate_limited_check_vm_status(vm_id)
 
     @tool
     def check_worker_health(url: str, capability: str = "tts") -> str:
-        """Check if a worker's /health endpoint is OK."""
-        from worker_provisioner import check_worker_health as _check
-        return json.dumps({"healthy": _check(url, capability)})
+        """Check if a worker's /health endpoint is OK. Rate-limited per URL."""
+        from agent_memory import _rate_limited_check_worker_health
+        return _rate_limited_check_worker_health(url, capability)
 
     @tool
     def terminate_vm(vm_id: str) -> str:
@@ -660,12 +709,16 @@ def _build_audio_agent(model) -> Agent:
             "history": json.loads(history_json),
         }, provenance={"agent": "audio"})
 
+    memory_tools = _make_memory_tools("audio")
+
     return Agent(
         name="audio",
         system_prompt=(
             "You are the Audio+Provisioner Agent for a documentary pipeline.\n\n"
             "You own TTS end-to-end: allocate workers, generate narration, "
             "evaluate quality, scale workers.\n\n"
+            "PHASE 0: RECALL — call recall_memory to check what you've learned "
+            "from previous runs (GPU preferences, disk requirements, failures).\n"
             "PHASE 1: READ — find narration gaps in OTIO (find_narration_gaps)\n"
             "PHASE 2: PLAN — compute workload from gaps\n"
             "PHASE 3: PROVISION — search Vast.ai GPUs, pick one, create VM, "
@@ -675,13 +728,16 @@ def _build_audio_agent(model) -> Agent:
             "PHASE 4: GENERATE — for each gap, call generate_narration, "
             "add_clip to OTIO, align_narration\n"
             "PHASE 5: EVALUATE — evaluate_narration_quality, rebalance if needed\n"
-            "PHASE 6: CLEANUP — terminate_vm to stop billing\n\n"
+            "PHASE 6: CLEANUP — terminate_vm to stop billing\n"
+            "PHASE 7: REMEMBER — call remember for anything you learned this run "
+            "(failures, successes, gotchas).\n\n"
             "RULES:\n"
             "- ALL data flows through the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
             "- If scenes are missing, report error — that's a contract violation.\n"
             "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
             "- Always terminate VMs when done to minimize cost.\n"
+            "- Poll VM health with backoff: 10s, 30s, 60s, 120s. Don't tight-loop.\n"
         ),
         tools=[
             read_pipeline_data, find_narration_gaps, get_scene_durations,
@@ -691,7 +747,7 @@ def _build_audio_agent(model) -> Agent:
             get_account_credits,
             generate_narration, align_narration, evaluate_narration_quality,
             begin_escalation, end_escalation, classify_failure, write_ladder_state,
-        ],
+        ] + memory_tools,
         model=model,
     )
 
@@ -804,15 +860,15 @@ def _build_video_agent(model) -> Agent:
 
     @tool
     def check_vm_status(vm_id: str) -> str:
-        """Check if a VM is running and healthy."""
-        from agents.video_provisioner_agent import _tool_check_vm_status
-        return _tool_check_vm_status(vm_id)
+        """Check if a VM is running and healthy. Rate-limited per VM."""
+        from agent_memory import _rate_limited_check_vm_status
+        return _rate_limited_check_vm_status(vm_id)
 
     @tool
     def check_worker_health(url: str, capability: str = "ltx") -> str:
-        """Check if a worker's /health endpoint is OK."""
-        from worker_provisioner import check_worker_health as _check
-        return json.dumps({"healthy": _check(url, capability)})
+        """Check if a worker's /health endpoint is OK. Rate-limited per URL."""
+        from agent_memory import _rate_limited_check_worker_health
+        return _rate_limited_check_worker_health(url, capability)
 
     @tool
     def terminate_vm(vm_id: str) -> str:
@@ -884,12 +940,16 @@ def _build_video_agent(model) -> Agent:
             "history": json.loads(history_json),
         }, provenance={"agent": "video"})
 
+    memory_tools = _make_memory_tools("video")
+
     return Agent(
         name="video",
         system_prompt=(
             "You are the Video+Provisioner Agent for a documentary pipeline.\n\n"
             "You own rendering end-to-end: visual planning, allocate GPU workers, "
             "render clips, evaluate quality, scale fleet.\n\n"
+            "PHASE 0: RECALL — call recall_memory to check what you've learned "
+            "from previous runs (GPU preferences, disk requirements, failures).\n"
             "PHASE 1: SURVEY — find_video_gaps, read_pipeline_data for scenes/alignment\n"
             "PHASE 2: VISUAL PLANNING — generate LTX-2.3 prompts, "
             "write_pipeline_data(\"visual_concepts\"), "
@@ -900,7 +960,9 @@ def _build_video_agent(model) -> Agent:
             "provision_vm, wait for health.\n"
             "PHASE 4: PRODUCTION — render_clip for each concept, "
             "check_clip, add_clip to OTIO. Scale fleet if needed.\n"
-            "PHASE 5: CLEANUP — validate_timeline, terminate_vm\n\n"
+            "PHASE 5: CLEANUP — validate_timeline, terminate_vm\n"
+            "PHASE 6: REMEMBER — call remember for anything you learned this run "
+            "(failures, successes, gotchas).\n\n"
             "RULES:\n"
             "- ALL data flows through the OTIO file on disk. No agent state.\n"
             "- Every write carries provenance.\n"
@@ -908,6 +970,7 @@ def _build_video_agent(model) -> Agent:
             "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
             "- Always terminate VMs when done to minimize cost.\n"
             "- VRAM is a hard floor — never lower for cost.\n"
+            "- Poll VM health with backoff: 10s, 30s, 60s, 120s. Don't tight-loop.\n"
         ),
         tools=[
             read_timeline, read_pipeline_data, get_scene_durations, find_video_gaps,
@@ -917,7 +980,7 @@ def _build_video_agent(model) -> Agent:
             check_worker_health, terminate_vm, list_active_vms, get_account_credits,
             render_clip, check_clip,
             begin_escalation, end_escalation, classify_failure, write_ladder_state,
-        ],
+        ] + memory_tools,
         model=model,
     )
 

@@ -679,104 +679,11 @@ async def get_reasoning_raw_for_slot(
             short, scene_num, phrase_idx
         )
 
-    try:
-        from plugins.reasoning_trace import _REASONING_DB
-        import sqlite3 as _sqlite3
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(
-            {"traces": [], "count": 0, "error": f"reasoning store unavailable: {exc}"},
-            status_code=200,
-        )
-
-    try:
-        conn = _sqlite3.connect(_REASONING_DB, timeout=5)
-        conn.row_factory = _sqlite3.Row
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(
-            {"traces": [], "count": 0, "error": f"reasoning db open failed: {exc}"},
-            status_code=200,
-        )
-
-    try:
-        # If we have substring filters the DB-side LIKE narrows the set
-        # before Python-side track-keyword filtering. Without a slot_id
-        # we return the most recent ``limit`` entries verbatim.
-        query = "SELECT * FROM reasoning_log WHERE 1=1"
-        params: list = []
-
-        if since:
-            query += " AND timestamp > ?"
-            params.append(float(since))
-
-        if filter_terms:
-            clauses = []
-            for term in filter_terms:
-                clauses.append("(content LIKE ? OR metadata LIKE ?)")
-                like = f"%{term}%"
-                params.extend([like, like])
-            query += " AND (" + " OR ".join(clauses) + ")"
-
-        # Over-fetch by a factor of 4 so track-keyword post-filtering can
-        # still return up to ``limit`` rows. Bounded at 4000.
-        fetch_limit = min(limit * 4, 4000) if filter_terms else limit
-        query += " ORDER BY id DESC LIMIT ?"
-        params.append(fetch_limit)
-
-        try:
-            rows = conn.execute(query, params).fetchall()
-        finally:
-            conn.close()
-    except Exception as exc:  # noqa: BLE001
-        return JSONResponse(
-            {"traces": [], "count": 0, "error": f"reasoning query failed: {exc}"},
-            status_code=200,
-        )
-
-    traces: list[dict] = []
-    for row in rows:
-        try:
-            metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-        except Exception:  # noqa: BLE001
-            metadata = {}
-
-        if filter_terms and track_keyword:
-            haystack = (
-                (row["content"] or "").lower()
-                + " "
-                + json.dumps(metadata, default=str).lower()
-                + " "
-                + (row["agent_name"] or "").lower()
-            )
-            if track_keyword not in haystack:
-                # The entry matched one of the slot needles but not the
-                # track keyword — skip unless it's a generic digest with
-                # no track signal at all (in which case we keep it).
-                if any(
-                    other in haystack
-                    for other in ("video", "narration", "music")
-                    if other != track_keyword
-                ):
-                    continue
-
-        traces.append(
-            {
-                "id": row["id"],
-                "timestamp": row["timestamp"],
-                "event_type": row["event_type"],
-                "agent_name": row["agent_name"],
-                "model": row["model"],
-                "content": row["content"],
-                "tokens_in": row["tokens_in"],
-                "tokens_out": row["tokens_out"],
-                "metadata": metadata,
-            }
-        )
-        if len(traces) >= limit:
-            break
-
-    # Chronological order for the UI's virtualised timeline.
-    traces.reverse()
-    return JSONResponse({"traces": traces, "count": len(traces)})
+    # reasoning_trace plugin removed (ADK pipeline deleted)
+    return JSONResponse(
+        {"traces": [], "count": 0, "error": "reasoning_trace plugin removed"},
+        status_code=200,
+    )
 
 
 # ---------------------------------------------------------------------------

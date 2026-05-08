@@ -1,4 +1,4 @@
-# Documentary Pipeline — ADK FunctionTool wrappers
+# Documentary Pipeline — tools
 
 from tools.qa_jury import (
     AUDIO_ONLY_CHECKS,

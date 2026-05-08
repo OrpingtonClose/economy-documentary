@@ -19,11 +19,6 @@ import logging
 import os
 from typing import Optional
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
-
 logger = logging.getLogger(__name__)
 
 # Placeholder strings that indicate upstream data is missing/stale.
@@ -320,13 +315,3 @@ def validate_media_files(
         "results": results,
     })
 
-
-# Export as ADK FunctionTools
-if FunctionTool is not None:
-    validate_stage_output_tool = FunctionTool(validate_stage_output)
-    validate_otio_compliance_tool = FunctionTool(validate_otio_compliance)
-    validate_media_files_tool = FunctionTool(validate_media_files)
-
-    validation_tools = [validate_stage_output_tool, validate_otio_compliance_tool, validate_media_files_tool]
-else:
-    validation_tools = []

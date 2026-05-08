@@ -42,9 +42,9 @@ Design invariants (tested in ``tests/test_artifact_revision_tag.py``):
    :data:`ARTIFACT_REVISION_TAGS_KEY` as a JSON-encoded dict, matching the
    JSON-string convention used by :mod:`server.callbacks.state_manager`
    and :mod:`server.callbacks.preference_ledger`.
-5. **ADK idiom.**  The producer-side helper returns an
-   ``after_agent_callback`` compatible with ``google.adk.agents.Agent`` —
-   same pattern as :mod:`server.callbacks.timeline_guardian`.
+5. **Callback idiom.**  The producer-side helper returns an
+   ``after_agent_callback`` compatible with the pipeline's agent
+   framework — same pattern as :mod:`server.callbacks.timeline_guardian`.
 
 What this module deliberately does NOT do:
 

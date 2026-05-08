@@ -13,11 +13,6 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-try:
-    from google.adk.tools import ToolContext
-except ImportError:
-    ToolContext = None  # type: ignore[assignment,misc]
-
 from callbacks.media_immutability import check_media_immutability
 from dashboard import get_active_collector
 

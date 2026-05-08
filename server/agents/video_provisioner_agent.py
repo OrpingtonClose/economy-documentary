@@ -548,11 +548,23 @@ def _tool_provision_vm(offer_id: int, disk_gb: int = 224,
 
     Args:
         offer_id: Offer ID from search_gpu_offers.
-        disk_gb: Disk size in GB.
+        disk_gb: Disk size in GB.  Enforced minimums: tts=64, ltx=300.
         worker_mode: Worker mode for gpu_worker.py (tts, ltx, both).
         docker_image: Docker image to use.  Empty = auto-resolve from manifest.
         env_vars_json: JSON dict of additional env vars to set on the VM.
     """
+    # Enforce disk minimums — Vast.ai offer metadata is unreliable about
+    # actual disk size, and model downloads (especially LTX-2.3) need
+    # far more disk than the offer specs suggest.
+    DISK_MINIMUMS = {"tts": 64, "ltx": 150, "both": 150}
+    min_disk = DISK_MINIMUMS.get(worker_mode, 150)
+    if disk_gb < min_disk:
+        logger.warning(
+            "provision_vm: disk_gb=%d below minimum %d for %s — raising to minimum",
+            disk_gb, min_disk, worker_mode,
+        )
+        disk_gb = min_disk
+
     try:
         from worker_provisioner import (
             _vast_cmd,
@@ -675,14 +687,30 @@ def _tool_provision_vm(offer_id: int, disk_gb: int = 224,
         return json.dumps({"error": str(e)})
 
 
+# Rate limiter for health checks — prevents tight polling loops
+_check_vm_last_call: dict[str, float] = {}
+_CHECK_VM_MIN_INTERVAL = 10.0  # seconds between calls per VM
+
+
 def _tool_check_vm_status(vm_id: str) -> str:
     """Check a Vast.ai VM's status, connection details, and health.
 
-    Runs `vastai show instance`.
+    Runs `vastai show instance`. Rate-limited: returns a "wait" response
+    if called more than once per 10 seconds for the same VM.
 
     Args:
         vm_id: The instance ID from provision_vm.
     """
+    import time as _time
+    now = _time.monotonic()
+    last = _check_vm_last_call.get(vm_id, 0)
+    if now - last < _CHECK_VM_MIN_INTERVAL:
+        return json.dumps({
+            "vm_id": vm_id,
+            "status": "rate_limited",
+            "message": f"Called too soon — wait {_CHECK_VM_MIN_INTERVAL - (now - last):.0f}s. Use exponential backoff: 10s, 30s, 60s, 120s.",
+        })
+    _check_vm_last_call[vm_id] = now
     try:
         from worker_provisioner import _vast_cmd
         result = _vast_cmd(["show", "instance", vm_id, "--raw"])
@@ -724,13 +752,28 @@ def _tool_check_vm_status(vm_id: str) -> str:
         return json.dumps({"error": str(e)})
 
 
+_check_health_last_call: dict[str, float] = {}
+_CHECK_HEALTH_MIN_INTERVAL = 10.0
+
+
 def _tool_check_worker_health(url: str, capability: str = "ltx") -> str:
-    """HTTP GET to a worker's /health endpoint.
+    """HTTP GET to a worker's /health endpoint. Rate-limited per URL.
 
     Args:
         url: Worker URL (e.g. "http://1.2.3.4:8880").
         capability: Capability to check (e.g. "ltx", "tts").
     """
+    import time as _time
+    now = _time.monotonic()
+    last = _check_health_last_call.get(url, 0)
+    if now - last < _CHECK_HEALTH_MIN_INTERVAL:
+        return json.dumps({
+            "url": url,
+            "healthy": False,
+            "rate_limited": True,
+            "message": f"Called too soon — wait {_CHECK_HEALTH_MIN_INTERVAL - (now - last):.0f}s. Use exponential backoff: 10s, 30s, 60s, 120s.",
+        })
+    _check_health_last_call[url] = now
     try:
         from worker_provisioner import check_worker_health
         healthy = check_worker_health(url, capability)
@@ -761,7 +804,7 @@ def _tool_terminate_vm(vm_id: str) -> str:
     """
     try:
         from worker_provisioner import _vast_cmd
-        result = _vast_cmd(["destroy", "instance", vm_id])
+        result = _vast_cmd(["destroy", "instance", "--yes", vm_id])
         return json.dumps({
             "vm_id": vm_id,
             "status": "destroyed",

@@ -11,10 +11,6 @@ import logging
 import os
 import subprocess
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
 from worker_provisioner import resolve_docker_image
 
 # ---------------------------------------------------------------------------
@@ -304,19 +300,3 @@ def list_active_vms(tool_context=None) -> str:
     result = _vast_cmd(["show", "instances", "--raw"])
     return json.dumps(result)
 
-
-# -- ADK FunctionTool wrappers (optional) ------------------------------------
-if FunctionTool is not None:
-    provision_gpu_vm_tool = FunctionTool(provision_gpu_vm)
-    check_vm_status_tool = FunctionTool(check_vm_status)
-    terminate_vm_tool = FunctionTool(terminate_vm)
-    list_active_vms_tool = FunctionTool(list_active_vms)
-
-    vastai_tools = [
-        provision_gpu_vm_tool,
-        check_vm_status_tool,
-        terminate_vm_tool,
-        list_active_vms_tool,
-    ]
-else:
-    vastai_tools = []

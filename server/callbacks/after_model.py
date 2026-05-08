@@ -12,11 +12,6 @@ import logging
 import os
 from typing import Any, Optional
 
-try:
-    from google.adk.agents.callback_context import CallbackContext
-except ImportError:
-    CallbackContext = None  # type: ignore[assignment,misc]
-
 from callbacks.before_model import release_llm_semaphore_if_held
 from dashboard import get_active_collector
 

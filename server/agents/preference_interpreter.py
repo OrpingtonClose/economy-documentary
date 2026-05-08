@@ -974,35 +974,13 @@ def _interpreter_after_agent_callback(callback_context: Any) -> None:
 def _build_preference_interpreter_agent() -> Any:
     """Build the ADK ``Agent`` wrapper for the preference interpreter.
 
-    Returns ``None`` when ADK / model-config cannot be imported (mirrors
-    ``diagnostic_classifier._build_diagnostic_classifier_agent``).  The
-    pure-Python ``interpret_directive`` entry point still works.
+    Returns ``None`` — ADK agent wrapper removed.  The pure-Python
+    ``interpret_directive`` entry point still works.
     """
-    try:
-        from google.adk.agents import Agent
-
-        from agents.model_config import build_model
-    except Exception as exc:  # noqa: BLE001 -- defensive
-        logger.warning(
-            "ADK unavailable (%s) -- preference_interpreter_agent will be "
-            "None; interpret_directive() still works as a pure-Python "
-            "entrypoint.",
-            exc,
-        )
-        return None
-
-    return Agent(
-        name="preference_interpreter",
-        model=build_model(synthesis=True),
-        instruction=_INTERPRETER_AGENT_INSTRUCTION,
-        tools=[],
-        output_key=PREFERENCE_INTERPRETER_SUMMARY_KEY,
-        before_agent_callback=_interpreter_before_agent_callback,
-        after_agent_callback=_interpreter_after_agent_callback,
-    )
+    return None
 
 
-preference_interpreter_agent = _build_preference_interpreter_agent()
+preference_interpreter_agent = None
 
 
 __all__ = [

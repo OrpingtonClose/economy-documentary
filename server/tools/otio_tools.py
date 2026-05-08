@@ -1,5 +1,5 @@
 """
-OTIO timeline tools -- ADK FunctionTool wrappers for OpenTimelineIO operations.
+OTIO timeline tools -- OpenTimelineIO operations.
 
 All timeline mutations go through these tools. They enforce idempotency
 (check for existing clips before appending) and maintain the canonical
@@ -15,11 +15,6 @@ import threading
 from typing import Optional
 
 import opentimelineio as otio
-
-try:
-    from google.adk.tools import FunctionTool  # type: ignore[import-not-found]
-except ImportError:  # pragma: no cover — playground-only VMs skip google-adk.
-    FunctionTool = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -1323,27 +1318,3 @@ def validate_timeline(phase: str, tool_context=None) -> str:
 
     return json.dumps({"valid": True, "phase": phase, "message": "All checks passed"})
 
-
-# -- ADK FunctionTool wrappers -------------------------------------------------
-# The raw functions above are the source of truth and are consumed
-# directly by the Strands scenario agent via ``from tools import
-# otio_tools``. The ADK wrappers below are only needed by the legacy
-# ADK pipeline entrypoints; on playground-only VMs ``google-adk`` is
-# intentionally absent, so skip the wrappers and the ``otio_tools``
-# list rather than failing at import time.
-if FunctionTool is not None:
-    create_timeline_tool = FunctionTool(create_timeline)
-    add_narration_clip_tool = FunctionTool(add_narration_clip)
-    add_video_clip_tool = FunctionTool(add_video_clip)
-    get_timeline_status_tool = FunctionTool(get_timeline_status)
-    validate_timeline_tool = FunctionTool(validate_timeline)
-
-    otio_tools = [
-        create_timeline_tool,
-        add_narration_clip_tool,
-        add_video_clip_tool,
-        get_timeline_status_tool,
-        validate_timeline_tool,
-    ]
-else:  # pragma: no cover — playground-only VMs skip google-adk.
-    otio_tools = []

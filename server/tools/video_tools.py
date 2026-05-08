@@ -26,11 +26,6 @@ import threading
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
-
 logger = logging.getLogger(__name__)
 
 _OUTPUT_BASE = os.environ.get(
@@ -565,11 +560,3 @@ def probe_clip(mp4_path: str, tool_context=None) -> str:
     except (json.JSONDecodeError, ValueError) as e:
         return json.dumps({"error": f"ffprobe output parse error: {e}"})
 
-
-# -- ADK FunctionTool wrappers (optional) ------------------------------------
-if FunctionTool is not None:
-    generate_video_clip_tool = FunctionTool(generate_video_clip)
-    probe_clip_tool = FunctionTool(probe_clip)
-    video_tools = [generate_video_clip_tool, probe_clip_tool]
-else:
-    video_tools = []

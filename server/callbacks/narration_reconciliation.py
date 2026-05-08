@@ -24,7 +24,7 @@ Spec references:
 ADK idioms (per meta #122):
 
 - :func:`build_narration_reconciliation_agent` returns a
-  ``google.adk.agents.Agent`` subclass instance with the measurement
+  lightweight Agent instance with the measurement
   callables registered as plain ``tools=[...]``.
 - Cross-stage state flows through the blackboard under
   :data:`NARRATION_RECONCILIATION_STATE_KEY` (full per-block report)
@@ -687,7 +687,7 @@ _AGENT_INSTRUCTION = (
 
 
 def build_narration_reconciliation_agent():
-    """Return an ADK ``Agent`` wrapping the E2 reconciliation loop.
+    """Return a lightweight Agent wrapping the E2 reconciliation loop.
 
     Same pattern as :func:`server.critique.stylistic_qa_agent.build_stylistic_qa_agent`:
     the measurement callables are registered as plain ``tools=[...]``
@@ -698,41 +698,14 @@ def build_narration_reconciliation_agent():
     downstream callbacks like
     :func:`server.callbacks.otio_state.authoritative_transition_callback`
     can read it.
-
-    Returns a lightweight stub Agent when ``google-adk`` is not
-    importable, so unit tests can exercise this factory without the
-    ADK dependency.
     """
-    try:
-        from google.adk.agents import Agent  # type: ignore
-    except ImportError:
-        logger.info(
-            "google-adk not importable; returning lightweight stub Agent "
-            "for unit-test environments."
+
+    class _StubAgent:
+        name = _AGENT_NAME
+        tools = list(_AGENT_TOOLS)
+        after_agent_callback = staticmethod(
+            narration_reconciliation_after_agent_callback
         )
+        output_key = NARRATION_RECONCILIATION_STATE_KEY
 
-        class _StubAgent:
-            name = _AGENT_NAME
-            tools = list(_AGENT_TOOLS)
-            after_agent_callback = staticmethod(
-                narration_reconciliation_after_agent_callback
-            )
-            output_key = NARRATION_RECONCILIATION_STATE_KEY
-
-        return _StubAgent()
-
-    try:
-        from agents.model_config import build_model  # type: ignore
-        model = build_model()
-    except ImportError:  # pragma: no cover — defensive for non-repo imports
-        import os
-        model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-
-    return Agent(
-        name=_AGENT_NAME,
-        model=model,
-        instruction=_AGENT_INSTRUCTION,
-        tools=list(_AGENT_TOOLS),
-        after_agent_callback=narration_reconciliation_after_agent_callback,
-        output_key=NARRATION_RECONCILIATION_STATE_KEY,
-    )
+    return _StubAgent()

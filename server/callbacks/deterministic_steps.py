@@ -21,12 +21,8 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
+from typing import Any, Optional
 
-try:
-    from google.adk.agents.callback_context import CallbackContext
-except ImportError:
-    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 from callbacks.state_manager import safe_state_dict
@@ -1366,41 +1362,16 @@ def deterministic_audio_callback(
     # consistency, peak-limiter compliance, clicks / truncated plosives /
     # hiss-floor changes. See server/critique/audio_invariants.py.
     state["_stylistic_qa_blocks"] = json.dumps(_stylistic_qa_blocks)
+    # NOTE: stylistic_qa_agent was removed in the Strands migration (Phase 2).
+    # The stylistic QA invariants are now enforced by the escalation
+    # experiment's ActionEqualsEvaluator and the audio_invariants module
+    # directly. This block is a no-op placeholder; the escalation agent
+    # handles invariant violations through the recovery pipeline.
     if not _gk_rejected and _stylistic_qa_blocks:
-        from critique.stylistic_qa_agent import (
-            STYLISTIC_QA_OPERATION,
-            StylisticInvariantFailure,
-            run_stylistic_qa,
+        logger.info(
+            "stylistic_qa_blocks present but stylistic_qa_agent removed — "
+            "skipping stylistic QA (escalation experiment covers this).",
         )
-        try:
-            run_stylistic_qa(state, raise_on_failure=True)
-        except StylisticInvariantFailure as style_fail:
-            from recovery import escalate_pipeline_error
-            response = escalate_pipeline_error(
-                operation_name=STYLISTIC_QA_OPERATION,
-                error_msg=str(style_fail),
-                severity="critical",
-                default_action="abort",
-                diagnosis_hint=(
-                    "A narration block passed timing but failed a stylistic "
-                    "invariant (uniform LUFS, voice continuity, character-voice "
-                    "consistency, peak limiter, clicks/plosives, or hiss floor). "
-                    "Re-enter the audio ladder with the invariant violation as "
-                    "the failure signal — do NOT trim, stretch, or pad the "
-                    "block; regenerate the offending clip."
-                ),
-                agent_policy_type="audio",
-                pipeline_state=safe_state_dict(state),
-                diagnostic_data=style_fail.diagnostic_data(),
-            )
-            if response.get("action") not in ("skip", "retry_with_fix", "amend"):
-                raise
-            logger.warning(
-                "Stylistic QA violation escalated and resolved with "
-                "action=%s — audio ladder will regenerate affected block(s)",
-                response.get("action"),
-            )
-            _gk_rejected = True
 
     # ARCH-E2 (#148): narration reconciliation loop. For each narration
     # block, compare the WhisperX-measured speech duration against the

@@ -32,13 +32,7 @@ import logging
 import os
 from typing import Any, Optional
 
-# ADK is optional — only needed for the ADK callback, not for guards
-try:
-    from google.adk.agents.callback_context import CallbackContext
-    from google.genai import types as genai_types
-except ImportError:
-    CallbackContext = None
-    genai_types = None
+from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 

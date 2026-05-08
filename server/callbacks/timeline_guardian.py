@@ -23,12 +23,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+from typing import Any, Optional
 
-try:
-    from google.adk.agents.callback_context import CallbackContext
-except ImportError:
-    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)

@@ -1,25 +1,12 @@
-"""FastAPI + AG-UI server for the documentary pipeline.
+"""FastAPI server for the documentary pipeline.
 
 Provides:
-- POST / -- AG-UI endpoint for CopilotKit frontend (unified SSE stream)
+- /playground/* -- Strands pipeline playground (active pipeline)
 - /dashboard/* -- pipeline REST endpoints (snapshots, runs, reports)
 - /agui/* -- artifact, escalation, and feedback REST endpoints
+- /fleet/* -- Vast.ai VM fleet management
 - Request logging middleware
 - Pipeline collector middleware for dashboard integration
-
-All real-time events (pipeline progress, artifacts, gatekeeper, escalations)
-flow through the single CopilotKit SSE stream at POST /.  There are no
-separate SSE channels — the chat connection IS the pipeline connection.
-
-UI-07 (run persistence + reconnect):
-- Each POST / gets a stable run id (``run-<hex>``) unless the request
-  includes ``X-Pipeline-Run-Id`` of an existing run + ``Last-Event-ID``,
-  in which case the endpoint runs in **resume mode** and replays
-  buffered events instead of starting a new agent run.
-- Every SSE chunk written to the wire also goes into a per-run ring
-  buffer (see :mod:`run_registry`) tagged with a monotonic ``id:`` so
-  clients can resume with ``Last-Event-ID``.
-- ``GET /api/current-run`` exposes the latest run id for URL hydration.
 """
 
 from __future__ import annotations
@@ -28,7 +15,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -37,27 +23,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response, StreamingResponse
+from starlette.responses import Response
 
 load_dotenv()
 
-from ag_ui.core import (
-    CustomEvent,
-    EventType,
-    RunAgentInput,
-    TextMessageContentEvent,
-    TextMessageEndEvent,
-    TextMessageStartEvent,
-)
-from ag_ui.encoder import EventEncoder
-from ag_ui_adk import ADKAgent
-from google.adk.apps import App
-
-from agents.model_config import ADK_MODEL_NAME
-from agents.pipeline import pipeline_agent
-# Callbacks are wired directly into individual Agent sub-agents
-# (scenario_director.py, visual_director.py) — not at the AG-UI level.
-# See: before_model, after_model, before_tool, after_tool callbacks.
+# AG-UI / CopilotKit imports removed — ADK pipeline deleted.
+# The playground router (Strands) is the active pipeline path.
 from dashboard import (
     get_all_active_collectors,
     remove_collector,
@@ -68,14 +39,12 @@ from dashboard.event_store import init_db, insert_run, finalize_run, insert_snap
 from agui import (
     router as agui_router,
     api_router as agui_api_router,
-    subscribe_agui_events,
-    unsubscribe_agui_events,
 )
 from dashboard.sse import router as dashboard_router
 from dashboard_directives import router as dashboard_directives_router
 from fleet.router import router as fleet_router
 from playground import router as playground_router
-from plugins import build_plugins, setup_otel
+# plugins removed — ADK pipeline deleted
 from run_registry import get_run_registry
 
 logger = logging.getLogger(__name__)
@@ -84,27 +53,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 
 def _validate_env() -> None:
     """Validate required environment variables at startup."""
-    model = ADK_MODEL_NAME
+    model = os.environ.get("STRANDS_MODEL", "")
     if not model:
-        raise ValueError("ADK_MODEL environment variable is required")
-
-    # Check for at least one API key
-    has_google = bool(os.environ.get("GOOGLE_API_KEY"))
-    has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-    has_api_base = bool(os.environ.get("OPENAI_API_BASE"))
-
-    if not (has_google or has_openai or has_api_base):
         logger.warning(
-            "No API keys configured. Set GOOGLE_API_KEY for Gemini "
-            "or OPENAI_API_KEY + OPENAI_API_BASE for LiteLLM routing."
+            "STRANDS_MODEL not set — pipeline will use default model"
         )
-
-    logger.info(
-        "Model configuration: ADK_MODEL=%s, Gemini=%s, LiteLLM=%s",
-        model,
-        "yes" if has_google else "no",
-        "yes" if (has_openai or has_api_base) else "no",
-    )
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -211,9 +164,8 @@ class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan: setup OTel, validate env, init DB, fleet coordinator."""
+    """Application lifespan: validate env, init DB, fleet coordinator."""
     _validate_env()
-    setup_otel()
     init_db()
 
     # Start fleet coordinator if FLEET_MODE is enabled
@@ -296,411 +248,8 @@ app.include_router(fleet_router)
 app.include_router(playground_router)
 
 
-# AG-UI endpoint -- custom wrapper that merges pipeline events + heartbeats
-# into the CopilotKit SSE stream so the connection never goes idle.
-_adk_app = App(
-    name="documentary_pipeline",
-    root_agent=pipeline_agent,
-    plugins=build_plugins(),
-)
-adk_agent = ADKAgent.from_app(
-    app=_adk_app,
-)
-
-_HEARTBEAT_INTERVAL = 5  # seconds between SSE heartbeats during idle periods
-
-
-def _parse_last_event_id(raw: Optional[str]) -> int:
-    """Parse the ``Last-Event-ID`` header into an int (0 on failure)."""
-    if not raw:
-        return 0
-    try:
-        return max(0, int(raw.strip()))
-    except (ValueError, AttributeError):
-        return 0
-
-
-def _tagged(seq: int, sse_text: str) -> str:
-    """Prepend the SSE ``id:`` field to an already-encoded event."""
-    return f"id: {seq}\n{sse_text}"
-
-
-def _buffer_overflow_event(run_id: str, last_seq: int) -> str:
-    """Return an SSE chunk announcing that some events were evicted.
-
-    Shipped as an AG-UI CustomEvent so the frontend reducer can route
-    it the same way as live pipeline events.
-    """
-    payload = {
-        "type": "buffer_overflow",
-        "run_id": run_id,
-        "last_seq": last_seq,
-        "message": (
-            "Some events were evicted from the server buffer before you "
-            "reconnected. The dashboard is refetching the snapshot."
-        ),
-        "timestamp": time.time(),
-    }
-    custom = CustomEvent(
-        type=EventType.CUSTOM,
-        name="buffer_overflow",
-        value=payload,
-    )
-    # Use a fresh encoder so we don't depend on Accept headers here.
-    return EventEncoder().encode(custom)
-
-
-def _run_started_event(run_id: str) -> str:
-    """Return an SSE chunk carrying the pipeline run id.
-
-    Emitted as the very first event on every fresh POST /. The frontend
-    uses this to stamp ``?run={id}`` into the URL so refresh preserves
-    the session.
-    """
-    payload = {
-        "type": "run_started",
-        "run_id": run_id,
-        "timestamp": time.time(),
-    }
-    custom = CustomEvent(
-        type=EventType.CUSTOM,
-        name="run_started",
-        value=payload,
-    )
-    return EventEncoder().encode(custom)
-
-
-async def _replay_stream(run_id: str, last_event_id: int):
-    """Generator yielding buffered SSE chunks > ``last_event_id``.
-
-    Yields a ``buffer_overflow`` custom event first if the client's
-    Last-Event-ID sits behind the oldest entry still in the ring buffer.
-    Emits a final ``run_started``-style marker so the client can pick up
-    the current seq id even when no buffered events exceed the cursor.
-    """
-    registry = get_run_registry()
-    events, overflow, latest = registry.replay(run_id, last_event_id)
-    if overflow:
-        # seq 0 is a safe sentinel because every real event is >= 1.
-        yield _tagged(0, _buffer_overflow_event(run_id, latest))
-    for seq, sse_text in events:
-        yield _tagged(seq, sse_text)
-    # Make the replay flush explicit so the client can close the resume
-    # fetch once everything has been drained.
-    replay_done = CustomEvent(
-        type=EventType.CUSTOM,
-        name="replay_done",
-        value={
-            "type": "replay_done",
-            "run_id": run_id,
-            "last_seq": latest,
-            "replayed": len(events),
-            "timestamp": time.time(),
-        },
-    )
-    yield f": end of replay\n{EventEncoder().encode(replay_done)}"
-
-
-def _narrator_to_agui_events(payload: dict) -> list:
-    """Turn a narrator queue payload into an AG-UI TEXT_MESSAGE_* triplet.
-
-    The narrator publishes events as dicts with an ``id`` and a rendered
-    ``text`` (see :mod:`agents.chat_narrator`).  CopilotKit expects three
-    events per assistant turn: ``TEXT_MESSAGE_START`` ->
-    ``TEXT_MESSAGE_CONTENT`` (1..N chunks) -> ``TEXT_MESSAGE_END``.  We
-    emit a single CONTENT chunk per turn because narrator turns are
-    one-liners — streaming adds latency without a readability benefit.
-    """
-    message_id = str(payload.get("id") or "narrator")
-    text = str(payload.get("text") or "")
-    if not text:
-        return []
-    return [
-        TextMessageStartEvent(
-            type=EventType.TEXT_MESSAGE_START,
-            messageId=message_id,
-            role="assistant",
-        ),
-        TextMessageContentEvent(
-            type=EventType.TEXT_MESSAGE_CONTENT,
-            messageId=message_id,
-            delta=text,
-        ),
-        TextMessageEndEvent(
-            type=EventType.TEXT_MESSAGE_END,
-            messageId=message_id,
-        ),
-    ]
-
-
-@app.post("/")
-async def unified_agui_endpoint(request: Request):
-    """AG-UI endpoint with unified SSE stream.
-
-    Merges three event sources into one SSE connection:
-    1. AG-UI protocol events from the ADK agent (text, tool calls, state)
-    2. Pipeline events from emit_agui_event() (artifacts, gatekeeper, escalations)
-    3. Heartbeat comments every few seconds to keep the connection alive
-
-    This prevents the browser/proxy from closing the connection during long
-    deterministic operations (TTS generation, video rendering) that can take
-    10+ minutes per stage.
-
-    UI-07: if the request carries ``X-Pipeline-Run-Id`` for a run we know
-    about, we run in **resume mode** and replay the buffered events
-    whose seq is greater than the caller's ``Last-Event-ID`` header.
-    """
-    registry = get_run_registry()
-    accept_header = request.headers.get("accept")
-
-    run_id: str = getattr(request.state, "run_id", None) or registry.create()
-    is_resume: bool = getattr(request.state, "is_resume", False)
-    last_event_id = _parse_last_event_id(request.headers.get("last-event-id"))
-
-    if is_resume:
-        # Replay-only mode. Do NOT start a new agent run; the original
-        # POST owns the agent lifecycle. We just drain the ring buffer.
-        response = StreamingResponse(
-            _replay_stream(run_id, last_event_id),
-            media_type=EventEncoder(accept=accept_header).get_content_type(),
-        )
-        response.headers["X-Pipeline-Run-Id"] = run_id
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["X-Accel-Buffering"] = "no"
-        return response
-
-    # Fresh run. Parse the AG-UI input body here (the middleware already
-    # minted the run id).
-    body_bytes = await request.body()
-    try:
-        body_json = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
-    except json.JSONDecodeError:
-        body_json = {}
-    try:
-        input_data = RunAgentInput.model_validate(body_json)
-    except Exception as exc:  # pragma: no cover -- validation mirrors ag_ui
-        return JSONResponse(
-            {"error": "invalid AG-UI input", "detail": str(exc)},
-            status_code=422,
-        )
-
-    encoder = EventEncoder(accept=accept_header)
-
-    # UI-PIPE (#235): stage the latest user message into the session state
-    # so the Preference Ledger R0 seed + all downstream prompts can read the
-    # brief.  Mirrors run_pipeline.py's CLI path which pre-populates
-    # initial_state["topic"] + state[ORIGINAL_BRIEF_KEY] before invoking the
-    # pipeline.  Without this, scenario_director aborts with "no brief_text
-    # provided" and the agent run ends before any narrator event can reach
-    # CopilotKit's chat stream.
-    try:
-        _latest_user_text = ""
-        for _msg in reversed(list(input_data.messages or [])):
-            if getattr(_msg, "role", None) == "user":
-                _raw = getattr(_msg, "content", "")
-                if isinstance(_raw, str):
-                    _latest_user_text = _raw.strip()
-                elif isinstance(_raw, list):
-                    _parts = []
-                    for _p in _raw:
-                        _t = getattr(_p, "text", None)
-                        if isinstance(_t, str):
-                            _parts.append(_t)
-                    _latest_user_text = " ".join(_parts).strip()
-                if _latest_user_text:
-                    break
-        if _latest_user_text:
-            if input_data.state is None or not isinstance(input_data.state, dict):
-                input_data.state = {}
-            _state = input_data.state
-            if not str(_state.get("topic") or "").strip():
-                _state["topic"] = _latest_user_text
-            from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
-            if not str(_state.get(ORIGINAL_BRIEF_KEY) or "").strip():
-                _state[ORIGINAL_BRIEF_KEY] = _latest_user_text
-            logger.info(
-                "UI-PIPE: staged user brief into session state (topic=%r)",
-                _latest_user_text[:80],
-            )
-    except Exception as _brief_err:
-        logger.warning("UI-PIPE brief propagation skipped: %s", _brief_err)
-
-    # Subscribe to pipeline events (artifacts, gatekeeper, escalations)
-    pipeline_queue = subscribe_agui_events()
-
-    # Subscribe to narrator chat turns (UI-01 #186).  Each promoted event
-    # on this queue is fanned out to the stream as an assistant
-    # TEXT_MESSAGE_* triplet so CopilotKit renders it as a normal chat
-    # message on the same connection (no new channel).
-    from agents.chat_narrator import (  # local import to break import cycles
-        subscribe_narrator_events,
-        unsubscribe_narrator_events,
-    )
-    narrator_queue = subscribe_narrator_events()
-
-    async def event_generator():
-        # Announce the run id BEFORE any agent/pipeline traffic so the
-        # frontend can stamp the URL immediately (UI-07a).
-        run_started_sse = _run_started_event(run_id)
-        seq = registry.append(run_id, run_started_sse)
-        yield _tagged(seq, run_started_sse)
-
-        merged: asyncio.Queue = asyncio.Queue()
-
-        async def agent_reader():
-            """Read AG-UI events from the ADK agent and forward to merged queue."""
-            try:
-                async for event in adk_agent.run(input_data):
-                    await merged.put(("agent", event))
-            except Exception as exc:
-                await merged.put(("agent_error", exc))
-            finally:
-                await merged.put(("agent_done", None))
-
-        async def pipeline_reader():
-            """Poll the thread-safe deque for pipeline events."""
-            try:
-                while True:
-                    if pipeline_queue:
-                        event = pipeline_queue.popleft()
-                        await merged.put(("pipeline", event))
-                    else:
-                        await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                pass
-
-        async def narrator_reader():
-            """Poll the thread-safe narrator deque for chat turns."""
-            try:
-                while True:
-                    if narrator_queue:
-                        event = narrator_queue.popleft()
-                        await merged.put(("narrator", event))
-                    else:
-                        await asyncio.sleep(0.2)
-            except asyncio.CancelledError:
-                pass
-
-        agent_task = asyncio.create_task(agent_reader())
-        pipe_task = asyncio.create_task(pipeline_reader())
-        narrator_task = asyncio.create_task(narrator_reader())
-
-        try:
-            while True:
-                try:
-                    kind, payload = await asyncio.wait_for(
-                        merged.get(), timeout=_HEARTBEAT_INTERVAL
-                    )
-                except asyncio.TimeoutError:
-                    # No events for a while — send SSE comment to keep alive
-                    yield ": heartbeat\n\n"
-                    continue
-
-                if kind == "agent_done":
-                    break
-                elif kind == "agent_error":
-                    logger.error("ADK agent error in unified stream: %s", payload)
-                    # Save trace capture on error path (pipeline cleanup may not run)
-                    try:
-                        from orchestrator.trace_capture import get_trace_capture
-                        _tc = get_trace_capture()
-                        _tc.end_run(summary=f"Pipeline error: {str(payload)[:200]}")
-                        _tc_path = _tc.save()
-                        logger.info("Trace captured on error path: %s", _tc_path)
-                    except Exception as _tc_err:
-                        logger.debug("Trace capture on error skipped: %s", _tc_err)
-                    from ag_ui.core import RunErrorEvent
-                    err_event = RunErrorEvent(
-                        type=EventType.RUN_ERROR,
-                        message=f"Agent execution failed: {payload}",
-                        code="AGENT_ERROR",
-                    )
-                    try:
-                        sse = encoder.encode(err_event)
-                        seq = registry.append(run_id, sse)
-                        yield _tagged(seq, sse)
-                    except Exception:
-                        fallback = 'event: error\ndata: {"error": "Agent execution failed"}\n\n'
-                        seq = registry.append(run_id, fallback)
-                        yield _tagged(seq, fallback)
-                    break
-                elif kind == "agent":
-                    try:
-                        sse = encoder.encode(payload)
-                        seq = registry.append(run_id, sse)
-                        yield _tagged(seq, sse)
-                    except Exception as enc_err:
-                        logger.error("Event encoding error: %s", enc_err)
-                elif kind == "pipeline":
-                    # Forward pipeline events as AG-UI CustomEvents
-                    custom = CustomEvent(
-                        type=EventType.CUSTOM,
-                        name="pipeline_event",
-                        value=payload,
-                    )
-                    try:
-                        sse = encoder.encode(custom)
-                        seq = registry.append(run_id, sse)
-                        yield _tagged(seq, sse)
-                    except Exception as enc_err:
-                        logger.error("Pipeline event encoding error: %s", enc_err)
-                elif kind == "narrator":
-                    # UI-01 (#186): emit as an assistant TEXT_MESSAGE_* triplet
-                    # so CopilotKit renders it inline as a normal chat turn.
-                    for evt in _narrator_to_agui_events(payload):
-                        try:
-                            sse = encoder.encode(evt)
-                            seq = registry.append(run_id, sse)
-                            yield _tagged(seq, sse)
-                        except Exception as enc_err:
-                            logger.error(
-                                "Narrator event encoding error: %s", enc_err
-                            )
-
-            # Drain remaining pipeline events after agent finishes
-            while pipeline_queue:
-                event = pipeline_queue.popleft()
-                custom = CustomEvent(
-                    type=EventType.CUSTOM,
-                    name="pipeline_event",
-                    value=event,
-                )
-                try:
-                    sse = encoder.encode(custom)
-                    seq = registry.append(run_id, sse)
-                    yield _tagged(seq, sse)
-                except Exception:
-                    pass
-
-            # Drain remaining narrator turns after agent finishes so the
-            # last one-liner (typically ``stage_completed`` for assembly)
-            # still reaches the reviewer.
-            while narrator_queue:
-                event = narrator_queue.popleft()
-                for evt in _narrator_to_agui_events(event):
-                    try:
-                        sse = encoder.encode(evt)
-                        seq = registry.append(run_id, sse)
-                        yield _tagged(seq, sse)
-                    except Exception:
-                        pass
-
-        finally:
-            pipe_task.cancel()
-            narrator_task.cancel()
-            if not agent_task.done():
-                agent_task.cancel()
-            unsubscribe_agui_events(pipeline_queue)
-            unsubscribe_narrator_events(narrator_queue)
-
-    response = StreamingResponse(
-        event_generator(),
-        media_type=encoder.get_content_type(),
-    )
-    response.headers["X-Pipeline-Run-Id"] = run_id
-    response.headers["Cache-Control"] = "no-cache"
-    response.headers["X-Accel-Buffering"] = "no"
-    return response
+# ADK AG-UI endpoint removed — CopilotKit frontend no longer served.
+# The Strands playground at /playground/* is the active pipeline.
 
 
 @app.get("/api/current-run")
@@ -740,7 +289,7 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "model": ADK_MODEL_NAME,
+        "model": os.environ.get("STRANDS_MODEL", "unknown"),
         "version": "0.1.0",
     }
 

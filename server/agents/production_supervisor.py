@@ -54,64 +54,13 @@ def _build_production_supervisor():
     traceable events and optimizable sub-agents. Falls back to the
     plain Agent + orchestrated_production_callback if unavailable.
 
-    Imports google.adk lazily so this module is importable in minimal
-    test environments (e.g. the CI job that only runs the escalation
-    menu unit tests).  If ADK isn't installed, returns ``None`` and
-    callers fall back to the non-ADK code paths.
+    ADK agent wrapper removed — returns None.  supervisor_escalate()
+    still works as a pure-Python entry point.
     """
-    try:
-        from google.adk.agents import Agent
-        from agents.model_config import build_model
-        from callbacks.timeline_guardian import timeline_guardian_callback
-        from orchestrator.production_orchestrator import (
-            orchestrated_production_callback,
-        )
-    except Exception as exc:
-        logger.warning(
-            "ADK / pipeline deps unavailable (%s) -- production_supervisor "
-            "will be None; supervisor_escalate() still works",
-            exc,
-        )
-        return None
-
-    try:
-        from orchestrator.production_agent import ProductionAgent
-
-        agent = ProductionAgent(
-            name="production_supervisor",
-            description=(
-                "ADK CustomAgent that wraps the ProductionOrchestrator. "
-                "Every orchestration phase (planning, evaluation, execution, "
-                "synthesis) yields ADK events visible to adk eval/optimize. "
-                "Sub-agents: production_planner, production_evaluator, "
-                "production_replanner."
-            ),
-            # before/after callbacks for approval gates are wired in pipeline.py
-            after_agent_callback=timeline_guardian_callback,
-        )
-        logger.info(
-            "Production supervisor: using ADK ProductionAgent (CustomAgent) "
-            "with traceable sub-agents"
-        )
-        return agent
-
-    except Exception as e:
-        logger.warning(
-            "ProductionAgent unavailable (%s) -- falling back to plain Agent + "
-            "orchestrated_production_callback",
-            e,
-        )
-        return Agent(
-            name="production_supervisor",
-            model=build_model(),
-            instruction=_INSTRUCTION,
-            tools=[],
-            before_agent_callback=orchestrated_production_callback,
-            after_agent_callback=timeline_guardian_callback,
-        )
+    return None
 
 
-production_supervisor = _build_production_supervisor()
+production_supervisor = None
 
 
 # ===========================================================================

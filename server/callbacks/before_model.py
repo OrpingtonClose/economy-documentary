@@ -14,10 +14,6 @@ import logging
 import os
 from typing import Any, List, Optional
 
-try:
-    from google.adk.agents.callback_context import CallbackContext
-except ImportError:
-    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 from dashboard import get_active_collector

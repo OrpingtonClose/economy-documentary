@@ -21,10 +21,6 @@ import os
 import time
 from typing import Any, MutableMapping, Optional
 
-try:
-    from google.adk.agents.callback_context import CallbackContext
-except ImportError:
-    CallbackContext = None  # type: ignore[assignment,misc]
 from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)

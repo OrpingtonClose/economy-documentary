@@ -13,11 +13,6 @@ import logging
 import os
 from typing import List, Optional
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
-
 logger = logging.getLogger(__name__)
 
 _CATALOG_PATH = os.path.join(os.path.dirname(__file__), "lora_catalog.json")
@@ -149,12 +144,3 @@ def get_lora_details(lora_id: str, tool_context=None) -> str:
     entry = catalog[lora_id]
     return json.dumps({"lora_id": lora_id, **entry})
 
-
-# -- ADK FunctionTool wrappers -------------------------------------------------
-if FunctionTool is not None:
-    query_lora_catalog_tool = FunctionTool(query_lora_catalog)
-    get_lora_details_tool = FunctionTool(get_lora_details)
-
-    lora_tools = [query_lora_catalog_tool, get_lora_details_tool]
-else:
-    lora_tools = []

@@ -146,12 +146,30 @@ async def run_documentary(
     logger.info("Brief: %s", brief[:80])
     logger.info("Model: %s", model_id)
 
+    # Pull latest agent memory from git
+    try:
+        from agent_memory import pull_memory
+        pull_result = pull_memory()
+        logger.info("Agent memory pull: %s", pull_result)
+    except Exception as exc:
+        logger.warning("Agent memory pull failed (non-blocking): %s", exc)
+
     try:
         await shell.run(brief, initial_state={"_timeline_path": timeline_path})
         from tools.otio_lifecycle import get_otio_lifecycle_state
-        return {"status": "completed", "otio_state": get_otio_lifecycle_state(timeline_path), "timeline_path": timeline_path}
+        result = {"status": "completed", "otio_state": get_otio_lifecycle_state(timeline_path), "timeline_path": timeline_path}
     except Exception as exc:
-        return {"status": "failed", "error": str(exc), "timeline_path": timeline_path}
+        result = {"status": "failed", "error": str(exc), "timeline_path": timeline_path}
+    finally:
+        # Commit agent memory to git regardless of success/failure
+        try:
+            from agent_memory import commit_memory
+            commit_result = commit_memory(f"run: {brief[:60]}")
+            logger.info("Agent memory commit: %s", commit_result)
+        except Exception as exc:
+            logger.warning("Agent memory commit failed (non-blocking): %s", exc)
+
+    return result
 
 
 def main():

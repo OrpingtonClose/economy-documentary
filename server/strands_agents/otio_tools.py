@@ -1,7 +1,7 @@
 """
 Strands tools for OTIO state access and pipeline operations.
 
-These 9 domain-specific tools replace the ADK ``FunctionTool`` wrappers
+These 9 domain-specific tools replace the old ``FunctionTool`` wrappers
 in ``server/tools/``. They use the ``@tool`` decorator from Strands
 and interact with the OTIOStateManager via the Strands agent's tool
 context.

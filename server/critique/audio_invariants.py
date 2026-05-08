@@ -26,10 +26,11 @@ these invariants, regardless of which tier produced it:
    :data:`HISS_FLOOR_TOLERANCE_DB`.
 
 Each check is a **plain callable** (ADK "tools as plain callables"
-idiom) and returns a structured :class:`InvariantResult`. The composing
-agent in :mod:`server.critique.stylistic_qa_agent` collects all results
-and raises :class:`StylisticInvariantFailure` when any block fails —
-that exception is the failure signal the audio ladder consumes.
+idiom) and returns a structured :class:`InvariantResult`. The escalation
+experiment's :class:`ActionEqualsEvaluator` consumes these results and
+the recovery pipeline handles invariant violations — the former
+composing agent (:mod:`server.critique.stylistic_qa_agent`) was removed
+in the Strands migration.
 
 Design invariants:
 
@@ -38,7 +39,7 @@ Design invariants:
   a ``FAIL`` verdict with an explanatory message — callers decide how
   to escalate.
 - Pure: no side effects, no blackboard reads. Blackboard reads live in
-  :mod:`server.critique.stylistic_qa_agent` at the composition layer.
+  the escalation experiment's task adapter at the composition layer.
 - Cheap: each check is O(samples); the full invariant battery on a 20s
   clip completes in well under a second on CPU.
 """

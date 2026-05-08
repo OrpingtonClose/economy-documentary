@@ -29,11 +29,6 @@ import subprocess
 import tempfile
 from typing import List, Optional
 
-try:
-    from google.adk.tools import FunctionTool
-except ImportError:
-    FunctionTool = None
-
 from .master_profiles import (
     DEFAULT_PROFILE,
     MasterProfile,
@@ -737,21 +732,10 @@ def finalize_master(
     })
 
 
-# -- ADK FunctionTool wrappers -------------------------------------------------
-# NOTE: ARCH-F3 (#164) removed ``trim_clip`` and its FunctionTool wrapper.
-if FunctionTool is not None:
-    mux_audio_video_tool = FunctionTool(mux_audio_video)
-    concat_clips_tool = FunctionTool(concat_clips)
-
-    assembly_tools = [mux_audio_video_tool, concat_clips_tool]
-else:
-    assembly_tools = []
-
 __all__ = [
     "normalize_audio_loudness",
     "mux_audio_video",
     "concat_clips",
     "upscale_to_profile",
     "finalize_master",
-    "assembly_tools",
 ]

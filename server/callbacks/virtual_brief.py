@@ -576,7 +576,7 @@ def virtual_brief_after_agent_callback(callback_context):  # pragma: no cover
 
 
 def build_virtual_brief_agent():
-    """Return an ADK ``Agent`` that exposes the virtual-brief tool.
+    """Return a lightweight Agent that exposes the virtual-brief tool.
 
     The agent is deliberately thin: assembly is deterministic, so we
     register :func:`assemble_virtual_brief_tool` as a plain callable
@@ -584,50 +584,15 @@ def build_virtual_brief_agent():
     the stage-boundary hard-conflict gate. An LLM is attached so
     dashboards / reviewers get a natural-language diagnostic when the
     callback raises, but it must not be relied on to enforce the gate.
-
-    Falls back to a lightweight stub when ``google-adk`` is not
-    importable so unit tests can import this module without the ADK
-    dependency (same pattern as
-    :func:`server.critique.stylistic_qa_agent.build_stylistic_qa_agent`).
     """
-    try:
-        from google.adk.agents import Agent  # type: ignore
-    except ImportError:
-        logger.info(
-            "google-adk not importable; returning lightweight stub Agent "
-            "for unit-test environments."
-        )
 
-        class _StubAgent:
-            name = "virtual_brief_agent"
-            output_key = VIRTUAL_BRIEF_OUTPUT_KEY
-            tools = [assemble_virtual_brief_tool]
-            after_agent_callback = staticmethod(virtual_brief_after_agent_callback)
+    class _StubAgent:
+        name = "virtual_brief_agent"
+        output_key = VIRTUAL_BRIEF_OUTPUT_KEY
+        tools = [assemble_virtual_brief_tool]
+        after_agent_callback = staticmethod(virtual_brief_after_agent_callback)
 
-        return _StubAgent()
-
-    try:
-        from agents.model_config import build_model  # type: ignore
-
-        model = build_model()
-    except ImportError:  # pragma: no cover -- defensive for non-repo imports
-        model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-
-    return Agent(
-        name="virtual_brief_agent",
-        model=model,
-        instruction=(
-            "You are the Virtual Brief Agent for a documentary pipeline.\n"
-            "Given a stage or scope, you call assemble_virtual_brief_tool\n"
-            "to collect the scope-filtered, specificity-sorted view of the\n"
-            "Preference Ledger. HardConflicts are enforced by the\n"
-            "after_agent_callback -- do not attempt to resolve them; the\n"
-            "pipeline will halt and re-escalate to a human reviewer."
-        ),
-        tools=[assemble_virtual_brief_tool],
-        after_agent_callback=virtual_brief_after_agent_callback,
-        output_key=VIRTUAL_BRIEF_OUTPUT_KEY,
-    )
+    return _StubAgent()
 
 
 __all__ = [

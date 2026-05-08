@@ -404,21 +404,3 @@ def get_provision_trace(role: str = "tts") -> str:
         "trace": trace,
     })
 
-
-# -- ADK FunctionTool wrappers -------------------------------------------------
-try:
-    from google.adk.tools import FunctionTool
-
-    search_offers_tool = FunctionTool(search_offers)
-    create_instance_tool = FunctionTool(create_instance)
-    check_vm_status_tool = FunctionTool(check_vm_status)
-    get_provision_trace_tool = FunctionTool(get_provision_trace)
-
-    PROVISIONER_TOOLS = [
-        search_offers_tool,
-        create_instance_tool,
-        check_vm_status_tool,
-        get_provision_trace_tool,
-    ]
-except ImportError:
-    PROVISIONER_TOOLS = []
