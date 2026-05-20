@@ -1,25 +1,3 @@
-"""
-OTIO State Manager — single source of truth for timeline state.
-
-The OTIO timeline is a complex Python object (not JSON-serializable),
-so it cannot live directly in the Strands Graph's ``invocation_state``.
-Instead, this manager holds the timeline reference and is passed *into*
-the invocation_state as a pointer. The LLM accesses timeline data via
-``otio_read(stage)`` which returns a text summary, not the raw object.
-
-Architecture::
-
-    OTIOStateManager (separate from invocation_state)
-      ├─ Holds: Timeline, _navigation, FeedbackStore, QA, cost
-      ├─ Passed via invocation_state as reference
-      ├─ Checkpoints via otio_json → B2 after each stage
-      └─ LLM access via otio_read(stage) → text summary
-
-This replaces the blackboard dict pattern from the ADK pipeline where
-OTIO objects were crammed into session state and the LLM couldn't
-see them anyway.
-"""
-
 from __future__ import annotations
 
 import json
@@ -86,12 +64,13 @@ class OTIOStateManager:
     def __init__(self, output_dir: str = "/tmp/documentary-pipeline") -> None:
         self._output_dir = output_dir
         self._timeline_dir = os.path.join(output_dir, "timelines")
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # State
         self._otio_state: str = OTIO_STATE_DRAFT
         self._timeline: Any = None  # opentimelineio.schema.Timeline
         self._timeline_path: str = ""
+        self._timeline_mtime: float = 0.0
         self._navigation: dict[str, Any] = {}
         self._escalation: dict[str, Any] | None = None
         self._history: list[dict[str, Any]] = []
@@ -103,6 +82,42 @@ class OTIOStateManager:
 
         # QA results per stage
         self._qa_results: dict[str, list[dict[str, Any]]] = {}
+
+    # -----------------------------------------------------------------------
+    # Cache synchronization — the only place _timeline is reloaded from disk
+    # -----------------------------------------------------------------------
+
+    def refresh_from_disk(self) -> None:
+        """Reload _timeline from the on-disk .otio file.
+
+        This is the sole cache-synchronization wire and the only place the
+        in-memory timeline is reloaded from disk.  It MUST be called before
+        every read, mutation, or checkpoint so that in-memory state does not
+        race with external writers (e.g., SyncOtioClient local fallback,
+        A2A otio-agent, other processes).  Skipping this call before
+        checkpoint serializes a ghost timeline to B2 and makes resume
+        actively harmful.
+
+        No-op if _timeline_path is empty or the file does not exist.
+        """
+        try:
+            with self._lock:
+                if not self._timeline_path:
+                    return
+
+                if os.path.exists(self._timeline_path):
+                    import opentimelineio as otio
+                    self._timeline = otio.adapters.read_from_file(self._timeline_path)
+                    self._timeline_mtime = os.path.getmtime(self._timeline_path)
+                    return
+
+                json_path = os.path.splitext(self._timeline_path)[0] + ".json"
+                if os.path.exists(json_path):
+                    with open(json_path, "r") as f:
+                        self._timeline = json.load(f)
+                    self._timeline_mtime = os.path.getmtime(json_path)
+        except Exception as exc:
+            logger.error("refresh_from_disk failed: %s", exc)
 
     # -----------------------------------------------------------------------
     # Lifecycle state
@@ -189,6 +204,7 @@ class OTIOStateManager:
                 # Write to disk so contract enforcers and tools can find it
                 os.makedirs(self._timeline_dir, exist_ok=True)
                 otio.adapters.write_to_file(self._timeline, self._timeline_path)
+                self._timeline_mtime = os.path.getmtime(self._timeline_path)
                 logger.info("Timeline written to %s", self._timeline_path)
             except ImportError:
                 # Lightweight fallback for environments without OTIO
@@ -212,272 +228,216 @@ class OTIOStateManager:
         """Return a text summary of the timeline for a given stage.
 
         This is what the LLM sees — not the raw OTIO object.
-        The summary format depends on which stage is asking:
-        - scenario: scene list + durations
-        - audio: narration clips + durations + alignment
-        - visual: visual concepts + clip status
-        - production: rendered clips + QA scores
-        - assembly: final output status
+        The summary format depends on which stage is asking: audio, video,
+        assembly, or scenario.
         """
+        self.refresh_from_disk()
         with self._lock:
             if self._timeline is None:
                 return "No timeline created yet."
 
-            lines = [f"Timeline state: {self._otio_state}"]
-            if self._escalation:
-                lines.append(f"Escalation: {self._escalation['type']} ({self._escalation['reason']})")
-
-            # Count clips per track
             try:
                 import opentimelineio as otio
+            except ImportError:
+                # Fallback text for dict mode
+                tracks = self._timeline.get("tracks", {})
+                lines = [f"Timeline: {self._timeline.get('name', 'unknown')}"]
+                for tname, clips in tracks.items():
+                    lines.append(f"  {tname}: {len(clips)} clips")
+                return "\n".join(lines)
 
-                if isinstance(self._timeline, otio.schema.Timeline):
-                    for track in self._timeline.tracks:
-                        clip_count = len(track)
-                        lines.append(f"  {track.name}: {clip_count} clips")
-                else:
-                    raise ImportError
-            except (ImportError, TypeError):
-                # Dict fallback
-                if isinstance(self._timeline, dict):
-                    tracks = self._timeline.get("tracks", {})
-                    for track_name, clips in tracks.items():
-                        lines.append(f"  {track_name}: {len(clips)} clips")
-
-            # Stage-specific details
-            if stage in self._qa_results:
-                lines.append(f"  QA results ({stage}): {len(self._qa_results[stage])} checks")
-
-            lines.append(f"  Cost accrued: ${self._cost_accrued:.2f} / ${self._cost_budget:.2f}")
-
+            lines = [f"Timeline: {self._timeline.name}"]
+            for track in self._timeline.tracks:
+                clip_count = len(track)
+                kind = "video" if track.kind == otio.schema.Track.Kind.Video else "audio"
+                lines.append(f"  {track.name} ({kind}): {clip_count} clips")
+                if clip_count > 0:
+                    for clip in track:
+                        if hasattr(clip, "name"):
+                            lines.append(f"    - {clip.name}")
             return "\n".join(lines)
 
     # -----------------------------------------------------------------------
-    # Mutations (guarded when authoritative)
+    # Mutation guards
     # -----------------------------------------------------------------------
 
     def guard_mutation(self, operation: str) -> None:
-        """Check if a mutation is allowed.
+        """Raise if caller is not allowed to mutate."""
+        with self._lock:
+            if self._otio_state == OTIO_STATE_AUTHORITATIVE and self._escalation is None:
+                raise OtioStateViolation(
+                    f"Mutating authoritative OTIO without escalation: {operation}",
+                    details={
+                        "operation": operation,
+                        "otio_state": self._otio_state,
+                        "escalation": self._escalation,
+                    },
+                )
 
-        Raises OtioStateViolation if the timeline is authoritative
-        and no escalation is active.
-        """
-        if not self.is_authoritative:
-            return  # Draft — mutations always allowed
-        if self._escalation is not None:
-            return  # Escalation window — mutations allowed
-        raise OtioStateViolation(
-            f"Cannot perform '{operation}' on authoritative timeline",
-            details={
-                "operation": operation,
-                "otio_state": self._otio_state,
-                "timeline_path": self._timeline_path,
-                "escalation": self._escalation,
-            },
-        )
+    # -----------------------------------------------------------------------
+    # Timeline mutation
+    # -----------------------------------------------------------------------
 
     def add_clip(self, track: str, scene_num: int, phrase_idx: int,
                  clip_path: str, duration: float, metadata: dict | None = None,
                  provenance: dict | None = None) -> None:
-        """Add a clip to the specified track. Guarded when authoritative.
-
-        Provenance is stored alongside the clip metadata. Even if the
-        clip is partial or has errors, it gets added with full provenance.
-        """
+        """Add a clip to the specified track."""
+        self.refresh_from_disk()
         self.guard_mutation("add_clip")
-        clip_meta = metadata or {}
-        if provenance:
-            clip_meta["_provenance"] = provenance
-
         with self._lock:
-            if isinstance(self._timeline, dict):
-                tracks = self._timeline.setdefault("tracks", {})
-                track_clips = tracks.setdefault(track, [])
-                clip = {
-                    "scene_num": scene_num,
-                    "phrase_idx": phrase_idx,
-                    "path": clip_path,
-                    "duration": duration,
-                    "metadata": clip_meta,
-                    "added_at": time.time(),
-                }
-                track_clips.append(clip)
-            else:
+            try:
                 import opentimelineio as otio
+                clip = otio.schema.Clip(
+                    name=f"s{scene_num}p{phrase_idx}",
+                    source_range=otio.opentime.TimeRange(
+                        start_time=otio.opentime.RationalTime(0, 24),
+                        duration=otio.opentime.RationalTime(duration * 24, 24),
+                    ),
+                    media_reference=otio.schema.ExternalReference(
+                        target_url=clip_path,
+                        available_range=otio.opentime.TimeRange(
+                            start_time=otio.opentime.RationalTime(0, 24),
+                            duration=otio.opentime.RationalTime(duration * 24, 24),
+                        ),
+                    ),
+                )
+                if metadata:
+                    clip.metadata.update(metadata)
+                if provenance:
+                    clip.metadata["provenance"] = provenance
                 for t in self._timeline.tracks:
                     if t.name == track:
-                        clip = otio.schema.Clip(
-                            name=f"scene_{scene_num}_phrase_{phrase_idx}",
-                            source_range=otio.opentime.TimeRange(
-                                start_time=otio.opentime.RationalTime(0, 24),
-                                duration=otio.opentime.RationalTime.from_seconds(duration, 24),
-                            ),
-                        )
-                        clip.media_reference = otio.schema.ExternalReference(
-                            target_url=clip_path,
-                        )
-                        clip.metadata["documentary"] = clip_meta
                         t.append(clip)
-                        self._write_timeline()
                         break
-                else:
-                    logger.warning("Track '%s' not found in timeline", track)
+                self._write_timeline()
+            except ImportError:
+                tracks = self._timeline.get("tracks", {})
+                if track in tracks:
+                    tracks[track].append({
+                        "scene_num": scene_num,
+                        "phrase_idx": phrase_idx,
+                        "path": clip_path,
+                        "duration": duration,
+                        "metadata": metadata or {},
+                        "provenance": provenance or {},
+                    })
+
+    # -----------------------------------------------------------------------
+    # Internal disk I/O
+    # -----------------------------------------------------------------------
 
     def _write_timeline(self) -> None:
         """Write the current timeline to disk."""
-        try:
-            import opentimelineio as otio
-            if isinstance(self._timeline, otio.schema.Timeline) and self._timeline_path:
-                os.makedirs(os.path.dirname(self._timeline_path), exist_ok=True)
-                otio.adapters.write_to_file(self._timeline, self._timeline_path)
-        except Exception as exc:
-            logger.warning("Failed to write timeline: %s", exc)
+        with self._lock:
+            # Prevent clobbering a newer on-disk file with stale in-memory cache.
+            if self._timeline_path:
+                disk_path = self._timeline_path
+                if not os.path.exists(disk_path):
+                    disk_path = os.path.splitext(self._timeline_path)[0] + ".json"
+                if os.path.exists(disk_path):
+                    current_mtime = os.path.getmtime(disk_path)
+                    if current_mtime != self._timeline_mtime:
+                        logger.warning(
+                            "_write_timeline: %s changed on disk since last refresh "
+                            "(mtime %s != cached %s); reloading to avoid clobbering.",
+                            disk_path, current_mtime, self._timeline_mtime,
+                        )
+                        self.refresh_from_disk()
+                        return
+
+            if isinstance(self._timeline, dict):
+                # Dict mode — write JSON
+                path = self._timeline_path.replace(".otio", ".json")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w") as f:
+                    json.dump(self._timeline, f, indent=2, default=str)
+                self._timeline_mtime = os.path.getmtime(path)
+                return
+
+            try:
+                import opentimelineio as otio
+                if isinstance(self._timeline, otio.schema.Timeline) and self._timeline_path:
+                    os.makedirs(os.path.dirname(self._timeline_path), exist_ok=True)
+                    otio.adapters.write_to_file(self._timeline, self._timeline_path)
+                    self._timeline_mtime = os.path.getmtime(self._timeline_path)
+            except Exception as exc:
+                logger.error("_write_timeline failed: %s", exc)
+                raise
 
     # -----------------------------------------------------------------------
-    # Pipeline metadata — intermediate data stored on the timeline
+    # Pipeline metadata
     # -----------------------------------------------------------------------
 
     def set_pipeline_metadata(self, key: str, value: Any,
                                provenance: dict | None = None) -> None:
-        """Write pipeline metadata to the timeline with provenance.
-
-        This is how intermediate pipeline data (scenes, alignment,
-        visual concepts) flows between stages. The OTIO timeline is
-        the shared data structure — no separate state dict.
-
-        Metadata is stored under timeline.metadata["documentary"][key].
-        Provenance is stored under timeline.metadata["documentary"]["_provenance"][key].
-
-        Even on error, the value and provenance are persisted. The
-        pipeline does not discard output because it's imperfect.
-        """
+        """Set a key in timeline.metadata['documentary']."""
+        self.refresh_from_disk()
         self.guard_mutation(f"set_pipeline_metadata:{key}")
         with self._lock:
-            if isinstance(self._timeline, dict):
-                meta = self._timeline.setdefault("metadata", {})
-                doc = meta.setdefault("documentary", {})
-                doc[key] = value
-                if provenance:
-                    prov = doc.setdefault("_provenance", {})
-                    prov[key] = provenance
-            else:
-                import opentimelineio as otio
-                if isinstance(self._timeline, otio.schema.Timeline):
-                    meta = self._timeline.metadata
-                    if "documentary" not in meta:
-                        meta["documentary"] = {}
-                    meta["documentary"][key] = value
-                    if provenance:
-                        meta["documentary"].setdefault("_provenance", {})[key] = provenance
-                    self._write_timeline()
-            logger.info("Pipeline metadata set: %s", key)
-
-    def get_pipeline_metadata(self, key: str, default: Any = None) -> Any:
-        """Read pipeline metadata from the timeline.
-
-        Returns None if the key doesn't exist.
-        """
-        with self._lock:
-            if isinstance(self._timeline, dict):
-                meta = self._timeline.get("metadata", {})
-                doc = meta.get("documentary", {})
-                return doc.get(key, default)
-            else:
-                import opentimelineio as otio
-                if isinstance(self._timeline, otio.schema.Timeline):
-                    meta = self._timeline.metadata
-                    doc = meta.get("documentary", {}) if isinstance(meta, dict) else {}
-                    return doc.get(key, default)
-        return default
-
-    # -----------------------------------------------------------------------
-    # Checkpoints
-    # -----------------------------------------------------------------------
-
-    def checkpoint(self, label: str) -> dict[str, Any]:
-        """Serialize the current timeline state and record a checkpoint.
-
-        Returns the checkpoint dict for B2 upload.
-        """
-        with self._lock:
-            checkpoint = {
-                "label": label,
-                "otio_state": self._otio_state,
-                "timeline_path": self._timeline_path,
-                "timestamp": time.time(),
-                "cost_accrued": self._cost_accrued,
-                "qa_summary": {
-                    stage: len(checks) for stage, checks in self._qa_results.items()
-                },
-                "clip_counts": self._clip_counts(),
-            }
-
-            # If OTIO is available, serialize via otio_json
             try:
                 import opentimelineio as otio
-
                 if isinstance(self._timeline, otio.schema.Timeline):
-                    checkpoint["otio_json"] = otio.adapters.otio_json.write_to_string(
-                        self._timeline
-                    )
-            except (ImportError, Exception):
-                # Dict fallback — serialize as-is
+                    doc_meta = self._timeline.metadata.setdefault("documentary", {})
+                    doc_meta[key] = {
+                        "value": value,
+                        "timestamp": time.time(),
+                        "provenance": provenance or {},
+                    }
+                    self._write_timeline()
+            except ImportError:
                 if isinstance(self._timeline, dict):
-                    checkpoint["timeline_dict"] = self._timeline
+                    self._timeline.setdefault("metadata", {}).setdefault("documentary", {})[key] = {
+                        "value": value,
+                        "timestamp": time.time(),
+                        "provenance": provenance or {},
+                    }
+                    self._write_timeline()
 
-            self._checkpoints.append(checkpoint)
-            logger.info("Checkpoint '%s': %s", label, checkpoint.get("clip_counts", {}))
-            return checkpoint
-
-    def _clip_counts(self) -> dict[str, int]:
-        """Count clips per track."""
-        counts = {}
-        if isinstance(self._timeline, dict):
-            for track_name, clips in self._timeline.get("tracks", {}).items():
-                counts[track_name] = len(clips)
-        else:
-            # Real OTIO timeline
-            import opentimelineio as otio
-            for track in self._timeline.tracks:
-                clip_count = sum(1 for item in track if isinstance(item, otio.schema.Clip))
-                if track.name:
-                    counts[track.name] = clip_count
-        return counts
-
-    # -----------------------------------------------------------------------
-    # QA + Cost
-    # -----------------------------------------------------------------------
-
-    def record_qa(self, stage: str, result: dict[str, Any]) -> None:
-        """Record a QA check result for a stage."""
+    def get_pipeline_metadata(self, key: str, default: Any = None) -> Any:
+        """Read a key from timeline.metadata['documentary']."""
+        self.refresh_from_disk()
         with self._lock:
-            self._qa_results.setdefault(stage, []).append(result)
-
-    def add_cost(self, amount: float) -> None:
-        """Add to the accrued cost."""
-        self._cost_accrued += amount
-
-    @property
-    def cost(self) -> tuple[float, float]:
-        """Return (accrued, budget) cost tuple."""
-        return (self._cost_accrued, self._cost_budget)
+            try:
+                import opentimelineio as otio
+                if isinstance(self._timeline, otio.schema.Timeline):
+                    meta = self._timeline.metadata
+                    doc = meta.get("documentary", {})
+                    entry = doc.get(key, default)
+                    if isinstance(entry, dict) and "value" in entry:
+                        return entry["value"]
+                    return entry
+            except ImportError:
+                if isinstance(self._timeline, dict):
+                    meta = self._timeline.get("metadata", {})
+                    doc = meta.get("documentary", {})
+                    entry = doc.get(key, default)
+                    if isinstance(entry, dict) and "value" in entry:
+                        return entry["value"]
+                    return entry
+            return default
 
     # -----------------------------------------------------------------------
-    # Internal
+    # Full state read
     # -----------------------------------------------------------------------
 
-    def _record_transition(self, from_state: str | None, to_state: str, reason: str) -> None:
-        self._history.append({
-            "from": from_state,
-            "to": to_state,
-            "reason": reason,
-            "timestamp": time.time(),
-        })
+    def read_state(self) -> dict[str, Any]:
+        """Return the full internal state for the orchestrator."""
+        self.refresh_from_disk()
+        with self._lock:
+            counts = self._clip_counts()
+            return {
+                "otio_state": self._otio_state,
+                "escalation": self._escalation,
+                "history": list(self._history),
+                "checkpoints": list(self._checkpoints),
+                "clip_counts": counts,
+                "cost_accrued": self._cost_accrued,
+                "cost_budget": self._cost_budget,
+                "qa_results": dict(self._qa_results),
+                "navigation": dict(self._navigation),
+                "timeline_path": self._timeline_path,
+            }
 
-    @property
-    def history(self) -> list[dict[str, Any]]:
-        return list(self._history)
-
-    @property
-    def checkpoints(self) -> list[dict[str, Any]]:
-        return list(self._checkpoints)
+    # -----------------------------------------------------------------------
+    # Checkpoints — B2 and local
+    # -----------------------------------------------------------------------

@@ -152,7 +152,8 @@ apt-get install -y sox libsox-dev
 # Model downloads — ltx-pipelines uses single-file checkpoint + gemma
 # ---------------------------------------------------------------------------
 B2_BUCKET="ltx2-models-orpington"
-pip install --break-system-packages --no-cache-dir huggingface_hub 2>/dev/null
+pip install --break-system-packages --no-cache-dir huggingface_hub hf-transfer 2>/dev/null
+export HF_HUB_ENABLE_HF_TRANSFER=1
 
 if [ -n "${B2_KEY_ID:-}" ] && [ -n "${B2_APPLICATION_KEY:-}" ]; then
     echo "=== Downloading models (B2 primary, HuggingFace fallback) ==="
@@ -188,18 +189,26 @@ else
     mkdir -p "$LTX_DIR"
 
     # 1. Single-file checkpoint (~46 GB) — the core model weights
-    #    Using official Lightricks/LTX-2.3 repo (22B dev model, bf16).
+    #    Try B2 first (public bucket, fast), fall back to HuggingFace.
     if [ ! -f "$LTX_DIR/ltx-2.3-22b-dev.safetensors" ]; then
         echo "--- LTX-2.3 22B checkpoint (~46 GB) ---"
-        python3 -c "
+        B2_URL="https://f004.backblazeb2.com/file/${B2_BUCKET}/ltx-2.3/ltx-2.3-22b-dev.safetensors"
+        if curl -fSL --progress-bar -C - -o "$LTX_DIR/ltx-2.3-22b-dev.safetensors.tmp" "$B2_URL"; then
+            mv "$LTX_DIR/ltx-2.3-22b-dev.safetensors.tmp" "$LTX_DIR/ltx-2.3-22b-dev.safetensors"
+            echo "Checkpoint downloaded from B2."
+        else
+            rm -f "$LTX_DIR/ltx-2.3-22b-dev.safetensors.tmp"
+            echo "B2 failed, falling back to HuggingFace ..."
+            python3 -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
     'Lightricks/LTX-2.3',
     filename='ltx-2.3-22b-dev.safetensors',
     local_dir='$LTX_DIR',
 )
-print('Checkpoint downloaded.')
+print('Checkpoint downloaded from HuggingFace.')
 "
+        fi
     else
         echo "LTX-2.3 checkpoint already present."
     fi

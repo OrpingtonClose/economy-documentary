@@ -51,7 +51,13 @@ RULES:
 
 
 @tool
-def assemble_final_cut() -> str:
+def assemble_final_cut(
+    scenes: str = "",
+    clip_artifacts: str = "",
+    whisperx_alignment: str = "",
+    timeline_path: str = "",
+    output_dir: str = "",
+) -> str:
     """Assemble the final documentary cut from all scene clips.
 
     Composes the OTIO timeline, muxes audio and video per scene,
@@ -61,8 +67,8 @@ def assemble_final_cut() -> str:
     try:
         from tools.assembly_tools import assemble_documentary
         from tools.otio_file_ops import resolve_timeline_path
-        tp = resolve_timeline_path()
-        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        tp = timeline_path or resolve_timeline_path()
+        pipeline_dir = output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
         return assemble_documentary(
             timeline_path=tp,
             output_dir=os.path.join(pipeline_dir, "output"),

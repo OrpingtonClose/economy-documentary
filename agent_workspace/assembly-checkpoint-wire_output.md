@@ -1,0 +1,1 @@
+[Agent assembly-checkpoint-wire produced no text output]

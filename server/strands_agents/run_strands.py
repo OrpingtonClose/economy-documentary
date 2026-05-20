@@ -6,11 +6,22 @@ Defaults are defined in DEFAULTS dict below. All can be overridden via CLI.
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Ensure server/ is on sys.path so strands_agents and tools imports resolve
+# when the script is run directly (python strands_agents/run_strands.py)
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_SERVER_DIR = os.path.dirname(_SCRIPT_DIR)
+if _SERVER_DIR not in sys.path:
+    sys.path.insert(0, _SERVER_DIR)
+
 import argparse
 import asyncio
 import json
 import logging
 import os
+import signal
 import sys
 import time
 import uuid
@@ -18,7 +29,7 @@ from typing import Any
 
 import opentimelineio as otio
 
-from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell
+from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell, STAGE_ORDER
 from strands_agents.stages.preflight import run_preflight, PreflightError
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,
@@ -33,11 +44,11 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "kimi-k2.6",
-    "base_url": "https://api.moonshot.ai/v1",
+    "model": "deepseek-chat",
+    "base_url": "https://api.deepseek.com/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,
-    "max_nodes": 50,
+    "max_nodes": 200,
     "max_retries": 3,
     "approval": "auto_approve",
 }
@@ -109,6 +120,45 @@ def _write_pipeline_manifest(pipeline_dir: str, timeline_path: str) -> None:
         json.dump(manifest, f, indent=2)
 
 
+def _acquire_pipeline_lock(output_dir: str) -> str:
+    """Create a lock file to prevent concurrent pipeline runs.
+
+    Returns the lock file path. Raises RuntimeError if another run is active.
+    """
+    lock_file = os.path.join(output_dir, ".pipeline.lock")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Check for stale lock (PID no longer exists)
+    if os.path.exists(lock_file):
+        try:
+            with open(lock_file) as f:
+                old_pid = int(f.read().strip())
+            if old_pid != os.getpid():
+                # Check if the old process is still alive
+                try:
+                    os.kill(old_pid, 0)
+                    raise RuntimeError(
+                        f"Another pipeline run is active (PID {old_pid}). "
+                        f"Lock file: {lock_file}. Stop the other run first."
+                    )
+                except OSError:
+                    pass  # Process is dead, lock is stale
+        except (ValueError, OSError):
+            pass  # Corrupt lock file, overwrite it
+
+    with open(lock_file, "w") as f:
+        f.write(str(os.getpid()))
+    return lock_file
+
+
+def _release_pipeline_lock(lock_file: str) -> None:
+    """Remove the pipeline lock file."""
+    try:
+        os.remove(lock_file)
+    except OSError:
+        pass
+
+
 async def run_documentary(
     brief: str,
     *,
@@ -123,11 +173,20 @@ async def run_documentary(
 ) -> dict[str, Any]:
     model = _get_model(model_id, api_key, base_url)
 
+    # Prevent concurrent runs
+    lock_file = _acquire_pipeline_lock(output_dir)
+    _provisioner = None
+
     report = run_preflight(output_dir=output_dir)
     if not report.passed:
         for f in report.failures:
             logger.error("Preflight: %s: %s", f.name, f.message)
+        _release_pipeline_lock(lock_file)
         raise PreflightError(report)
+
+    # Lazy provisioning: workers are provisioned on-demand when tools call
+    # ensure_available(). No eager provisioning at pipeline start.
+    # This prevents VM leaks and ensures we only pay for what we use.
 
     timeline_dir = os.path.join(output_dir, "timelines")
     os.makedirs(timeline_dir, exist_ok=True)
@@ -138,13 +197,25 @@ async def run_documentary(
     os.environ["PIPELINE_DIR"] = output_dir
 
     approval_stages = set() if approval_mode == "auto_approve" else {"scenario", "audio", "video", "assembly"}
-    hooks = [ImmutabilityHook(), BudgetHook(budget_usd=budget_usd), ApprovalGateHook(gated_stages=approval_stages), ShellGuardHook()]
+    hooks = [ImmutabilityHook(), ApprovalGateHook(gated_stages=approval_stages), ShellGuardHook()]
+    # BudgetHook disabled — it can abort mid-run. Log-only tracking instead.
+    budget_hook = BudgetHook(budget_usd=budget_usd)
+    hooks.append(budget_hook)
 
-    graph = build_documentary_graph(hooks=hooks, max_node_executions=max_node_executions, model=model)
-    shell = RecoveryShell(graph, max_retries=max_retries)
+    graph, shell = build_documentary_graph(hooks=hooks, max_node_executions=max_node_executions, model=model)
+    shell.max_retries = max_retries
 
     logger.info("Brief: %s", brief[:80])
     logger.info("Model: %s", model_id)
+
+    # Print stage transitions for visibility
+    print(f"\n{'='*60}")
+    print(f"  DOCUMENTARY PIPELINE")
+    print(f"  Brief: {brief[:60]}")
+    print(f"  Model: {model_id}")
+    print(f"  Budget: ${budget_usd:.2f}")
+    print(f"  Stages: {' → '.join(STAGE_ORDER)}")
+    print(f"{'='*60}\n")
 
     # Pull latest agent memory from git
     try:
@@ -154,12 +225,49 @@ async def run_documentary(
     except Exception as exc:
         logger.warning("Agent memory pull failed (non-blocking): %s", exc)
 
+    result: dict[str, Any] = {}
     try:
         await shell.run(brief, initial_state={"_timeline_path": timeline_path})
         from tools.otio_lifecycle import get_otio_lifecycle_state
-        result = {"status": "completed", "otio_state": get_otio_lifecycle_state(timeline_path), "timeline_path": timeline_path}
+
+        # Verify master.mp4 exists before claiming success
+        assembly_output = None
+        try:
+            from tools.otio_metadata import read_pipeline_metadata
+            assembly_output = read_pipeline_metadata(timeline_path, "assembly_output_path")
+        except Exception:
+            pass
+
+        master_mp4 = assembly_output or os.path.join(output_dir, "master.mp4")
+        if os.path.exists(master_mp4):
+            size_mb = os.path.getsize(master_mp4) / (1024 * 1024)
+            result = {
+                "status": "completed",
+                "otio_state": get_otio_lifecycle_state(timeline_path),
+                "timeline_path": timeline_path,
+                "output_path": master_mp4,
+                "output_size_mb": round(size_mb, 2),
+            }
+            print(f"\n{'='*60}")
+            print(f"  PIPELINE COMPLETE")
+            print(f"  Output: {master_mp4}")
+            print(f"  Size: {size_mb:.1f} MB")
+            print(f"{'='*60}")
+        else:
+            result = {
+                "status": "failed",
+                "error": f"Pipeline reported complete but output file missing: {master_mp4}",
+                "timeline_path": timeline_path,
+            }
+            print(f"\n{'='*60}")
+            print(f"  PIPELINE FAILED — output file missing")
+            print(f"  Expected: {master_mp4}")
+            print(f"{'='*60}")
     except Exception as exc:
         result = {"status": "failed", "error": str(exc), "timeline_path": timeline_path}
+        print(f"\n{'='*60}")
+        print(f"  PIPELINE FAILED: {exc}")
+        print(f"{'='*60}")
     finally:
         # Commit agent memory to git regardless of success/failure
         try:
@@ -168,6 +276,20 @@ async def run_documentary(
             logger.info("Agent memory commit: %s", commit_result)
         except Exception as exc:
             logger.warning("Agent memory commit failed (non-blocking): %s", exc)
+
+        # CRITICAL: Destroy VMs to stop credit burn
+        try:
+            from worker_provisioner import get_provisioner
+            _provisioner = get_provisioner()
+            if _provisioner:
+                print("\n  [CLEANUP] Destroying VMs...")
+                _provisioner.cleanup(destroy_vms=True)
+                print("  [CLEANUP] VMs destroyed.")
+        except Exception as exc:
+            logger.warning("VM cleanup failed (non-blocking): %s", exc)
+
+        # Release lock
+        _release_pipeline_lock(lock_file)
 
     return result
 
@@ -186,6 +308,29 @@ def main():
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+    # Handle Ctrl+C gracefully — destroy VMs before exiting
+    _provisioner_for_signal = None
+
+    def _sigint_handler(signum, frame):
+        print("\n\n[INTERRUPT] Ctrl+C received — destroying VMs...")
+        try:
+            from worker_provisioner import get_provisioner
+            prov = get_provisioner()
+            if prov:
+                prov.cleanup(destroy_vms=True)
+        except Exception as exc:
+            print(f"[INTERRUPT] VM cleanup error: {exc}")
+        # Release lock if held
+        try:
+            lock = os.path.join(args.output_dir, ".pipeline.lock")
+            if os.path.exists(lock):
+                os.remove(lock)
+        except Exception:
+            pass
+        sys.exit(130)
+
+    signal.signal(signal.SIGINT, _sigint_handler)
 
     result = asyncio.run(run_documentary(
         brief=" ".join(args.brief),

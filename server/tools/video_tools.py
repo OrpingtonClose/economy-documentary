@@ -47,10 +47,9 @@ _worker_index = 0
 def _get_next_worker_url() -> str:
     """Get the next GPU worker URL using health-aware dispatch.
 
-    Priority order:
-    1. InfraAgent healthy workers — health-aware, no queue side effects
-    2. Round-robin from VIDEO_WORKER_URLS — blind fallback
-    3. Single worker from VIDEO_WORKER_URL / GPU_WORKER_URL
+    Lazy provisioning: if no healthy worker exists, trigger provisioning
+    and block until ready.  The provisioner's thread-safe gate dedupes
+    concurrent calls so only one VM is created.
     """
     global _worker_index
 
@@ -68,20 +67,13 @@ def _get_next_worker_url() -> str:
     except ImportError:
         pass
     except Exception as e:
-        logger.warning("InfraAgent worker lookup failed, falling back to env vars: %s", e)
+        logger.warning("InfraAgent worker lookup failed, falling back to provisioner: %s", e)
 
-    # 2. Round-robin from env vars (blind fallback)
-    urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
-    if urls_str:
-        urls = [u.strip() for u in urls_str.split(",") if u.strip()]
-        if urls:
-            with _worker_lock:
-                url = urls[_worker_index % len(urls)]
-                _worker_index += 1
-            return url
-
-    # 3. Single worker fallback
-    return os.environ.get("VIDEO_WORKER_URL", "") or os.environ.get("GPU_WORKER_URL", "")
+    # 2. Lazy provisioning via provisioner
+    from worker_provisioner import get_provisioner
+    provisioner = get_provisioner()
+    spec = provisioner.ensure_available("video")
+    return spec.worker_url or f"http://localhost:{spec.local_port}"
 
 
 def _generate_solid_color_mp4(
@@ -109,7 +101,7 @@ def _generate_solid_color_mp4(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            
         )
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
@@ -258,36 +250,13 @@ def generate_video_clip(
         }).encode("utf-8")
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         try:
-            resp_ctx = urlopen(req_inner, timeout=3600)  # 60 min: 3 QA retries × 30 steps + Qwen-Omni
+            resp_ctx = urlopen(req_inner)
         except URLError as e:
-            # Service unavailable — provisioner must fix before we retry.
-            logger.warning("Video worker unreachable at %s: %s", url, e)
-            from worker_provisioner import get_provisioner, ProvisionerEscalationFailed
-            try:
-                prov = get_provisioner()
-                prov.ensure_available("video")
-                new_url_base = os.environ.get("GPU_WORKER_URL", 
-                    os.environ.get("VIDEO_WORKER_URL", ""))
-                url = f"{new_url_base.rstrip('/')}/video"
-                retry_payload = json.dumps({
-                    "prompt": prompt, "negative_prompt": negative_prompt,
-                    "visual_style": visual_style, "duration_sec": duration_sec,
-                    "width": 512, "height": 320, "num_frames": num_frames,
-                    "seed": seed, "num_inference_steps": num_inference_steps,
-                    "guidance_scale": guidance_scale, "stg_scale": stg_scale,
-                    "modality_scale": modality_scale,
-                    "guidance_rescale": guidance_rescale,
-                    "stg_blocks": stg_blocks if stg_blocks is not None else [28],
-                }).encode("utf-8")
-                retry_req = Request(url, data=retry_payload,
-                    headers={"Content-Type": "application/json"})
-                resp_ctx = urlopen(retry_req, timeout=3600)
-            except ProvisionerEscalationFailed:
-                raise
-            except Exception as prov_err:
-                raise RuntimeError(
-                    f"Video worker unreachable and provisioner failed: {prov_err}"
-                ) from e
+            # Worker unreachable — fail honestly.  The pipeline's recovery
+            # system will handle this; tools must NOT provision VMs.
+            raise RuntimeError(
+                f"Video worker unreachable at {url}: {e}"
+            ) from e
         with resp_ctx as resp:
             result_bytes = resp.read()
             qa_quality = resp.headers.get("X-QA-Quality", "unknown")
@@ -513,7 +482,7 @@ def probe_clip(mp4_path: str, tool_context=None) -> str:
             cmd,
             capture_output=True,
             text=True,
-            timeout=30,
+            
         )
         if result.returncode != 0:
             return json.dumps(

@@ -1,0 +1,1 @@
+[Agent otio-read-hotspot-clipcounts produced no text output]

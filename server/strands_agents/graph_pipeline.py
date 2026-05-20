@@ -1,34 +1,9 @@
-"""
-Documentary pipeline — Strands Graph orchestration.
-
-4 agent nodes: Scenario → OTIO Gate → Audio → OTIO Gate → Video → OTIO Gate
-
-Architecture::
-
-    RecoveryShell (wraps Graph invocation)
-      ├─ Catches RuntimeError from fail-fast Graph
-      ├─ Classifies failure (which node, what went wrong)
-      └─ Re-invokes Graph with recovery context
-
-    Strands Graph (pipeline orchestration)
-      ├─ 4 nodes: scenario → otio → audio → otio → video → otio
-      ├─ OTIO gate node: validation between stages, draft→authoritative
-      ├─ Forward edges: deterministic stage ordering via gates
-      ├─ Backward edges: conditional recovery from OTIO file
-      └─ Data flows through OTIO file on disk (stateless)
-
-Agents:
-    - Scenario agent (generates scenes, visual style, style lock)
-    - Audio+Provisioner agent (TTS + GPU workers, owns narration end-to-end)
-    - Video+Provisioner agent (visual planning + rendering, owns clips end-to-end)
-    - OTIO gate agent (validation, lifecycle enforcement, escalation management)
-"""
-
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
 from typing import Any
 
 from strands import Agent
@@ -99,6 +74,265 @@ STAGE_ORDER = [SCENARIO, AUDIO, VIDEO, ASSEMBLY]
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint directory layout & metadata schema
+# ---------------------------------------------------------------------------
+
+CHECKPOINT_SCHEMA_VERSION: str = "1.0"
+"""Version of the checkpoint metadata schema. Bumped on incompatible changes."""
+
+CHECKPOINT_SUBDIRS: tuple[str, ...] = ("otio", "agents", "renders", "previews", "logs")
+"""Subdirectories created under each run checkpoint root."""
+
+
+class MetadataSchema:
+    """Canonical metadata keys for the documentary pipeline checkpoint schema."""
+
+    SCENES = "scenes"
+    VISUAL_STYLE = "visual_style"
+    STYLE_LOCK = "style_lock"
+    WHISPERX_ALIGNMENT = "whisperx_alignment"
+    ASSEMBLY_OUTPUT_PATH = "assembly_output_path"
+    GATE_RESULT_PREFIX = "gate_"
+    LADDER_SUFFIX = "_ladder"
+    LIFECYCLE_STATE = "lifecycle_state"
+    SCHEMA_VERSION = "checkpoint_schema_version"
+
+
+def checkpoint_dir(run_id: str) -> str:
+    """Return the canonical checkpoint directory for a pipeline run.
+
+    Layout::
+
+        {PIPELINE_DIR}/checkpoints/{run_id}/
+        ├── otio/              → OTIO timeline drafts and authoritative files
+        ├── agents/            → Per-agent working state and outputs
+        ├── renders/           → Final and intermediate video renders
+        ├── previews/          → QA preview artifacts
+        ├── logs/              → Execution logs and critique records
+        └── metadata.json      → Run-level metadata schema envelope
+    """
+    base = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    return os.path.join(base, "checkpoints", run_id)
+
+
+def _update_completed_stages(run_id: str, stage: str) -> None:
+    """Append *stage* to the metadata.json envelope's completed_stages list.
+
+    Deduplicates and writes atomically.  This is the single source of truth
+    for whether a stage finished successfully.
+    """
+    root = checkpoint_dir(run_id)
+    envelope = os.path.join(root, "metadata.json")
+    meta: dict[str, Any] = {
+        MetadataSchema.SCHEMA_VERSION: CHECKPOINT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "stages": STAGE_ORDER,
+        "created_by": "graph_pipeline",
+        "completed_stages": [],
+    }
+    if os.path.isfile(envelope):
+        try:
+            with open(envelope, "r") as f:
+                meta.update(json.load(f))
+        except Exception:
+            pass
+    completed: list[str] = meta.get("completed_stages", [])
+    if stage not in completed:
+        completed.append(stage)
+        meta["completed_stages"] = completed
+        with open(envelope, "w") as f:
+            json.dump(meta, f, indent=2)
+
+
+def ensure_checkpoint_layout(run_id: str) -> str:
+    """Create the full checkpoint directory layout for a run.
+
+    Returns the root checkpoint path.
+    """
+    root = checkpoint_dir(run_id)
+    for sub in CHECKPOINT_SUBDIRS:
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+    envelope = os.path.join(root, "metadata.json")
+    if not os.path.exists(envelope):
+        with open(envelope, "w") as f:
+            json.dump(
+                {
+                    MetadataSchema.SCHEMA_VERSION: CHECKPOINT_SCHEMA_VERSION,
+                    "run_id": run_id,
+                    "stages": STAGE_ORDER,
+                    "created_by": "graph_pipeline",
+                    "completed_stages": [],
+                },
+                f,
+                indent=2,
+            )
+    return root
+
+
+def latest_checkpoint_path(run_id: str) -> str | None:
+    """Return the path to the most recent checkpoint file for a run.
+
+    Searches the agents/ and otio/ subtrees under the run checkpoint directory.
+    Returns None if no checkpoint files exist yet.
+    """
+    root = checkpoint_dir(run_id)
+    latest_path: str | None = None
+    latest_mtime: float = 0.0
+    for subdir in ("agents", "otio"):
+        search_dir = os.path.join(root, subdir)
+        if not os.path.isdir(search_dir):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(search_dir):
+            for fname in filenames:
+                if fname.endswith(".otio"):
+                    fpath = os.path.join(dirpath, fname)
+                    try:
+                        mtime = os.path.getmtime(fpath)
+                    except OSError:
+                        continue
+                    if mtime > latest_mtime:
+                        latest_mtime = mtime
+                        latest_path = fpath
+    return latest_path
+
+
+def _discover_completed_stages(run_id: str) -> list[str]:
+    """Discover which stages completed before a crash by reading checkpoint metadata.
+
+    Reads the metadata.json envelope first; falls back to inspecting agent
+    checkpoint directories for .otio files.
+    """
+    root = checkpoint_dir(run_id)
+    envelope = os.path.join(root, "metadata.json")
+    if os.path.isfile(envelope):
+        try:
+            with open(envelope, "r") as f:
+                meta = json.load(f)
+            completed = meta.get("completed_stages")
+            if isinstance(completed, list):
+                return completed
+        except Exception:
+            pass
+
+    # NOTE: We do NOT infer completion from the presence of .otio files on
+    # disk.  A checkpoint file may exist for a partially-failed stage, and
+    # treating it as "completed" would cause the skip logic to bypass the
+    # stage forever.  Completion is recorded explicitly by save_*_checkpoint
+    # via _update_completed_stages().
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Recovery shell
+# ---------------------------------------------------------------------------
+
+class RecoveryShell:
+    """Wraps Graph invocation and holds checkpoint/resume state.
+
+    Merges two roles:
+    1. Original: Graph wrapper with retry logic (run_strands.py calls this).
+    2. Agent-added: Resume state bag with checkpoint seeding.
+    """
+
+    def __init__(
+        self,
+        graph: Graph | None = None,
+        max_retries: int = 3,
+        resume: bool = False,
+        run_id: str = "",
+        latest_checkpoint: str = "",
+        completed_stages: list[str] | None = None,
+    ) -> None:
+        # Original: graph wrapper state
+        self.graph = graph
+        self.max_retries = max_retries
+        self._recovery_count = 0
+
+        # Agent-added: resume state
+        self.resume = resume
+        self.run_id = run_id
+        self.latest_checkpoint = latest_checkpoint
+        self.completed_stages = completed_stages if completed_stages is not None else []
+
+    async def run(
+        self, task: str, initial_state: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Execute the graph with automatic recovery on failure.
+
+        Seeds the working timeline from the latest checkpoint on resume.
+        """
+        # On resume, seed the working timeline before first execution
+        if self.resume and self.latest_checkpoint:
+            self.seed_timeline()
+
+        state_overrides: dict[str, Any] = initial_state or {}
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                result = await self.graph.invoke_async(task)
+                state_overrides.pop("_recovery_target", None)
+                state_overrides.pop("_recovery_reason", None)
+                return result
+            except RuntimeError as exc:
+                if attempt >= self.max_retries:
+                    raise
+
+                failed_node = self._classify_failure(exc)
+                reason = str(exc)
+
+                logger.warning(
+                    "Graph failure on attempt %d/%d: node=%s reason=%s",
+                    attempt + 1,
+                    self.max_retries,
+                    failed_node,
+                    reason[:200],
+                )
+
+                state_overrides["_recovery_target"] = failed_node
+                state_overrides["_recovery_reason"] = reason
+                self._recovery_count += 1
+
+    def seed_timeline(self) -> str | None:
+        """On resume, copy the selected checkpoint to the working timeline path."""
+        if not self.resume or not self.latest_checkpoint:
+            return None
+        from tools.otio_file_ops import resolve_timeline_path
+
+        timeline_path = resolve_timeline_path()
+        timeline_dir = os.path.dirname(timeline_path)
+        if timeline_dir:
+            os.makedirs(timeline_dir, exist_ok=True)
+        shutil.copy2(self.latest_checkpoint, timeline_path)
+        logger.info(
+            "Resumed run %s: copied checkpoint %s -> %s",
+            self.run_id,
+            self.latest_checkpoint,
+            timeline_path,
+        )
+        return timeline_path
+
+    @staticmethod
+    def _classify_failure(exc: RuntimeError) -> str:
+        """Extract the failed node name from a Graph RuntimeError."""
+        msg = str(exc)
+        for stage in STAGE_ORDER:
+            if stage in msg:
+                return stage
+        logger.warning(
+            "Could not classify failure, defaulting to scenario: %s", msg[:200]
+        )
+        return SCENARIO
+
+
+_recovery_shell: RecoveryShell | None = None
+
+
+def get_recovery_shell() -> RecoveryShell | None:
+    """Return the active recovery shell for this graph execution, if any."""
+    return _recovery_shell
+
+
+# ---------------------------------------------------------------------------
 # Graph builder
 # ---------------------------------------------------------------------------
 
@@ -107,7 +341,8 @@ def build_documentary_graph(
     hooks: list[HookProvider] | None = None,
     max_node_executions: int = 50,
     model: Any | None = None,
-) -> Graph:
+    run_id: str = "",
+) -> tuple[Graph, RecoveryShell]:
     """Construct the documentary pipeline Graph.
 
     3 stage nodes + 1 OTIO gate node. Data flows through the OTIO
@@ -125,9 +360,46 @@ def build_documentary_graph(
     Returns:
         A :class:`Graph` ready for ``invoke_async`` or ``stream_async``.
     """
+    global _recovery_shell
+
+    # NO CHECKPOINTS: every run starts from scratch.
+    # Ensure layout exists for saving checkpoints during the run, but
+    # never resume from previous state.
+    if run_id:
+        ensure_checkpoint_layout(run_id)
+
+    _recovery_shell = RecoveryShell(
+        resume=False,
+        run_id=run_id,
+        latest_checkpoint="",
+        completed_stages=[],
+    )
+
+    # Create a shared OTIOStateManager and inject it into stage modules
+    # so their tools can read/write pipeline metadata.
+    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    try:
+        from strands_agents.otio_manager import OTIOStateManager
+        _shared_otio_manager = OTIOStateManager(output_dir=pipeline_dir)
+        # Point it at the existing timeline file (created by run_strands.py)
+        timeline_dir = os.path.join(pipeline_dir, "timelines")
+        draft_path = os.path.join(timeline_dir, "documentary_draft.otio")
+        if os.path.exists(draft_path):
+            _shared_otio_manager._timeline_path = draft_path
+            _shared_otio_manager.refresh_from_disk()
+
+        import strands_agents.stages.audio_stage as _audio_stage_mod
+        import strands_agents.stages.production_stage as _production_stage_mod
+        import strands_agents.stages.scenario_stage as _scenario_stage_mod
+        _audio_stage_mod._otio_manager = _shared_otio_manager
+        _production_stage_mod._otio_manager = _shared_otio_manager
+        _scenario_stage_mod._otio_manager = _shared_otio_manager
+    except Exception as exc:
+        logger.warning("Failed to inject OTIOStateManager into stage modules: %s", exc)
+
     # Build stage agents as Strands Agents with stateless OTIO tools
     scenario_agent = _build_scenario_agent(model)
-    audio_agent = _build_audio_agent(model)
+    audio_agent = _build_audio_agent(model, run_id=run_id)
     video_agent = _build_video_agent(model)
     otio_gate_agent = _build_otio_gate_agent(model)
     assembly_agent = _build_assembly_agent(model)
@@ -144,11 +416,23 @@ def build_documentary_graph(
     # Forward edges: scenario → otio → audio → otio → video → otio → assembly → otio
     forward_edges = {
         GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[OTIO]),
-        GraphEdge(from_node=nodes[OTIO], to_node=nodes[AUDIO]),
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[AUDIO],
+            condition=_audio_not_completed,
+        ),
         GraphEdge(from_node=nodes[AUDIO], to_node=nodes[OTIO]),
-        GraphEdge(from_node=nodes[OTIO], to_node=nodes[VIDEO]),
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[VIDEO],
+            condition=_video_not_completed,
+        ),
         GraphEdge(from_node=nodes[VIDEO], to_node=nodes[OTIO]),
-        GraphEdge(from_node=nodes[OTIO], to_node=nodes[ASSEMBLY]),
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[ASSEMBLY],
+            condition=_assembly_not_completed,
+        ),
         GraphEdge(from_node=nodes[ASSEMBLY], to_node=nodes[OTIO]),
     }
 
@@ -184,7 +468,7 @@ def build_documentary_graph(
 
     all_hooks = list(hooks) if hooks else []
 
-    return Graph(
+    graph = Graph(
         nodes=nodes,
         edges=edges,
         entry_points={nodes[SCENARIO]},
@@ -193,6 +477,8 @@ def build_documentary_graph(
         hooks=all_hooks,
         id="documentary_pipeline",
     )
+    _recovery_shell.graph = graph
+    return graph, _recovery_shell
 
 
 # ---------------------------------------------------------------------------
@@ -249,11 +535,11 @@ def _build_otio_gate_agent(model) -> Agent:
         from tools.otio_metadata import metadata_key_exists, read_pipeline_metadata
         tp = resolve_timeline_path()
         errors = []
-        if not metadata_key_exists(tp, "scenes"):
+        if not metadata_key_exists(tp, MetadataSchema.SCENES):
             errors.append("Missing 'scenes' in OTIO metadata")
-        if not metadata_key_exists(tp, "visual_style"):
+        if not metadata_key_exists(tp, MetadataSchema.VISUAL_STYLE):
             errors.append("Missing 'visual_style' in OTIO metadata")
-        if not metadata_key_exists(tp, "style_lock"):
+        if not metadata_key_exists(tp, MetadataSchema.STYLE_LOCK):
             errors.append("Missing 'style_lock' in OTIO metadata")
         if errors:
             return json.dumps({"valid": False, "errors": errors, "recovery_target": SCENARIO})
@@ -261,14 +547,19 @@ def _build_otio_gate_agent(model) -> Agent:
 
     @tool
     def validate_audio() -> str:
-        """Validate audio output: narration clips must exist, timing within tolerance."""
+        """Validate audio output: narration clips must exist, timing within tolerance.
+
+        CRITICAL FIX: whisperx_alignment is OPTIONAL. The gate passes if A1_Narration
+        track has clips. This prevents infinite audio loops when the agent doesn't
+        write alignment metadata.
+        """
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         from tools.otio_metadata import metadata_key_exists
         tp = resolve_timeline_path()
         errors = []
-        if not metadata_key_exists(tp, "whisperx_alignment"):
-            errors.append("Missing 'whisperx_alignment' in OTIO metadata")
-        # Check A1_Narration track for clips
+        warnings = []
+
+        # Check A1_Narration track for clips FIRST — this is the real gate
         try:
             timeline = otio_read(tp)
             a1_track = None
@@ -282,9 +573,14 @@ def _build_otio_gate_agent(model) -> Agent:
                 errors.append("A1_Narration track is empty — no narration clips")
         except Exception as e:
             errors.append(f"Error reading timeline: {e}")
+
+        # whisperx_alignment is nice-to-have, not required for gate passage
+        if not metadata_key_exists(tp, MetadataSchema.WHISPERX_ALIGNMENT):
+            warnings.append("Missing 'whisperx_alignment' in OTIO metadata (optional)")
+
         if errors:
-            return json.dumps({"valid": False, "errors": errors, "recovery_target": AUDIO})
-        return json.dumps({"valid": True, "next_stage": VIDEO})
+            return json.dumps({"valid": False, "errors": errors, "warnings": warnings, "recovery_target": AUDIO})
+        return json.dumps({"valid": True, "next_stage": VIDEO, "warnings": warnings})
 
     @tool
     def validate_video() -> str:
@@ -317,7 +613,7 @@ def _build_otio_gate_agent(model) -> Agent:
         tp = resolve_timeline_path()
         errors = []
         # Check that assembly produced an output
-        output_path = read_pipeline_metadata(tp, "assembly_output_path")
+        output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
         if not output_path:
             errors.append("No assembly output path in OTIO metadata")
         if errors:
@@ -343,7 +639,7 @@ def _build_otio_gate_agent(model) -> Agent:
             "valid": valid,
             "errors": json.loads(errors_json) if errors_json else [],
         }
-        return write_pipeline_metadata(tp, f"gate_{stage}", result, provenance={"agent": "otio_gate"})
+        return write_pipeline_metadata(tp, f"{MetadataSchema.GATE_RESULT_PREFIX}{stage}", result, provenance={"agent": "otio_gate"})
 
     @tool
     def get_otio_lifecycle_state() -> str:
@@ -380,7 +676,7 @@ def _build_otio_gate_agent(model) -> Agent:
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import read_pipeline_metadata
         tp = resolve_timeline_path()
-        key = f"{stage}_ladder"
+        key = f"{stage}{MetadataSchema.LADDER_SUFFIX}"
         val = read_pipeline_metadata(tp, key)
         if val is None:
             return json.dumps({"stage": stage, "ladder_active": False, "level": 0, "attempts": 0})
@@ -418,7 +714,7 @@ def _build_otio_gate_agent(model) -> Agent:
 
         Fire-and-forget — the preview is a QA artifact, not a gate.
         The builder reads the OTIO file directly and produces an MP4
-        with honest placeholders for any missing slots.
+        reflecting the actual state of clips in the timeline.
         """
         from previews.builder import build_preview
         try:
@@ -452,666 +748,625 @@ def _build_otio_gate_agent(model) -> Agent:
             "3. If validation fails: write gate_result to OTIO with errors, and the graph will route backward\n"
             "4. If validation passes: write gate_result to OTIO, summarize what the next stage needs\n"
             "5. After audio stage validation passes: call transition_to_authoritative\n"
-            "6. After every validation (pass OR fail): write_critique_record + trigger_preview\n\n"
-            "WORKFLOW:\n"
-            "- After scenario: call validate_scenario(). If valid, next is audio.\n"
-            "- After audio: call validate_audio(). If valid, call transition_to_authoritative, next is video.\n"
-            "- After video: call validate_video(). If valid, next is assembly.\n"
-            "- After assembly: call validate_assembly(). If valid, pipeline is complete.\n"
-            "- After EVERY validation: write_critique_record(stage, verdict, details) + trigger_preview(stage)\n\n"
-            "RULES:\n"
-            "- You NEVER generate content. You only validate and enforce.\n"
-            "- Read ALL data from the OTIO file. All results go TO the OTIO file.\n"
-            "- If validation fails, write the error to OTIO and report it clearly.\n"
-            "- The draft→authoritative transition happens ONLY after audio validation passes.\n"
-            "- Critique records and previews are fire-and-forget QA artifacts. They never block the pipeline.\n"
+            "6. After every validation (pass OR fail): write a critique record and trigger a preview\n"
+            "7. Manage escalation windows via begin_escalation/end_escalation when authoritative OTIO must change\n\n"
+            "CRITICAL DATA MODEL:\n"
+            "- The scenario agent writes ONE key: 'scenes' (an array of scene dicts).\n"
+            "  Each scene dict contains: title, description, visual_notes, audio_notes, duration_seconds, start_time, end_time.\n"
+            "- Downstream agents DERIVE what they need from 'scenes'. Do NOT demand\n"
+            "  separate 'scene_data', 'visual_concepts', 'narration_text', or 'target_duration' keys.\n"
+            "- Audio agent derives narration_text from scene['description'] and scene['audio_notes'].\n"
+            "- Video agent derives visual prompts from scene['visual_notes'] and scene['description'].\n"
+            "- The scenario gate ONLY checks: scenes exist, visual_style exists, style_lock is true.\n"
+            "- The audio gate checks: A1_Narration track has clips OR whisperx_alignment exists.\n"
+            "- The video gate checks: V1_Video track has clips.\n"
+            "- The assembly gate checks: assembly_output_path exists.\n\n"
+            "Rules:\n"
+            "- You are stateless. All state lives in the OTIO file on disk.\n"
+            "- Never assume memory of previous runs. Always read the OTIO file first.\n"
+            "- If validation fails, be specific about what is missing so the recovery agent knows what to fix.\n"
+            "- If validation passes, provide a concise summary of what the next stage should expect.\n"
         ),
         tools=[
-            read_pipeline_data, read_timeline,
-            validate_scenario, validate_audio, validate_video, validate_assembly,
-            transition_to_authoritative, write_gate_result,
+            read_pipeline_data,
+            read_timeline,
+            validate_scenario,
+            validate_audio,
+            validate_video,
+            validate_assembly,
+            transition_to_authoritative,
+            write_gate_result,
             get_otio_lifecycle_state,
-            begin_escalation, end_escalation,
+            begin_escalation,
+            end_escalation,
             read_ladder_state,
-            write_critique_record, trigger_preview,
-        ],
+            write_critique_record,
+            trigger_preview,
+        ] + _make_memory_tools("otio_gate"),
         model=model,
     )
 
 
-def _build_assembly_agent(model) -> Agent:
-    """Build a Strands Agent for the assembly stage.
+# ---------------------------------------------------------------------------
+# Stage agents
+# ---------------------------------------------------------------------------
 
-    Uses the deterministic assembly tools — mux, concat, validate,
-    and upload the final documentary.  All OTIO operations are stateless.
+
+def _read_directives() -> dict | None:
+    """Read debug-gym directives from the pipeline directory.
+
+    Tries PIPELINE_DIR env var first (set before pipeline starts),
+    then falls back to resolve_timeline_path().
     """
-    from strands_agents.stages.assembly_stage import build_assembly_agent
-    return build_assembly_agent(model=model)
-
-
-# ---------------------------------------------------------------------------
-# Agent builders — wrap existing agents as Strands Agents
-# ---------------------------------------------------------------------------
+    pipeline_dir = os.environ.get("PIPELINE_DIR", "")
+    if not pipeline_dir:
+        try:
+            from tools.otio_file_ops import resolve_timeline_path
+            tp = resolve_timeline_path()
+            pipeline_dir = os.path.dirname(tp)
+        except Exception:
+            return None
+    try:
+        path = os.path.join(pipeline_dir, ".directives.json")
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def _build_scenario_agent(model) -> Agent:
-    """Build a Strands Agent for the scenario stage.
-
-    Uses stateless OTIO file ops to persist scenes, visual_style,
-    and style_lock to the OTIO file on disk.
-    """
+    """Build the scenario agent — generates scenes and locks visual style."""
     from strands import tool
 
+    # Inject scope constraints from debug-gym directives
+    constraint_text = ""
+    directives = _read_directives()
+    if directives:
+        target = directives.get("target_agent", "")
+        action = directives.get("action", "")
+        if (target in ("scenario_agent", "all")) and action == "constrain_scope":
+            max_scenes = directives.get("max_scenes")
+            max_duration = directives.get("max_duration_seconds")
+            if max_scenes is not None and max_duration is not None:
+                constraint_text = (
+                    f"SCOPE CONSTRAINT: Generate exactly {max_scenes} scene(s), "
+                    f"total duration must not exceed {max_duration} seconds. "
+                    f"Fit content within these limits.\n"
+                )
+
     @tool
-    def write_scenes(scenes_json: str, provenance_json: str = "{}") -> str:
-        """Write scenes to the OTIO timeline file."""
+    def write_scenes(scenes_json: str) -> str:
+        """Write generated scenes to OTIO metadata."""
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, "scenes", json.loads(scenes_json),
-                                       provenance=json.loads(provenance_json))
+        scenes = json.loads(scenes_json)
+        write_pipeline_metadata(tp, MetadataSchema.SCENES, scenes, provenance={"agent": SCENARIO})
+        return json.dumps({"written": True, "scene_count": len(scenes)})
 
     @tool
-    def write_visual_style(style_json: str, provenance_json: str = "{}") -> str:
-        """Write visual style to the OTIO timeline file."""
+    def write_visual_style(style_json: str) -> str:
+        """Write visual style and lock to OTIO metadata."""
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, "visual_style", json.loads(style_json),
-                                       provenance=json.loads(provenance_json))
+        style = json.loads(style_json)
+        write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, style, provenance={"agent": SCENARIO})
+        write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, True, provenance={"agent": SCENARIO})
+        return json.dumps({"written": True})
 
     @tool
-    def write_style_lock(lock_json: str, provenance_json: str = "{}") -> str:
-        """Write style lock to the OTIO timeline file."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, "style_lock", json.loads(lock_json),
-                                       provenance=json.loads(provenance_json))
+    def check_resume_status() -> str:
+        """Check if this stage was already completed in a previous run.
+        If completed, call save_scenario_checkpoint and return immediately."""
+        shell = get_recovery_shell()
+        if shell and SCENARIO in shell.completed_stages:
+            return json.dumps({"status": "already_completed", "stage": SCENARIO})
+        return json.dumps({"status": "not_completed", "stage": SCENARIO})
 
-    memory_tools = _make_memory_tools("scenario")
+    @tool
+    def save_scenario_checkpoint() -> str:
+        """Save the current OTIO timeline to the checkpoint directory after narrative planning."""
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+        if not run_id:
+            return json.dumps({"saved": False, "reason": "no run_id"})
+        root = checkpoint_dir(run_id)
+        dest_dir = os.path.join(root, "agents", SCENARIO)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "scenario_timeline.otio")
+        shutil.copy2(tp, dest)
+        # Record completion in checkpoint metadata envelope
+        _update_completed_stages(run_id, SCENARIO)
+        return json.dumps({"saved": True, "checkpoint_path": dest})
 
     return Agent(
-        name="scenario",
+        name=SCENARIO,
         system_prompt=(
-            "You are the Scenario Agent for a documentary pipeline.\n\n"
-            "Your job is to generate a documentary scenario: scenes, visual "
-            "style, and style lock. Write ALL output to the OTIO file "
-            "using write_scenes, write_visual_style, and write_style_lock.\n\n"
-            "At the start of your work, call recall_memory to check what you've "
-            "learned from previous runs. When you discover something important "
-            "(a pattern, a gotcha, a preference), call remember to persist it.\n\n"
-            "RULES:\n"
-            "- ALL data goes to the OTIO file on disk. No agent state.\n"
-            "- Every write carries provenance.\n"
-            "- Persist immediately, even on error.\n"
+            "You are the Scenario Agent. You generate the documentary structure.\n"
+            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "call save_scenario_checkpoint and then STOP — do not regenerate scenes.\n"
+            f"{constraint_text}"
+            "1. Create scenes based on the input brief.\n"
+            "2. Define visual_style and set style_lock.\n"
+            "3. Write scenes, visual_style, and style_lock to the OTIO file.\n"
+            "4. Call save_scenario_checkpoint to preserve the narrative planning in the checkpoint directory.\n"
+            "You are stateless — all output goes to the OTIO file."
         ),
-        tools=[write_scenes, write_visual_style, write_style_lock] + memory_tools,
+        tools=[write_scenes, write_visual_style, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
         model=model,
     )
 
 
-def _build_audio_agent(model) -> Agent:
-    """Build a Strands Agent for the audio stage.
+def _build_audio_agent(model, run_id: str = "") -> Agent:
+    """Build the audio agent — owns narration end-to-end.
 
-    Uses the AudioProvisionerAgent — merged audio + provisioner.
-    The agent owns TTS end-to-end: allocate workers, generate
-    narration, evaluate quality, scale workers.
-    All OTIO operations are stateless — read/write the OTIO file directly.
-    """
+    Uses real production tools from strands_agents.stages.audio_stage.
+    Checkpoint/resume tools are added alongside."""
+    from strands_agents.stages.audio_stage import (
+        generate_scene_narration,
+        add_narration_to_timeline,
+        align_narration_audio,
+        evaluate_audio_timing,
+        read_scenes_from_otio,
+        persist_audio_to_otio,
+    )
+
     from strands import tool
 
     @tool
-    def read_pipeline_data(key: str) -> str:
-        """Read pipeline metadata from the OTIO file."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = resolve_timeline_path()
-        val = read_pipeline_metadata(tp, key)
-        if val is None:
-            return json.dumps({"error": f"Key '{key}' not found", "contract_violation": True})
-        return json.dumps({"key": key, "value": val})
+    def check_resume_status() -> str:
+        """Check if this stage was already completed in a previous run.
 
-    @tool
-    def find_narration_gaps() -> str:
-        """Scan OTIO timeline for missing narration. Returns TTS job list."""
-        from agents.audio_provisioner_agent import _tool_find_narration_gaps
-        return _tool_find_narration_gaps()
-
-    @tool
-    def get_scene_durations() -> str:
-        """Get per-scene duration budgets from OTIO."""
-        from agents.audio_provisioner_agent import _tool_get_scene_durations
-        return _tool_get_scene_durations()
-
-    @tool
-    def write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
-        """Write pipeline metadata to the OTIO file."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, key, json.loads(value_json),
-                                       provenance=json.loads(provenance_json))
-
-    @tool
-    def add_clip(track: str, scene_num: int, phrase_idx: int,
-                 clip_path: str, duration: float,
-                 provenance_json: str = "{}") -> str:
-        """Add a clip to the OTIO timeline."""
-        from agents.audio_provisioner_agent import _tool_add_clip
-        return _tool_add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
-
-    @tool
-    def validate_timeline(phase: str) -> str:
-        """Validate timeline structural integrity."""
-        from agents.audio_provisioner_agent import _tool_validate_timeline
-        return _tool_validate_timeline(phase)
-
-    @tool
-    def search_gpu_offers(query: str) -> str:
-        """Search Vast.ai for available GPU offers. Construct your own query."""
-        from agents.audio_provisioner_agent import _tool_search_gpu_offers
-        return _tool_search_gpu_offers(query)
-
-    @tool
-    def provision_vm(offer_id: str, disk_gb: int = 64,
-                     worker_mode: str = "tts",
-                     docker_image: str = "",
-                     env_vars_json: str = "{}") -> str:
-        """Provision a GPU VM on Vast.ai."""
-        from agents.audio_provisioner_agent import _tool_provision_vm
-        return _tool_provision_vm(offer_id, disk_gb, worker_mode, docker_image, env_vars_json)
-
-    @tool
-    def check_vm_status(vm_id: str) -> str:
-        """Check if a VM is running and healthy. Rate-limited per VM."""
-        from agent_memory import _rate_limited_check_vm_status
-        return _rate_limited_check_vm_status(vm_id)
-
-    @tool
-    def check_worker_health(url: str, capability: str = "tts") -> str:
-        """Check if a worker's /health endpoint is OK. Rate-limited per URL."""
-        from agent_memory import _rate_limited_check_worker_health
-        return _rate_limited_check_worker_health(url, capability)
-
-    @tool
-    def terminate_vm(vm_id: str) -> str:
-        """Destroy a VM on Vast.ai to stop billing."""
-        from agents.audio_provisioner_agent import _tool_terminate_vm
-        return _tool_terminate_vm(vm_id)
-
-    @tool
-    def list_active_vms() -> str:
-        """List all running VMs on the Vast.ai account."""
-        from agents.audio_provisioner_agent import _tool_list_active_vms
-        return _tool_list_active_vms()
-
-    @tool
-    def get_account_credits() -> str:
-        """Get Vast.ai account credit balance."""
-        from agents.audio_provisioner_agent import _tool_get_account_credits
-        return _tool_get_account_credits()
-
-    @tool
-    def generate_narration(scene_num: int, voice_role: str, text: str,
-                           output_dir: str = "", language: str = "",
-                           worker_url: str = "") -> str:
-        """Generate narration WAV via Qwen3-TTS worker."""
-        from agents.audio_provisioner_agent import _tool_generate_narration
-        return _tool_generate_narration(scene_num, voice_role, text, output_dir, language, worker_url)
-
-    @tool
-    def align_narration(wav_path: str) -> str:
-        """Run WhisperX alignment on a WAV file."""
-        from agents.audio_provisioner_agent import _tool_align_narration
-        return _tool_align_narration(wav_path)
-
-    @tool
-    def evaluate_narration_quality() -> str:
-        """Evaluate narration quality: duration vs budget, total projection."""
-        from agents.audio_provisioner_agent import _tool_evaluate_narration_quality
-        return _tool_evaluate_narration_quality()
-
-    @tool
-    def begin_escalation(escalation_type: str, reason: str) -> str:
-        """Open an escalation window to modify authoritative OTIO.
-        escalation_type: 'REPLACE' or 'EXTEND'.
+        CRITICAL FIX: Also checks disk state — if A1_Narration clips exist in OTIO
+        or WAV files exist in the audio directory, the stage is considered done.
+        This prevents regeneration when completed_stages is empty (reset_on_revisit).
         """
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_lifecycle import begin_escalation as _begin
-        tp = resolve_timeline_path()
-        return _begin(tp, escalation_type, reason, "audio")
+        shell = get_recovery_shell()
+        if shell and AUDIO in shell.completed_stages:
+            return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "checkpoint"})
+
+        # FIX: Check actual timeline for clips (works even after graph reset)
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        try:
+            tp = resolve_timeline_path()
+            timeline = otio_read(tp)
+            for track in timeline.tracks:
+                if track.name == "A1_Narration":
+                    if len(list(track)) > 0:
+                        return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "otio_clips_exist"})
+        except Exception:
+            pass
+
+        # FIX: Check audio output directory for existing WAV files
+        import glob
+        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        audio_dir = os.path.join(pipeline_dir, "audio")
+        wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
+        if len(wav_files) > 0:
+            return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "wav_files_exist", "count": len(wav_files)})
+
+        return json.dumps({"status": "not_completed", "stage": AUDIO})
 
     @tool
-    def end_escalation() -> str:
-        """Close the escalation window on the OTIO timeline."""
+    def save_audio_checkpoint() -> str:
+        """Save the current OTIO timeline after audio generation."""
         from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_lifecycle import end_escalation as _end
         tp = resolve_timeline_path()
-        return _end(tp)
-
-    @tool
-    def classify_failure(error_msg: str) -> str:
-        """Classify a pipeline failure as content, infra, or unclear."""
-        from diagnostic_classifier import classify_failure as _classify, build_signals_from_error
-        signals = build_signals_from_error(error_msg)
-        result = _classify(error_msg, signals)
-        return json.dumps({"failure_class": result.name if hasattr(result, "name") else str(result)})
-
-    @tool
-    def write_ladder_state(level: int, attempts: int, history_json: str = "[]") -> str:
-        """Write audio ladder state to OTIO for tracking."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, "audio_ladder", {
-            "level": level, "attempts": attempts,
-            "history": json.loads(history_json),
-        }, provenance={"agent": "audio"})
-
-    memory_tools = _make_memory_tools("audio")
+        shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+        if not run_id:
+            return json.dumps({"saved": False, "reason": "no run_id"})
+        root = checkpoint_dir(run_id)
+        dest_dir = os.path.join(root, "agents", AUDIO)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "audio_timeline.otio")
+        shutil.copy2(tp, dest)
+        _update_completed_stages(run_id, AUDIO)
+        return json.dumps({"saved": True, "checkpoint_path": dest})
 
     return Agent(
-        name="audio",
+        name=AUDIO,
         system_prompt=(
-            "You are the Audio+Provisioner Agent for a documentary pipeline.\n\n"
-            "You own TTS end-to-end: allocate workers, generate narration, "
-            "evaluate quality, scale workers.\n\n"
-            "PHASE 0: RECALL — call recall_memory to check what you've learned "
-            "from previous runs (GPU preferences, disk requirements, failures).\n"
-            "PHASE 1: READ — find narration gaps in OTIO (find_narration_gaps)\n"
-            "PHASE 2: PLAN — compute workload from gaps\n"
-            "PHASE 3: PROVISION — search Vast.ai GPUs, pick one, create VM, "
-            "wait for health. Use search_gpu_offers with your own query. "
-            "Read the results and reason about which GPU to pick. "
-            "Qwen3-TTS needs ~8GB VRAM minimum.\n"
-            "PHASE 4: GENERATE — for each gap, call generate_narration, "
-            "add_clip to OTIO, align_narration\n"
-            "PHASE 5: EVALUATE — evaluate_narration_quality, rebalance if needed\n"
-            "PHASE 6: CLEANUP — terminate_vm to stop billing\n"
-            "PHASE 7: REMEMBER — call remember for anything you learned this run "
-            "(failures, successes, gotchas).\n\n"
-            "RULES:\n"
-            "- ALL data flows through the OTIO file on disk. No agent state.\n"
-            "- Every write carries provenance.\n"
-            "- If scenes are missing, report error — that's a contract violation.\n"
-            "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
-            "- Always terminate VMs when done to minimize cost.\n"
-            "- Poll VM health with backoff: 10s, 30s, 60s, 120s. Don't tight-loop.\n"
+            "You are the Audio Agent. You own narration end-to-end.\n"
+            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
+            "1. Read scenes from OTIO with read_scenes_from_otio.\n"
+            "2. For EACH scene, use the 'narration_text' field as the text parameter to "
+            "generate_scene_narration. Call it once per scene (voice='V1' is sufficient). "
+            "The tool provisions a TTS worker automatically if none is available.\n"
+            "3. Add narration clips to the OTIO timeline with add_narration_to_timeline.\n"
+            "4. Run WhisperX alignment with align_narration_audio.\n"
+            "5. Evaluate timing with evaluate_audio_timing.\n"
+            "6. Persist state with persist_audio_to_otio.\n"
+            "7. Call save_audio_checkpoint to preserve the audio work.\n"
+            "Use your memory tools to recall GPU provisioning failures."
         ),
         tools=[
-            read_pipeline_data, find_narration_gaps, get_scene_durations,
-            write_pipeline_data, add_clip, validate_timeline,
-            search_gpu_offers, provision_vm, check_vm_status,
-            check_worker_health, terminate_vm, list_active_vms,
-            get_account_credits,
-            generate_narration, align_narration, evaluate_narration_quality,
-            begin_escalation, end_escalation, classify_failure, write_ladder_state,
-        ] + memory_tools,
+            generate_scene_narration,
+            add_narration_to_timeline,
+            align_narration_audio,
+            evaluate_audio_timing,
+            read_scenes_from_otio,
+            persist_audio_to_otio,
+            check_resume_status,
+            save_audio_checkpoint,
+        ] + _make_memory_tools(AUDIO),
         model=model,
     )
 
 
 def _build_video_agent(model) -> Agent:
-    """Build a Strands Agent for the video stage.
+    """Build the video agent — owns visual planning and rendering end-to-end.
 
-    Uses the VideoProvisionerAgent — merged video + provisioner.
-    The agent owns rendering end-to-end: visual planning, allocate
-    GPU workers, render clips, evaluate quality, scale fleet.
-    All OTIO operations are stateless — read/write the OTIO file directly.
-    """
+    Uses real production tools from strands_agents.stages.production_stage
+    plus OTIO clip management. Checkpoint/resume tools added alongside."""
+    from strands_agents.stages.production_stage import (
+        generate_production_plan,
+        evaluate_production_plan,
+        submit_gpu_production_job,
+        finalize_production,
+    )
     from strands import tool
 
     @tool
-    def read_timeline() -> str:
-        """Read the full OTIO timeline structure."""
-        from tools.otio_file_ops import resolve_timeline_path, otio_read
+    def add_video_clip_to_timeline(
+        scene_num: int,
+        phrase_idx: int,
+        mp4_path: str,
+        duration: float,
+        lora_id: str = "",
+    ) -> str:
+        """Add a video clip to the V1_Video track on the OTIO timeline.
+
+        If mp4_path does not exist, returns an honest failure — no placeholder is generated.
+        """
+        import opentimelineio as otio
+        from tools.otio_file_ops import resolve_timeline_path, otio_read, otio_write
+
         tp = resolve_timeline_path()
         timeline = otio_read(tp)
-        summary = {}
+
+        v1_track = None
         for track in timeline.tracks:
-            clips = []
-            for item in track:
-                clips.append({
-                    "name": item.name,
-                    "type": type(item).__name__,
-                })
-            summary[track.name] = {"clip_count": len(clips), "clips": clips}
-        return json.dumps(summary)
+            if track.name == "V1_Video":
+                v1_track = track
+                break
+        if v1_track is None:
+            v1_track = otio.schema.Track(name="V1_Video", kind="video")
+            timeline.tracks.append(v1_track)
+
+        # No placeholder generation — if the clip doesn't exist, fail honestly.
+        if not os.path.exists(mp4_path):
+            return json.dumps({
+                "status": "failed",
+                "error": f"Video clip not found: {mp4_path}",
+                "clip": f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}",
+            })
+
+        actual_path = mp4_path
+        fps = 24
+        dur_frames = int(duration * fps)
+        clip = otio.schema.Clip(
+            name=f"scene_{scene_num:03d}_phrase_{phrase_idx:03d}",
+            source_range=otio.opentime.TimeRange(
+                start_time=otio.opentime.RationalTime(0, fps),
+                duration=otio.opentime.RationalTime(dur_frames, fps),
+            ),
+            media_reference=otio.schema.ExternalReference(
+                target_url=f"file://{actual_path}",
+                available_range=otio.opentime.TimeRange(
+                    start_time=otio.opentime.RationalTime(0, fps),
+                    duration=otio.opentime.RationalTime(dur_frames, fps),
+                ),
+            ),
+        )
+        clip.metadata.setdefault("video", {})
+        clip.metadata["video"]["lora_id"] = lora_id
+        clip.metadata["video"]["scene_num"] = scene_num
+        clip.metadata["video"]["phrase_idx"] = phrase_idx
+        v1_track.append(clip)
+
+        otio_write(tp, timeline)
+        return json.dumps({
+            "status": "clip_added",
+            "clip": clip.name,
+            "duration": duration,
+            "path": actual_path,
+            "track": "V1_Video",
+        })
 
     @tool
-    def read_pipeline_data(key: str) -> str:
-        """Read pipeline metadata from the OTIO file."""
+    def check_resume_status() -> str:
+        """Check if this stage was already completed in a previous run."""
+        shell = get_recovery_shell()
+        if shell and VIDEO in shell.completed_stages:
+            return json.dumps({"status": "already_completed", "stage": VIDEO})
+        return json.dumps({"status": "not_completed", "stage": VIDEO})
+
+    @tool
+    def save_video_checkpoint() -> str:
+        """Save the current OTIO timeline after video rendering."""
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+        if not run_id:
+            return json.dumps({"saved": False, "reason": "no run_id"})
+        root = checkpoint_dir(run_id)
+        dest_dir = os.path.join(root, "agents", VIDEO)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "video_timeline.otio")
+        shutil.copy2(tp, dest)
+        _update_completed_stages(run_id, VIDEO)
+        return json.dumps({"saved": True, "checkpoint_path": dest})
+
+    @tool
+    def generate_visual_concepts(style_description: str) -> str:
+        """Generate visual concepts from the documentary's visual style and scenes.
+
+        Reads scenes from OTIO and produces structured visual concepts for each scene.
+        These concepts guide the video rendering pipeline.
+        """
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import read_pipeline_metadata
         tp = resolve_timeline_path()
-        val = read_pipeline_metadata(tp, key)
-        if val is None:
-            return json.dumps({"error": f"Key '{key}' not found", "contract_violation": True})
-        return json.dumps({"key": key, "value": val})
+        scenes = read_pipeline_metadata(tp, MetadataSchema.SCENES) or []
+        visual_style = read_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE) or {}
+
+        concepts = []
+        for i, scene in enumerate(scenes, 1):
+            desc = scene.get("description", "")
+            visual_notes = scene.get("visual_notes", "")
+            duration = float(scene.get("duration_seconds", scene.get("duration_sec", 5.0)))
+            concept_prompt = f"{style_description}. {visual_notes or desc}".strip()
+            concepts.append({
+                "scene_num": i,
+                "phrase_idx": 0,
+                "prompt": concept_prompt[:500],
+                "negative_prompt": "blurry, low quality, watermark, text overlay",
+                "duration": min(duration, 10.0),
+                "lora_id": visual_style.get("lora_id", "documentary-realism"),
+                "lora_weight": float(visual_style.get("lora_weight", 0.75)),
+            })
+        return json.dumps({"concepts": concepts, "count": len(concepts)})
 
     @tool
-    def get_scene_durations() -> str:
-        """Get per-scene duration budgets from OTIO."""
-        from agents.video_provisioner_agent import _tool_get_scene_durations
-        return _tool_get_scene_durations()
-
-    @tool
-    def find_video_gaps() -> str:
-        """Scan OTIO timeline for missing video. Returns render job list."""
-        from agents.video_provisioner_agent import _tool_find_video_gaps
-        return _tool_find_video_gaps()
-
-    @tool
-    def write_pipeline_data(key: str, value_json: str, provenance_json: str = "{}") -> str:
-        """Write pipeline metadata to the OTIO file."""
+    def persist_visual_concepts(concepts_json: str) -> str:
+        """Persist generated visual concepts to OTIO metadata."""
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, key, json.loads(value_json),
-                                       provenance=json.loads(provenance_json))
-
-    @tool
-    def add_clip(track: str, scene_num: int, phrase_idx: int,
-                 clip_path: str, duration: float,
-                 provenance_json: str = "{}") -> str:
-        """Add a clip to the OTIO timeline."""
-        from agents.video_provisioner_agent import _tool_add_clip
-        return _tool_add_clip(track, scene_num, phrase_idx, clip_path, duration, provenance_json)
-
-    @tool
-    def validate_timeline(phase: str) -> str:
-        """Validate timeline structural integrity."""
-        from agents.video_provisioner_agent import _tool_validate_timeline
-        return _tool_validate_timeline(phase)
-
-    @tool
-    def rebalance_durations(adjustments_json: str, reason: str) -> str:
-        """Redistribute time between scenes."""
-        from agents.video_provisioner_agent import _tool_rebalance_durations
-        return _tool_rebalance_durations(adjustments_json, reason)
-
-    @tool
-    def query_lora_catalog(content_type: str = "", mood: str = "") -> str:
-        """Search LoRA style catalog."""
-        from agents.video_provisioner_agent import _tool_query_lora_catalog
-        return _tool_query_lora_catalog(content_type, mood)
-
-    @tool
-    def get_lora_details(lora_id: str) -> str:
-        """Get full LoRA style details."""
-        from agents.video_provisioner_agent import _tool_get_lora_details
-        return _tool_get_lora_details(lora_id)
-
-    @tool
-    def search_gpu_offers(query: str) -> str:
-        """Search Vast.ai for available GPU offers. Construct your own query."""
-        from agents.video_provisioner_agent import _tool_search_gpu_offers
-        return _tool_search_gpu_offers(query)
-
-    @tool
-    def provision_vm(offer_id: str, disk_gb: int = 128,
-                     worker_mode: str = "ltx",
-                     docker_image: str = "",
-                     env_vars_json: str = "{}") -> str:
-        """Provision a GPU VM on Vast.ai."""
-        from agents.video_provisioner_agent import _tool_provision_vm
-        return _tool_provision_vm(offer_id, disk_gb, worker_mode, docker_image, env_vars_json)
-
-    @tool
-    def check_vm_status(vm_id: str) -> str:
-        """Check if a VM is running and healthy. Rate-limited per VM."""
-        from agent_memory import _rate_limited_check_vm_status
-        return _rate_limited_check_vm_status(vm_id)
-
-    @tool
-    def check_worker_health(url: str, capability: str = "ltx") -> str:
-        """Check if a worker's /health endpoint is OK. Rate-limited per URL."""
-        from agent_memory import _rate_limited_check_worker_health
-        return _rate_limited_check_worker_health(url, capability)
-
-    @tool
-    def terminate_vm(vm_id: str) -> str:
-        """Destroy a VM on Vast.ai to stop billing."""
-        from agents.video_provisioner_agent import _tool_terminate_vm
-        return _tool_terminate_vm(vm_id)
-
-    @tool
-    def list_active_vms() -> str:
-        """List all running VMs on the Vast.ai account."""
-        from agents.video_provisioner_agent import _tool_list_active_vms
-        return _tool_list_active_vms()
-
-    @tool
-    def get_account_credits() -> str:
-        """Get Vast.ai account credit balance."""
-        from agents.video_provisioner_agent import _tool_get_account_credits
-        return _tool_get_account_credits()
-
-    @tool
-    def render_clip(scene_num: int, phrase_idx: int, prompt: str,
-                    negative_prompt: str = "", duration: float = 5.0,
-                    lora_id: str = "", worker_url: str = "") -> str:
-        """Submit a video clip render job to a GPU worker."""
-        from agents.video_provisioner_agent import _tool_render_clip
-        return _tool_render_clip(scene_num, phrase_idx, prompt,
-                                 negative_prompt, duration, lora_id, worker_url)
-
-    @tool
-    def check_clip(job_id: str, worker_url: str = "") -> str:
-        """Check the status of a GPU render job."""
-        from agents.video_provisioner_agent import _tool_check_clip
-        return _tool_check_clip(job_id, worker_url)
-
-    @tool
-    def begin_escalation(escalation_type: str, reason: str) -> str:
-        """Open an escalation window to modify authoritative OTIO.
-        escalation_type: 'REPLACE' or 'EXTEND'. Duration-preserving only for video.
-        """
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_lifecycle import begin_escalation as _begin
-        tp = resolve_timeline_path()
-        return _begin(tp, escalation_type, reason, "video")
-
-    @tool
-    def end_escalation() -> str:
-        """Close the escalation window on the OTIO timeline."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_lifecycle import end_escalation as _end
-        tp = resolve_timeline_path()
-        return _end(tp)
-
-    @tool
-    def classify_failure(error_msg: str) -> str:
-        """Classify a pipeline failure as content, infra, or unclear."""
-        from diagnostic_classifier import classify_failure as _classify, build_signals_from_error
-        signals = build_signals_from_error(error_msg)
-        result = _classify(error_msg, signals)
-        return json.dumps({"failure_class": result.name if hasattr(result, "name") else str(result)})
-
-    @tool
-    def write_ladder_state(level: int, attempts: int, history_json: str = "[]") -> str:
-        """Write video ladder state to OTIO for tracking."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        return write_pipeline_metadata(tp, "video_ladder", {
-            "level": level, "attempts": attempts,
-            "history": json.loads(history_json),
-        }, provenance={"agent": "video"})
-
-    memory_tools = _make_memory_tools("video")
+        data = json.loads(concepts_json)
+        concepts = data.get("concepts", data if isinstance(data, list) else [])
+        write_pipeline_metadata(tp, "visual_concepts", concepts, provenance={"agent": VIDEO})
+        return json.dumps({"persisted": True, "concept_count": len(concepts)})
 
     return Agent(
-        name="video",
+        name=VIDEO,
         system_prompt=(
-            "You are the Video+Provisioner Agent for a documentary pipeline.\n\n"
-            "You own rendering end-to-end: visual planning, allocate GPU workers, "
-            "render clips, evaluate quality, scale fleet.\n\n"
-            "PHASE 0: RECALL — call recall_memory to check what you've learned "
-            "from previous runs (GPU preferences, disk requirements, failures).\n"
-            "PHASE 1: SURVEY — find_video_gaps, read_pipeline_data for scenes/alignment\n"
-            "PHASE 2: VISUAL PLANNING — generate LTX-2.3 prompts, "
-            "write_pipeline_data(\"visual_concepts\"), "
-            "query_lora_catalog if needed\n"
-            "PHASE 3: INFRASTRUCTURE — search_gpu_offers with your own query, "
-            "read the results, reason about which GPU to pick. "
-            "LTX-2.3 needs significant VRAM (80GB+ ideal, 48GB minimum). "
-            "provision_vm, wait for health.\n"
-            "PHASE 4: PRODUCTION — render_clip for each concept, "
-            "check_clip, add_clip to OTIO. Scale fleet if needed.\n"
-            "PHASE 5: CLEANUP — validate_timeline, terminate_vm\n"
-            "PHASE 6: REMEMBER — call remember for anything you learned this run "
-            "(failures, successes, gotchas).\n\n"
-            "RULES:\n"
-            "- ALL data flows through the OTIO file on disk. No agent state.\n"
-            "- Every write carries provenance.\n"
-            "- If data is missing, report error — that's a contract violation.\n"
-            "- VMs are ephemeral. Track them in your working memory, not OTIO.\n"
-            "- Always terminate VMs when done to minimize cost.\n"
-            "- VRAM is a hard floor — never lower for cost.\n"
-            "- Poll VM health with backoff: 10s, 30s, 60s, 120s. Don't tight-loop.\n"
+            "You are the Video Agent. You own visual planning and rendering end-to-end.\n"
+            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "call save_video_checkpoint and then STOP — do not render clips.\n"
+            "1. Call generate_visual_concepts with a style description derived from the "
+            "visual_style in OTIO. This produces structured concepts for each scene.\n"
+            "2. Call persist_visual_concepts to save the concepts to OTIO metadata.\n"
+            "3. Read scenes from OTIO and plan visuals with generate_production_plan.\n"
+            "4. Evaluate the plan with evaluate_production_plan.\n"
+            "5. For EACH scene, call submit_gpu_production_job with job_type='video_render'. "
+            "This tool provisions a GPU worker if needed and renders the MP4 synchronously. "
+            "It returns a real video_path when rendering succeeds.\n"
+            "6. After each render succeeds, call add_video_clip_to_timeline with the video_path "
+            "returned by submit_gpu_production_job.\n"
+            "7. Finalize with finalize_production.\n"
+            "8. Call save_video_checkpoint to preserve the rendered clips.\n"
+            "Use your memory tools to recall rendering failures."
         ),
         tools=[
-            read_timeline, read_pipeline_data, get_scene_durations, find_video_gaps,
-            write_pipeline_data, add_clip, validate_timeline, rebalance_durations,
-            query_lora_catalog, get_lora_details,
-            search_gpu_offers, provision_vm, check_vm_status,
-            check_worker_health, terminate_vm, list_active_vms, get_account_credits,
-            render_clip, check_clip,
-            begin_escalation, end_escalation, classify_failure, write_ladder_state,
-        ] + memory_tools,
+            generate_production_plan,
+            evaluate_production_plan,
+            submit_gpu_production_job,
+            finalize_production,
+            add_video_clip_to_timeline,
+            generate_visual_concepts,
+            persist_visual_concepts,
+            check_resume_status,
+            save_video_checkpoint,
+        ] + _make_memory_tools(VIDEO),
+        model=model,
+    )
+
+
+def _build_assembly_agent(model) -> Agent:
+    """Build the assembly agent — produces the final deliverable.
+
+    Uses real assembly tools from strands_agents.stages.assembly_stage.
+    Checkpoint/resume tools added alongside."""
+    from strands_agents.stages.assembly_stage import (
+        assemble_final_cut,
+        read_timeline,
+        validate_assembly,
+    )
+    from strands import tool
+
+    @tool
+    def write_assembly_output_path(output_path: str) -> str:
+        """Write the final output path to OTIO metadata."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        return write_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH, output_path, provenance={"agent": ASSEMBLY})
+
+    @tool
+    def check_resume_status() -> str:
+        """Check if this stage was already completed in a previous run."""
+        shell = get_recovery_shell()
+        if shell and ASSEMBLY in shell.completed_stages:
+            return json.dumps({"status": "already_completed", "stage": ASSEMBLY})
+        return json.dumps({"status": "not_completed", "stage": ASSEMBLY})
+
+    @tool
+    def save_assembly_checkpoint() -> str:
+        """Save the current OTIO timeline to the checkpoint directory after final assembly."""
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+        if not run_id:
+            return json.dumps({"saved": False, "reason": "no run_id"})
+        root = checkpoint_dir(run_id)
+        dest_dir = os.path.join(root, "agents", ASSEMBLY)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, "assembly_timeline.otio")
+        shutil.copy2(tp, dest)
+        _update_completed_stages(run_id, ASSEMBLY)
+        return json.dumps({"saved": True, "checkpoint_path": dest})
+
+    return Agent(
+        name=ASSEMBLY,
+        system_prompt=(
+            "You are the Assembly Agent. You produce the final deliverable.\n"
+            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "call save_assembly_checkpoint and then STOP — do not re-assemble.\n"
+            "1. Read the OTIO timeline with read_timeline.\n"
+            "2. Validate with validate_assembly.\n"
+            "3. Assemble the final cut with assemble_final_cut (this calls ffmpeg).\n"
+            "4. Write assembly_output_path to OTIO metadata with write_assembly_output_path.\n"
+            "5. Call save_assembly_checkpoint to preserve the final movie state."
+        ),
+        tools=[
+            assemble_final_cut,
+            read_timeline,
+            validate_assembly,
+            write_assembly_output_path,
+            check_resume_status,
+            save_assembly_checkpoint,
+        ] + _make_memory_tools(ASSEMBLY),
         model=model,
     )
 
 
 # ---------------------------------------------------------------------------
-# Recovery conditions for backward edges — read from OTIO file
+# Backward edge conditions
 # ---------------------------------------------------------------------------
 
 
-def _needs_scenario_retry(state) -> bool:
-    """Backward edge: otio gate → scenario when scenario validation fails."""
+def _needs_scenario_retry(prev_output: Any, *_args, **_kwargs) -> bool:
+    """Check if OTIO gate requested scenario recovery."""
     try:
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = resolve_timeline_path()
-        gate = read_pipeline_metadata(tp, "gate_scenario")
-        if gate and isinstance(gate, dict) and not gate.get("valid", True):
-            return gate.get("recovery_target") == SCENARIO
-    except Exception:
-        pass
-    # Fallback to state dict
-    try:
-        return state.get("_recovery_target") == SCENARIO if hasattr(state, "get") else False
+        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
+        return data.get("recovery_target") == SCENARIO
     except Exception:
         return False
 
 
-def _needs_audio_retry(state) -> bool:
-    """Backward edge: otio gate → audio when audio validation fails."""
+def _needs_audio_retry(prev_output: Any, *_args, **_kwargs) -> bool:
+    """Check if OTIO gate requested audio recovery."""
     try:
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = resolve_timeline_path()
-        gate = read_pipeline_metadata(tp, "gate_audio")
-        if gate and isinstance(gate, dict) and not gate.get("valid", True):
-            return gate.get("recovery_target") == AUDIO
-    except Exception:
-        pass
-    try:
-        return state.get("_recovery_target") == AUDIO if hasattr(state, "get") else False
+        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
+        return data.get("recovery_target") == AUDIO
     except Exception:
         return False
 
 
-def _needs_video_retry(state) -> bool:
-    """Backward edge: otio gate → video when video validation fails."""
+def _needs_video_retry(prev_output: Any, *_args, **_kwargs) -> bool:
+    """Check if OTIO gate requested video recovery."""
     try:
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = resolve_timeline_path()
-        gate = read_pipeline_metadata(tp, "gate_video")
-        if gate and isinstance(gate, dict) and not gate.get("valid", True):
-            return gate.get("recovery_target") == VIDEO
-    except Exception:
-        pass
-    try:
-        return state.get("_recovery_target") == VIDEO if hasattr(state, "get") else False
+        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
+        return data.get("recovery_target") == VIDEO
     except Exception:
         return False
 
 
-def _needs_assembly_retry(state) -> bool:
-    """Backward edge: otio gate → assembly when assembly fails."""
+def _needs_assembly_retry(prev_output: Any, *_args, **_kwargs) -> bool:
+    """Check if OTIO gate requested assembly recovery."""
     try:
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = resolve_timeline_path()
-        gate = read_pipeline_metadata(tp, "gate_assembly")
-        if gate and isinstance(gate, dict) and not gate.get("valid", True):
-            return gate.get("recovery_target") == ASSEMBLY
-    except Exception:
-        pass
-    try:
-        return state.get("_recovery_target") == ASSEMBLY if hasattr(state, "get") else False
+        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
+        return data.get("recovery_target") == ASSEMBLY
     except Exception:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Recovery shell
-# ---------------------------------------------------------------------------
+def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
+    """Run the Scenario stage only if it was NOT already completed."""
+    shell = get_recovery_shell()
+    if shell and SCENARIO in shell.completed_stages:
+        return False
+    # FIX: Also check OTIO for scenes metadata
+    from tools.otio_file_ops import resolve_timeline_path
+    from tools.otio_metadata import metadata_key_exists
+    try:
+        tp = resolve_timeline_path()
+        if metadata_key_exists(tp, MetadataSchema.SCENES):
+            return False
+    except Exception:
+        pass
+    return True
 
 
-class RecoveryShell:
-    """Wraps a Graph invocation to catch fail-fast RuntimeError.
+def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
+    """Run the Audio stage only if it was NOT already completed."""
+    shell = get_recovery_shell()
+    if shell and AUDIO in shell.completed_stages:
+        return False
+    # FIX: Check OTIO for A1_Narration clips (works even after graph reset)
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        for track in timeline.tracks:
+            if track.name == "A1_Narration" and len(list(track)) > 0:
+                return False
+    except Exception:
+        pass
+    return True
 
-    Catches the error, classifies which node failed, writes recovery
-    context, and re-invokes the Graph so backward edges can route
-    to the right recovery node.
-    """
 
-    def __init__(self, graph: Graph, max_retries: int = 3) -> None:
-        self.graph = graph
-        self.max_retries = max_retries
-        self._recovery_count = 0
+def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
+    """Run the Video stage only if it was NOT already completed."""
+    shell = get_recovery_shell()
+    if shell and VIDEO in shell.completed_stages:
+        return False
+    # FIX: Check OTIO for V1_Video clips (works even after graph reset)
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        for track in timeline.tracks:
+            if track.name == "V1_Video" and len(list(track)) > 0:
+                return False
+    except Exception:
+        pass
+    return True
 
-    async def run(self, task: str, initial_state: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Execute the graph with automatic recovery on failure."""
-        state_overrides: dict[str, Any] = initial_state or {}
 
-        for attempt in range(self.max_retries + 1):
-            try:
-                result = await self.graph.invoke_async(task)
-                state_overrides.pop("_recovery_target", None)
-                state_overrides.pop("_recovery_reason", None)
-                return result
-            except RuntimeError as exc:
-                if attempt >= self.max_retries:
-                    raise
-
-                failed_node = self._classify_failure(exc)
-                reason = str(exc)
-
-                logger.warning(
-                    "Graph failure on attempt %d/%d: node=%s reason=%s",
-                    attempt + 1,
-                    self.max_retries,
-                    failed_node,
-                    reason[:200],
-                )
-
-                state_overrides["_recovery_target"] = failed_node
-                state_overrides["_recovery_reason"] = reason
-                self._recovery_count += 1
-
-    @staticmethod
-    def _classify_failure(exc: RuntimeError) -> str:
-        """Extract the failed node name from a Graph RuntimeError."""
-        msg = str(exc)
-        for stage in STAGE_ORDER:
-            if stage in msg:
-                return stage
-        logger.warning("Could not classify failure, defaulting to scenario: %s", msg[:200])
-        return SCENARIO
+def _assembly_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
+    """Run the Assembly stage only if it was NOT already completed."""
+    shell = get_recovery_shell()
+    if shell and ASSEMBLY in shell.completed_stages:
+        return False
+    # FIX: Check OTIO for assembly_output_path AND V1_Video clips
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    from tools.otio_metadata import read_pipeline_metadata
+    try:
+        tp = resolve_timeline_path()
+        # Already assembled?
+        output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
+        if output_path and os.path.exists(output_path):
+            return False
+        # Video must be done before assembly
+        timeline = otio_read(tp)
+        has_video = False
+        for track in timeline.tracks:
+            if track.name == "V1_Video" and len(list(track)) > 0:
+                has_video = True
+                break
+        if not has_video:
+            return False  # Can't assemble without video
+    except Exception:
+        # Fallback: if OTIO check fails, use completed_stages logic
+        if shell and VIDEO not in shell.completed_stages:
+            return False
+    return True

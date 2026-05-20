@@ -73,18 +73,24 @@ def generate_narration(
 
     duration = _estimate_duration(text)
 
-    # Skip regeneration if WAV already exists, is non-empty, and matches current text
-    text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]
+    # Skip regeneration if WAV already exists, is non-empty, and text is equivalent
+    # FIX: Compare stripped text content instead of hash. Prevents regeneration
+    # when agent rephrases with minor whitespace/punctuation differences.
     sidecar_path = wav_path.replace(".wav", ".txt")
+    normalized_text = text.strip()
     if os.path.isfile(wav_path) and os.path.getsize(wav_path) > 0:
-        # Validate text content matches (prevent stale cache from different script)
         text_matches = False
         if os.path.isfile(sidecar_path):
             try:
-                with open(sidecar_path, "r") as sf:
-                    cached_hash = sf.read().strip()
-                text_matches = cached_hash == text_hash
-            except OSError:
+                with open(sidecar_path, "r", encoding="utf-8") as sf:
+                    cached_text = sf.read()
+                # Backward-compat: old sidecars stored 12-char hash
+                if len(cached_text.strip()) == 12 and all(c in hashlib.sha256(b"").hexdigest() for c in cached_text.strip()[:8]):
+                    # Old hash format — treat as mismatch to regenerate once
+                    text_matches = False
+                else:
+                    text_matches = cached_text.strip() == normalized_text
+            except (OSError, UnicodeDecodeError):
                 pass
         if not text_matches:
             logger.info("Text changed for %s, regenerating", wav_path)
@@ -111,11 +117,15 @@ def generate_narration(
             except wave.Error:
                 logger.warning("Corrupt WAV %s, regenerating", wav_path)
 
-    def _write_sidecar(path: str, h: str) -> None:
-        """Write text hash sidecar so cache can detect stale content."""
+    def _write_sidecar(path: str, content: str) -> None:
+        """Write text sidecar so cache can detect stale content.
+
+        FIX: Stores full normalized text instead of hash. This prevents
+        regeneration when the agent rephrases with minor changes.
+        """
         try:
-            with open(path, "w") as f:
-                f.write(h)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
         except OSError:
             pass
 
@@ -128,12 +138,16 @@ def generate_narration(
     # The provisioner allocates a TTS worker when it receives the task
     # list from the audio stage. If no worker is available, the tool
     # fails honestly.
-    gpu_worker_url = os.environ.get("TTS_WORKER_URL", "")
-    if not gpu_worker_url:
+    from worker_provisioner import get_provisioner
+    provisioner = get_provisioner()
+    try:
+        spec = provisioner.ensure_available("tts")
+        gpu_worker_url = spec.worker_url or f"http://localhost:{spec.local_port}"
+    except Exception as exc:
         return json.dumps({
             "scene_num": scene_num,
             "status": "failed",
-            "error": "No TTS worker available. TTS_WORKER_URL not set. The provisioner must allocate a TTS worker.",
+            "error": f"TTS worker unavailable: {exc}",
         })
 
     # Determine language: explicit param takes priority, then suffix convention
@@ -170,7 +184,7 @@ def generate_narration(
         }).encode("utf-8")
         req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
         try:
-            with urlopen(req_inner, timeout=300) as resp:  # 5 min: first call loads model
+            with urlopen(req_inner) as resp:
                 result_bytes = resp.read()
                 return {
                     "wav_bytes": result_bytes,
@@ -180,40 +194,11 @@ def generate_narration(
                     "actual_text": text,
                 }
         except URLError as e:
-            # Service unavailable — provisioner must fix before we retry.
-            # This is NOT a tool error — it's a pipeline failure unless
-            # the provisioner can re-provision the TTS worker.
-            logger.warning("TTS worker unreachable at %s: %s", url, e)
-            from worker_provisioner import get_provisioner, ProvisionerEscalationFailed
-            try:
-                prov = get_provisioner()
-                prov.ensure_available("tts")
-                # Re-provisioned — update URL and retry once
-                new_url = os.environ.get("TTS_WORKER_URL", url)
-                retry_payload = json.dumps({
-                    "text": text, "voice": voice,
-                    "language": language, "scene_num": scene_num,
-                }).encode("utf-8")
-                retry_req = Request(
-                    f"{new_url.rstrip('/')}/tts",
-                    data=retry_payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                with urlopen(retry_req, timeout=300) as resp:
-                    result_bytes = resp.read()
-                    return {
-                        "wav_bytes": result_bytes,
-                        "actual_duration": float(resp.headers.get("X-Audio-Duration", str(duration))),
-                        "actual_sample_rate": int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE))),
-                        "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
-                        "actual_text": text,
-                    }
-            except ProvisionerEscalationFailed:
-                raise  # Propagates — triggers interested-party stage
-            except Exception as prov_err:
-                raise RuntimeError(
-                    f"TTS worker unreachable and provisioner failed: {prov_err}"
-                ) from e
+            # Worker unreachable — fail honestly.  The pipeline's recovery
+            # system will handle this; tools must NOT provision VMs.
+            raise RuntimeError(
+                f"TTS worker unreachable at {url}: {e}"
+            ) from e
 
     from recovery import execute_with_recovery, TTS_POLICY
     tts_result = execute_with_recovery(
@@ -243,8 +228,8 @@ def generate_narration(
     # If recovery shortened the text, the WAV doesn't match the original — don't cache it
     # or the next run would falsely serve truncated audio as a cache hit.
     actual_text = tts_result.get("actual_text", text)
-    if actual_text == text:
-        _write_sidecar(sidecar_path, text_hash)
+    if actual_text.strip() == normalized_text:
+        _write_sidecar(sidecar_path, normalized_text)
     else:
         logger.warning(
             "TTS text was amended by recovery (orig=%d chars, actual=%d chars) — skipping sidecar",

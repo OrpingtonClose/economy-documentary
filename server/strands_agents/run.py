@@ -371,6 +371,7 @@ async def run_documentary(
     model: str | BaseChatModel | None = None,
     get_operator_decision: OperatorDecision = _auto_reject_interrupt,
     max_interrupt_rounds: int = 32,
+    resume_from_checkpoint: str | None = None,
 ) -> dict[str, Any]:
     """Drive the orchestrator to completion, resuming through interrupts.
 
@@ -386,6 +387,9 @@ async def run_documentary(
             interrupts to an operator.
         max_interrupt_rounds: Safety cap so a misbehaving agent cannot
             loop on interrupts forever.
+        resume_from_checkpoint: Optional checkpoint identifier (e.g.
+            a LangGraph ``thread_id``) used to resume a previous run
+            instead of starting from scratch.
 
     Returns:
         The final graph state dict.
@@ -395,8 +399,12 @@ async def run_documentary(
             ``max_interrupt_rounds``.
     """
 
+    config: dict[str, Any] | None = None
+    if resume_from_checkpoint:
+        config = {"configurable": {"thread_id": resume_from_checkpoint}}
+
     agent = build_documentary_orchestrator(run_dir, model=model)
-    state = await agent.ainvoke({"messages": [("user", brief)]})
+    state = await agent.ainvoke({"messages": [("user", brief)]}, config=config)
 
     rounds = 0
     while "__interrupt__" in state:
@@ -407,7 +415,7 @@ async def run_documentary(
             )
         logger.info("round=<%d> | resolving interrupt", rounds)
         command = await get_operator_decision(state)
-        state = await agent.ainvoke(command)
+        state = await agent.ainvoke(command, config=config)
 
     logger.info("rounds=<%d> | pipeline complete", rounds)
     return state

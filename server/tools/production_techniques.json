@@ -1,0 +1,54 @@
+{
+  "techniques": {
+    "visual_hook_intense_zoom": {
+      "type": "visual_hook",
+      "description": "An aggressive, fast zoom into the subject to reset visual attention. Creates an immediate orienting response.",
+      "best_for": "The beginning of a new scene, or when emphasizing a critical piece of data.",
+      "ltx_params_injection": {
+        "camera_movement": "dolly_in",
+        "motion_bucket_id": 180,
+        "prompt_injection": "Intense, rapid zoom into the subject."
+      },
+      "cognitive_load_impact": "high_reset"
+    },
+    "visual_hook_pan_whip": {
+      "type": "visual_hook",
+      "description": "A rapid, blurred whip-pan transition that forces the eye to track movement, breaking static habituation.",
+      "best_for": "Transitioning between two contrasting concepts or locations.",
+      "ltx_params_injection": {
+        "camera_movement": "pan_right",
+        "motion_bucket_id": 200,
+        "prompt_injection": "Rapid whip-pan transition blurring the background."
+      },
+      "cognitive_load_impact": "high_reset"
+    },
+    "kinetic_typography_flash": {
+      "type": "assembly_hook",
+      "description": "1 to 3 critical words flash maximally large in the center of the screen, perfectly timed to the audio. Anchors the eye to the center of the frame.",
+      "best_for": "Keywords, statistics, or the main thesis statement of the scene.",
+      "assembly_instructions": "Identify the 1-3 target words in the WhisperX timestamp data. Create an overlay text clip exactly matching those start/end times. Font size: maximum. Alignment: center-center.",
+      "cognitive_load_impact": "focus_anchor"
+    },
+    "auditory_hook_sub_bass_impact": {
+      "type": "auditory_hook",
+      "description": "A deep, low-frequency sound effect (SFX) impact that occurs simultaneously with a visual hook. Provides cross-modal sensory alignment.",
+      "best_for": "Accompanying kinetic typography flashes or the start of a visually intense scene.",
+      "assembly_instructions": "Insert sub-bass SFX clip into track A2_Music perfectly aligned with the start timestamp of the target visual.",
+      "cognitive_load_impact": "cross_modal_sync"
+    },
+    "pacing_rule_45s_limit": {
+      "type": "pacing_constraint",
+      "description": "No single scene should exceed 45 seconds of contiguous narration. Focus decays rapidly beyond this point without a thematic context shift.",
+      "best_for": "Evaluating the overall scenario structure.",
+      "evaluation_instructions": "If a scene exceeds 45 seconds, the scenario agent must split the scene into two distinct scenes with contrasting visual themes.",
+      "cognitive_load_impact": "prevent_decay"
+    },
+    "pacing_rule_tri_voice": {
+      "type": "pacing_constraint",
+      "description": "Utilize three distinct voice personas per scene (e.g., authoritative narrator, experiential voice, didactic explainer) to prevent auditory habituation.",
+      "best_for": "Assigning TTS voices during the audio generation phase.",
+      "evaluation_instructions": "Ensure Qwen3-TTS speaker tags cycle between at least three distinct voice profiles within any contiguous 60-second block.",
+      "cognitive_load_impact": "prevent_habituation"
+    }
+  }
+}

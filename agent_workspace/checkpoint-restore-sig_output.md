@@ -1,0 +1,1 @@
+[Agent checkpoint-restore-sig produced no text output]

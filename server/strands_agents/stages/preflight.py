@@ -220,37 +220,47 @@ def _check_python_module(module_name: str, description: str) -> CheckResult:
 def _check_llm_access() -> CheckResult:
     """Check that LLM credentials are valid and the model is reachable.
 
-    Merged credentials + reachability. Lightweight: for Bedrock, uses
-    list_foundation_models (read-only, no inference cost). For Anthropic,
-    uses GET /v1/models (no tokens consumed).
-    """
+    Lightweight: for Anthropic, uses GET /v1/models (no tokens consumed).
+    For DeepSeek and other OpenAI-compatible providers, uses a minimal
+    chat completion (cheapest possible)."""
     import urllib.request
     import urllib.error
 
-    model_id = os.environ.get("STRANDS_MODEL", "claude-sonnet-4-20250514")
+    model_id = os.environ.get("STRANDS_MODEL", "deepseek-chat")
 
-    # Try Bedrock
-    aws_access = os.environ.get("AWS_ACCESS_KEY_ID", "")
-    aws_secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-    aws_profile = os.environ.get("AWS_PROFILE", "")
-    aws_config = os.path.expanduser("~/.aws/credentials")
-    has_aws = bool(aws_access and aws_secret) or aws_profile or os.path.exists(aws_config)
-
-    if has_aws:
+    # Try DeepSeek (cheapest, fastest)
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if deepseek_key:
         try:
-            import boto3
-            session = boto3.Session(profile_name=aws_profile) if aws_profile else boto3.Session()
-            client = session.client("bedrock", region_name=os.environ.get("AWS_REGION", "us-east-1"))
-            client.list_foundation_models()
+            payload = json.dumps({
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 1,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.deepseek.com/v1/chat/completions",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {deepseek_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return CheckResult(
+                    name="llm_access", passed=True, category="credentials",
+                    message=f"DeepSeek: valid, model {model_id}",
+                )
+        except urllib.error.HTTPError as exc:
             return CheckResult(
-                name="llm_access", passed=True, category="credentials",
-                message=f"Bedrock: valid, model {model_id}",
+                name="llm_access", passed=False, category="credentials",
+                message=f"DeepSeek: API key rejected — HTTP {exc.code}",
+                remedy="Check DEEPSEEK_API_KEY",
             )
         except Exception as exc:
             return CheckResult(
                 name="llm_access", passed=False, category="credentials",
-                message=f"Bedrock: credentials found but failed — {str(exc)[:200]}",
-                remedy="Check AWS credentials, region, and permissions",
+                message=f"DeepSeek: unreachable — {exc}",
+                remedy="Check network access and DEEPSEEK_API_KEY",
             )
 
     # Try Anthropic
@@ -288,18 +298,79 @@ def _check_llm_access() -> CheckResult:
     return CheckResult(
         name="llm_access", passed=False, category="credentials",
         message="No LLM credentials found",
-        remedy="Set AWS credentials (for Bedrock) or ANTHROPIC_API_KEY",
+        remedy="Set DEEPSEEK_API_KEY (recommended) or ANTHROPIC_API_KEY",
     )
 
 
+def _check_vast_api_key() -> CheckResult:
+    """Hard check — Vast.ai is the ONLY path to GPU workers."""
+    raw = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
+    key = raw.split()[0].strip() if raw else ""
+    if not key:
+        return CheckResult(
+            name="vast_api_key", passed=False, soft=False, category="workers",
+            message="VAST_AI_KEY (or VAST_API_KEY) not set",
+            remedy="Set VAST_AI_KEY to provision GPU workers. BYO workers are forbidden.",
+        )
+    return CheckResult(
+        name="vast_api_key", passed=True, category="workers",
+        message="VAST_AI_KEY configured",
+    )
+
+
+def _check_vast_funds() -> CheckResult:
+    """Check that the Vast.ai account has credits to provision VMs."""
+    import subprocess
+    raw = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
+    key = raw.split()[0].strip() if raw else ""
+    if not key:
+        return CheckResult(
+            name="vast_funds", passed=False, soft=False, category="workers",
+            message="Cannot check funds — VAST_AI_KEY not set",
+            remedy="Set VAST_AI_KEY",
+        )
+    try:
+        result = subprocess.run(
+            ["vastai", "--api-key", key, "show", "user", "--raw"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return CheckResult(
+                name="vast_funds", passed=False, soft=True, category="workers",
+                message=f"Could not query Vast.ai account: {result.stderr[:200]}",
+                remedy="Check VAST_AI_KEY validity",
+            )
+        data = json.loads(result.stdout)
+        credit = data.get("credit", 0)
+        balance = data.get("balance", 0)
+        # credit is promo credits; balance is the actual prepaid balance (can be negative)
+        usable = float(credit) + max(0.0, float(balance))
+        if usable > 0:
+            return CheckResult(
+                name="vast_funds", passed=True, category="workers",
+                message=f"Vast.ai balance: ${usable:.2f} usable (${credit:.2f} credit + ${balance:.2f} balance)",
+            )
+        return CheckResult(
+            name="vast_funds", passed=False, soft=False, category="workers",
+            message=f"Vast.ai balance: ${usable:.2f} usable (${credit:.2f} credit + ${balance:.2f} balance). Insufficient to provision GPU workers.",
+            remedy="Add funds to your Vast.ai account at https://cloud.vast.ai/billing/",
+        )
+    except Exception as exc:
+        return CheckResult(
+            name="vast_funds", passed=False, soft=True, category="workers",
+            message=f"Vast.ai funds check failed: {exc}",
+            remedy="Check network and VAST_AI_KEY",
+        )
+
+
 def _check_video_worker() -> CheckResult:
-    """Soft check — GPU worker optional for first 4 stages."""
+    """GPU worker will be provisioned via Vast.ai during the run."""
     url = os.environ.get("VIDEO_WORKER_URLS", "")
     if not url:
         return CheckResult(
             name="video_worker", passed=False, soft=True, category="workers",
-            message="No GPU video worker configured",
-            remedy="Set VIDEO_WORKER_URLS or let the provisioner allocate one (needs VAST_API_KEY)",
+            message="No GPU video worker running yet (will be provisioned)",
+            remedy="Provisioning starts when production stage runs",
         )
     result = _check_http_reachable(f"{url.rstrip('/')}/health", "GPU video worker")
     result.category = "workers"
@@ -307,13 +378,13 @@ def _check_video_worker() -> CheckResult:
 
 
 def _check_tts_worker() -> CheckResult:
-    """Soft check — TTS worker needed for audio stage."""
+    """TTS worker will be provisioned via Vast.ai during the run."""
     url = os.environ.get("TTS_WORKER_URL", "")
     if not url:
         return CheckResult(
             name="tts_worker", passed=False, soft=True, category="workers",
-            message="No TTS worker configured",
-            remedy="Set TTS_WORKER_URL or let the provisioner allocate one",
+            message="No TTS worker running yet (will be provisioned)",
+            remedy="Provisioning starts when audio stage runs",
         )
     result = _check_http_reachable(f"{url.rstrip('/')}/health", "TTS worker")
     result.category = "workers"
@@ -359,6 +430,8 @@ def run_preflight(
     report.started_at = time.time()
 
     checks = [
+        _check_vast_api_key(),
+        _check_vast_funds(),
         _check_llm_access(),
         _check_video_worker(),
         _check_tts_worker(),

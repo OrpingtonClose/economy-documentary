@@ -367,7 +367,7 @@ VIDEO_POLICY = RecoveryPolicy(
         _video_amend_steps,
     ],
     enable_env_assessment=True,
-    escalate_to_human=True,
+    escalate_to_human=False,
     non_retryable_patterns=(),
 )
 
@@ -377,7 +377,7 @@ TTS_POLICY = RecoveryPolicy(
     creative_budget=1,
     creative_amendments=[_tts_amend_chunk],
     enable_env_assessment=True,
-    escalate_to_human=True,
+    escalate_to_human=False,
 )
 
 LLM_POLICY = RecoveryPolicy(

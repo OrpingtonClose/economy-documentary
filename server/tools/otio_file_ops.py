@@ -1,29 +1,12 @@
-"""
-Stateless OTIO file protocol — pure I/O primitives.
-
-Foundation layer for the documentary pipeline. Every tool function that
-touches the OTIO timeline goes through these primitives. No business
-logic lives here — only read, write, lock, and path resolution.
-
-Key invariants (from IMPLEMENTATION_ROADMAP.md Stage 1):
-- Every mutation goes through ``otio_read_modify_write()`` with
-  ``fcntl.flock(LOCK_EX)``.
-- Every write is atomic (temp file + ``os.rename``).
-- No caching — every tool reads the file fresh.
-- ``PIPELINE_DIR`` is the only env var, set once before forking.
-
-The ``threading.Lock`` that used to live in ``otio_tools.py`` is
-replaced by ``fcntl.flock`` here, which works across processes (not
-just threads) — critical for the multi-agent architecture.
-"""
-
 from __future__ import annotations
 
 import fcntl
+import glob
 import json
 import logging
 import os
 import tempfile
+import time
 from typing import Any, Callable
 
 import opentimelineio as otio
@@ -139,7 +122,7 @@ def otio_read_modify_write(
     *mutation_fn*, writes the result atomically, and releases the lock.
 
     The lock is held for the entire RMW cycle, preventing concurrent
-    writers from interleaving.  Readers don't need the lock because
+    writers from interleaving.  Readers don’t need the lock because
     :func:`otio_write` is atomic.
 
     Args:
@@ -250,7 +233,7 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
     3. Raises :class:`FileNotFoundError` if neither is available.
 
     The manifest file must contain a ``"timeline_path"`` key whose value
-    is an existing file.  If the key is missing or the file doesn't exist,
+    is an existing file.  If the key is missing or the file doesn’t exist,
     :class:`FileNotFoundError` is raised.
 
     Args:
@@ -263,7 +246,7 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
     Raises:
         FileNotFoundError: If the manifest is missing, the
             ``timeline_path`` key is absent, or the timeline file
-            doesn't exist.
+            doesn’t exist.
     """
     if pipeline_dir is None:
         pipeline_dir = os.environ.get("PIPELINE_DIR")
@@ -300,3 +283,322 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
         )
 
     return timeline_path
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint — versioned stage snapshots
+# ---------------------------------------------------------------------------
+
+def _checkpoint_paths(
+    checkpoint_dir: str,
+    run_id: str,
+    label: str,
+    timestamp: int,
+) -> tuple[str, str]:
+    """Compute snapshot and sidecar paths for a checkpoint.
+
+    Returns:
+        ``(snapshot_path, meta_path)`` inside *checkpoint_dir*.
+    """
+    suffix = f"{run_id}_{label}_{timestamp}" if run_id else f"{label}_{timestamp}"
+    snapshot_path = os.path.join(checkpoint_dir, f"{suffix}.otio")
+    meta_path = os.path.join(checkpoint_dir, f"{suffix}.meta.json")
+    return snapshot_path, meta_path
+
+
+def otio_checkpoint(
+    timeline_path: str,
+    label: str,
+    run_id: str = "",
+) -> dict[str, Any]:
+    """Save a versioned local snapshot of the .otio file.
+
+    This is the **only** sanctioned way to persist stage state between
+    pipeline stages.  Each call creates an immutable pair of files on
+    disk — a snapshot ``.otio`` and a JSON sidecar — that together
+    form a recoverable checkpoint.
+
+    Snapshot layout
+    ---------------
+    The snapshot is written to::
+
+        {timeline_dir}/.checkpoints/{run_id}_{label}_{timestamp}.otio
+
+    alongside a metadata sidecar::
+
+        {timeline_dir}/.checkpoints/{run_id}_{label}_{timestamp}.meta.json
+
+    When *run_id* is empty the filename omits the run prefix and becomes
+    ``{label}_{timestamp}.otio``.
+
+    Preconditions
+    -------------
+    * *timeline_path* must exist on disk and be a readable OTIO file.
+    * The parent directory of *timeline_path* must be writable so the
+      ``.checkpoints`` subdirectory can be created.
+
+    Postconditions
+    --------------
+    * A new ``.otio`` snapshot file exists inside
+      ``{timeline_dir}/.checkpoints/``.
+    * A corresponding ``.meta.json`` sidecar exists with the same
+      basename.
+    * The live timeline at *timeline_path* is **not** modified.
+    * Snapshot filenames are lexicographically sortable by epoch timestamp.
+
+    Parameters
+    ----------
+    timeline_path:
+        Absolute path to the live ``.otio`` timeline.
+    label:
+        Stage label, e.g. ``"scenario"``, ``"audio"``, ``"video"``,
+        or ``"assembly"``.  Used as a namespace in the filename.
+    run_id:
+        Optional run identifier.  When non-empty, prefixes the filename
+        so that multiple runs can coexist in the same checkpoint store.
+        Defaults to ``""`` (no prefix).
+
+    Returns
+    -------
+    dict:
+        The sidecar metadata dictionary.  Contains at minimum:
+
+        * ``checkpoint_path`` (*str*): Absolute path to the snapshot
+          ``.otio`` file.
+        * ``label`` (*str*): The stage label passed in.
+        * ``timestamp`` (*float*): Epoch seconds when the checkpoint
+          was created.
+        * ``run_id`` (*str*): The run identifier.
+        * ``clip_counts`` (*dict[str, int]* | *None*): Track-to-clip
+          count mapping captured from the timeline.
+        * ``completed`` (*bool*): Always ``False`` on initial save;
+          the OTIO gate toggles this to ``True`` after stage validation
+          passes.
+
+    Raises
+    ------
+    FileNotFoundError:
+        If *timeline_path* does not exist.
+    PermissionError:
+        If the checkpoint directory cannot be created or written.
+    """
+    if not os.path.exists(timeline_path):
+        raise FileNotFoundError(f"OTIO timeline not found: {timeline_path}")
+
+    timeline_dir = os.path.dirname(timeline_path) or "."
+    checkpoint_dir = os.path.join(timeline_dir, ".checkpoints")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    timestamp = int(time.time())
+    snapshot_path, meta_path = _checkpoint_paths(
+        checkpoint_dir, run_id, label, timestamp
+    )
+
+    # Read the current .otio from disk (fresh copy — no in-memory staleness)
+    timeline = otio_read(timeline_path)
+
+    # Count clips per track
+    clip_counts: dict[str, int] = {}
+    for track in timeline.tracks:
+        if track.name:
+            clip_count = sum(
+                1 for item in track if isinstance(item, otio.schema.Clip)
+            )
+            clip_counts[track.name] = clip_count
+
+    # Read metadata from timeline
+    meta = timeline.metadata
+    doc_meta: dict[str, Any] = {}
+    if isinstance(meta, dict):
+        doc_meta = meta.get("documentary", {}) or {}
+
+    # Write snapshot atomically using existing primitive
+    otio_write(snapshot_path, timeline)
+
+    # Write sidecar metadata
+    sidecar: dict[str, Any] = {
+        "checkpoint_path": snapshot_path,
+        "label": label,
+        "timestamp": timestamp,
+        "run_id": run_id,
+        "clip_counts": clip_counts or None,
+        "qa_summary": doc_meta.get("_qa_summary", {}) if isinstance(doc_meta, dict) else {},
+        "cost_accrued": doc_meta.get("_cost_accrued", 0.0) if isinstance(doc_meta, dict) else 0.0,
+        "completed": False,
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(sidecar, f, indent=2)
+
+    return sidecar
+
+
+def restore_from_checkpoint(
+    timeline_path: str,
+    checkpoint_path: str = "",
+    run_id: str = "",
+) -> None:
+    """Restore an .otio file from a checkpoint snapshot.
+
+    Copies the checkpoint at *checkpoint_path* to the live
+    *timeline_path* atomically while holding the exclusive file lock.
+
+    If *checkpoint_path* is empty, the latest checkpoint matching
+    *run_id* is discovered via :func:`list_checkpoints` and used
+    automatically.
+
+    The exclusive file lock on the live timeline is held for the
+    duration of the operation so that concurrent writers cannot
+    interleave with the restore.
+
+    Args:
+        timeline_path: Absolute path to the live ``.otio`` file.
+        checkpoint_path: Absolute path to the checkpoint ``.otio`` file.
+            If empty, the latest matching checkpoint is selected
+            automatically.
+        run_id: Optional run identifier used to filter checkpoints when
+            *checkpoint_path* is empty.
+
+    Raises:
+        FileNotFoundError: If *checkpoint_path* does not exist and no
+            matching checkpoint is found.
+    """
+    if not checkpoint_path:
+        timeline_dir = os.path.dirname(timeline_path) or "."
+        checkpoints = list_checkpoints(timeline_dir, run_id=run_id)
+        if not checkpoints:
+            raise FileNotFoundError(
+                f"No checkpoint found for run_id={run_id!r} "
+                f"under {timeline_dir}"
+            )
+        latest_checkpoint = max(checkpoints, key=lambda c: c["timestamp"])
+        checkpoint_path = latest_checkpoint["checkpoint_path"]
+
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    with OTIOFileLock(timeline_path):
+        # Atomic byte-for-byte copy so the round-trip through the OTIO
+        # adapter cannot alter the checkpoint in any way.
+        directory = os.path.dirname(timeline_path) or "."
+        os.makedirs(directory, exist_ok=True)
+        prefix = f".otio_write_{os.path.basename(timeline_path)}_"
+        tmp_fd = None
+        tmp_path = None
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                prefix=prefix,
+                suffix=".otio",
+                dir=directory,
+            )
+            os.close(tmp_fd)
+            tmp_fd = None
+
+            with open(checkpoint_path, "rb") as src, open(tmp_path, "wb") as dst:
+                dst.write(src.read())
+
+            os.rename(tmp_path, timeline_path)
+            tmp_path = None
+        except BaseException:
+            if tmp_fd is not None:
+                try:
+                    os.close(tmp_fd)
+                except OSError:
+                    pass
+            if tmp_path is not None and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+            raise
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint listing — discover available stage snapshots
+# ---------------------------------------------------------------------------
+
+def list_checkpoints(
+    timeline_dir: str,
+    run_id: str = "",
+) -> list[dict[str, Any]]:
+    """List available OTIO checkpoints under *timeline_dir*.
+
+    Scans ``{timeline_dir}/.checkpoints/`` for snapshot files written
+    by :func:`otio_checkpoint`.  Each checkpoint entry describes the
+    stage label, the epoch timestamp, and optional sidecar metadata.
+
+    Filter & sort behaviour
+    -----------------------
+    **Filter** — When *run_id* is non-empty, only checkpoints whose
+    sidecar ``run_id`` field matches exactly are included.  The default
+    empty string disables filtering and includes every checkpoint.
+
+    **Sort order** — The returned list is ordered **descending by
+    timestamp** (newest checkpoint first).  This guarantees that
+    ``result[0]`` is always the latest snapshot, which resume logic
+    relies on.
+
+    Each dict contains at minimum:
+
+    - ``checkpoint_path`` (*str*): Absolute path to the ``.otio`` snapshot.
+    - ``label`` (*str*): Stage label, e.g. ``"scenario"`` or ``"audio"``.
+    - ``timestamp`` (*float* | *int*): Epoch seconds when the checkpoint
+      was created.
+    - ``meta_path`` (*str* | *None*): Path to the ``.meta.json`` sidecar,
+      if present.
+    - ``clip_counts`` (*dict[str, int]* | *None*): Track-to-clip-count
+      mapping from sidecar metadata.
+    - ``completed`` (*bool* | *None*): Whether the stage gate has
+      marked this checkpoint as finished.
+
+    Args:
+        timeline_dir: Absolute path to the directory that contains the
+            live timeline.  The checkpoint store is expected at
+            ``{timeline_dir}/.checkpoints``.
+        run_id: Optional run identifier used to filter checkpoints by
+            exact match against the sidecar ``run_id`` field.
+
+    Returns:
+        A list of checkpoint metadata dicts.  Returns ``[]`` when the
+        ``.checkpoints`` directory is missing or contains no matching
+        entries.
+
+    Raises:
+        FileNotFoundError: If *timeline_dir* itself does not exist.
+    """
+    if not os.path.exists(timeline_dir):
+        raise FileNotFoundError(f"Timeline directory not found: {timeline_dir}")
+
+    checkpoint_dir = os.path.join(timeline_dir, ".checkpoints")
+    if not os.path.exists(checkpoint_dir):
+        return []
+
+    pattern = os.path.join(checkpoint_dir, "*.meta.json")
+    meta_paths = glob.glob(pattern)
+
+    checkpoints: list[dict[str, Any]] = []
+    for meta_path in meta_paths:
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                sidecar = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+
+        if run_id and sidecar.get("run_id") != run_id:
+            continue
+
+        otio_path = meta_path.replace(".meta.json", ".otio")
+        if not os.path.exists(otio_path):
+            continue
+
+        entry: dict[str, Any] = {
+            "checkpoint_path": otio_path,
+            "label": sidecar.get("label", ""),
+            "timestamp": sidecar.get("timestamp", 0),
+            "meta_path": meta_path,
+            "clip_counts": sidecar.get("clip_counts"),
+            "completed": sidecar.get("completed"),
+        }
+        checkpoints.append(entry)
+
+    checkpoints.sort(key=lambda x: x["timestamp"], reverse=True)
+    return checkpoints

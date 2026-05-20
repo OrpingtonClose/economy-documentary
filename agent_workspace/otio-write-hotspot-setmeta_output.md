@@ -1,0 +1,1 @@
+[Agent otio-write-hotspot-setmeta produced no text output]

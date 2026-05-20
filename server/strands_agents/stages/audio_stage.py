@@ -1,26 +1,9 @@
-"""
-Audio stage — Strands Agent for TTS generation + WhisperX alignment.
-
-THIS IS A STRANDS PROJECT. No ADK imports. No callback bridges.
-The agent calls tools directly: generate_narration, add_narration_clip,
-WhisperX alignment, OTIO writes. The LLM agent is the orchestrator;
-the tools do the work.
-
-Flow:
-1. Read scenes from pipeline state
-2. For each scene, for each voice: generate_narration → add_narration_clip
-3. Run WhisperX alignment on all audio
-4. Evaluate timing against target
-5. If timing drift > 15%, set recovery context for the timing loop
-6. OTIO state transitions to authoritative
-7. Persist scenes + whisperx_alignment to agent state for downstream contracts
-"""
-
 from __future__ import annotations
 
 import json
 import logging
 import os
+import subprocess
 from typing import Any
 
 from strands import Agent, ToolContext, tool
@@ -77,6 +60,53 @@ def generate_scene_narration(
     Returns:
         JSON with wav_path, duration, and generation metadata.
     """
+    # ── Existence check — skip regeneration if WAV already present ────
+    expected_path = os.path.join(
+        output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline"),
+        "audio",
+        f"scene_{scene_num:03d}_{voice}.wav",
+    )
+    if os.path.exists(expected_path):
+        logger.info(
+            "scene=%d voice=%s: WAV exists at %s — skipping TTS",
+            scene_num,
+            voice,
+            expected_path,
+        )
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
+                    expected_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            duration = (
+                float(result.stdout.strip())
+                if result.returncode == 0 and result.stdout.strip()
+                else 8.0
+            )
+        except Exception:
+            duration = 8.0
+        return json.dumps(
+            {
+                "wav_path": expected_path,
+                "duration": duration,
+                "scene_num": scene_num,
+                "voice": voice,
+                "text": text,
+                "note": "reused existing file",
+            }
+        )
+
     try:
         from tools.tts_tools import generate_narration
 
@@ -103,6 +133,7 @@ def generate_scene_narration(
             "duration": 8.0,
             "scene_num": scene_num,
             "voice": voice,
+            "text": text,
             "note": f"placeholder: TTS unavailable ({exc})",
         })
 
@@ -127,11 +158,12 @@ def add_narration_to_timeline(
     """
     try:
         from tools.otio_tools import add_narration_clip
+        from tools.otio_file_ops import resolve_timeline_path
 
         class _ToolCtx:
             def __init__(self):
                 self.state = {
-                    "_timeline_path": os.environ.get("_timeline_path", ""),
+                    "_timeline_path": resolve_timeline_path(),
                     "pipeline_phase": "audio",
                 }
 

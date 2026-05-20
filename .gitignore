@@ -11,3 +11,5 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 dashboard_logs/
 lora_cache/
+graphify-out/cache/
+graphify-out/

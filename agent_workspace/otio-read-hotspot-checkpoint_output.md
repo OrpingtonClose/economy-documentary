@@ -1,0 +1,1 @@
+[Agent otio-read-hotspot-checkpoint produced no text output]

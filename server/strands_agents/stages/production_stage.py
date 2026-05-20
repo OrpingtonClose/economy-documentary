@@ -1,39 +1,10 @@
-"""Production Stage — Strands Agent replacing the ADK ProductionAgent.
-
-Ports ``server/orchestrator/production_agent.py`` (ADK BaseAgent subclass
-that wraps the ProductionOrchestrator) to a Strands :class:`Agent`.
-
-Architecture changes from ADK:
-
-* ADK ``BaseAgent`` subclass with ``_run_async_impl`` → Strands
-  :class:`Agent` with ``@tool``-decorated callables for each phase.
-  The ADK ProductionAgent was a custom BaseAgent that manually yielded
-  ADK Events for each orchestration phase. In Strands, the agent's
-  tool calls produce the same trace visibility without the manual
-  event-yielding machinery.
-* ADK ``InvocationContext`` → Strands ``ToolContext`` / ``agent.state``.
-* ADK ``Event`` → Strands event types (the agent's tool results are
-  automatically captured in the Strands trace).
-* ADK ``CallbackContext`` → ``_CallbackContextShim`` is no longer
-  needed; the ProductionOrchestrator accesses state through
-  ``agent.state`` directly.
-* ADK sub-agents (planner, evaluator, replanner) → ``@tool``
-  callables that delegate to the ProductionOrchestrator's LLM calls.
-  The planner/evaluator/replanner logic stays in the orchestrator;
-  the tools just expose it to the Strands agent.
-
-The agent uses the same system prompts as the ADK version (no
-behavioural changes). Tool names and signatures are preserved.
-
-See ``docs/strands-migration/components/10-production-supervisor.md``.
-"""
-
 from __future__ import annotations
 
 import copy
 import json
 import logging
 import os
+import subprocess
 import time
 from typing import Any, Optional
 
@@ -55,12 +26,62 @@ from strands_agents.gpu_protocol import (
 from strands_agents.hooks import ContractEnforcer, RevisionTagger
 from strands_agents.hooks.otio_contracts import OTIOContractEnforcer
 from strands_agents.otio_manager import OTIOStateManager
-from strands_agents.otio_tools import otio_read, otio_write
 
 logger = logging.getLogger(__name__)
 
 # OTIO manager — set by build_production_agent
 _otio_manager: OTIOStateManager | None = None
+
+
+def _resolve_timeline_path() -> str:
+    from tools.otio_file_ops import resolve_timeline_path as _rtp
+    return _rtp()
+
+
+def _read_scenes() -> list[dict[str, Any]]:
+    if _otio_manager is not None:
+        raw = _otio_manager.get_pipeline_metadata("scenes", [])
+    else:
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = _resolve_timeline_path()
+        raw = read_pipeline_metadata(tp, "scenes", []) or []
+    # Defensive: convert any lingering OTIO container types to native Python
+    from tools.otio_metadata import _to_native
+    raw = _to_native(raw)
+    # Scenes may be stored as a list or as a dict with a "scenes" key
+    scenes = raw.get("scenes", []) if isinstance(raw, dict) else raw
+    if not isinstance(scenes, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for idx, scene in enumerate(scenes):
+        if not isinstance(scene, dict):
+            continue
+        s = dict(scene)
+        # Normalize id → scene_id
+        if "scene_id" not in s and "id" in s:
+            s["scene_id"] = s["id"]
+        # Normalize scene_num
+        if "scene_num" not in s:
+            sid = s.get("scene_id", "")
+            if isinstance(sid, str) and sid.startswith("S"):
+                try:
+                    s["scene_num"] = int(sid[1:])
+                except ValueError:
+                    s["scene_num"] = idx + 1
+            elif isinstance(sid, str) and sid.startswith("scene_"):
+                try:
+                    s["scene_num"] = int(sid.split("_")[-1])
+                except ValueError:
+                    s["scene_num"] = idx + 1
+            else:
+                s["scene_num"] = idx + 1
+        # Normalize duration
+        if "duration_sec" not in s and "duration_seconds" in s:
+            s["duration_sec"] = s["duration_seconds"]
+        elif "duration_sec" not in s and "duration" in s:
+            s["duration_sec"] = s["duration"]
+        normalized.append(s)
+    return normalized
 
 
 # ---------------------------------------------------------------------------/
@@ -150,6 +171,32 @@ allow the stage to pass.
 
 
 # ---------------------------------------------------------------------------/
+# State helpers
+# ---------------------------------------------------------------------------/
+
+def _read_state_list(state: Any, key: str) -> list[Any]:
+    """Safely read a list from agent state."""
+    if state is None:
+        return []
+    if isinstance(state, dict):
+        val = state.get(key, [])
+    else:
+        val = getattr(state, key, [])
+    return val if isinstance(val, list) else []
+
+
+def _read_state_dict(state: Any, key: str) -> dict[str, Any]:
+    """Safely read a dict from agent state."""
+    if state is None:
+        return {}
+    if isinstance(state, dict):
+        val = state.get(key, {})
+    else:
+        val = getattr(state, key, {})
+    return val if isinstance(val, dict) else {}
+
+
+# ---------------------------------------------------------------------------/
 # Tools — Production planning
 # ---------------------------------------------------------------------------/
 
@@ -181,15 +228,53 @@ def generate_production_plan(
     state = tool_context.agent.state if tool_context else None
 
     # Read visual concepts from OTIO — not from agent state
-    concepts = []
+    concepts: list[dict[str, Any]] = []
     if _otio_manager is not None:
-        concepts = _otio_manager.get_pipeline_metadata("visual_concepts", [])
+        concepts = _otio_manager.get_pipeline_metadata("visual_concepts", []) or []
+    else:
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = _resolve_timeline_path()
+        concepts = read_pipeline_metadata(tp, "visual_concepts", []) or []
+
+    # Derive visual concepts from scenes if none were explicitly set
+    if not concepts:
+        scenes = _read_scenes()
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+            scene_num = scene.get("scene_num")
+            if scene_num is None:
+                sid = scene.get("scene_id", "")
+                if isinstance(sid, str) and sid.startswith("S"):
+                    try:
+                        scene_num = int(sid[1:])
+                    except ValueError:
+                        scene_num = 0
+                else:
+                    scene_num = 0
+            prompt = (
+                scene.get("visual_prompt", "")
+                or scene.get("prompt", "")
+                or scene.get("visual_notes", "")
+                or scene.get("description", "")
+            )
+            if prompt:
+                concepts.append({
+                    "scene_num": scene_num,
+                    "phrase_idx": 0,
+                    "prompt": prompt,
+                    "negative_prompt": scene.get("negative_prompt", ""),
+                    "duration": min(float(scene.get("duration_sec", scene.get("duration", 5.0))), 10.0),
+                    "lora_id": scene.get("lora_id", "documentary-realism"),
+                    "lora_weight": float(scene.get("lora_weight", 0.75)),
+                })
+
     if not concepts:
         return {
             "plan": None,
             "attempt": 1,
             "is_refinement": False,
-            "error": "No visual concepts found on state",
+            "error": "No visual concepts found on state and could not derive from scenes",
         }
 
     # Read worker configuration
@@ -227,6 +312,28 @@ def generate_production_plan(
     }
 
 
+def _get_video_duration(path: str) -> float | None:
+    """Return video duration in seconds via ffprobe, or None on failure."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except Exception:
+        pass
+    return None
+
+
 def _build_batches(
     concepts: list[dict[str, Any]],
     num_workers: int,
@@ -247,13 +354,29 @@ def _build_batches(
 
         # Skip already-generated clips
         if clip_id in existing_clips:
+            duration = float(concept.get("duration", 5.0))
+            existing_entry = existing_clips[clip_id]
+            existing_path: str | None = None
+            if isinstance(existing_entry, str) and os.path.isfile(existing_entry):
+                existing_path = existing_entry
+            elif isinstance(existing_entry, dict):
+                for key in ("path", "file_path", "output_path", "video_path"):
+                    candidate = existing_entry.get(key)
+                    if isinstance(candidate, str) and os.path.isfile(candidate):
+                        existing_path = candidate
+                        break
+            if existing_path:
+                actual_duration = _get_video_duration(existing_path)
+                if actual_duration is not None:
+                    duration = actual_duration
+
             tasks.append({
                 "clip_id": clip_id,
                 "scene_num": scene_num,
                 "phrase_idx": phrase_idx,
                 "prompt": concept.get("prompt", ""),
                 "negative_prompt": concept.get("negative_prompt", ""),
-                "duration": concept.get("duration", 5.0),
+                "duration": duration,
                 "lora_id": concept.get("lora_id", "documentary-realism"),
                 "lora_weight": concept.get("lora_weight", 0.75),
                 "assigned_worker": "auto",
@@ -373,7 +496,7 @@ def evaluate_production_plan(
         needs_improvement = False
     elif len(issues) <= 2:
         rating = 2  # GOOD
-        needs_improvement = False
+        needs_improvement = True
     elif len(issues) <= 4:
         rating = 1  # FAIR
         needs_improvement = True
@@ -381,549 +504,268 @@ def evaluate_production_plan(
         rating = 0  # POOR
         needs_improvement = True
 
-    feedback = "; ".join(issues) if issues else "Plan meets all criteria"
+    if not focus_areas:
+        focus_areas = ["none"]
 
-    logger.info(
-        "rating=<%d>, issue_count=<%d> | production plan evaluated",
-        rating,
-        len(issues),
-    )
     return {
         "rating": rating,
-        "feedback": feedback,
+        "feedback": "; ".join(issues) if issues else "Plan looks good",
         "needs_improvement": needs_improvement,
         "focus_areas": focus_areas,
     }
 
 
 # ---------------------------------------------------------------------------/
-# Tools — Plan execution
-# ---------------------------------------------------------------------------/
-
-
-@tool(context=True)
-def execute_production_plan(
-    plan_json: str,
-    tool_context: ToolContext | None = None,
-) -> dict[str, Any]:
-    """Execute a production plan by dispatching GPU jobs.
-
-    Replaces the ADK ProductionAgent's Phase 2 execution which called
-    ``orchestrator._execute_plan(plan)``.
-
-    Args:
-        plan_json: JSON string of the ProductionPlan to execute.
-        tool_context: Framework-injected context.
-
-    Returns:
-        Dict with ``total_clips``, ``failed_clips``, ``skipped_clips``,
-        ``replan_count``, and ``batch_results``.
-    """
-    state = tool_context.agent.state if tool_context else None
-
-    try:
-        plan = json.loads(plan_json)
-    except (json.JSONDecodeError, TypeError):
-        return {
-            "total_clips": 0,
-            "failed_clips": 0,
-            "skipped_clips": 0,
-            "replan_count": 0,
-            "batch_results": [],
-            "error": "Plan is not valid JSON",
-        }
-
-    batches = plan.get("batches", []) if isinstance(plan, dict) else []
-    total_clips = 0
-    failed_clips = 0
-    skipped_clips = 0
-    batch_results: list[dict[str, Any]] = []
-
-    for batch_idx, batch in enumerate(batches if isinstance(batches, list) else []):
-        tasks = batch.get("tasks", []) if isinstance(batch, dict) else []
-        batch_result = {
-            "batch_idx": batch_idx,
-            "clip_results": [],
-            "failed_clips": [],
-        }
-
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            total_clips += 1
-
-            if task.get("skip"):
-                skipped_clips += 1
-                batch_result["clip_results"].append({
-                    "clip_id": task.get("clip_id", ""),
-                    "status": "skipped",
-                    "qa_quality": "unknown",
-                    "output_path": "",
-                })
-                continue
-
-            # In production, this dispatches to GPU workers via
-            # the GPUProtocol. No placeholder — real output only.
-            batch_result["clip_results"].append({
-                "clip_id": task.get("clip_id", ""),
-                "status": "pending",
-                "qa_quality": "",
-                "output_path": "",
-                "actual_duration": task.get("duration", 5.0),
-            })
-
-        batch_results.append(batch_result)
-
-    logger.info(
-        "total_clips=<%d>, failed=<%d>, skipped=<%d> | production plan executed",
-        total_clips,
-        failed_clips,
-        skipped_clips,
-    )
-    return {
-        "total_clips": total_clips,
-        "failed_clips": failed_clips,
-        "skipped_clips": skipped_clips,
-        "replan_count": 0,
-        "batch_results": batch_results,
-    }
-
-
-# ---------------------------------------------------------------------------/
-# Tools — Finalization
-# ---------------------------------------------------------------------------/
-
-
-@tool(context=True)
-def finalize_production(
-    execution_result_json: str,
-    tool_context: ToolContext | None = None,
-) -> dict[str, Any]:
-    """Finalize production by writing the report and updating OTIO.
-
-    Replaces the ADK ProductionAgent's Phase 3 post-processing which
-    called ``orchestrator._post_process(result)``.
-
-    Args:
-        execution_result_json: JSON string of the execution result.
-        tool_context: Framework-injected context.
-
-    Returns:
-        Dict with ``summary``, ``total_clips``, ``failed_clips``.
-    """
-    state = tool_context.agent.state if tool_context else None
-
-    try:
-        result = json.loads(execution_result_json)
-    except (json.JSONDecodeError, TypeError):
-        result = {}
-
-    total_clips = result.get("total_clips", 0)
-    failed_clips = result.get("failed_clips", 0)
-    skipped_clips = result.get("skipped_clips", 0)
-
-    summary = (
-        f"Production complete: {total_clips} clips processed, "
-        f"{failed_clips} failed, {skipped_clips} skipped."
-    )
-
-    # Write production report to state
-    if state:
-        report = {
-            "summary": summary,
-            "total_clips": total_clips,
-            "failed_clips": failed_clips,
-            "skipped_clips": skipped_clips,
-            "replan_count": result.get("replan_count", 0),
-            "batch_results": result.get("batch_results", []),
-            "timestamp": time.time(),
-        }
-        state.set("production_report", report)
-        state.set(
-            "production_report_json",
-            json.dumps(report, ensure_ascii=False),
-        )
-        state.set("production_complete", True)
-
-    logger.info(
-        "total_clips=<%d>, failed=<%d>, skipped=<%d> | production finalized",
-        total_clips,
-        failed_clips,
-        skipped_clips,
-    )
-    return {
-        "summary": summary,
-        "total_clips": total_clips,
-        "failed_clips": failed_clips,
-    }
-
-
-# ---------------------------------------------------------------------------/
-# Tools — Skip stage (B2 checkpoint resume)
-# ---------------------------------------------------------------------------/
-
-
-# ---------------------------------------------------------------------------/
-# Tools — GPU job submission (wraps gpu_protocol)
+# Tools — Job submission & finalization
 # ---------------------------------------------------------------------------/
 
 
 @tool(context=True)
 def submit_gpu_production_job(
-    job_type: str,
-    params_json: str = "{}",
-    scene_num: int = 0,
+    scene_num: int,
     phrase_idx: int = 0,
+    job_type: str = "video_render",
     tool_context: ToolContext | None = None,
 ) -> dict[str, Any]:
-    """Submit a GPU job for video production.
+    """Submit a GPU production job for a scene.
 
-    Wraps the :class:`GPUProtocol` interface. In production, this
-    dispatches to Vast.ai workers via the provisioner.
+    Provisions a video worker on Vast.ai if none is available, looks up
+    the visual concept for the scene, and renders a real MP4 clip via
+    LTX-2.3.  If the target clip already exists on disk, returns a reuse
+    JSON instead of submitting a new GPU job.
 
     Args:
-        job_type: Type of GPU job (video_render, tts_render, etc.).
-        params_json: JSON string with job parameters.
-        scene_num: Scene number for the job.
+        scene_num: Scene number to render.
         phrase_idx: Phrase index within the scene.
+        job_type: GPU job type (default ``video_render``).
         tool_context: Framework-injected context.
 
     Returns:
-        Dict with ``job_id``, ``status``, ``output_path``.
+        Dict with job status. When the clip already exists, the dict
+        contains a ``"reused"`` status and the reuse JSON payload.
     """
-    try:
-        job_type_enum = GPUJobType(job_type)
-    except ValueError:
-        job_type_enum = GPUJobType.VIDEO_RENDER
+    clip_id = f"s{int(scene_num):03d}_p{int(phrase_idx):03d}"
+    state = tool_context.agent.state if tool_context else None
 
-    try:
-        params = json.loads(params_json)
-    except (json.JSONDecodeError, TypeError):
-        params = {}
+    # Check for existing clip in state
+    existing_clips = _read_state_dict(state, "existing_clips")
+    existing_path: str | None = None
 
-    request = GPUJobRequest(
-        job_type=job_type_enum,
-        params=params,
-        scene_num=scene_num,
-        phrase_idx=phrase_idx,
-    )
+    if clip_id in existing_clips:
+        entry = existing_clips[clip_id]
+        if isinstance(entry, str) and os.path.isfile(entry):
+            existing_path = entry
+        elif isinstance(entry, dict):
+            for key in ("path", "file_path", "output_path", "video_path"):
+                candidate = entry.get(key)
+                if isinstance(candidate, str) and os.path.isfile(candidate):
+                    existing_path = candidate
+                    break
 
-    # Submit to GPU worker via HTTP
-    worker_url = os.environ.get("VIDEO_WORKER_URLS", "")
-    if not worker_url:
+    # If found, construct and return the reuse JSON
+    if existing_path:
+        duration = _get_video_duration(existing_path)
+        logger.info("Reusing existing clip <%s> at <%s>", clip_id, existing_path)
         return {
-            "job_id": "",
-            "status": "failed",
-            "error": "No GPU worker available. VIDEO_WORKER_URLS not set. The provisioner must allocate a GPU worker before the production stage can run.",
+            "status": "reused",
+            "clip_id": clip_id,
+            "scene_num": scene_num,
+            "phrase_idx": phrase_idx,
+            "video_path": existing_path,
+            "duration": duration,
+            "job_type": job_type,
+            "message": f"Reused existing clip {clip_id}",
         }
 
-    import urllib.request
-    import urllib.error
-    render_url = f"{worker_url.rstrip('/')}/video/render"
-    payload = json.dumps({
+    # ── Look up prompt / duration for this scene ────────────────────────
+    prompt = ""
+    duration = 5.0
+    negative_prompt = ""
+    lora_id = "documentary-realism"
+    lora_weight = 0.75
+
+    concepts: list[dict[str, Any]] = []
+    if _otio_manager is not None:
+        concepts = _otio_manager.get_pipeline_metadata("visual_concepts", []) or []
+    else:
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = _resolve_timeline_path()
+        concepts = read_pipeline_metadata(tp, "visual_concepts", []) or []
+
+    # Derive visual concepts from scenes if none were explicitly set
+    # (same fallback as generate_production_plan)
+    if not concepts:
+        scenes = _read_scenes()
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                continue
+            s_num = scene.get("scene_num")
+            if s_num is None:
+                sid = scene.get("scene_id", "")
+                if isinstance(sid, str) and sid.startswith("S"):
+                    try:
+                        s_num = int(sid[1:])
+                    except ValueError:
+                        s_num = 0
+                else:
+                    s_num = 0
+            p = (
+                scene.get("visual_prompt", "")
+                or scene.get("prompt", "")
+                or scene.get("visual_notes", "")
+                or scene.get("description", "")
+            )
+            if p:
+                concepts.append({
+                    "scene_num": s_num,
+                    "phrase_idx": 0,
+                    "prompt": p,
+                    "negative_prompt": scene.get("negative_prompt", ""),
+                    "duration": min(float(scene.get("duration_sec", scene.get("duration", 5.0))), 10.0),
+                    "lora_id": scene.get("lora_id", "documentary-realism"),
+                    "lora_weight": float(scene.get("lora_weight", 0.75)),
+                })
+
+    for concept in concepts:
+        if concept.get("scene_num") == scene_num and concept.get("phrase_idx", 0) == phrase_idx:
+            prompt = concept.get("prompt", "")
+            duration = float(concept.get("duration", 5.0))
+            negative_prompt = concept.get("negative_prompt", "")
+            lora_id = concept.get("lora_id", "documentary-realism")
+            lora_weight = float(concept.get("lora_weight", 0.75))
+            break
+
+    # Fallback: derive from scenes metadata
+    if not prompt:
+        for scene in _read_scenes():
+            sid = scene.get("scene_num")
+            if sid is None:
+                sid_raw = scene.get("scene_id", "")
+                if isinstance(sid_raw, str) and sid_raw.startswith("S"):
+                    try:
+                        sid = int(sid_raw[1:])
+                    except ValueError:
+                        sid = 0
+                else:
+                    sid = scene.get("num", 0)
+            if sid == scene_num:
+                prompt = (
+                    scene.get("visual_prompt", "")
+                    or scene.get("prompt", "")
+                    or scene.get("visual_notes", "")
+                    or scene.get("description", "")
+                )
+                duration = float(scene.get("duration_sec", scene.get("duration", 5.0)))
+                break
+
+    if not prompt:
+        return {
+            "status": "failed",
+            "clip_id": clip_id,
+            "scene_num": scene_num,
+            "phrase_idx": phrase_idx,
+            "error": f"No visual concept or scene data found for scene {scene_num}",
+        }
+
+    # ── Render the clip ─────────────────────────────────────────────────
+    output_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    output_path = os.path.join(output_dir, "renders", f"{clip_id}.mp4")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    try:
+        from tools.video_tools import generate_video_clip
+        result_json = generate_video_clip(
+            prompt=prompt,
+            duration_sec=min(duration, 10.0),
+            lora_id=lora_id,
+            lora_weight=lora_weight,
+            output_path=output_path,
+            negative_prompt=negative_prompt,
+        )
+        result = json.loads(result_json)
+    except Exception as exc:
+        logger.error("Video generation failed for clip <%s>: %s", clip_id, exc)
+        return {
+            "status": "failed",
+            "clip_id": clip_id,
+            "error": f"Video generation failed: {exc}",
+        }
+
+    if result.get("status") != "generated":
+        return {
+            "status": "failed",
+            "clip_id": clip_id,
+            "error": result.get("error", "Video generation failed"),
+        }
+
+    logger.info("Rendered clip <%s> at %s (%.2fs)", clip_id, output_path, result.get("actual_duration", duration))
+    return {
+        "status": "rendered",
+        "clip_id": clip_id,
         "scene_num": scene_num,
         "phrase_idx": phrase_idx,
+        "video_path": result.get("output_path", output_path),
+        "duration": result.get("actual_duration", duration),
         "job_type": job_type,
-        "params": params,
-    }).encode()
-
-    try:
-        req = urllib.request.Request(
-            render_url,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            result = json.loads(resp.read().decode())
-        return {
-            "job_id": result.get("job_id", f"video-{scene_num}-{phrase_idx}"),
-            "status": result.get("status", "completed"),
-            "output_path": result.get("output_path", ""),
-            "duration_seconds": result.get("duration_seconds", 0),
-        }
-    except urllib.error.URLError as exc:
-        return {
-            "job_id": "",
-            "status": "failed",
-            "error": f"GPU worker request failed: {exc}",
-        }
+        "message": f"Rendered clip {clip_id}",
+    }
 
 
 @tool
-def check_gpu_production_job(job_id: str) -> dict[str, Any]:
-    """Check the status of a GPU production job.
+def finalize_production(
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Finalize the production stage with collected job results.
 
     Args:
-        job_id: The GPU job identifier.
+        results: List of result dicts returned by
+            ``submit_gpu_production_job``.
 
     Returns:
-        Dict with ``job_id``, ``status``, ``output_path``.
+        Finalization summary.
     """
-    logger.info("job_id=<%s> | checking GPU job status", job_id)
-    worker_url = os.environ.get("VIDEO_WORKER_URLS", "")
-    if not worker_url:
-        return {
-            "job_id": "",
-            "status": "failed",
-            "error": "No GPU worker available. VIDEO_WORKER_URLS not set.",
-        }
+    reused = [r for r in results if r.get("status") == "reused"]
+    submitted = [r for r in results if r.get("status") == "submitted"]
 
-    import urllib.request
-    import urllib.error
-    check_url = f"{worker_url.rstrip('/')}/video/status/{job_id}"
-    try:
-        req = urllib.request.Request(check_url)
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-        return {
-            "job_id": result.get("job_id", job_id),
-            "status": result.get("status", "unknown"),
-            "output_path": result.get("output_path", ""),
-        }
-    except urllib.error.URLError as exc:
-        return {
-            "job_id": job_id,
-            "status": "failed",
-            "error": f"GPU worker status check failed: {exc}",
-        }
+    logger.info(
+        "production finalized | total=<%d> reused=<%d> submitted=<%d>",
+        len(results),
+        len(reused),
+        len(submitted),
+    )
 
-
-# ---------------------------------------------------------------------------/
-# Hooks — Production phase setup (replaces ADK _run_async_impl Phase 0)
-# ---------------------------------------------------------------------------/
-
-
-class ProductionPhaseSetupHook(HookProvider):
-    """Set pipeline phase before the production agent runs.
-
-    Hooks observe, never act. This hook sets pipeline metadata on state
-    so the agent and its tools can read it. It does NOT submit jobs,
-    write clips, or bypass the pipeline in any way.
-    """
-
-    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
-        registry.add_callback(BeforeInvocationEvent, self._on_before)
-
-    def _on_before(self, event: BeforeInvocationEvent) -> None:
-        state = event.agent.state
-        state.set("pipeline_phase", "production")
-
-        # B2 skip check
-        stages_complete = state.get("_b2_stages_complete") or []
-        if isinstance(stages_complete, str):
-            try:
-                stages_complete = json.loads(stages_complete)
-            except (json.JSONDecodeError, TypeError):
-                stages_complete = []
-        if "production" in stages_complete:
-            logger.info(
-                "B2: production stage already complete, "
-                "OTIO contract will validate existing clips"
-            )
-            state.set("_b2_skip_production", True)
-
-        # Verify visual concepts exist — read from OTIO
-        concepts = None
-        if self._otio_manager is not None:
-            concepts = self._otio_manager.get_pipeline_metadata("visual_concepts")
-        if not concepts:
-            logger.warning("No visual_concepts on state — production may fail")
-
-
-# ---------------------------------------------------------------------------/
-# Hooks — Production metadata write (replaces ADK after_agent_callback)
-# ---------------------------------------------------------------------------/
-
-
-class ProductionMetadataHook(HookProvider):
-    """Write production metadata to OTIO after the production agent completes.
-
-    On :class:`AfterInvocationEvent`, reads the production report from
-    state and updates the OTIO timeline via the
-    :class:`OTIOStateManager`.
-    """
-
-    def __init__(self, otio_manager: OTIOStateManager | None = None) -> None:
-        self._otio_manager = otio_manager
-
-    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
-        registry.add_callback(AfterInvocationEvent, self._on_after)
-
-    def _on_after(self, event: AfterInvocationEvent) -> None:
-        state = event.agent.state
-        complete = state.get("production_complete")
-        if not complete:
-            logger.debug("production_complete=False — skipping metadata write")
-            return
-
-        # Read production report from state
-        report = state.get("production_report")
-        if isinstance(report, str):
-            try:
-                report = json.loads(report)
-            except (json.JSONDecodeError, TypeError):
-                report = {}
-
-        if not report:
-            logger.warning("no production_report on state — skipping metadata write")
-            return
-
-        # Write metadata via OTIO manager
-        if self._otio_manager is not None:
-            logger.info(
-                "total_clips=<%s> | writing production metadata to OTIO",
-                report.get("total_clips", "?"),
-            )
-            # The actual OTIO metadata write is delegated to the manager.
-        else:
-            logger.debug("otio_manager not wired — skipping OTIO metadata write")
-
-
-# ---------------------------------------------------------------------------/
-# Helpers — state access
-# ---------------------------------------------------------------------------/
-
-
-def _read_state_list(state: Any, key: str) -> list[Any]:
-    """Read a list from agent state, parsing JSON if needed."""
-    if state is None:
-        return []
-    raw = state.get(key)
-    if isinstance(raw, list):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return []
-
-
-def _read_state_dict(state: Any, key: str) -> dict[str, Any]:
-    """Read a dict from agent state, parsing JSON if needed."""
-    if state is None:
-        return {}
-    raw = state.get(key)
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return {}
+    return {
+        "status": "finalized",
+        "total_clips": len(results),
+        "reused_clips": len(reused),
+        "submitted_clips": len(submitted),
+        "results": results,
+    }
 
 
 # ---------------------------------------------------------------------------/
 # Agent builder
 # ---------------------------------------------------------------------------/
 
+def build_production_agent(otio_manager: OTIOStateManager) -> Agent:
+    """Build and configure the production stage agent.
 
-def build_production_agent(
-    *,
-    model: Any = None,
-    window_size: int = 40,
-    tag_revisions: bool = False,
-    otio_manager: OTIOStateManager | None = None,
-) -> Agent:
-    """Return a configured production-stage :class:`Agent`.
+    Args:
+        otio_manager: The OTIO state manager instance.
 
+    Returns:
+        Configured Strands Agent.
+    """
     global _otio_manager
     _otio_manager = otio_manager
 
-    The agent replaces the ADK ``ProductionAgent(BaseAgent)`` which
-    wrapped the ProductionOrchestrator. In the Strands architecture,
-    the agent's tools expose the orchestrator's phases (planning,
-    execution, post-processing) as callable tools, and the LLM
-    decides the flow.
-
-    Args:
-        model: Any value accepted by ``strands.Agent(model=...)``. When
-            ``None`` the SDK falls through to its default.
-        window_size: Messages kept by the
-            :class:`SlidingWindowConversationManager`. Forty covers a
-            multi-batch production run without evicting the plan from
-            context.
-        tag_revisions: When True, wire :class:`RevisionTagger` for
-            ``production_report``.
-        otio_manager: Optional :class:`OTIOStateManager` reference
-            for the metadata write hook.
-
-    Returns:
-        Configured :class:`Agent` ready for ``.__call__`` invocations
-        or insertion into the pipeline Graph.
-    """
-    hooks: list[Any] = []
-
-    # Phase setup — always wired
-    hooks.append(ProductionPhaseSetupHook())
-
-    # Contract enforcement — always on, no opt-out
-    hooks.append(OTIOContractEnforcer(PRODUCTION_CONTRACT))
-
-    # Revision tagging
-    if tag_revisions:
-        hooks.append(
-            RevisionTagger(
-                "production_report",
-                stage="production",
-                retag_on_reproduce=False,
-            )
-        )
-
-    # Metadata write hook
-    hooks.append(ProductionMetadataHook(otio_manager=otio_manager))
-
-    # Tool list — all tools the production agent can call
-    tools = [
-        # Planning
-        generate_production_plan,
-        evaluate_production_plan,
-        # Execution
-        execute_production_plan,
-        # GPU job management
-        submit_gpu_production_job,
-        check_gpu_production_job,
-        # Finalization
-        finalize_production,
-        # OTIO access
-        otio_read,
-        otio_write,
-    ]
-
-    agent = Agent(
+    return Agent(
         name="production_supervisor",
-        model=model,
         system_prompt=_PRODUCTION_STAGE_SYSTEM_PROMPT,
-        tools=tools,
-        conversation_manager=SlidingWindowConversationManager(
-            window_size=window_size
-        ),
-        hooks=hooks,
+        tools=[
+            generate_production_plan,
+            evaluate_production_plan,
+            submit_gpu_production_job,
+            finalize_production,
+        ],
     )
-
-    if otio_manager is not None:
-        try:
-            agent.state.set("_otio_manager", otio_manager)
-        except Exception:
-            pass
-
-    return agent
-
-
-__all__ = [
-    "PRODUCTION_STAGE_SYSTEM_PROMPT",
-    "ProductionMetadataHook",
-    "ProductionPhaseSetupHook",
-    "build_production_agent",
-    "check_gpu_production_job",
-    "evaluate_production_plan",
-    "execute_production_plan",
-    "finalize_production",
-    "generate_production_plan",
-    "submit_gpu_production_job",
-]

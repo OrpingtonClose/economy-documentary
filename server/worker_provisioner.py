@@ -57,6 +57,11 @@ from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
 
+# Hard ceiling on total VMs per pipeline run.
+# Step-wise: start at 1, add 1 if healthy, add 1 more if still healthy.
+# Never exceed this count regardless of workload.
+MAX_TOTAL_VMS = int(os.environ.get("MAX_TOTAL_VMS", "3"))
+
 
 # ---------------------------------------------------------------------------
 # Data types
@@ -304,11 +309,11 @@ TTS_SPEC = WorkerSpec(
     local_port=8880,
     remote_port=8880,
     capability="tts",
-    gpu_type="RTX_4000",      # cheap GPU; broadened automatically if unavailable
+    gpu_type="RTX_3060",      # cheapest GPU with >=8 GB; broadened automatically if unavailable
     min_vram_gb=8,             # 1.7B model at bf16 = 3.4 GB + overhead
-    max_price=1.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=50,            # ~4.3 GB TTS model + ~30 GB OS/software (WORKER_MODE=tts skips LTX)
-    disk_gb=64,                # --disk arg (comfortable headroom for TTS-only)
+    max_price=0.50,            # fits $2 budget alongside video worker
+    min_disk_gb=30,            # TTS model ~4GB + OS ~30GB + cache ~20GB
+    disk_gb=50,                # comfortable headroom for TTS-only
     worker_mode="tts",
 )
 
@@ -318,11 +323,11 @@ VIDEO_SPEC = WorkerSpec(
     local_port=8881,
     remote_port=8880,
     capability="ltx",
-    gpu_type="H200",           # 141 GB VRAM; broadened to H100/A100 if unavailable
-    min_vram_gb=48,            # ~46 GB bf16 transformer + ~2-4 GB activations at 512×320
-    max_price=5.00,            # fallback ceiling; overridden by weighted budget
-    min_disk_gb=200,           # ~46 GB checkpoint + Gemma + OS + output
-    disk_gb=224,               # --disk arg
+    gpu_type="RTX_4090",       # cheaper than H200; ~24 GB VRAM is enough for LTX at 512×320
+    min_vram_gb=24,            # LTX-2.3 at 512×320 needs ~20 GB; 24 GB gives headroom
+    max_price=1.50,            # fits $2 budget: 30 min render + 30 min TTS + 10 min overhead
+    min_disk_gb=120,           # LTX checkpoint ~46GB + Gemma ~2GB + HF cache ~50GB + OS ~30GB
+    disk_gb=150,               # peak during download ~100GB, need 150GB for safety
     worker_mode="ltx",
 )
 
@@ -332,7 +337,7 @@ VIDEO_SPEC = WorkerSpec(
 # ---------------------------------------------------------------------------
 
 
-def check_worker_health(url: str, capability: str, timeout: int = 10) -> bool:
+def check_worker_health(url: str, capability: str) -> bool:
     """Check if a worker at the given URL is healthy and has the capability loaded.
 
     Returns True if healthy, False otherwise.
@@ -340,7 +345,7 @@ def check_worker_health(url: str, capability: str, timeout: int = 10) -> bool:
     health_url = f"{url.rstrip('/')}/health"
     try:
         req = Request(health_url)
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         if data.get("status") != "ok":
             return False
@@ -350,12 +355,12 @@ def check_worker_health(url: str, capability: str, timeout: int = 10) -> bool:
         return False
 
 
-def check_worker_reachable(url: str, timeout: int = 5) -> bool:
+def check_worker_reachable(url: str) -> bool:
     """Check if a worker URL is reachable (responds to /health, any status)."""
     health_url = f"{url.rstrip('/')}/health"
     try:
         req = Request(health_url)
-        with urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=5) as resp:
             resp.read()
         return True
     except Exception:
@@ -368,11 +373,11 @@ def check_worker_reachable(url: str, timeout: int = 5) -> bool:
 
 # Minimum credit reserve — never spend the last few dollars so the account
 # doesn't hit zero mid-run.
-_CREDIT_RESERVE = 5.0
+_CREDIT_RESERVE = 0.10  # minimal reserve — balance is $1.13, need ~$0.70 for 30-min run
 
 # Estimated maximum pipeline duration in hours.  Used to convert credits
 # into a safe per-worker $/hr ceiling.
-_ESTIMATED_RUN_HOURS = 2.0
+_ESTIMATED_RUN_HOURS = 1.0  # 1 hour is plenty for a short documentary (1-3 scenes)
 
 # Per-worker price ceilings by GPU tier.
 # TTS GPUs (8-24 GB) cost $0.05-0.30/hr on Vast.ai.
@@ -491,9 +496,11 @@ def calculate_budget_per_worker(
 
 def _vast_cmd(args: list[str]) -> dict | list | str:
     """Run a vastai CLI command and return parsed output."""
-    api_key = os.environ.get("VAST_API_KEY", "")
+    raw_key = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
+    # Clean: some env files have trailing newlines / garbage after the key
+    api_key = raw_key.split()[0].strip() if raw_key else ""
     if not api_key:
-        raise RuntimeError("VAST_API_KEY not set — cannot provision GPU workers")
+        raise RuntimeError("VAST_AI_KEY (or VAST_API_KEY) not set — cannot provision GPU workers")
 
     cmd = ["vastai", "--api-key", api_key] + args
     try:
@@ -939,19 +946,21 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
 
 
 
-def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
+def wait_for_vm_running(spec: WorkerSpec) -> dict:
     """Wait for a provisioned VM to reach 'running' status.
 
     Returns the VM info dict with connection details.
     Extracts both SSH proxy info (legacy fallback) and direct connection
     info (public_ipaddr + port mapping) for direct HTTP access.
+
+    Waits indefinitely — no timeout. The operator decides when to stop.
     """
     logger.info(
-        "Waiting for %s VM %s to start (timeout %ds)...",
-        spec.role, spec.vm_id, timeout,
+        "Waiting for %s VM %s to start (no timeout)...",
+        spec.role, spec.vm_id,
     )
     start = time.time()
-    while time.time() - start < timeout:
+    while True:
         try:
             result = _vast_cmd(["show", "instance", spec.vm_id, "--raw"])
             if isinstance(result, dict):
@@ -970,8 +979,6 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
                     # Direct connection info
                     spec.public_ipaddr = result.get("public_ipaddr", "")
                     # Extract mapped port from Vast.ai ports dict.
-                    # Format: {"8880/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8880"}]}
-                    # or sometimes the external port differs from internal.
                     ports = result.get("ports", {}) or {}
                     port_key = f"{spec.remote_port}/tcp"
                     if port_key in ports:
@@ -993,11 +1000,6 @@ def wait_for_vm_running(spec: WorkerSpec, timeout: int = 600) -> dict:
             logger.warning("  Error checking VM status: %s", exc)
 
         time.sleep(15)
-
-    raise RuntimeError(
-        f"{spec.role} VM {spec.vm_id} did not reach 'running' "
-        f"within {timeout}s"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1268,20 +1270,14 @@ def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
         return None
 
 
-# Hard ceiling for wait_for_worker_healthy (issue #62).  15 minutes is a
-# generous upper bound for the slowest path (pull 80GB image + download
-# model weights + load into VRAM on a cold host).  Longer waits almost
-# always indicate a stuck host, so we fail loud instead of hanging forever.
-WORKER_HEALTH_TIMEOUT_MAX_SECONDS = 15 * 60
-# Heartbeat interval for wait_for_worker_healthy (issue #62).  The
-# pipeline operator sees elapsed time + last known bootstrap phase at
-# this cadence even when the phase hasn't changed.
+# Heartbeat interval for wait_for_worker_healthy.  The pipeline operator
+# sees elapsed time + last known bootstrap phase at this cadence even
+# when the phase hasn't changed.
 WORKER_HEALTH_HEARTBEAT_SECONDS = 30
 
 
 def wait_for_worker_healthy(
     spec: WorkerSpec,
-    timeout: int = WORKER_HEALTH_TIMEOUT_MAX_SECONDS,
     poll_interval: int = 15,
 ) -> bool:
     """Wait for a worker to become healthy after provisioning.
@@ -1291,33 +1287,16 @@ def wait_for_worker_healthy(
     2. Run bootstrap in background (install deps, download models)
     3. Load the model into VRAM
 
-    The worker's /health endpoint reports structured bootstrap status so we
-    can see exactly what's happening and escalate failures immediately
-    rather than waiting for a blind timeout.
-
-    Issue #62: the caller-supplied ``timeout`` is clamped to
-    ``WORKER_HEALTH_TIMEOUT_MAX_SECONDS`` (15 minutes) so a bad caller
-    can't hang the pipeline forever.  A heartbeat is logged every
+    This function waits INDEFINITELY until the worker reports healthy or
+    a bootstrap error.  There is no timeout — the operator decides when
+    to intervene, not a hardcoded clock.  A heartbeat is logged every
     ``WORKER_HEALTH_HEARTBEAT_SECONDS`` (30s) showing elapsed time and
-    the last known bootstrap phase — the operator always knows whether
-    the VM is pulling the image, loading the model, or already ready.
-    On timeout a clear RuntimeError-equivalent ``False`` return is
-    produced and the provisioner logs a fatal summary.
+    the last known bootstrap phase.
     """
-    # Clamp to the hard ceiling.  Lower values (e.g. from tests) are
-    # respected; higher values are capped.
-    effective_timeout = max(1, min(int(timeout), WORKER_HEALTH_TIMEOUT_MAX_SECONDS))
-    if effective_timeout < timeout:
-        logger.warning(
-            "wait_for_worker_healthy: clamping timeout %ds -> %ds (hard ceiling, #62)",
-            timeout, effective_timeout,
-        )
-
-    # Use resolved worker_url if available (direct connection), else legacy tunnel
     url = spec.worker_url or f"http://localhost:{spec.local_port}"
     logger.info(
-        "Waiting for %s worker at %s to become healthy (timeout %ds)...",
-        spec.role, url, effective_timeout,
+        "Waiting for %s worker at %s to become healthy (no timeout)...",
+        spec.role, url,
     )
 
     start = time.time()
@@ -1325,7 +1304,7 @@ def wait_for_worker_healthy(
     last_bootstrap_phase = ""
     last_bootstrap_detail = ""
     last_heartbeat = start
-    while time.time() - start < effective_timeout:
+    while True:
         elapsed = int(time.time() - start)
 
         # Check if tunnel is still alive (only relevant for SSH tunnel connections)
@@ -1339,7 +1318,7 @@ def wait_for_worker_healthy(
                 logger.error("Failed to restart tunnel: %s", exc)
 
         # Fetch full health detail (includes bootstrap status)
-        health_data = _get_worker_health_detail(url, timeout=10)
+        health_data = _get_worker_health_detail(url)
 
         if health_data is not None:
             # --- Bootstrap error escalation ---
@@ -1350,15 +1329,10 @@ def wait_for_worker_healthy(
             bootstrap_category = bootstrap.get("error_category", "")
 
             if bootstrap_phase == "error":
-                # Bootstrap has failed — escalate immediately instead of
-                # waiting for the full timeout.  This is the key integration
-                # with the recovery architecture: structured error information
-                # flows from the VM back to the provisioner.
                 logger.error(
                     "BOOTSTRAP FAILED on %s worker (category=%s): %s",
                     spec.role, bootstrap_category, bootstrap_error,
                 )
-                # Store error on the spec so callers can inspect it
                 spec.bootstrap_error = bootstrap_error
                 spec.bootstrap_error_category = bootstrap_category
                 return False
@@ -1396,39 +1370,22 @@ def wait_for_worker_healthy(
                 )
                 last_status = "unreachable"
 
-        # Issue #62: periodic heartbeat so operators see progress even
-        # when no phase transition has occurred for a while.
+        # Periodic heartbeat so operators see progress even when no phase
+        # transition has occurred for a while.
         now = time.time()
         if now - last_heartbeat >= WORKER_HEALTH_HEARTBEAT_SECONDS:
             last_heartbeat = now
             phase = last_bootstrap_phase or last_status
             detail = last_bootstrap_detail or ""
             logger.info(
-                "  heartbeat: %s worker still waiting — elapsed=%ds / %ds "
+                "  heartbeat: %s worker still waiting — elapsed=%ds "
                 "(phase=%s%s)",
-                spec.role, elapsed, effective_timeout,
+                spec.role, elapsed,
                 phase or "starting",
                 f", {detail}" if detail else "",
             )
 
         time.sleep(poll_interval)
-
-    # Issue #62: fail loud with the last known state so the operator can
-    # see exactly where the worker got stuck.
-    logger.error(
-        "%s worker at %s did NOT become healthy within %ds "
-        "(last phase=%s, last status=%s).  Fail-loud per #62.",
-        spec.role, url, effective_timeout,
-        last_bootstrap_phase or "unknown",
-        last_status,
-    )
-    spec.bootstrap_error = (
-        f"timeout after {effective_timeout}s "
-        f"(last phase={last_bootstrap_phase or 'unknown'}, "
-        f"last status={last_status})"
-    )
-    spec.bootstrap_error_category = "timeout"
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1459,6 +1416,7 @@ class WorkerProvisioner:
         self._provisioned = False
         self._threads: dict[str, threading.Thread] = {}
         self._provision_start_error: str = ""
+        self._provision_queue: list[WorkerSpec] = []
         # Event signalled after start_provisioning() populates _specs
         # (or fails).  wait_for_worker() waits on this before checking
         # _specs so it doesn't race against the background launcher.
@@ -1486,36 +1444,48 @@ class WorkerProvisioner:
         self._provision_start_error = ""
         self._specs_ready.clear()
 
-        # Build specs from defaults
+        # Build specs from defaults — but preserve any existing specs that
+        # are already healthy or provisioning.  This prevents duplicate VMs
+        # when start_provisioning() is called after ensure_available() has
+        # already kicked off provisioning, or across multiple pipeline runs.
         specs_needed: list[WorkerSpec] = []
+        with self._lock:
+            existing_by_role = {s.role: s for s in self._specs}
+
         if require_tts:
-            specs_needed.append(WorkerSpec(
-                role="tts",
-                env_var="TTS_WORKER_URL",
-                local_port=TTS_SPEC.local_port,
-                remote_port=TTS_SPEC.remote_port,
-                capability="tts",
-                gpu_type=TTS_SPEC.gpu_type,
-                min_vram_gb=TTS_SPEC.min_vram_gb,
-                max_price=TTS_SPEC.max_price,
-                min_disk_gb=TTS_SPEC.min_disk_gb,
-                disk_gb=TTS_SPEC.disk_gb,
-                worker_mode="tts",
-            ))
+            if "tts" in existing_by_role:
+                specs_needed.append(existing_by_role["tts"])
+            else:
+                specs_needed.append(WorkerSpec(
+                    role="tts",
+                    env_var="TTS_WORKER_URL",
+                    local_port=TTS_SPEC.local_port,
+                    remote_port=TTS_SPEC.remote_port,
+                    capability="tts",
+                    gpu_type=TTS_SPEC.gpu_type,
+                    min_vram_gb=TTS_SPEC.min_vram_gb,
+                    max_price=TTS_SPEC.max_price,
+                    min_disk_gb=TTS_SPEC.min_disk_gb,
+                    disk_gb=TTS_SPEC.disk_gb,
+                    worker_mode="tts",
+                ))
         if require_video:
-            specs_needed.append(WorkerSpec(
-                role="video",
-                env_var="GPU_WORKER_URL",
-                local_port=VIDEO_SPEC.local_port,
-                remote_port=VIDEO_SPEC.remote_port,
-                capability="ltx",
-                gpu_type=VIDEO_SPEC.gpu_type,
-                min_vram_gb=VIDEO_SPEC.min_vram_gb,
-                max_price=VIDEO_SPEC.max_price,
-                min_disk_gb=VIDEO_SPEC.min_disk_gb,
-                disk_gb=VIDEO_SPEC.disk_gb,
-                worker_mode="ltx",
-            ))
+            if "video" in existing_by_role:
+                specs_needed.append(existing_by_role["video"])
+            else:
+                specs_needed.append(WorkerSpec(
+                    role="video",
+                    env_var="GPU_WORKER_URL",
+                    local_port=VIDEO_SPEC.local_port,
+                    remote_port=VIDEO_SPEC.remote_port,
+                    capability="ltx",
+                    gpu_type=VIDEO_SPEC.gpu_type,
+                    min_vram_gb=VIDEO_SPEC.min_vram_gb,
+                    max_price=VIDEO_SPEC.max_price,
+                    min_disk_gb=VIDEO_SPEC.min_disk_gb,
+                    disk_gb=VIDEO_SPEC.disk_gb,
+                    worker_mode="ltx",
+                ))
 
         with self._lock:
             self._specs = specs_needed
@@ -1624,30 +1594,92 @@ class WorkerProvisioner:
                         spec.ready_event.set()
                 return
 
-        # Launch background threads for workers that need provisioning
-        for spec in specs_needed:
-            if spec.status == "pending":
-                t = threading.Thread(
-                    target=self._provision_worker_thread,
-                    args=(spec,),
-                    name=f"provision-{spec.role}",
-                    daemon=True,
-                )
-                self._threads[spec.role] = t
-                t.start()
-                logger.info(
-                    "Background provisioning started for %s worker",
-                    spec.role,
-                )
+        # Step-wise provisioning: start with 1 VM, add more only after
+        # the previous ones are healthy.  Hard cap at MAX_TOTAL_VMS.
+        pending_specs = [s for s in specs_needed if s.status == "pending"]
+        if len(pending_specs) > MAX_TOTAL_VMS:
+            logger.warning(
+                "Step-wise provisioning: %d VMs requested but MAX_TOTAL_VMS=%d. "
+                "Only the first %d will be provisioned.",
+                len(pending_specs), MAX_TOTAL_VMS, MAX_TOTAL_VMS,
+            )
+            pending_specs = pending_specs[:MAX_TOTAL_VMS]
+
+        if pending_specs:
+            # Start only the FIRST VM.  The rest are queued and launched
+            # by _provision_worker_thread when the previous one succeeds.
+            first = pending_specs[0]
+            self._provision_queue = pending_specs[1:]  # remaining specs
+            # Mark as provisioning BEFORE starting the thread so that
+            # concurrent ensure_available() calls see "provisioning" and
+            # wait instead of racing to provision a duplicate VM.
+            first.status = "provisioning"
+            first.ready_event.clear()
+            t = threading.Thread(
+                target=self._provision_worker_thread_stepwise,
+                args=(first,),
+                name=f"provision-{first.role}",
+                daemon=True,
+            )
+            self._threads[first.role] = t
+            t.start()
+            logger.info(
+                "Step-wise provisioning: started %s (1/%d). "
+                "Remaining: %d queued.",
+                first.role, min(len(specs_needed), MAX_TOTAL_VMS),
+                len(self._provision_queue),
+            )
 
     def _provision_worker_thread(self, spec: WorkerSpec) -> None:
         """Background thread: provision a single worker end-to-end.
 
         Updates spec.status and signals spec.ready_event when done.
         """
-        spec.status = "provisioning"
+        # Status is already set to "provisioning" by the caller
+        # (start_provisioning or ensure_available) to prevent races.
         try:
-            self._provision_and_connect(spec, timeout=2400)
+            self._provision_and_connect(spec)
+
+            # Verify via InfraAgent-style /status before marking healthy.
+            # This ensures the VM is fully bootstrapped (models loaded,
+            # GPU ready) before we declare success and start the next VM.
+            _url = spec.worker_url or f"http://localhost:{spec.local_port}"
+            _status_ok = False
+            try:
+                from urllib.request import Request, urlopen
+                req = Request(f"{_url.rstrip('/')}/status")
+                with urlopen(req, timeout=10) as resp:
+                    status_data = json.loads(resp.read().decode())
+                    # VMAgent status: check bootstrap phase and model_loaded
+                    bootstrap = status_data.get("bootstrap", {})
+                    phase = bootstrap.get("phase", "")
+                    model_loaded = status_data.get("health", {}).get("model_loaded", False)
+                    if phase == "ready" and model_loaded:
+                        _status_ok = True
+                        logger.info(
+                            "VMAgent /status confirms %s is ready "
+                            "(model_loaded=%s)", spec.role, model_loaded
+                        )
+                    else:
+                        logger.warning(
+                            "VMAgent /status for %s: phase=%s, "
+                            "model_loaded=%s — waiting for /health fallback",
+                            spec.role, phase, model_loaded
+                        )
+            except Exception as status_exc:
+                logger.debug(
+                    "VMAgent /status for %s unavailable (%s) — "
+                    "falling back to /health",
+                    spec.role, status_exc,
+                )
+
+            # Fallback to /health if /status wasn't available or not ready
+            if not _status_ok:
+                if not check_worker_health(_url, spec.capability):
+                    raise RuntimeError(
+                        f"Worker health check failed after provisioning {_url}"
+                    )
+
             spec.status = "healthy"
 
             # Update env var so contracts see the new URL
@@ -1664,7 +1696,6 @@ class WorkerProvisioner:
                 "Background provisioning FAILED for %s: %s", spec.role, exc,
             )
             # Only clean up the SSH tunnel — do NOT destroy the VM.
-            # The user explicitly forbade auto-destroying VMs on failure.
             # The VM stays running so it can be debugged or retried.
             if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
                 logger.info(
@@ -1679,6 +1710,41 @@ class WorkerProvisioner:
         finally:
             spec.ready_event.set()
 
+    def _provision_worker_thread_stepwise(self, spec: WorkerSpec) -> None:
+        """Provision one VM, then chain to the next queued VM on success.
+
+        This enforces the step-wise rule: start at 1, go to 2, then 3.
+        If any VM fails, the remaining queue is NOT processed.
+        """
+        self._provision_worker_thread(spec)
+
+        # On success, provision the next VM in queue
+        if spec.status == "healthy" and self._provision_queue:
+            next_spec = self._provision_queue.pop(0)
+            logger.info(
+                "Step-wise provisioning: %s healthy — starting next VM %s",
+                spec.role, next_spec.role,
+            )
+            t = threading.Thread(
+                target=self._provision_worker_thread_stepwise,
+                args=(next_spec,),
+                name=f"provision-{next_spec.role}",
+                daemon=True,
+            )
+            self._threads[next_spec.role] = t
+            t.start()
+        elif spec.status != "healthy":
+            logger.error(
+                "Step-wise provisioning: %s FAILED — remaining %d VMs NOT started",
+                spec.role, len(self._provision_queue),
+            )
+            # Mark all queued specs as failed so wait_for_worker doesn't hang
+            for queued in self._provision_queue:
+                queued.status = "failed"
+                queued.error = f"Previous VM {spec.role} failed — step-wise chain broken"
+                queued.ready_event.set()
+            self._provision_queue = []
+
     # ------------------------------------------------------------------
     # Phase 2: Blocking per-worker — called by stage before_callbacks
     # ------------------------------------------------------------------
@@ -1686,7 +1752,6 @@ class WorkerProvisioner:
     def wait_for_worker(
         self,
         role: str,
-        timeout: int = 2700,
     ) -> bool:
         """Wait for a specific worker to be ready.
 
@@ -1695,17 +1760,13 @@ class WorkerProvisioner:
         - Production stage calls wait_for_worker("video")
 
         Returns True if the worker is healthy.
-        Raises RuntimeError if provisioning failed or timed out.
+        Raises RuntimeError if provisioning failed.
         """
         # Wait for start_provisioning() to populate _specs.  When
         # provisioning runs in a background thread there's a window
         # where _specs is still empty.  Use a generous 120s ceiling
         # (start_provisioning spec-building is <30s in practice).
-        if not self._specs_ready.wait(timeout=120):
-            raise RuntimeError(
-                "Timed out waiting for start_provisioning() to "
-                "populate worker specs (120s)"
-            )
+        self._specs_ready.wait()
 
         # If start_provisioning() itself failed in the background thread,
         # surface that error clearly instead of the confusing "No spec found".
@@ -1726,23 +1787,14 @@ class WorkerProvisioner:
             return True
 
         logger.info(
-            "Stage waiting for %s worker (status=%s, timeout=%ds)...",
-            role, spec.status, timeout,
+            "Stage waiting for %s worker (status=%s, no timeout)...",
+            role, spec.status,
         )
 
         # Poll with short waits (1s) instead of one long blocking wait.
-        # This prevents the async event loop from freezing — the ADK
-        # callbacks run on the event loop thread, so a long blocking
-        # wait would freeze the entire server (HTTP, SSE, dashboard).
-        import time as _time
-        _deadline = _time.monotonic() + timeout
+        # This prevents the async event loop from freezing.
         while not spec.ready_event.is_set():
-            remaining = _deadline - _time.monotonic()
-            if remaining <= 0:
-                raise RuntimeError(
-                    f"{role} worker provisioning timed out after {timeout}s"
-                )
-            spec.ready_event.wait(timeout=min(1.0, remaining))
+            spec.ready_event.wait(timeout=1.0)
 
         if spec.status == "failed":
             raise RuntimeError(
@@ -1790,9 +1842,9 @@ class WorkerProvisioner:
     ) -> WorkerSpec:
         """Fix the worker for the given role. Local escalation only.
 
-        This is the provisioner's internal escalation — called by media
-        tools (generate_narration, generate_video_clip) when the worker
-        is unreachable. The agent never calls this directly.
+        Thread-safe: N concurrent calls dedupe to a single provisioning
+        attempt.  The first caller becomes the provisioning thread; the
+        rest wait on a ready_event and return the same WorkerSpec.
 
         Strategy:
         1. Is there a healthy VM? → return immediately
@@ -1806,7 +1858,7 @@ class WorkerProvisioner:
         """
         spec = self._get_spec(role)
         if spec is None:
-            # No spec exists — create one
+            # No spec exists — create one (double-checked under lock below)
             spec = WorkerSpec(
                 role=role,
                 env_var="TTS_WORKER_URL" if role == "tts" else "GPU_WORKER_URL",
@@ -1821,7 +1873,12 @@ class WorkerProvisioner:
                 worker_mode="tts" if role == "tts" else "ltx",
             )
             with self._lock:
-                self._specs = [s for s in self._specs if s.role != role] + [spec]
+                # Double-check: did another thread create it while we were building?
+                existing = self._get_spec(role)
+                if existing is not None:
+                    spec = existing
+                else:
+                    self._specs = [s for s in self._specs if s.role != role] + [spec]
 
         _trace(spec, "ensure_available_start", {
             "max_attempts": max_attempts,
@@ -1831,7 +1888,10 @@ class WorkerProvisioner:
             "reliability_floor": reliability_floor,
         })
 
-        # Step 1: Check if already healthy
+        # ------------------------------------------------------------------
+        # Thread-safe provisioning gate
+        # ------------------------------------------------------------------
+        # Fast path: already healthy (lock-free read; stale OK — we recheck)
         if spec.status == "healthy" and spec.worker_url:
             try:
                 if check_worker_health(spec.worker_url, spec.capability):
@@ -1840,131 +1900,185 @@ class WorkerProvisioner:
                     })
                     return spec
             except Exception:
-                pass  # Not actually healthy, proceed to fix
+                pass  # Not actually healthy, fall through to gate
 
-        # Step 2: If VM exists but unhealthy, try to verify status
-        if spec.vm_id and spec.status not in ("healthy", "pending"):
-            _trace(spec, "ensure_available_vm_exists", {
-                "vm_id": spec.vm_id,
-                "status": spec.status,
-            })
-            try:
-                vm_info = _vast_cmd(["show", "instance", spec.vm_id, "--raw"])
-                if isinstance(vm_info, dict):
-                    actual = vm_info.get("actual_status", "unknown")
-                    if actual == "running":
-                        # VM running but service unhealthy — check health
-                        _trace(spec, "ensure_available_vm_running", {
-                            "vm_id": spec.vm_id,
-                            "actual_status": actual,
-                        })
-                        # Try health endpoint
-                        try:
-                            _url = spec.worker_url or f"http://localhost:{spec.local_port}"
-                            if check_worker_health(_url, spec.capability):
-                                spec.status = "healthy"
-                                spec.ready_event.set()
-                                _trace(spec, "ensure_available_recovered", {
-                                    "vm_id": spec.vm_id,
-                                    "worker_url": _url,
-                                })
-                                return spec
-                        except Exception:
-                            pass
-                        # VM running but service won't come up — destroy
-                        _trace(spec, "ensure_available_destroy_stuck", {
-                            "vm_id": spec.vm_id,
-                            "reason": "VM running but service unhealthy",
-                        })
+        while True:
+            with self._lock:
+                # Recheck under lock
+                if spec.status == "healthy":
+                    return spec
+                if spec.status == "provisioning":
+                    # Another thread is provisioning — wait and retry
+                    _event = spec.ready_event
+                    _wait = True
+                else:
+                    # We become the provisioning thread
+                    spec.status = "provisioning"
+                    spec.ready_event.clear()
+                    _event = None
+                    _wait = False
+
+            if _wait:
+                _trace(spec, "ensure_available_waiting", {
+                    "reason": "another_thread_provisioning",
+                })
+                _event.wait(timeout=1.0)
+                # Loop back to check final status
+                continue
+
+            break  # We are the provisioning thread
+
+        # We hold the "provisioning" token.  Do the work OUTSIDE the lock
+        # so other threads can call _get_spec / get_worker_url concurrently.
+        try:
+            # Step 1: If VM exists but unhealthy, try to verify status
+            if spec.vm_id:
+                _trace(spec, "ensure_available_vm_exists", {
+                    "vm_id": spec.vm_id,
+                    "status": spec.status,
+                })
+                try:
+                    vm_info = _vast_cmd(["show", "instance", spec.vm_id, "--raw"])
+                    if isinstance(vm_info, dict):
+                        actual = vm_info.get("actual_status", "unknown")
+                        if actual == "running":
+                            _trace(spec, "ensure_available_vm_running", {
+                                "vm_id": spec.vm_id,
+                                "actual_status": actual,
+                            })
+                            try:
+                                _url = spec.worker_url or f"http://localhost:{spec.local_port}"
+                                if check_worker_health(_url, spec.capability):
+                                    with self._lock:
+                                        spec.status = "healthy"
+                                        spec.ready_event.set()
+                                    _trace(spec, "ensure_available_recovered", {
+                                        "vm_id": spec.vm_id,
+                                        "worker_url": _url,
+                                    })
+                                    return spec
+                            except Exception:
+                                pass
+                            # VM running but service won't come up — destroy
+                            _trace(spec, "ensure_available_destroy_stuck", {
+                                "vm_id": spec.vm_id,
+                                "reason": "VM running but service unhealthy",
+                            })
+                            try:
+                                from tools.vastai_tools import terminate_vm
+                                terminate_vm(spec.vm_id)
+                            except Exception:
+                                pass
+                            spec.vm_id = ""
+                except Exception as e:
+                    _trace(spec, "ensure_available_vm_check_failed", {
+                        "vm_id": spec.vm_id,
+                        "error": str(e),
+                    })
+
+            # Step 2: Apply constraint overrides
+            if max_price is not None:
+                spec.max_price = max_price
+            if min_vram_gb is not None:
+                spec.min_vram_gb = min_vram_gb
+            if gpu_type is not None:
+                spec.gpu_type = gpu_type
+
+            # Step 3: Enforce MAX_TOTAL_VMS ceiling
+            with self._lock:
+                total_vms = sum(1 for s in self._specs if s.vm_id)
+            if total_vms >= MAX_TOTAL_VMS:
+                _trace(spec, "ensure_available_max_vms", {
+                    "total_vms": total_vms,
+                    "max": MAX_TOTAL_VMS,
+                })
+                raise ProvisionerEscalationFailed(
+                    message=(
+                        f"MAX_TOTAL_VMS ({MAX_TOTAL_VMS}) reached. "
+                        f"Cannot provision additional {role} worker."
+                    ),
+                    role=role,
+                    trace=list(spec.provision_trace),
+                )
+
+            # Step 4: Attempt provisioning with escalating constraint relaxation
+            _excluded: set[int] = set()
+            for attempt in range(max_attempts):
+                _trace(spec, "ensure_available_attempt", {
+                    "attempt": attempt + 1,
+                    "max_attempts": max_attempts,
+                    "max_price": spec.max_price,
+                    "gpu_type": spec.gpu_type,
+                    "min_vram_gb": spec.min_vram_gb,
+                })
+                try:
+                    self._provision_and_connect(spec)
+                    new_url = spec.worker_url or f"http://localhost:{spec.local_port}"
+                    os.environ[spec.env_var] = new_url
+                    with self._lock:
+                        spec.status = "healthy"
+                        spec.ready_event.set()
+                    _trace(spec, "ensure_available_success", {
+                        "attempt": attempt + 1,
+                        "vm_id": spec.vm_id,
+                        "worker_url": new_url,
+                    })
+                    return spec
+                except Exception as exc:
+                    _trace(spec, "ensure_available_attempt_failed", {
+                        "attempt": attempt + 1,
+                        "error": str(exc),
+                        "error_type": (
+                            "no_such_ask" if "no_such_ask" in str(exc).lower()
+                            else "other"
+                        ),
+                    })
+                    # Clean up failed VM
+                    if spec.vm_id:
                         try:
                             from tools.vastai_tools import terminate_vm
                             terminate_vm(spec.vm_id)
                         except Exception:
                             pass
                         spec.vm_id = ""
-                        spec.status = "pending"
-            except Exception as e:
-                _trace(spec, "ensure_available_vm_check_failed", {
-                    "vm_id": spec.vm_id,
-                    "error": str(e),
-                })
+                    spec.error = str(exc)
+                    _excluded.update({int(o.get("id", 0)) for o in []})
 
-        # Step 3: Apply constraint overrides
-        if max_price is not None:
-            spec.max_price = max_price
-        if min_vram_gb is not None:
-            spec.min_vram_gb = min_vram_gb
-        if gpu_type is not None:
-            spec.gpu_type = gpu_type
+                    # Relax constraints for next attempt
+                    if attempt < max_attempts - 1:
+                        spec.max_price = min(spec.max_price * 1.5, 10.0)
+                        if spec.gpu_type:
+                            spec.gpu_type = ""  # broaden to any GPU
+                        _trace(spec, "ensure_available_relaxing", {
+                            "new_max_price": spec.max_price,
+                            "new_gpu_type": spec.gpu_type or "(any)",
+                        })
 
-        # Step 4: Attempt provisioning with escalating constraint relaxation
-        _excluded: set[int] = set()
-        for attempt in range(max_attempts):
-            _trace(spec, "ensure_available_attempt", {
-                "attempt": attempt + 1,
-                "max_attempts": max_attempts,
-                "max_price": spec.max_price,
-                "gpu_type": spec.gpu_type,
-                "min_vram_gb": spec.min_vram_gb,
+            # All attempts exhausted
+            with self._lock:
+                spec.status = "failed"
+                spec.ready_event.set()
+            _trace(spec, "ensure_available_escalation_failed", {
+                "attempts": max_attempts,
+                "final_max_price": spec.max_price,
+                "final_gpu_type": spec.gpu_type,
             })
-            try:
-                spec.status = "provisioning"
-                spec.error = ""
-                self._provision_and_connect(spec, timeout=2400)
-                spec.status = "healthy"
-                new_url = spec.worker_url or f"http://localhost:{spec.local_port}"
-                os.environ[spec.env_var] = new_url
-                _trace(spec, "ensure_available_success", {
-                    "attempt": attempt + 1,
-                    "vm_id": spec.vm_id,
-                    "worker_url": new_url,
-                })
-                return spec
-            except Exception as exc:
-                _trace(spec, "ensure_available_attempt_failed", {
-                    "attempt": attempt + 1,
-                    "error": str(exc),
-                    "error_type": (
-                        "no_such_ask" if "no_such_ask" in str(exc).lower()
-                        else "other"
-                    ),
-                })
-                # Clean up failed VM
-                if spec.vm_id:
-                    try:
-                        from tools.vastai_tools import terminate_vm
-                        terminate_vm(spec.vm_id)
-                    except Exception:
-                        pass
-                    spec.vm_id = ""
-                spec.status = "pending"
-                spec.error = str(exc)
-                _excluded.update({int(o.get("id", 0)) for o in []})  # nothing to exclude yet
+            raise ProvisionerEscalationFailed(
+                message=(
+                    f"Provisioner exhausted {max_attempts} local attempts for "
+                    f"{role} worker. Last error: {spec.error}"
+                ),
+                role=role,
+                trace=list(spec.provision_trace),
+            )
 
-                # Relax constraints for next attempt
-                if attempt < max_attempts - 1:
-                    spec.max_price = min(spec.max_price * 1.5, 10.0)
-                    if spec.gpu_type:
-                        spec.gpu_type = ""  # broaden to any GPU
-                    _trace(spec, "ensure_available_relaxing", {
-                        "new_max_price": spec.max_price,
-                        "new_gpu_type": spec.gpu_type or "(any)",
-                    })
-
-        # All attempts exhausted — raise with full trace
-        _trace(spec, "ensure_available_escalation_failed", {
-            "attempts": max_attempts,
-            "final_max_price": spec.max_price,
-            "final_gpu_type": spec.gpu_type,
-        })
-        raise ProvisionerEscalationFailed(
-            message=(
-                f"Provisioner exhausted {max_attempts} local attempts for "
-                f"{role} worker. Last error: {spec.error}"
-            ),
-            role=role,
-            trace=list(spec.provision_trace),
-        )
+        except Exception:
+            # Ensure waiters are unblocked even on unexpected errors
+            with self._lock:
+                if spec.status == "provisioning":
+                    spec.status = "failed"
+                    spec.ready_event.set()
+            raise
 
     # ------------------------------------------------------------------
     # Legacy blocking API (backward compat)
@@ -1974,7 +2088,7 @@ class WorkerProvisioner:
         self,
         require_tts: bool = True,
         require_video: bool = True,
-        provision_timeout: int = 2700,
+        
     ) -> dict:
         """Ensure all required workers are healthy, provisioning if needed.
 
@@ -1994,7 +2108,7 @@ class WorkerProvisioner:
 
         for spec in self._specs:
             try:
-                self.wait_for_worker(spec.role, timeout=provision_timeout)
+                self.wait_for_worker(spec.role)
                 if spec.vm_id:
                     status["provisioned"].append(spec.role)
                 else:
@@ -2027,33 +2141,19 @@ class WorkerProvisioner:
         )
         return status
 
-    def _provision_and_connect(
-        self, spec: WorkerSpec, timeout: int = 2400
-    ) -> None:
+    def _provision_and_connect(self, spec: WorkerSpec) -> None:
         """Provision a VM, connect, and wait for health.
 
-        Full lifecycle for a single worker.  The wall-clock ``timeout``
-        covers all steps end-to-end.  The health-wait step gets whatever
-        time remains after provisioning + VM boot + connection, with a
-        minimum of 120s so the wait isn't uselessly short.
+        No timeout — waits indefinitely for each step.  The operator
+        decides when to stop, not a hardcoded clock.
 
         Connection strategy (in order):
-        1. **Direct HTTP** via VM's public IP + mapped port (``--direct``
-           + ``--env '-p 8880:8880'``).  No SSH needed.  Uses
-           ``establish_direct_connection()`` which polls the /health
-           endpoint and uses ``vastai execute``/``vastai logs`` for
-           diagnostics.
+        1. **Direct HTTP** via VM's public IP + mapped port.
         2. **SSH tunnel** (legacy fallback) if direct connection fails.
 
-        If the VM stays in "loading" (Docker image pull) for too long,
-        connections fail on both direct and SSH, or the worker's bootstrap
-        fails (e.g., network issues, CUDA OOM), the VM is destroyed and
-        re-provisioned on a different host.
         Up to ``_MAX_PROVISION_RETRIES`` retries are attempted.
         """
         _MAX_PROVISION_RETRIES = 2
-        _LOADING_TIMEOUT = 300  # seconds before we consider a host "slow"
-        _start = time.time()
         _excluded_offers: set[int] = set()  # offer IDs of bad hosts
 
         for attempt in range(1 + _MAX_PROVISION_RETRIES):
@@ -2072,27 +2172,20 @@ class WorkerProvisioner:
                 )
                 return
 
-            # Step 2: Wait for VM to be running — use a shorter timeout
-            # for image pull so we can retry on a faster host.  On the
-            # final attempt give the full remaining budget (up to 600s)
-            # since there are no more retries to benefit from the cap.
-            is_final = (attempt >= _MAX_PROVISION_RETRIES)
-            cap = 600 if is_final else _LOADING_TIMEOUT
-            elapsed = int(time.time() - _start)
-            vm_timeout = max(min(timeout - elapsed, cap), 60)
+            # Step 2: Wait for VM to be running (no timeout)
             try:
-                wait_for_vm_running(spec, timeout=vm_timeout)
+                wait_for_vm_running(spec)
             except RuntimeError:
                 if attempt < _MAX_PROVISION_RETRIES:
                     # Track this offer so we don't pick it again
                     if selected_offer_id:
                         _excluded_offers.add(selected_offer_id)
                     logger.warning(
-                        "%s VM %s (offer %s) stuck loading after %ds "
-                        "— destroying and retrying on a different host "
+                        "%s VM %s (offer %s) stuck loading — "
+                        "destroying and retrying on a different host "
                         "(attempt %d/%d, excluded offers: %s)",
                         spec.role, spec.vm_id, selected_offer_id,
-                        vm_timeout, attempt + 2, 1 + _MAX_PROVISION_RETRIES,
+                        attempt + 2, 1 + _MAX_PROVISION_RETRIES,
                         _excluded_offers,
                     )
                     self._destroy_and_reset_spec(spec)
@@ -2157,11 +2250,8 @@ class WorkerProvisioner:
                         f"all retries"
                     )
 
-            # Step 4: Wait for worker to be healthy
-            # Bootstrap + model download can take 15-30 min (95GB at ~65 MB/s)
-            elapsed = int(time.time() - _start)
-            remaining = max(timeout - elapsed, 120)
-            healthy = wait_for_worker_healthy(spec, timeout=remaining)
+            # Step 4: Wait for worker to be healthy (no timeout)
+            healthy = wait_for_worker_healthy(spec)
             if healthy:
                 break  # VM running + connected + healthy — done
 
@@ -2369,6 +2459,29 @@ class WorkerProvisioner:
                 logger.info("InfraAgent stopped")
         except Exception:
             pass
+
+    def get_worker_url(self, role: str) -> str | None:
+        """Return the URL of a healthy worker for *role*, or None.
+
+        Read-only — never triggers provisioning.
+        """
+        with self._lock:
+            for spec in self._specs:
+                if spec.role == role and spec.status == "healthy":
+                    return spec.worker_url or f"http://localhost:{spec.local_port}"
+            return None
+
+    def get_worker_urls(self, role: str) -> list[str]:
+        """Return all healthy worker URLs for *role*.
+
+        Read-only — never triggers provisioning.
+        """
+        with self._lock:
+            urls: list[str] = []
+            for spec in self._specs:
+                if spec.role == role and spec.status == "healthy":
+                    urls.append(spec.worker_url or f"http://localhost:{spec.local_port}")
+            return urls
 
     def get_vm_ids(self) -> list[str]:
         """Return the IDs of all provisioned VMs."""
