@@ -528,30 +528,6 @@ def _brief_to_dict(brief: VirtualBrief) -> dict[str, Any]:
     }
 
 
-def assemble_virtual_brief_tool(
-    state: Mapping[str, Any],
-    *,
-    stage: Optional[str] = None,
-    scope: Optional[str] = None,
-    scope_ref: Optional[str] = None,
-    subject: Optional[str] = None,
-) -> dict[str, Any]:
-    """ADK tool wrapper: calls :func:`assemble_virtual_brief` and returns a
-    JSON-serialisable dict.
-
-    Registered on the :class:`Agent` as a plain callable (meta #122 DoD:
-    "Tools as plain callables"). Fails loud on any invalid input.
-    """
-    brief = assemble_virtual_brief(
-        state,
-        stage=stage,
-        scope=scope,
-        scope_ref=scope_ref,
-        subject=subject,
-    )
-    return _brief_to_dict(brief)
-
-
 def virtual_brief_after_agent_callback(callback_context):  # pragma: no cover
     """Stage-boundary check: fail loud if the last-assembled brief carries
     a :class:`HardConflict`.
@@ -581,6 +557,5 @@ __all__ = [
     "HardConflict",
     "VirtualBrief",
     "assemble_virtual_brief",
-    "assemble_virtual_brief_tool",
-        "virtual_brief_after_agent_callback",
+            "virtual_brief_after_agent_callback",
 ]

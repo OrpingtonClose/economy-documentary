@@ -241,67 +241,6 @@ def _validate_derivation_entry(
     return rev, tuple(artifact_ids)
 
 
-def record_stage_derivation(
-    state: MutableMapping[str, Any],
-    stage_name: str,
-    *,
-    revision: Optional[int] = None,
-    artifact_ids: Optional[Sequence[str]] = None,
-) -> None:
-    """Tag a stage as derived against a specific ledger revision.
-
-    This is the **stub** surface ARCH-B1 will own. It exists here so A5 can
-    be exercised end-to-end without waiting for B1 (per issue #135: "accept
-    the value from state under a well-known key"). When B1 lands, it should
-    either replace this function or call through to it; the storage shape
-    is stable.
-
-    If ``revision`` is ``None``, the current ledger revision is used.
-    If ``artifact_ids`` is ``None``, the existing list is preserved (or an
-    empty list if no prior entry exists).
-
-    Persists the map as a JSON string under :data:`STAGE_DERIVATIONS_KEY`,
-    mirroring the ledger's own JSON-string storage.
-    """
-    if not isinstance(stage_name, str) or not stage_name:
-        raise ValueError(
-            f"stage_name must be a non-empty string, got {stage_name!r}"
-        )
-
-    derivations = _load_stage_derivations(state)
-    existing = derivations.get(stage_name, {})
-
-    if revision is None:
-        revision = current_revision(state)
-    if not isinstance(revision, int) or isinstance(revision, bool):
-        raise TypeError(
-            f"revision must be int, got {type(revision).__name__}"
-        )
-    if revision < 0:
-        raise ValueError(f"revision must be >= 0, got {revision}")
-
-    if artifact_ids is None:
-        ids_list = list(existing.get("artifact_ids", []))
-    else:
-        if isinstance(artifact_ids, str):
-            raise TypeError(
-                "artifact_ids must be a sequence of strings, not a bare str"
-            )
-        ids_list = []
-        for i, aid in enumerate(artifact_ids):
-            if not isinstance(aid, str):
-                raise TypeError(
-                    f"artifact_ids[{i}] must be str, got {type(aid).__name__}"
-                )
-            ids_list.append(aid)
-
-    derivations[stage_name] = {
-        "revision": revision,
-        "artifact_ids": ids_list,
-    }
-    state[STAGE_DERIVATIONS_KEY] = json.dumps(derivations, ensure_ascii=False)
-
-
 # ---------------------------------------------------------------------------
 # Drift-signal queue
 # ---------------------------------------------------------------------------
@@ -551,8 +490,7 @@ __all__ = [
     "STAGE_DERIVATIONS_KEY",
     "LEDGER_DRIFT_SIGNALS_KEY",
     "LedgerDrift",
-    "record_stage_derivation",
-    "pending_drift_signals",
+        "pending_drift_signals",
     "check_consistency",
     "check_consistency_at_gate",
     "after_agent_consistency_check",

@@ -283,82 +283,9 @@ def _iter_agent_tree(root: Any) -> Iterable[Any]:
                 stack.append(sub)
 
 
-def wire_consistency_checks_into_agents(
-    root: Any,
-    *,
-    executor: Optional[StepExecutor] = None,
-) -> list[str]:
-    """Compose B2 callbacks onto every agent in ``root``'s tree.
-
-    For each agent, preserves any existing ``after_agent_callback``,
-    ``before_agent_callback``, and ``before_tool_callback`` by wrapping
-    them with the corresponding ``make_*_with_consistency`` factory.
-    Idempotent: agents tagged with :data:`_WIRED_ATTR` are skipped.
-
-    Returns the list of agent names that were wired on this call
-    (excluding those already wired). Useful for tests and startup logs.
-
-    Args:
-        root: A SequentialAgent / LoopAgent / Agent -- typically the
-            master ``pipeline_agent``.
-        executor: Optional step executor forwarded to A6's
-            :func:`remanifestation.handle_drift`.
-    """
-    wired: list[str] = []
-    for agent in _iter_agent_tree(root):
-        if getattr(agent, _WIRED_ATTR, False):
-            continue
-
-        name = getattr(agent, "name", None) or type(agent).__name__
-
-        orig_after = getattr(agent, "after_agent_callback", None)
-        agent.after_agent_callback = make_after_agent_with_consistency(
-            orig_after,
-            executor=executor,
-        )
-
-        orig_before = getattr(agent, "before_agent_callback", None)
-        agent.before_agent_callback = make_before_agent_with_consistency(
-            orig_before,
-            executor=executor,
-        )
-
-        # before_tool_callback is only meaningful on agents that own tools;
-        # leaf Agent instances do. SequentialAgent / LoopAgent / composite
-        # agents typically leave this attribute unset -- skip silently.
-        if hasattr(agent, "before_tool_callback"):
-            orig_tool = getattr(agent, "before_tool_callback", None)
-            agent.before_tool_callback = make_before_tool_with_consistency(
-                orig_tool,
-                executor=executor,
-            )
-
-        try:
-            setattr(agent, _WIRED_ATTR, True)
-        except Exception:
-            # Some ADK base classes use __slots__ and reject ad-hoc
-            # attributes. That just means we cannot dedup, not that the
-            # wiring failed -- warn once and continue.
-            logger.debug(
-                "consistency_gate: could not tag agent %r as wired "
-                "(likely __slots__); idempotency disabled for this agent",
-                name,
-            )
-        wired.append(name)
-
-    logger.info(
-        "consistency_gate: wired ARCH-B2 consistency checks into "
-        "%d agent(s): %s",
-        len(wired),
-        wired,
-    )
-    return wired
-
-
 __all__ = [
     "gate_poll_consistency_check",
     "make_after_agent_with_consistency",
     "make_before_agent_with_consistency",
     "make_before_tool_with_consistency",
-    "wire_consistency_checks_into_agents",
-]
+    ]

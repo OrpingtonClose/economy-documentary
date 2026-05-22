@@ -117,11 +117,6 @@ class RecoveryLogger:
         with self._lock:
             return list(self._entries)
 
-    def count_for(self, artifact_id: str) -> int:
-        """Return how many entries reference ``artifact_id``."""
-        with self._lock:
-            return sum(1 for e in self._entries if e.get("artifact_id") == artifact_id)
-
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()

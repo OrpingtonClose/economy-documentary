@@ -312,58 +312,6 @@ def queue_operator_decision(
     return _handler
 
 
-def replay_operator_decisions(
-    decisions: Sequence[ApprovalDecision],
-    run_dir: Path | None = None,
-    *,
-    operator: str = "test-replay",
-) -> OperatorDecision:
-    """Build a resume handler that replays a pre-scripted decision list.
-
-    Used by unit tests and experiment cases to drive the interrupt
-    loop without an operator console. The ``i``-th interrupt gets the
-    ``i``-th decision. Running out of decisions raises
-    :class:`RuntimeError` so under-specified test cases fail loudly.
-
-    Args:
-        decisions: Ordered list of operator decisions.
-        run_dir: When provided, each replay still writes an audit
-            record so trajectory evaluators can assert on it.
-        operator: Recorded on the audit record.
-
-    Returns:
-        A coroutine function suitable as ``get_operator_decision``
-        in :func:`run_documentary`.
-    """
-
-    iterator = iter(list(decisions))
-
-    async def _handler(state: dict[str, Any]) -> Command:
-        try:
-            decision = next(iterator)
-        except StopIteration as exc:
-            raise RuntimeError(
-                "replay_operator_decisions: pre-scripted list exhausted",
-            ) from exc
-        interrupt_id, tool_name, _ = _extract_interrupt_metadata(state)
-        action_count = _extract_action_count(state)
-        if run_dir is not None:
-            record = ApprovalRecord(
-                interrupt_id=interrupt_id,
-                tool_name=tool_name,
-                operator=operator,
-                decision=decision,
-            )
-            write_approval_record(run_dir, record)
-        return langchain_resume_command_from_decision(
-            tool_name,
-            decision,
-            action_count=action_count,
-        )
-
-    return _handler
-
-
 async def run_documentary(
     brief: str,
     run_dir: Path,
@@ -424,6 +372,5 @@ async def run_documentary(
 __all__ = [
     "OperatorDecision",
     "queue_operator_decision",
-    "replay_operator_decisions",
-    "run_documentary",
+        "run_documentary",
 ]

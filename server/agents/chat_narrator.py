@@ -352,13 +352,6 @@ class Narrator:
         self._subscribers: list[collections.deque] = []
         self._lock = threading.Lock()
 
-    def subscribe(self) -> collections.deque:
-        """Register a bounded subscriber queue and return it."""
-        queue: collections.deque = collections.deque(maxlen=_QUEUE_MAX)
-        with self._lock:
-            self._subscribers.append(queue)
-        return queue
-
     def unsubscribe(self, queue: collections.deque) -> None:
         with self._lock:
             try:

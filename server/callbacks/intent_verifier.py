@@ -439,94 +439,6 @@ _STAGE_DISPATCH = {
 # ---------------------------------------------------------------------------
 
 
-def verify_stage_constraints(
-    stage: str,
-    state: Mapping[str, Any],
-) -> VerificationRecord:
-    """Run the stage-owned R0 re-verification and return the record.
-
-    Pure function — never raises on R0 drift (callers inspect
-    ``record.passed`` and decide whether to halt).  Raises
-    :class:`ValueError` for unknown stages so mis-wired callers fail
-    loudly rather than silently skipping the check.
-    """
-    if stage not in _STAGE_DISPATCH:
-        raise ValueError(
-            f"verify_stage_constraints: unknown stage {stage!r} "
-            f"(known: {_KNOWN_STAGES})"
-        )
-    from agents.intent_extractor import get_brief_intent
-
-    intent = get_brief_intent(state)
-    if intent is None:
-        # No R0 == no contract to verify.  Return a passed record with
-        # a metric noting the absence so log consumers can distinguish
-        # "no R0" from "R0 satisfied".
-        return VerificationRecord(
-            stage=stage,
-            passed=True,
-            failures=[],
-            metrics={"no_brief_intent": True},
-        )
-    verifier = _STAGE_DISPATCH[stage]
-    return verifier(intent, state)
-
-
-def log_verification(
-    record: VerificationRecord,
-    state: Optional[MutableMapping[str, Any]] = None,
-) -> None:
-    """Append ``record`` to :data:`VERIFICATION_LOG_KEY` and log it.
-
-    When ``state`` is ``None`` the record still goes to the standard
-    logger; this is the pattern used by tests that want to invoke the
-    verifier without a full blackboard.
-    """
-    level = logging.INFO if record.passed else logging.ERROR
-    logger.log(
-        level,
-        "intent_verifier: stage=%s passed=%s failures=%s metrics=%s",
-        record.stage, record.passed, record.failures, record.metrics,
-    )
-    if state is None:
-        return
-    existing = state.get(VERIFICATION_LOG_KEY)
-    if isinstance(existing, str):
-        try:
-            entries = json.loads(existing)
-        except json.JSONDecodeError:
-            entries = []
-    elif isinstance(existing, list):
-        entries = list(existing)
-    else:
-        entries = []
-    entries.append(record.to_dict())
-    state[VERIFICATION_LOG_KEY] = json.dumps(entries)
-
-
-def emit_drift_narration(record: VerificationRecord) -> None:
-    """Push a plain-English ``halt_fired`` chat turn for a failed record.
-
-    The narrator is best-effort UI sugar — any failure here is swallowed
-    so the halt path itself remains the load-bearing signal.
-    """
-    if record.passed:
-        return
-    try:
-        from agents.chat_narrator import emit_narrator_event
-
-        emit_narrator_event(
-            "halt_fired",
-            fields={
-                "stage": record.stage,
-                "checkpoint": "intent_verifier",
-                "message": "; ".join(record.failures) or "R0 drift",
-            },
-        )
-    except Exception as exc:  # pragma: no cover -- defensive
-        logger.debug("intent_verifier: halt narration failed: %s", exc)
-
-
 __all__ = [
     "STAGE_ASSEMBLY",
     "STAGE_AUDIO",
@@ -535,7 +447,4 @@ __all__ = [
     "STAGE_VISUAL",
     "VERIFICATION_LOG_KEY",
     "VerificationRecord",
-    "emit_drift_narration",
-    "log_verification",
-        "verify_stage_constraints",
-]
+                ]

@@ -510,26 +510,6 @@ def _llm_intent(brief: str) -> Optional[BriefIntent]:
 # ---------------------------------------------------------------------------
 
 
-def extract_intent(brief: str, *, use_llm: bool = True) -> BriefIntent:
-    """Parse ``brief`` into a :class:`BriefIntent`, LLM-first with fallback.
-
-    Parameters
-    ----------
-    brief:
-        Raw free-text user brief.  Empty strings are permitted but yield
-        a fully-defaulted intent with low confidence.
-    use_llm:
-        When True (default), attempt a google-genai call first and only
-        fall back to the heuristic on failure.  Tests and offline runs
-        pass False to force the deterministic path.
-    """
-    if use_llm:
-        intent = _llm_intent(brief)
-        if intent is not None:
-            return intent
-    return _heuristic_intent(brief)
-
-
 #: Backup file path for the restated brief (R0).  Persisted to disk so
 #: the ``/agui/restated_brief`` endpoint (INTENT-03) can serve R0 across
 #: process boundaries and reload after B2 restore.
@@ -605,7 +585,6 @@ __all__ = [
     "DEFAULT_DURATION_SEC",
     "DEFAULT_TOLERANCE_SEC",
     "IntentExtractionError",
-    "extract_intent",
-    "get_brief_intent",
+        "get_brief_intent",
     "read_intent_backup",
     ]

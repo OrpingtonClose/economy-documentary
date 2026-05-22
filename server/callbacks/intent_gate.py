@@ -193,101 +193,9 @@ def _scenes_text_blob(scenes: list[dict]) -> str:
     return "\n".join(parts).lower()
 
 
-def evaluate_gate(
-    intent: "BriefIntent",  # noqa: F821 - forward ref, imported in callers
-    scenes: list[dict],
-    *,
-    attempt: int = 1,
-) -> GateVerdict:
-    """Evaluate R0 hard constraints against a scenario draft.
-
-    Pure function — no state mutation, no I/O.  Returns a
-    :class:`GateVerdict` describing every violation found so callers
-    can compose a critique or halt message.
-    """
-    total = _sum_scene_duration_sec(scenes)
-    gap_overhead = _compute_gap_overhead_sec(scenes)
-    movie_duration = total + gap_overhead
-    failures: list[str] = []
-
-    # Compare against MOVIE duration (narration + silence gaps) because
-    # that is the runtime of the delivered mp4 — and therefore the
-    # duration the user stated in the brief.  The raw narration sum is
-    # kept on the verdict for diagnostics.  See also the matching check
-    # in :mod:`callbacks.intent_verifier` which must stay in lockstep.
-    lower_target = intent.duration_sec - intent.tolerance_sec
-    upper_target = intent.duration_sec + intent.tolerance_sec
-    if not scenes:
-        failures.append("scenario draft has zero scenes")
-    elif movie_duration < lower_target or movie_duration > upper_target:
-        failures.append(
-            f"expected film runtime {movie_duration:.1f}s (narration "
-            f"{total:.1f}s + silence gaps {gap_overhead:.1f}s) is "
-            f"outside the {intent.duration_sec:.1f}s ± "
-            f"{intent.tolerance_sec:.1f}s window (acceptable range: "
-            f"{lower_target:.1f}s — {upper_target:.1f}s)"
-        )
-
-    blob = _scenes_text_blob(scenes)
-    missing_required: list[str] = []
-    for topic in intent.required_topics:
-        if topic and topic.lower() not in blob:
-            missing_required.append(topic)
-    if missing_required:
-        failures.append(
-            "scenario draft never mentions required topic(s): "
-            + ", ".join(repr(t) for t in missing_required)
-        )
-
-    present_forbidden: list[str] = []
-    for topic in intent.forbidden_topics:
-        if topic and topic.lower() in blob:
-            present_forbidden.append(topic)
-    if present_forbidden:
-        failures.append(
-            "scenario draft mentions forbidden topic(s): "
-            + ", ".join(repr(t) for t in present_forbidden)
-        )
-
-    return GateVerdict(
-        passed=not failures,
-        total_scene_duration_sec=total,
-        target_duration_sec=intent.duration_sec,
-        tolerance_sec=intent.tolerance_sec,
-        missing_required_topics=missing_required,
-        present_forbidden_topics=present_forbidden,
-        failures=failures,
-        attempt=attempt,
-        movie_duration_sec=movie_duration,
-        gap_overhead_sec=gap_overhead,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Critique + halt messages
 # ---------------------------------------------------------------------------
-
-
-def build_critique(verdict: GateVerdict) -> str:
-    """Turn a failing :class:`GateVerdict` into a director-facing critique.
-
-    The critique is plain prose the scenario director can consume on
-    its next attempt (we inject it under ``state[GATE_CRITIQUE_KEY]``
-    and the director reads it as template context).
-    """
-    lines = [
-        "R0 constraint gate rejected the previous scenario draft.",
-        f"Target film runtime: {verdict.target_duration_sec:.1f}s "
-        f"± {verdict.tolerance_sec:.1f}s.",
-        f"Measured film runtime (narration + silence gaps): "
-        f"{verdict.movie_duration_sec:.1f}s "
-        f"(narration {verdict.total_scene_duration_sec:.1f}s + "
-        f"gaps {verdict.gap_overhead_sec:.1f}s).",
-        "Fix every item below on your next attempt:",
-    ]
-    for failure in verdict.failures:
-        lines.append(f"- {failure}")
-    return "\n".join(lines)
 
 
 def build_halt_message(verdict: GateVerdict, *, max_attempts: int) -> str:
@@ -359,7 +267,5 @@ __all__ = [
     "INTENT_GATE_PASSED",
     "IntentGateHalt",
     "MAX_GATE_ATTEMPTS",
-    "build_critique",
-    "build_halt_message",
-    "evaluate_gate",
-            ]
+        "build_halt_message",
+                ]

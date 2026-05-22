@@ -66,16 +66,6 @@ class InfraAgentBumpClient:
         )
 
 
-def bump_infra_agent(
-    *,
-    url: str = DEFAULT_BUMP_URL,
-    http_post: Callable[..., "_BumpResponse"] | None = None,
-    timeout_s: float = DEFAULT_BUMP_TIMEOUT_S,
-) -> None:
-    """Functional shortcut for callers that don't want a client object."""
-    InfraAgentBumpClient(url=url, http_post=http_post, timeout_s=timeout_s).bump()
-
-
 def _default_http_post(*, url: str, timeout: float) -> _BumpResponse:
     """Default POST via :mod:`requests`."""
     import requests  # noqa: PLC0415
