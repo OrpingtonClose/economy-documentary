@@ -1,8 +1,8 @@
 """Infra-agent bump client.
 
-The worker calls ``POST http://localhost:29230/infra/bump`` on every
-request so active traffic resets the guardian's idle timer. The
-guardian lives in the same VM and trusts ``localhost`` callers.
+The worker calls ``POST http://localhost:29230/`` with body ``bump``
+on every request so active traffic resets the guardian's idle timer.
+The guardian lives in the same VM and trusts ``localhost`` callers.
 
 Failures on the bump are logged and swallowed — a single missed bump
 must never fail a user-facing synthesis request. If the infra agent
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_BUMP_URL = "http://127.0.0.1:29230/infra/bump"
+DEFAULT_BUMP_URL = "http://127.0.0.1:29230/"
 DEFAULT_BUMP_TIMEOUT_S = 2.0
 
 
@@ -32,11 +32,11 @@ class InfraAgentBumpClient:
     """Injectable bump helper.
 
     Attributes:
-        url: The agent's bump endpoint. Defaults to localhost.
+        url: The agent's POST / endpoint. Defaults to localhost.
         http_post: Injectable POST for tests. When ``None`` the default
             :mod:`requests`-backed implementation is used.
         timeout_s: Per-call timeout. Deliberately short — a missed
-            bump must never stall a render.
+            bump must never stall a synthesis.
     """
 
     url: str = DEFAULT_BUMP_URL
@@ -80,5 +80,5 @@ def _default_http_post(*, url: str, timeout: float) -> _BumpResponse:
     """Default POST via :mod:`requests`."""
     import requests  # noqa: PLC0415
 
-    response = requests.post(url, timeout=timeout)
+    response = requests.post(url, data="bump", timeout=timeout)
     return _BumpResponse(status_code=response.status_code)

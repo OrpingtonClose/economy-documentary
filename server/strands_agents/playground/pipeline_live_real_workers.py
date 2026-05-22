@@ -65,7 +65,7 @@ _MAX_VIDEO_DURATION_S = 5.0
 _DEFAULT_FPS = 24
 _DEFAULT_SEED = 7
 
-# Module-level lock that serialises ``/video/render`` POSTs to a single
+# Module-level lock that serialises ``POST /`` video requests to a single
 # H200-class GPU worker. AGENTS.md hard invariant: "Never parallelise
 # launch_visual_production jobs onto the same GPU worker." When the
 # orchestrator dispatches N scenes in one tool-call turn, LangGraph runs
@@ -141,7 +141,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
     ) -> dict[str, Any]:
         """Real Qwen3-TTS dispatch (slice 9d-wire / 9c).
 
-        Sends a /tts/render request to the live worker, decodes the
+        Sends a POST / request to the live worker, receives raw
         base64 WAV, persists it under ``run_dir/artifacts/``, and
         returns a placeholder-shaped envelope so the orchestrator's
         scripted brain stays compatible with slice 9a. The optional
@@ -150,17 +150,14 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
         hard-coded placeholder line (slice 9c).
         """
         resolved_text = _resolve_audio_text(scene_id, text)
-        body = {
-            "scene_id": scene_id,
-            "voice_id": voice_id,
-            "text": resolved_text,
-            "duration_s": _DEFAULT_AUDIO_DURATION_S,
-            "seed": _DEFAULT_SEED,
-        }
         started_ms = _now_ms()
         try:
             with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                resp = client.post(f"{worker_url}/tts/render", json=body)
+                resp = client.post(
+                    f"{worker_url.rstrip('/')}/",
+                    content=resolved_text.encode("utf-8"),
+                    headers={"Content-Type": "text/plain"},
+                )
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | tts dispatch failed", scene_id, exc
@@ -173,37 +170,26 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             )
 
         elapsed_ms = _now_ms() - started_ms
-        try:
-            payload = resp.json() if resp.content else {}
-        except ValueError:
-            payload = {"_text": resp.text}
-
         wav_path: Path | None = None
         wav_len = 0
-        if isinstance(payload, dict) and "wav_base64" in payload:
-            try:
-                wav_bytes = base64.b64decode(payload["wav_base64"])
-                wav_len = len(wav_bytes)
-                wav_path = _persist_artifact(run_dir, scene_id, "wav", wav_bytes)
-                logger.info(
-                    "scene_id=<%s>, bytes=<%d>, path=<%s> | wav persisted",
-                    scene_id,
-                    wav_len,
-                    wav_path,
-                )
-            except (ValueError, TypeError) as exc:
-                logger.warning(
-                    "scene_id=<%s>, error=<%r> | wav decode failed",
-                    scene_id,
-                    exc,
-                )
+        if resp.status_code == 200:
+            wav_bytes = resp.content
+            wav_len = len(wav_bytes)
+            wav_path = _persist_artifact(run_dir, scene_id, "wav", wav_bytes)
+            logger.info(
+                "scene_id=<%s>, bytes=<%d>, path=<%s> | wav persisted",
+                scene_id,
+                wav_len,
+                wav_path,
+            )
 
-        duration_sec = (
-            float(payload["duration_s"])
-            if isinstance(payload, dict)
-            and isinstance(payload.get("duration_s"), int | float)
-            else None
-        )
+        duration_sec = None
+        ds = resp.headers.get("X-Duration-S")
+        if ds is not None:
+            try:
+                duration_sec = float(ds)
+            except ValueError:
+                pass
         alignment: dict[str, Any] | None = None
         if duration_sec is not None and duration_sec > 0:
             alignment = {
@@ -282,7 +268,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
     ) -> dict[str, Any]:
         """Real LTX-2.3 BASIC dispatch (slice 9d-wire / 9c / 9k).
 
-        Sends a /video/render request to the live worker, decodes the
+        Sends a POST / request to the live worker, receives raw
         base64 MP4, persists it under ``run_dir/artifacts/``, and
         returns a placeholder-shaped envelope. The optional ``prompt``
         argument (slice 9c) carries a fully-formed style-locked LTX
@@ -327,7 +313,11 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             with _video_dispatch_lock:
                 logger.info("scene_id=<%s> | ltx dispatch acquired GPU lock", scene_id)
                 with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                    resp = client.post(f"{worker_url}/video/render", json=body)
+                    resp = client.post(
+                        f"{worker_url.rstrip('/')}/",
+                        content=resolved_prompt.encode("utf-8"),
+                        headers={"Content-Type": "text/plain"},
+                    )
         except httpx.HTTPError as exc:
             logger.warning(
                 "scene_id=<%s>, error=<%r> | ltx dispatch failed",
@@ -342,30 +332,18 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             )
 
         elapsed_ms = _now_ms() - started_ms
-        try:
-            payload = resp.json() if resp.content else {}
-        except ValueError:
-            payload = {"_text": resp.text}
-
         mp4_path: Path | None = None
         mp4_len = 0
-        if isinstance(payload, dict) and "mp4_base64" in payload:
-            try:
-                mp4_bytes = base64.b64decode(payload["mp4_base64"])
-                mp4_len = len(mp4_bytes)
-                mp4_path = _persist_artifact(run_dir, scene_id, "mp4", mp4_bytes)
-                logger.info(
-                    "scene_id=<%s>, bytes=<%d>, path=<%s> | mp4 persisted",
-                    scene_id,
-                    mp4_len,
-                    mp4_path,
-                )
-            except (ValueError, TypeError) as exc:
-                logger.warning(
-                    "scene_id=<%s>, error=<%r> | mp4 decode failed",
-                    scene_id,
-                    exc,
-                )
+        if resp.status_code == 200:
+            mp4_bytes = resp.content
+            mp4_len = len(mp4_bytes)
+            mp4_path = _persist_artifact(run_dir, scene_id, "mp4", mp4_bytes)
+            logger.info(
+                "scene_id=<%s>, bytes=<%d>, path=<%s> | mp4 persisted",
+                scene_id,
+                mp4_len,
+                mp4_path,
+            )
 
         return _envelope(
             "launch_visual_production",
@@ -378,7 +356,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             mp4_bytes_len=mp4_len,
             mp4_path=str(mp4_path) if mp4_path else None,
             elapsed_ms=elapsed_ms,
-            engine=payload.get("engine") if isinstance(payload, dict) else None,
+            engine=None,
         )
 
     return launch_visual_production

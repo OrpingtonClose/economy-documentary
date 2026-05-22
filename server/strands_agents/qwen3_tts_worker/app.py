@@ -1,17 +1,12 @@
 """FastAPI surface for the Qwen3-TTS worker.
 
-Three endpoints:
+Plain-text protocol — two endpoints only:
 
-* ``POST /tts/render`` — synthesize one utterance against the VM's
-  pinned voice. Returns metadata + base64-encoded WAV.
-* ``GET /health/vram`` — current and peak VRAM, used by the playground
-  pre-flight check and the worker registry.
-* ``GET /health`` — lightweight liveness. Does NOT bump the infra
-  agent — otherwise k8s-style pollers would keep the VM alive forever.
+* ``GET /`` — plain text status. Does NOT bump the infra agent.
+* ``POST /`` — receives plain text, returns raw WAV bytes.
 
-Every request (except ``/health``) runs through a middleware that fires
-a best-effort bump against ``http://localhost:29230/infra/bump``.
-Active traffic = alive VM, by construction.
+Every POST / runs through a middleware that fires a best-effort bump
+against ``http://localhost:29230/``.
 
 The app is built by :func:`build_app` with injected dependencies so
 unit tests do not need a GPU, a model, or a network.
@@ -19,14 +14,12 @@ unit tests do not need a GPU, a model, or a network.
 
 from __future__ import annotations
 
-import base64
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
@@ -38,24 +31,11 @@ from .engine import SynthesisRequest, TTSEngine, TTSEngineError
 logger = logging.getLogger(__name__)
 
 
-class _RenderRequest(BaseModel):
-    """``POST /tts/render`` body.
-
-    ``voice_id`` must equal the VM's pinned voice or the worker 409s.
-    """
-
-    text: str = Field(..., min_length=1, max_length=4_096)
-    voice_id: str = Field(..., min_length=1, max_length=128)
-    language: str = Field(default="en", min_length=2, max_length=16)
-    style: str | None = Field(default=None, max_length=64)
-    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
-
-
 class _BumpOnRequestMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that bumps the infra agent on each request.
 
-    Paths can be excluded (e.g. ``/health``) so that uptime probes do
-    not accidentally keep VMs alive.
+    Paths can be excluded so that uptime probes do not accidentally
+    keep VMs alive.
     """
 
     def __init__(
@@ -63,7 +43,7 @@ class _BumpOnRequestMiddleware(BaseHTTPMiddleware):
         app: Any,
         *,
         bump_client: InfraAgentBumpClient,
-        excluded_paths: tuple[str, ...] = ("/health",),
+        excluded_paths: tuple[str, ...] = ("/",),
     ) -> None:
         super().__init__(app)
         self._bump_client = bump_client
@@ -94,11 +74,9 @@ def build_app(
         worker_id: Registry id for this worker. Stamped on every
             response for tracing.
         pinned_voice_id: The one voice this VM is allowed to render.
-            Requests carrying any other ``voice_id`` 409.
         engine: The TTS engine. Real in production, stub in tests.
         telemetry: Peak VRAM / disk telemetry (shared with the infra
-            agent). Reused here so ``/health/vram`` returns the same
-            numbers the guardian publishes.
+            agent).
         bump_client: Injectable bump client. Defaults to a fresh
             :class:`InfraAgentBumpClient` pointing at localhost.
 
@@ -115,40 +93,33 @@ def build_app(
         bump_client=effective_bump,
     )
 
-    router_tts = APIRouter(prefix="/tts", tags=["tts"])
-    router_health = APIRouter(prefix="/health", tags=["health"])
-
-    @app.get("/health")
-    def _health() -> dict[str, Any]:
+    @app.get("/")
+    def _health() -> Response:
         """Liveness only — does not bump."""
-        return {"ok": True, "worker_id": worker_id}
+        return Response(
+            content=f"ok worker_id={worker_id}",
+            media_type="text/plain",
+        )
 
-    @router_tts.post("/render")
-    def _render(body: _RenderRequest) -> JSONResponse:
-        if body.voice_id != pinned_voice_id:
-            logger.warning(
-                "worker_id=<%s>, pinned=<%s>, got=<%s> | voice mismatch, rejecting",
-                worker_id,
-                pinned_voice_id,
-                body.voice_id,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "voice_mismatch",
-                    "pinned_voice_id": pinned_voice_id,
-                    "requested_voice_id": body.voice_id,
-                },
+    @app.post("/")
+    async def _render(request: Request) -> Response:
+        body = await request.body()
+        text = body.decode("utf-8").strip()
+        if not text:
+            return Response(
+                content="error: empty text",
+                media_type="text/plain",
+                status_code=400,
             )
 
         try:
             result = engine.synthesize(
                 SynthesisRequest(
-                    text=body.text,
-                    voice_id=body.voice_id,
-                    language=body.language,
-                    style=body.style,
-                    seed=body.seed,
+                    text=text,
+                    voice_id=pinned_voice_id,
+                    language="en",
+                    style=None,
+                    seed=None,
                 )
             )
         except TTSEngineError as exc:
@@ -157,36 +128,19 @@ def build_app(
                 worker_id,
                 exc,
             )
-            raise HTTPException(
-                status_code=400, detail={"reason": "engine_error", "message": str(exc)}
-            ) from exc
+            return Response(
+                content=f"error: {exc}",
+                media_type="text/plain",
+                status_code=400,
+            )
 
-        return JSONResponse(
-            content={
-                "worker_id": worker_id,
-                "voice_id": result.voice_id,
-                "engine": result.engine,
-                "duration_s": result.duration_s,
-                "sample_rate_hz": result.sample_rate_hz,
-                "wav_base64": base64.b64encode(result.wav_bytes).decode("ascii"),
-            }
+        return Response(
+            content=result.wav_bytes,
+            media_type="audio/wav",
+            headers={
+                "X-Duration-S": str(result.duration_s),
+                "X-Sample-Rate": str(result.sample_rate_hz),
+            },
         )
 
-    @router_health.get("/vram")
-    def _vram() -> JSONResponse:
-        snapshot = telemetry.sample()
-        return JSONResponse(
-            content={
-                "worker_id": worker_id,
-                "vram_total_gb": snapshot.vram_total_gb,
-                "vram_used_gb": snapshot.vram_used_gb,
-                "vram_peak_gb": snapshot.vram_peak_gb,
-                "disk_total_gb": snapshot.disk_total_gb,
-                "disk_used_gb": snapshot.disk_used_gb,
-                "disk_peak_gb": snapshot.disk_peak_gb,
-            }
-        )
-
-    app.include_router(router_tts)
-    app.include_router(router_health)
     return app

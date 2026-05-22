@@ -1,17 +1,12 @@
 """FastAPI surface for the LTX-Video worker.
 
-Three endpoints:
+Plain-text protocol — two endpoints only:
 
-* ``POST /video/render`` — render one scene clip. Returns metadata +
-  base64-encoded MP4.
-* ``GET /health/vram`` — current and peak VRAM, used by the playground
-  pre-flight check and the worker registry.
-* ``GET /health`` — lightweight liveness. Does NOT bump the infra
-  agent — otherwise k8s-style pollers would keep the VM alive forever.
+* ``GET /`` — plain text status. Does NOT bump the infra agent.
+* ``POST /`` — receives a plain text prompt, returns raw MP4 bytes.
 
-Every request (except ``/health``) runs through a middleware that fires
-a best-effort bump against ``http://localhost:29230/infra/bump``.
-Active traffic = alive VM, by construction.
+Every POST / runs through a middleware that fires a best-effort bump
+against ``http://localhost:29230/``.
 
 The app is built by :func:`build_app` with injected dependencies so
 unit tests do not need a GPU, a model, or a network.
@@ -19,14 +14,12 @@ unit tests do not need a GPU, a model, or a network.
 
 from __future__ import annotations
 
-import base64
 import logging
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 
@@ -44,30 +37,11 @@ from .engine import (
 logger = logging.getLogger(__name__)
 
 
-class _RenderRequest(BaseModel):
-    """``POST /video/render`` body.
-
-    Bounds mirror :mod:`engine` constants; the engine re-validates and
-    clamps duration, but the API rejects obvious garbage early.
-    """
-
-    prompt: str = Field(..., min_length=1, max_length=4_096)
-    duration_s: float = Field(
-        ..., gt=0.0, le=MAX_DURATION_S * 2
-    )  # engine clamps; allow a soft upper so out-of-range is 400 at schema
-    width: int = Field(default=1280, ge=256, le=3840)
-    height: int = Field(default=720, ge=256, le=2160)
-    fps: int = Field(default=24, ge=1, le=60)
-    style: str | None = Field(default=None, max_length=128)
-    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
-    negative_prompt: str | None = Field(default=None, max_length=4_096)
-
-
 class _BumpOnRequestMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that bumps the infra agent on each request.
 
-    Paths can be excluded (e.g. ``/health``) so that uptime probes do
-    not accidentally keep VMs alive.
+    Paths can be excluded so that uptime probes do not accidentally
+    keep VMs alive.
     """
 
     def __init__(
@@ -75,7 +49,7 @@ class _BumpOnRequestMiddleware(BaseHTTPMiddleware):
         app: Any,
         *,
         bump_client: InfraAgentBumpClient,
-        excluded_paths: tuple[str, ...] = ("/health",),
+        excluded_paths: tuple[str, ...] = ("/",),
     ) -> None:
         super().__init__(app)
         self._bump_client = bump_client
@@ -106,8 +80,7 @@ def build_app(
             response for tracing.
         engine: The video engine. Real in production, stub in tests.
         telemetry: Peak VRAM / disk telemetry (shared with the infra
-            agent). Reused here so ``/health/vram`` returns the same
-            numbers the guardian publishes.
+            agent).
         bump_client: Injectable bump client. Defaults to a fresh
             :class:`InfraAgentBumpClient` pointing at localhost.
 
@@ -124,37 +97,36 @@ def build_app(
         bump_client=effective_bump,
     )
 
-    router_video = APIRouter(prefix="/video", tags=["video"])
-    router_health = APIRouter(prefix="/health", tags=["health"])
-
-    @app.get("/health")
-    def _health() -> dict[str, Any]:
+    @app.get("/")
+    def _health() -> Response:
         """Liveness only — does not bump."""
-        return {"ok": True, "worker_id": worker_id}
+        return Response(
+            content=f"ok worker_id={worker_id}",
+            media_type="text/plain",
+        )
 
-    @router_video.post("/render")
-    def _render(body: _RenderRequest) -> JSONResponse:
-        if body.duration_s < MIN_DURATION_S:
-            raise HTTPException(
+    @app.post("/")
+    async def _render(request: Request) -> Response:
+        body = await request.body()
+        prompt = body.decode("utf-8").strip()
+        if not prompt:
+            return Response(
+                content="error: empty prompt",
+                media_type="text/plain",
                 status_code=400,
-                detail={
-                    "reason": "duration_too_short",
-                    "min_duration_s": MIN_DURATION_S,
-                    "requested_duration_s": body.duration_s,
-                },
             )
 
         try:
             result = engine.render(
                 RenderRequest(
-                    prompt=body.prompt,
-                    duration_s=body.duration_s,
-                    width=body.width,
-                    height=body.height,
-                    fps=body.fps,
-                    style=body.style,
-                    seed=body.seed,
-                    negative_prompt=body.negative_prompt,
+                    prompt=prompt,
+                    duration_s=5.0,
+                    width=512,
+                    height=320,
+                    fps=24,
+                    style=None,
+                    seed=42,
+                    negative_prompt=None,
                 )
             )
         except VideoEngineError as exc:
@@ -163,39 +135,21 @@ def build_app(
                 worker_id,
                 exc,
             )
-            raise HTTPException(
+            return Response(
+                content=f"error: {exc}",
+                media_type="text/plain",
                 status_code=400,
-                detail={"reason": "engine_error", "message": str(exc)},
-            ) from exc
+            )
 
-        return JSONResponse(
-            content={
-                "worker_id": worker_id,
-                "engine": result.engine,
-                "duration_s": result.duration_s,
-                "width": result.width,
-                "height": result.height,
-                "fps": result.fps,
-                "mp4_base64": base64.b64encode(result.mp4_bytes).decode("ascii"),
-                "mp4_bytes": len(result.mp4_bytes),
-            }
+        return Response(
+            content=result.mp4_bytes,
+            media_type="video/mp4",
+            headers={
+                "X-Duration-S": str(result.duration_s),
+                "X-Width": str(result.width),
+                "X-Height": str(result.height),
+                "X-FPS": str(result.fps),
+            },
         )
 
-    @router_health.get("/vram")
-    def _vram() -> JSONResponse:
-        snapshot = telemetry.sample()
-        return JSONResponse(
-            content={
-                "worker_id": worker_id,
-                "vram_total_gb": snapshot.vram_total_gb,
-                "vram_used_gb": snapshot.vram_used_gb,
-                "vram_peak_gb": snapshot.vram_peak_gb,
-                "disk_total_gb": snapshot.disk_total_gb,
-                "disk_used_gb": snapshot.disk_used_gb,
-                "disk_peak_gb": snapshot.disk_peak_gb,
-            }
-        )
-
-    app.include_router(router_video)
-    app.include_router(router_health)
     return app

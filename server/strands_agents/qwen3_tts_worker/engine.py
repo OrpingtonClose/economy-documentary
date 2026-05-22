@@ -34,7 +34,7 @@ class TTSEngineError(Exception):
 
 @dataclass(frozen=True)
 class SynthesisRequest:
-    """Inputs to a single ``/tts/render`` call.
+    """Inputs to a single ``POST /`` call.
 
     Attributes:
         text: The narration string to synthesize. Must be non-empty.

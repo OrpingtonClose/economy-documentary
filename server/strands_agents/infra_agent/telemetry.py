@@ -62,7 +62,7 @@ class ResourceTelemetry:
         snapshot = telemetry.sample()
 
     Thread-safe. :func:`sample` may be called from both the HTTP handler
-    thread (``/infra/status``) and the runner's ticker.
+    thread (``POST /`` with ``status``) and the runner's ticker.
     """
 
     vram_prober: VramProber

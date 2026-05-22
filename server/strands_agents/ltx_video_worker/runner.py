@@ -112,7 +112,7 @@ def _resolve_config(args: argparse.Namespace) -> WorkerConfig:
         else _env_int("WORKER_VRAM_GB", DEFAULT_LOCAL_VRAM_GB)
     )
     bump_url = args.bump_url or os.environ.get(
-        "INFRA_AGENT_BUMP_URL", "http://127.0.0.1:29230/infra/bump"
+        "INFRA_AGENT_BUMP_URL", "http://127.0.0.1:29230/"
     )
     disk_path = args.disk_path or os.environ.get("WORKER_DISK_PATH", "/")
 

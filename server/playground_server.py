@@ -58,10 +58,13 @@ app.add_middleware(
 )
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
+@app.get("/")
+async def health() -> Response:
     """Cheap liveness probe for nginx / supervisor / smoke tests."""
-    return {"status": "ok", "service": "component-playground"}
+    return Response(
+        content="ok service=component-playground",
+        media_type="text/plain",
+    )
 
 
 # Keep /health reachable even if the playground router's transitive

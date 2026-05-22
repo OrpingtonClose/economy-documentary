@@ -727,16 +727,16 @@ def _tool_check_vm_status(vm_id: str) -> str:
                 elif isinstance(bindings, (int, str)):
                     direct_port = int(bindings)
 
-            # Try health endpoint
-            health = None
+            # Try worker endpoint
+            health_text = None
             if actual_status == "running" and public_ipaddr and direct_port:
                 try:
-                    health_url = f"http://{public_ipaddr}:{direct_port}/health"
+                    health_url = f"http://{public_ipaddr}:{direct_port}/"
                     req = Request(health_url)
                     with urlopen(req, timeout=10) as resp:
-                        health = json.loads(resp.read().decode())
+                        health_text = resp.read().decode().strip()
                 except Exception as e:
-                    health = {"error": str(e)}
+                    health_text = f"error: {e}"
 
             return json.dumps({
                 "vm_id": vm_id,
@@ -745,7 +745,7 @@ def _tool_check_vm_status(vm_id: str) -> str:
                 "direct_port": direct_port,
                 "ssh_host": result.get("ssh_host", ""),
                 "ssh_port": result.get("ssh_port", 0),
-                "health": health,
+                "health_text": health_text,
             }, indent=2)
         return json.dumps({"vm_id": vm_id, "raw": str(result)[:500]})
     except Exception as e:
@@ -757,7 +757,7 @@ _CHECK_HEALTH_MIN_INTERVAL = 10.0
 
 
 def _tool_check_worker_health(url: str, capability: str = "ltx") -> str:
-    """HTTP GET to a worker's /health endpoint. Rate-limited per URL.
+    """HTTP GET to a worker's / endpoint. Rate-limited per URL.
 
     Args:
         url: Worker URL (e.g. "http://1.2.3.4:8880").
@@ -777,16 +777,16 @@ def _tool_check_worker_health(url: str, capability: str = "ltx") -> str:
     try:
         from worker_provisioner import check_worker_health
         healthy = check_worker_health(url, capability)
-        # Also get full health detail
-        health_url = f"{url.rstrip('/')}/health"
+        # Also get raw health text
+        health_url = f"{url.rstrip('/')}/"
         try:
             req = Request(health_url)
             with urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
+                text = resp.read().decode().strip()
                 return json.dumps({
                     "url": url,
                     "healthy": healthy,
-                    "health_detail": data,
+                    "health_text": text,
                 }, indent=2)
         except Exception:
             return json.dumps({"url": url, "healthy": healthy})
@@ -861,7 +861,7 @@ def _tool_render_clip(scene_num: int, phrase_idx: int, prompt: str,
                       lora_id: str = "", worker_url: str = "") -> str:
     """Submit a video clip render job to a GPU worker.
 
-    HTTP POST to the worker's /video/render endpoint.  Accepts
+    HTTP POST to the worker's / endpoint.  Accepts
     worker_url explicitly — the agent decides which worker to use.
 
     Args:
@@ -892,7 +892,7 @@ def _tool_render_clip(scene_num: int, phrase_idx: int, prompt: str,
 
     try:
         req = Request(
-            f"{worker_url.rstrip('/')}/video/render",
+            f"{worker_url.rstrip('/')}/",
             data=payload,
             headers={"Content-Type": "application/json"},
         )
@@ -1131,7 +1131,7 @@ _VIDEO_PROVISIONER_TOOLS = [
         description=(
             "Provision a Vast.ai GPU VM from a specific offer. You pick "
             "the offer_id from search_gpu_offers results. The VM starts "
-            "gpu_worker.py which loads LTX-2.3 and serves /video/render."
+            "gpu_worker.py which loads LTX-2.3 and serves POST /."
         ),
         parameters={
             "type": "object",
@@ -1162,7 +1162,7 @@ _VIDEO_PROVISIONER_TOOLS = [
     ),
     AgentTool(
         name="check_worker_health",
-        description="HTTP GET to a worker's /health endpoint. Returns health status and bootstrap detail.",
+        description="HTTP GET to a worker's / endpoint. Returns plain text status.",
         parameters={
             "type": "object",
             "properties": {
@@ -1203,7 +1203,7 @@ _VIDEO_PROVISIONER_TOOLS = [
         name="render_clip",
         description=(
             "Submit a video clip render job to a GPU worker. HTTP POST to "
-            "/video/render. Accepts worker_url explicitly — you decide "
+            "POST /. Accepts worker_url explicitly — you decide "
             "which worker to use."
         ),
         parameters={

@@ -284,14 +284,13 @@ async def run_exists(run_id: str):
     }
 
 
-@app.get("/health")
+@app.get("/")
 async def health():
     """Health check endpoint."""
-    return {
-        "status": "ok",
-        "model": os.environ.get("STRANDS_MODEL", "unknown"),
-        "version": "0.1.0",
-    }
+    return Response(
+        content=f"ok model={os.environ.get('STRANDS_MODEL', 'unknown')} version=0.1.0",
+        media_type="text/plain",
+    )
 
 
 if __name__ == "__main__":

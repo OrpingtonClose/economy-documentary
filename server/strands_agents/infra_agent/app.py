@@ -1,16 +1,13 @@
 """FastAPI surface for the infrastructure agent.
 
-Mounted on port 29230 on every Vast.ai VM. Four endpoints:
+Plain-text protocol — two endpoints only:
 
-* ``GET /infra/status`` — returns full agent state (boot ts, remaining
-  budgets, peak telemetry, destroy reason if latched). Bumps the
-  idle timer on hit.
-* ``POST /infra/bump`` — explicit noop that resets the idle timer.
-  For debug sessions where a status pull is too noisy.
-* ``POST /infra/destroy`` — latches the manual-destroy flag. The
-  runner's next tick triggers the destruction sequence.
-* ``GET /health`` — lightweight liveness probe. Does NOT bump the
-  idle timer (otherwise k8s-style pollers keep VMs alive forever).
+* ``GET /`` — lightweight liveness probe. Returns plain text.
+  Does NOT bump the idle timer (otherwise pollers keep VMs alive forever).
+* ``POST /`` — instruction endpoint. Receives raw text:
+  - ``bump`` → resets the idle timer
+  - ``destroy [reason]`` → latches the manual-destroy flag
+  - ``status`` → returns full agent state as plain text
 
 The app is a factory (:func:`build_app`) so tests and production both
 build against injected guardian state / config / telemetry / clients.
@@ -23,9 +20,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, FastAPI
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
 
 from strands_agents.infra_agent.guardian import (
     GuardianConfig,
@@ -37,13 +33,7 @@ from strands_agents.infra_agent.telemetry import ResourceTelemetry
 logger = logging.getLogger(__name__)
 
 
-class _DestroyRequest(BaseModel):
-    """Optional body on ``POST /infra/destroy``."""
-
-    reason: str | None = Field(default=None, max_length=256)
-
-
-def _serialise_status(
+def _serialise_status_plain(
     *,
     worker_id: str,
     vm_instance_id: str | None,
@@ -51,32 +41,23 @@ def _serialise_status(
     config: GuardianConfig,
     telemetry: ResourceTelemetry,
     now: float,
-) -> dict[str, Any]:
-    """Render a ``/infra/status`` payload."""
+) -> str:
+    """Render a plain-text status line."""
     idle_remaining, lifetime_remaining = remaining_s(
         state=state, config=config, now=now
     )
     snapshot = telemetry.sample()
-    return {
-        "worker_id": worker_id,
-        "vm_instance_id": vm_instance_id,
-        "boot_ts": state.boot_ts,
-        "last_bump_ts": state.last_bump_ts,
-        "uptime_s": now - state.boot_ts,
-        "idle_budget_s": config.idle_budget_s,
-        "idle_remaining_s": idle_remaining,
-        "lifetime_budget_s": config.max_lifetime_budget_s,
-        "lifetime_remaining_s": lifetime_remaining,
-        "manual_destroy_requested": state.manual_destroy_requested,
-        "telemetry": {
-            "vram_total_gb": snapshot.vram_total_gb,
-            "vram_used_gb": snapshot.vram_used_gb,
-            "vram_peak_gb": snapshot.vram_peak_gb,
-            "disk_total_gb": snapshot.disk_total_gb,
-            "disk_used_gb": snapshot.disk_used_gb,
-            "disk_peak_gb": snapshot.disk_peak_gb,
-        },
-    }
+    parts = [
+        f"worker_id={worker_id}",
+        f"vm_id={vm_instance_id or 'none'}",
+        f"uptime_s={round(now - state.boot_ts, 1)}",
+        f"idle_remaining_s={round(idle_remaining, 1)}",
+        f"lifetime_remaining_s={round(lifetime_remaining, 1)}",
+        f"manual_destroy={state.manual_destroy_requested}",
+        f"vram={snapshot.vram_used_gb:.1f}/{snapshot.vram_total_gb:.1f}GB",
+        f"disk={snapshot.disk_used_gb:.1f}/{snapshot.disk_total_gb:.1f}GB",
+    ]
+    return " ".join(parts)
 
 
 def build_app(
@@ -106,24 +87,34 @@ def build_app(
         title=f"infra-agent[{worker_id}]",
         description="Per-VM cost guardian + control plane",
     )
-    router = APIRouter(prefix="/infra", tags=["infra"])
 
-    @app.get("/health")
-    def _health() -> dict[str, Any]:
+    @app.get("/")
+    def _health() -> Response:
         """Liveness. Does not bump — polling loops shouldn't keep VMs alive."""
-        return {"ok": True, "worker_id": worker_id}
-
-    @router.get("/status")
-    def _status() -> JSONResponse:
-        now = clock()
-        state.bump(now)
-        logger.debug(
-            "worker_id=<%s>, last_bump_ts=<%f> | status hit (bumped)",
-            worker_id,
-            state.last_bump_ts,
+        return Response(
+            content=f"ok worker_id={worker_id}",
+            media_type="text/plain",
         )
-        return JSONResponse(
-            content=_serialise_status(
+
+    @app.post("/")
+    async def _instruction(request: Request) -> Response:
+        """Receive a plain-text instruction."""
+        body = await request.body()
+        text = body.decode("utf-8").strip()
+        now = clock()
+
+        if text == "bump":
+            state.bump(now)
+            logger.debug(
+                "worker_id=<%s>, last_bump_ts=<%f> | bump",
+                worker_id,
+                state.last_bump_ts,
+            )
+            return Response(content="ok", media_type="text/plain")
+
+        if text == "status":
+            state.bump(now)
+            status_text = _serialise_status_plain(
                 worker_id=worker_id,
                 vm_instance_id=vm_instance_id,
                 state=state,
@@ -131,44 +122,22 @@ def build_app(
                 telemetry=telemetry,
                 now=now,
             )
+            return Response(content=status_text, media_type="text/plain")
+
+        if text.startswith("destroy"):
+            reason = text[len("destroy"):].strip() or "manual"
+            state.request_manual_destroy()
+            logger.warning(
+                "worker_id=<%s>, reason=<%s> | manual destroy latched",
+                worker_id,
+                reason,
+            )
+            return Response(content="ok", media_type="text/plain")
+
+        return Response(
+            content=f"unknown instruction: {text}",
+            media_type="text/plain",
+            status_code=400,
         )
 
-    @router.post("/bump")
-    def _bump() -> JSONResponse:
-        now = clock()
-        state.bump(now)
-        logger.debug(
-            "worker_id=<%s>, last_bump_ts=<%f> | explicit bump",
-            worker_id,
-            state.last_bump_ts,
-        )
-        _idle_remaining, _lifetime_remaining = remaining_s(
-            state=state, config=config, now=now
-        )
-        return JSONResponse(
-            content={
-                "ok": True,
-                "last_bump_ts": state.last_bump_ts,
-                "idle_remaining_s": _idle_remaining,
-            }
-        )
-
-    @router.post("/destroy")
-    def _destroy(body: _DestroyRequest | None = None) -> JSONResponse:
-        reason = (body.reason if body is not None else None) or "manual"
-        state.request_manual_destroy()
-        logger.warning(
-            "worker_id=<%s>, reason=<%s> | manual destroy latched",
-            worker_id,
-            reason,
-        )
-        return JSONResponse(
-            content={
-                "ok": True,
-                "manual_destroy_requested": True,
-                "reason": reason,
-            }
-        )
-
-    app.include_router(router)
     return app

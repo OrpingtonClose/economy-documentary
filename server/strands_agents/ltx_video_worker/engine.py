@@ -37,7 +37,7 @@ class VideoEngineError(Exception):
 
 @dataclass(frozen=True)
 class RenderRequest:
-    """Inputs to a single ``/video/render`` call.
+    """Inputs to a single ``POST /`` call.
 
     Attributes:
         prompt: The scene description the engine conditions on.

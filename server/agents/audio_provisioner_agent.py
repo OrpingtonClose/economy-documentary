@@ -552,16 +552,16 @@ def _tool_check_vm_status(vm_id: str) -> str:
     ssh_host = result.get("ssh_host", "")
     ssh_port = result.get("ssh_port", 0)
 
-    # Try health endpoint if running
-    health = None
+    # Try worker endpoint if running
+    health_text = None
     if actual_status == "running" and public_ipaddr and direct_port:
         try:
-            health_url = f"http://{public_ipaddr}:{direct_port}/health"
+            health_url = f"http://{public_ipaddr}:{direct_port}/"
             req = Request(health_url)
             with urlopen(req, timeout=10) as resp:
-                health = json.loads(resp.read().decode())
+                health_text = resp.read().decode().strip()
         except Exception as e:
-            health = {"error": str(e)}
+            health_text = f"error: {e}"
 
     return json.dumps({
         "status": actual_status,
@@ -570,7 +570,7 @@ def _tool_check_vm_status(vm_id: str) -> str:
         "direct_port": direct_port,
         "ssh_host": ssh_host,
         "ssh_port": ssh_port,
-        "health": health,
+        "health_text": health_text,
     })
 
 
@@ -579,9 +579,9 @@ _AUDIO_CHECK_HEALTH_MIN_INTERVAL = 10.0
 
 
 def _tool_check_worker_health(url: str, capability: str) -> str:
-    """HTTP GET to worker /health endpoint. Rate-limited per URL.
+    """HTTP GET to worker / endpoint. Rate-limited per URL.
 
-    Returns the full health JSON including bootstrap status.
+    Returns plain text status.
 
     Args:
         url: Worker URL (e.g. "http://1.2.3.4:8880").
@@ -602,20 +602,17 @@ def _tool_check_worker_health(url: str, capability: str) -> str:
     from worker_provisioner import check_worker_health
 
     try:
-        # Get full health detail
-        health_url = f"{url.rstrip('/')}/health"
+        # Get raw health text
+        health_url = f"{url.rstrip('/')}/"
         req = Request(health_url)
         with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-        is_healthy = (
-            data.get("status") == "ok"
-            and bool(data.get(f"{capability}_loaded", False))
-        )
+            text = resp.read().decode().strip()
+        is_healthy = text.startswith("ok") and f"{capability}=yes" in text
         return json.dumps({
             "healthy": is_healthy,
             "url": url,
             "capability": capability,
-            "health_detail": data,
+            "health_text": text,
         })
     except Exception as e:
         return json.dumps({
@@ -1173,7 +1170,7 @@ _AUDIO_PROVISIONER_TOOLS = [
     AgentTool(
         name="check_worker_health",
         description=(
-            "HTTP GET to a worker's /health endpoint. Returns full health "
+            "HTTP GET to a worker's / endpoint. Returns plain text "
             "detail including bootstrap status and model loading state. "
             "Use this after check_vm_status shows the VM is running."
         ),

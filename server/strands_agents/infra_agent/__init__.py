@@ -5,7 +5,7 @@ workers in slice 5, future Langfuse replicas) installs this agent as a
 long-running sidecar. It exposes a small HTTP surface on port
 ``29230`` that:
 
-* **Keeps the VM alive** on any traffic (``/infra/bump`` or any other
+* **Keeps the VM alive** on any traffic (``POST /`` or any other
   request) — idle inactivity past ``GUARDIAN_IDLE_SECONDS`` triggers
   self-destruct.
 * **Caps lifetime** regardless of traffic — ``GUARDIAN_MAX_LIFETIME_SECONDS``

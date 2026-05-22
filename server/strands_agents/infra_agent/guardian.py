@@ -71,7 +71,7 @@ class GuardianState:
         boot_ts: Unix timestamp of agent boot. Fixed for the VM's life.
         last_bump_ts: Unix timestamp of the most recent bump. Updated
             on every request hitting the agent or the wrapped worker.
-        manual_destroy_requested: True once a ``/infra/destroy`` call
+        manual_destroy_requested: True once a ``POST /`` with ``destroy``
             has been accepted. Causes :func:`should_destroy` to return
             ``"manual"`` immediately.
     """
@@ -175,7 +175,7 @@ def remaining_s(
     """Return ``(idle_remaining_s, lifetime_remaining_s)`` at ``now``.
 
     Negative means the budget is exhausted — the corresponding trigger
-    in :func:`should_destroy` would fire. Exposed for ``/infra/status``.
+    in :func:`should_destroy` would fire. Exposed for ``POST /`` with ``status``.
     """
     idle_remaining = config.idle_budget_s - (now - state.last_bump_ts)
     lifetime_remaining = config.max_lifetime_budget_s - (now - state.boot_ts)
