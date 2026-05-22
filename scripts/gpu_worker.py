@@ -143,7 +143,7 @@ class VMAgent:
         self._tasks_completed: int = 0
         self._tasks_failed: int = 0
         self._total_gen_time: float = 0.0
-        self._last_overseer_poll: float = time.time()
+        self._last_activity: float = time.time()
         self._max_idle_seconds: float = 15.0 * 60.0
 
     def run_bootstrap(self) -> bool:
@@ -275,11 +275,12 @@ class VMAgent:
                 break
             self._check_health()
 
-    def record_overseer_poll(self) -> None:
-        self._last_overseer_poll = time.time()
+    def record_activity(self) -> None:
+        """Reset deadman timer on any substantial activity."""
+        self._last_activity = time.time()
 
     def _check_health(self) -> None:
-        idle_seconds = time.time() - self._last_overseer_poll
+        idle_seconds = time.time() - self._last_activity
         if idle_seconds > self._max_idle_seconds:
             logger.critical("DEADMAN: No overseer contact for %.0f min. Shutting down.", idle_seconds / 60.0)
             try:
@@ -500,6 +501,8 @@ def _load_ltx():
 
 
 def _generate_tts(text: str, voice: str, language: str) -> tuple[np.ndarray, int]:
+    if app.state.vm_agent is not None:
+        app.state.vm_agent.record_activity()
     _load_tts()
     profile = _VOICE_PROFILES.get(voice, _VOICE_PROFILES["V1"])
     voice_instruction = profile.get(language, profile.get("en", _VOICE_PROFILES["V1"]["en"]))
@@ -707,6 +710,8 @@ def _generate_video(
     stg_scale: float = 1.0, modality_scale: float = 3.0,
     guidance_rescale: float = 0.7, stg_blocks: list[int] | None = None,
 ) -> tuple[bytes, dict]:
+    if app.state.vm_agent is not None:
+        app.state.vm_agent.record_activity()
     qa_available = bool(_QA_BACKEND)
     _load_ltx()
 
@@ -867,7 +872,7 @@ def _generate_video(
 async def get_endpoint():
     """Probe. Returns plain text status."""
     if app.state.vm_agent is not None:
-        app.state.vm_agent.record_overseer_poll()
+        app.state.vm_agent.record_activity()
 
     gpu_name = "unknown"
     vram_used = 0.0
@@ -896,7 +901,7 @@ async def post_endpoint(request: Request):
     text = body.decode("utf-8").strip()
 
     if app.state.vm_agent is not None:
-        app.state.vm_agent.record_overseer_poll()
+        app.state.vm_agent.record_activity()
 
     if _worker_mode == "tts":
         t0 = time.time()
