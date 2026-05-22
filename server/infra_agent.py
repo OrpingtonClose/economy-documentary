@@ -695,7 +695,7 @@ class InfraAgent:
         poll_count = 0
         while not self._shutdown_event.is_set():
             # Sleep for poll_interval, waking early if shutdown is requested
-            if self._shutdown_event.wait(timeout=self._poll_interval):
+            if self._shutdown_event.wait():
                 break  # shutdown was requested
 
             self._poll_all_workers()
@@ -754,7 +754,7 @@ class InfraAgent:
         logger.info("InfraAgent: shutdown requested")
         self._shutdown_event.set()
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=5.0)
+            self._thread.join()
             if self._thread.is_alive():
                 logger.warning("InfraAgent: thread did not stop within 5s")
 

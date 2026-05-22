@@ -232,7 +232,7 @@ def add_playground_agui_endpoint(app: FastAPI, path: str = "/agui") -> None:
                         break
 
                     # Wait for new events (5s timeout = heartbeat window)
-                    new_events = await stream.wait_for_after(last_seq, timeout=5.0)
+                    new_events = await stream.wait_for_after(last_seq)
 
                     if new_events:
                         for event in new_events:

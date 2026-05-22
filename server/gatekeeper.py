@@ -252,7 +252,7 @@ def _probe_video_stats(mp4_path: str) -> Optional[dict]:
                 "-show_format",
                 mp4_path,
             ],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True,
         )
         if result.returncode != 0:
             return None
@@ -323,7 +323,7 @@ def _check_dead_still(mp4_path: str, stats: dict) -> Optional[str]:
                     "-pix_fmt", "gray",
                     out,
                 ],
-                capture_output=True, timeout=15,
+                capture_output=True,
             )
             if os.path.exists(out) and os.path.getsize(out) > 0:
                 frame_files.append(out)
@@ -413,7 +413,7 @@ def _check_looping(mp4_path: str, stats: dict) -> Optional[str]:
                     "-pix_fmt", "gray",
                     out,
                 ],
-                capture_output=True, timeout=15,
+                capture_output=True,
             )
             if os.path.exists(out) and os.path.getsize(out) > 0:
                 frame_files.append(out)

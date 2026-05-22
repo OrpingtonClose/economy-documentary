@@ -1683,7 +1683,7 @@ class WorkerProvisioner:
                 )
                 spec.tunnel_proc.terminate()
                 try:
-                    spec.tunnel_proc.wait(timeout=5)
+                    spec.tunnel_proc.wait()
                 except subprocess.TimeoutExpired:
                     spec.tunnel_proc.kill()
         finally:
@@ -1773,7 +1773,7 @@ class WorkerProvisioner:
         # Poll with short waits (1s) instead of one long blocking wait.
         # This prevents the async event loop from freezing.
         while not spec.ready_event.is_set():
-            spec.ready_event.wait(timeout=1.0)
+            spec.ready_event.wait()
 
         if spec.status == "failed":
             raise RuntimeError(
@@ -1902,7 +1902,7 @@ class WorkerProvisioner:
                 _trace(spec, "ensure_available_waiting", {
                     "reason": "another_thread_provisioning",
                 })
-                _event.wait(timeout=1.0)
+                _event.wait()
                 # Loop back to check final status
                 continue
 
@@ -2278,7 +2278,7 @@ class WorkerProvisioner:
                 if spec.tunnel_proc and spec.tunnel_proc.poll() is None:
                     spec.tunnel_proc.terminate()
                     try:
-                        spec.tunnel_proc.wait(timeout=5)
+                        spec.tunnel_proc.wait()
                     except subprocess.TimeoutExpired:
                         spec.tunnel_proc.kill()
                     spec.tunnel_proc = None
@@ -2337,7 +2337,7 @@ class WorkerProvisioner:
             )
             spec.tunnel_proc.terminate()
             try:
-                spec.tunnel_proc.wait(timeout=5)
+                spec.tunnel_proc.wait()
             except subprocess.TimeoutExpired:
                 spec.tunnel_proc.kill()
 
@@ -2433,7 +2433,7 @@ class WorkerProvisioner:
                 logger.info(
                     "Waiting for %s provisioning thread to finish...", role,
                 )
-                thread.join(timeout=30)
+                thread.join()
 
         with self._lock:
             specs = list(self._specs)

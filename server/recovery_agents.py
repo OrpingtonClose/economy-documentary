@@ -856,7 +856,7 @@ def _tool_check_service_health(service: str) -> dict:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=memory.used,memory.total",
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True,
             )
             if result.returncode == 0:
                 lines = result.stdout.strip().split("\n")
@@ -877,7 +877,7 @@ def _tool_check_service_health(service: str) -> dict:
 
     try:
         req = Request(url, method="HEAD")
-        with urlopen(req, timeout=5) as resp:
+        with urlopen(req) as resp:
             return {"service": service, "healthy": True, "status_code": resp.status}
     except (URLError, Exception) as e:
         return {"service": service, "healthy": False, "reason": str(e)[:200]}

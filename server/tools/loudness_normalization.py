@@ -108,7 +108,7 @@ class LoudnessResult:
 # ---------------------------------------------------------------------------
 
 def _run_ffmpeg(cmd: list, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, capture_output=True, text=True)
 
 
 def _parse_loudnorm_json(stderr: str) -> Optional[LoudnessStats]:
@@ -164,7 +164,7 @@ def measure_loudness(
         f"loudnorm=I={target_lufs}:TP={true_peak_db}:LRA={lra}:print_format=json",
         "-f", "null", "-",
     ]
-    result = _run_ffmpeg(cmd, timeout=timeout)
+    result = _run_ffmpeg(cmd)
     if result.returncode != 0:
         raise LoudnessMeasurementFailed(
             f"ffmpeg loudnorm measurement failed rc={result.returncode}: "
@@ -225,7 +225,7 @@ def _two_pass_loudnorm(
         cmd += ["-b:a", audio_bitrate]
     cmd.append(output_path)
 
-    result = _run_ffmpeg(cmd, timeout=timeout)
+    result = _run_ffmpeg(cmd)
     if result.returncode != 0:
         raise LoudnessMeasurementFailed(
             f"loudnorm pass 2 failed rc={result.returncode}: "

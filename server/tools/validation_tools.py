@@ -281,7 +281,7 @@ def validate_media_files(
                     "-of", "json",
                     path,
                 ],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True,
             )
             if probe.returncode == 0:
                 info = json.loads(probe.stdout)

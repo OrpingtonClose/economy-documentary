@@ -255,7 +255,7 @@ def render_card(
     timeout = max(60, int(spec.duration_sec * 30) + 60)
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd, capture_output=True, text=True,
         )
     except subprocess.TimeoutExpired as exc:
         raise TitleCardRenderError(

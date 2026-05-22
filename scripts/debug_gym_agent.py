@@ -100,7 +100,7 @@ class ToolExecutor:
         try:
             result = subprocess.run(
                 ["grep", "-rn", pattern, target],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True,
             )
             lines = result.stdout.strip().split("\n")[:20]
             return "\n".join(lines) if lines else "No matches"
@@ -111,7 +111,7 @@ class ToolExecutor:
         """Run a shell command."""
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=30,
+                cmd, shell=True, capture_output=True, text=True,
             )
             out = result.stdout[-2000:] if result.stdout else ""
             err = result.stderr[-500:] if result.stderr else ""
@@ -168,7 +168,7 @@ class ToolExecutor:
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", package],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True0,
             )
             if result.returncode == 0:
                 return json.dumps({"status": "installed", "package": package})
@@ -588,7 +588,7 @@ Action: <tool_name>(arg1=val1, arg2=val2)
             result = subprocess.run(
                 ["curl", "-sL", "-H", f"Authorization: Bearer {key}",
                  "https://console.vast.ai/api/v0/user/"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True,
             )
             data = json.loads(result.stdout)
             credit = float(data.get("credit", 0))

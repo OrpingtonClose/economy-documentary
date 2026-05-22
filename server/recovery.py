@@ -578,7 +578,7 @@ class EnvironmentalAssessor:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=memory.used,memory.total,name",
                  "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, text=True,
             )
             if result.returncode == 0:
                 lines = result.stdout.strip().split("\n")
@@ -681,7 +681,7 @@ class EnvironmentalAssessor:
         for name, url in endpoints.items():
             try:
                 req = Request(url, method="HEAD")
-                with urlopen(req, timeout=5):
+                with urlopen(req):
                     results[name] = {"reachable": True}
             except Exception as e:
                 results[name] = {"reachable": False, "error": str(e)[:100]}

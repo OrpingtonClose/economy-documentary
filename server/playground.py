@@ -1458,7 +1458,7 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
             if await request.is_disconnected():
                 return
             tail = await stream.wait_for_after(
-                last_seq, timeout=_EVENT_STREAM_HEARTBEAT_SECONDS
+                last_seq
             )
             if tail:
                 for event in tail:
