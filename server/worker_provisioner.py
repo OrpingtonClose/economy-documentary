@@ -374,7 +374,7 @@ _CREDIT_RESERVE = 0.10  # minimal reserve — balance is $1.13, need ~$0.70 for 
 
 # Estimated maximum pipeline duration in hours.  Used to convert credits
 # into a safe per-worker $/hr ceiling.
-_ESTIMATED_RUN_HOURS = 1.0  # 1 hour is plenty for a short documentary (1-3 scenes)
+_ESTIMATED_RUN_HOURS = 1.0  # Base estimate; agent scales by scene count
 
 # Per-worker price ceilings by GPU tier.
 # TTS GPUs (8-24 GB) cost $0.05-0.30/hr on Vast.ai.
@@ -995,6 +995,15 @@ def wait_for_vm_running(spec: WorkerSpec) -> dict:
         except Exception as exc:
             logger.warning("  Error checking VM status: %s", exc)
 
+        # Agent decides when to intervene — no hardcoded timeout
+        # But notify maintainer if VM stuck for suspiciously long
+        if elapsed > 600 and elapsed % 300 < 15:
+            from maintainer import notify_maintainer
+            notify_maintainer(
+                operation="wait_for_vm_running",
+                error=f"VM {spec.vm_id} still not running after {elapsed}s",
+                context={"role": spec.role, "vm_id": spec.vm_id, "status": status},
+            )
         time.sleep(15)
 
 
@@ -1372,6 +1381,15 @@ def wait_for_worker_healthy(
                 f", {detail}" if detail else "",
             )
 
+        # Agent decides when to intervene — no hardcoded timeout
+        # But notify maintainer if worker stuck bootstrapping
+        if elapsed > 900 and elapsed % 300 < poll_interval:
+            from maintainer import notify_maintainer
+            notify_maintainer(
+                operation="wait_for_worker_healthy",
+                error=f"Worker {url} still not healthy after {elapsed}s",
+                context={"role": spec.role, "url": url, "health_text": health_text},
+            )
         time.sleep(poll_interval)
 
 
