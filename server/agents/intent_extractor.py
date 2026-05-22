@@ -556,28 +556,6 @@ def read_intent_backup() -> Optional["BriefIntent"]:
         return None
 
 
-def get_brief_intent(state: Mapping[str, Any]) -> Optional[BriefIntent]:
-    """Read the cached :class:`BriefIntent` from session state, or ``None``.
-
-    Downstream consumers (constraint gate, per-stage verifier, chat
-    narrator, ``/agui/restated_brief``) use this helper rather than
-    touching the blackboard key directly.
-    """
-    raw = state.get(BRIEF_INTENT_KEY)
-    if raw is None:
-        return None
-    try:
-        if isinstance(raw, BriefIntent):
-            return raw
-        if isinstance(raw, Mapping):
-            return BriefIntent.model_validate(dict(raw))
-        return BriefIntent.from_json(str(raw))
-    except Exception as exc:
-        logger.warning("intent_extractor: could not decode %s: %s",
-                       BRIEF_INTENT_KEY, exc)
-        return None
-
-
 __all__ = [
     "BRIEF_INTENT_BACKUP_FILENAME",
     "BRIEF_INTENT_KEY",

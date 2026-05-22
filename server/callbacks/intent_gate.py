@@ -62,10 +62,6 @@ MAX_GATE_ATTEMPTS: int = 3
 INTENT_GATE_PASSED: threading.Event = threading.Event()
 
 
-class IntentGateHalt(RuntimeError):
-    """Raised internally when the gate has exhausted its retries."""
-
-
 # ---------------------------------------------------------------------------
 # Verdict data class
 # ---------------------------------------------------------------------------

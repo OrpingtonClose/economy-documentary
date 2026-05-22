@@ -352,13 +352,6 @@ class Narrator:
         self._subscribers: list[collections.deque] = []
         self._lock = threading.Lock()
 
-    def unsubscribe(self, queue: collections.deque) -> None:
-        with self._lock:
-            try:
-                self._subscribers.remove(queue)
-            except ValueError:
-                pass
-
     def emit(
         self,
         kind: str,
