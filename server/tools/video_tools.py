@@ -8,10 +8,8 @@ No JSON, no schemas, no structured anything.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import os
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 

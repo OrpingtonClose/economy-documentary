@@ -32,7 +32,7 @@ from typing import Any
 
 import opentimelineio as otio
 
-from strands_agents.graph_pipeline import build_documentary_graph, RecoveryShell, STAGE_ORDER
+from strands_agents.graph_pipeline import build_documentary_graph, STAGE_ORDER
 from strands_agents.stages.preflight import run_preflight, PreflightError
 from strands_agents.hooks.pipeline_hooks import (
     BudgetHook,

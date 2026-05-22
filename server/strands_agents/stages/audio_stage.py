@@ -6,7 +6,7 @@ import os
 import subprocess
 from typing import Any
 
-from strands import Agent, ToolContext, tool
+from strands import Agent, tool
 from strands_agents.otio_manager import OTIOStateManager
 
 logger = logging.getLogger(__name__)
