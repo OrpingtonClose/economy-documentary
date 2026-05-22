@@ -138,30 +138,6 @@ _PhraseExtractor = Callable[
 _EXTRACTOR: _PhraseExtractor | None = None
 
 
-def set_content_analyst_helpers(
-    *,
-    phrase_extractor: _PhraseExtractor | None = None,
-) -> None:
-    """Register a test-time or production phrase extractor.
-
-    When no helper is registered :func:`extract_phrases` raises
-    :class:`ContentAnalystHelperNotConfigured` so missing wiring is
-    surfaced loudly rather than silently returning an empty list.
-
-    Args:
-        phrase_extractor: Callable implementing
-            ``(scene, whisperx_segment, max_phrases) -> list[phrase]``.
-            Each returned phrase should contain ``text``,
-            ``phrase_type``, ``narrative_weight``, ``visual_intent``,
-            ``word_span``, ``time_span``. ``phrase_id`` is computed
-            deterministically by :func:`extract_phrases` itself so the
-            helper does not need to produce one. Pass ``None`` to clear
-            the registry.
-    """
-    global _EXTRACTOR
-    _EXTRACTOR = phrase_extractor
-
-
 class ContentAnalystHelperNotConfigured(RuntimeError):
     """Raised when an LLM-backed tool is invoked with no helper wired in."""
 

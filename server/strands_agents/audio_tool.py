@@ -140,29 +140,6 @@ class AudioHelpersNotConfigured(RuntimeError):
     """Raised when ``render_audio`` is invoked before helpers are registered."""
 
 
-def set_audio_helpers(
-    *,
-    tts_generate: TtsGenerate,
-    whisperx_align: WhisperxAlign,
-    loudness_normalize: LoudnessNormalize,
-    b2_upload: B2Upload,
-) -> None:
-    """Register the four production helpers used by :func:`render_audio`."""
-    global _HELPERS
-    _HELPERS = _AudioHelpers(
-        tts_generate=tts_generate,
-        whisperx_align=whisperx_align,
-        loudness_normalize=loudness_normalize,
-        b2_upload=b2_upload,
-    )
-
-
-def clear_audio_helpers() -> None:
-    """Clear the helper registry. Intended for test isolation."""
-    global _HELPERS
-    _HELPERS = None
-
-
 def _get_helpers() -> _AudioHelpers:
     if _HELPERS is None:
         raise AudioHelpersNotConfigured(

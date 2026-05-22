@@ -113,34 +113,6 @@ class ProductionHelpersNotConfigured(RuntimeError):
     """Raised when production tools are invoked before helpers are registered."""
 
 
-def set_production_helpers(
-    *,
-    pool: AsyncTaskPool,
-    dispatch: VideoWorkerDispatch,
-    health_check: WorkerHealthCheck,
-) -> None:
-    """Register the pool + worker helpers used by the production SubAgent.
-
-    Args:
-        pool: AsyncTaskPool the SubAgent launches work against. The
-            orchestrator owns its lifetime.
-        dispatch: Callable invoked on a worker thread to render one
-            scene's video. Must be thread-safe.
-        health_check: Callable returning worker-pool health. Invoked
-            from the orchestrator thread only.
-    """
-    global _HELPERS
-    _HELPERS = _ProductionHelpers(
-        pool=pool, dispatch=dispatch, health_check=health_check
-    )
-
-
-def clear_production_helpers() -> None:
-    """Clear the helper registry. Intended for test isolation."""
-    global _HELPERS
-    _HELPERS = None
-
-
 def _get_helpers() -> _ProductionHelpers:
     if _HELPERS is None:
         raise ProductionHelpersNotConfigured(

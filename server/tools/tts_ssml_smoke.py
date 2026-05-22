@@ -50,36 +50,6 @@ TTSCallable = Callable[[str, str, bool], str]
 WhisperXCallable = Callable[[str], str]
 
 
-@dataclass
-class CacheEntry:
-    """Per-voice SSML support record, cached in pipeline_state."""
-
-    voice_id: str
-    tts_engine_version: str
-    ssml_supported: bool
-    transcript: str
-    tested_at: float = 0.0
-    # How the smoke test prompted for the initialism.  "PAG" pronounced
-    # letter-by-letter looks like "p a g" in WhisperX output.
-    probe_text: str = "PAG"
-    expected_letters: str = "p a g"
-
-    def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "CacheEntry":
-        return cls(
-            voice_id=str(raw.get("voice_id", "")),
-            tts_engine_version=str(raw.get("tts_engine_version", "")),
-            ssml_supported=bool(raw.get("ssml_supported", False)),
-            transcript=str(raw.get("transcript", "")),
-            tested_at=float(raw.get("tested_at", 0.0)),
-            probe_text=str(raw.get("probe_text", "PAG")),
-            expected_letters=str(raw.get("expected_letters", "p a g")),
-        )
-
-
 # Pipeline_state key for the cache dict. Keyed by "<voice_id>::<engine_ver>".
 _CACHE_KEY = "tts_ssml_support_cache"
 

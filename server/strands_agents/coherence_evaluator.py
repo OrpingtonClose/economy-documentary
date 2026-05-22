@@ -141,30 +141,6 @@ _SoftScorer = Callable[
 _SCORER: _SoftScorer | None = None
 
 
-def set_coherence_evaluator_helpers(
-    *,
-    soft_scorer: _SoftScorer | None = None,
-) -> None:
-    """Register a test-time or production soft scorer.
-
-    The scorer receives ``(visual_concepts, style_lock, content_analysis)``
-    and MUST return a dict with at least ``rating`` (one of
-    :data:`CoherenceRating`) plus optional ``issues`` (``list[str]``)
-    and ``suggestions`` (``list[str]``). The caller layers deterministic
-    structural checks on top and takes the worst outcome.
-
-    Args:
-        soft_scorer: Callable that returns the judge's rating. Pass
-            ``None`` to clear the registry.
-    """
-    global _SCORER
-    _SCORER = soft_scorer
-    logger.debug(
-        "soft_scorer=<%s> | coherence evaluator helpers updated",
-        "set" if soft_scorer is not None else "cleared",
-    )
-
-
 def _require_scorer() -> _SoftScorer:
     if _SCORER is None:
         raise CoherenceEvaluatorHelperNotConfigured(

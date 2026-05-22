@@ -93,25 +93,6 @@ _TextRewriter = Callable[[str, Literal["shorten", "lengthen"], float], str]
 _TEXT_REWRITER: _TextRewriter | None = None
 
 
-def set_refiner_helpers(*, text_rewriter: _TextRewriter | None = None) -> None:
-    """Register a test-time or production text rewriter.
-
-    When no helper is registered :func:`tweak_voice_text` raises
-    :class:`ScenarioRefinerHelperNotConfigured` so missing wiring is
-    surfaced loudly rather than silently passing text through.
-
-    Args:
-        text_rewriter: Callable implementing
-            ``(text, direction, delta_sec) -> rewritten_text`` where
-            ``direction`` is ``"shorten"`` or ``"lengthen"`` and
-            ``delta_sec`` is roughly how many seconds of speech to
-            add or remove (assume ~2.5 words / second). Pass ``None``
-            to clear the registry.
-    """
-    global _TEXT_REWRITER
-    _TEXT_REWRITER = text_rewriter
-
-
 class ScenarioRefinerHelperNotConfigured(RuntimeError):
     """Raised when an LLM-backed tool is invoked with no helper wired in."""
 
