@@ -351,17 +351,17 @@ def check_vm_status(vm_id: str) -> str:
     ssh_host = result.get("ssh_host", "")
     ssh_port = result.get("ssh_port", 0)
 
-    # Try health endpoint if running
-    health = None
+    # Try worker endpoint if running
+    health_text = None
     if actual_status == "running" and public_ipaddr and direct_port:
         try:
             from urllib.request import Request, urlopen
-            health_url = f"http://{public_ipaddr}:{direct_port}/health"
+            health_url = f"http://{public_ipaddr}:{direct_port}/"
             req = Request(health_url)
             with urlopen(req, timeout=10) as resp:
-                health = json.loads(resp.read().decode())
+                health_text = resp.read().decode().strip()
         except Exception as e:
-            health = {"error": str(e)}
+            health_text = f"error: {e}"
 
     return json.dumps({
         "status": actual_status,
@@ -370,7 +370,7 @@ def check_vm_status(vm_id: str) -> str:
         "direct_port": direct_port,
         "ssh_host": ssh_host,
         "ssh_port": ssh_port,
-        "health": health,
+        "health_text": health_text,
     })
 
 

@@ -372,7 +372,7 @@ def _check_video_worker() -> CheckResult:
             message="No GPU video worker running yet (will be provisioned)",
             remedy="Provisioning starts when production stage runs",
         )
-    result = _check_http_reachable(f"{url.rstrip('/')}/health", "GPU video worker")
+    result = _check_http_reachable(f"{url.rstrip('/')}/", "GPU video worker")
     result.category = "workers"
     return result
 
@@ -386,7 +386,7 @@ def _check_tts_worker() -> CheckResult:
             message="No TTS worker running yet (will be provisioned)",
             remedy="Provisioning starts when audio stage runs",
         )
-    result = _check_http_reachable(f"{url.rstrip('/')}/health", "TTS worker")
+    result = _check_http_reachable(f"{url.rstrip('/')}/", "TTS worker")
     result.category = "workers"
     return result
 

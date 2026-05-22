@@ -99,10 +99,8 @@ def normalize_worker_mode(mode: str) -> str:
     return m
 
 
-# Control-plane health-endpoint port on the GPU VM.  gpu_worker.py serves
-# the main worker API on spec.remote_port (8880 by default); the
-# bootstrap/health controller listens on 5000 so we can probe it while
-# the main worker is still loading models (issue #64).
+# Control-plane port on the GPU VM.  gpu_worker.py serves
+# the main worker API on spec.remote_port (8880 by default).
 _HEALTH_CONTROL_PORT = 5000
 
 
@@ -134,7 +132,7 @@ class WorkerSpec:
     error: str = ""  # error message if status == "failed"
     ready_event: threading.Event = field(default_factory=threading.Event)
     # Bootstrap error detail — populated by wait_for_worker_healthy when the
-    # worker's /health endpoint reports a bootstrap failure.  This gives the
+    # worker's GET / response reports a bootstrap failure.  This gives the
     # provisioner (and recovery middleware) structured information about WHY
     # the worker failed, not just that it did.
     bootstrap_error: str = ""
@@ -340,15 +338,17 @@ VIDEO_SPEC = WorkerSpec(
 def check_worker_health(url: str, capability: str) -> bool:
     """Check if a worker at the given URL is healthy and has the capability loaded.
 
-    Returns True if healthy, False otherwise.
+    Parses plain text response like:
+      "ok NVIDIA A100 tts=yes ltx=no vram=0.0/40.0GB mode=ltx"
+    Returns True if status is "ok" and {capability}=yes, False otherwise.
     """
-    detail = _get_worker_health_detail(url, timeout=10)
-    if detail is None:
+    text = _get_worker_health_text(url, timeout=10)
+    if text is None:
         return False
-    if detail.get("status") != "ok":
+    parts = text.split()
+    if not parts or parts[0] != "ok":
         return False
-    loaded_key = f"{capability}_loaded"
-    return bool(detail.get(loaded_key, False))
+    return f"{capability}=yes" in text
 
 
 def check_worker_reachable(url: str) -> bool:
@@ -793,7 +793,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
             break
 
     # Architecture: the worker starts FIRST (FastAPI immediately reachable),
-    # then runs bootstrap + model loading in a background thread.  The /health
+    # then runs bootstrap + model loading in a background thread.  GET /
     # endpoint reports structured bootstrap status so the provisioner can see
     # exactly what's happening and escalate failures immediately — no more
     # blind timeouts.  The onstart installs minimal system deps + pip deps
@@ -840,7 +840,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         "print(f'Registered {len(nv_dirs)} nvidia lib dirs')\" && "
         "ldconfig && "
         # Start the worker — it handles bootstrap internally and reports
-        # structured status via /health endpoint.
+        # plain-text status via GET /.
         "python3 /workspace/economy-documentary/scripts/gpu_worker.py "
         f"--mode {shlex.quote(spec.worker_mode)} --port {spec.remote_port}"
     )
@@ -856,7 +856,7 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
     #
     # Port mapping (issue #64):
     # - spec.remote_port (8880): main worker API (TTS/LTX inference)
-    # - _HEALTH_CONTROL_PORT (5000): bootstrap/health control plane that
+    # - _HEALTH_CONTROL_PORT (5000): bootstrap control plane that
     #   reports bootstrap phase (pulling image / loading model / ready)
     #   while the main worker is still loading.  Previously only 8880 was
     #   exposed, so the provisioner was blind until model load finished.
@@ -1147,12 +1147,12 @@ def establish_direct_connection(
         # the FastAPI server).
         for attempt in range(1, max_retries + 1):
             try:
-                req = Request(f"{direct_url}/health")
+                req = Request(f"{direct_url}/")
                 with urlopen(req, timeout=5) as resp:
-                    data = json.loads(resp.read().decode())
+                    text = resp.read().decode().strip()
                     logger.info(
                         "Direct connection to %s ESTABLISHED (attempt %d): %s",
-                        spec.role, attempt, data.get("status", "unknown"),
+                        spec.role, attempt, text.split()[0] if text else "unknown",
                     )
                     spec.worker_url = direct_url
                     return direct_url
@@ -1186,7 +1186,7 @@ def establish_direct_connection(
             try:
                 result = _vast_cmd([
                     "execute", spec.vm_id,
-                    f"curl -s http://localhost:{spec.remote_port}/health",
+                    f"curl -s http://localhost:{spec.remote_port}/",
                 ])
                 if isinstance(result, str) and "ok" in result.lower():
                     logger.info(
@@ -1252,43 +1252,18 @@ def _log_vm_diagnostics(spec: WorkerSpec) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
-    """Fetch full health text from a worker and parse into a dict.
+def _get_worker_health_text(url: str, timeout: int = 10) -> str | None:
+    """Fetch raw health text from a worker.
 
     The worker returns plain text like:
       "ok NVIDIA A100 tts=yes ltx=no vram=0.0/40.0GB mode=ltx"
-    Returns the parsed dict, or None if unreachable.
+    Returns the raw text, or None if unreachable.
     """
     health_url = f"{url.rstrip('/')}/"
     try:
         req = Request(health_url)
         with urlopen(req, timeout=timeout) as resp:
-            text = resp.read().decode().strip()
-        parts = text.split()
-        data: dict = {"status": parts[0] if parts else "unknown"}
-        for part in parts[1:]:
-            if "=" in part:
-                key, val = part.split("=", 1)
-                if key in ("tts", "ltx"):
-                    data[f"{key}_loaded"] = val == "yes"
-                elif key == "vram":
-                    data["vram_used_gb"] = 0.0
-                    data["vram_total_gb"] = 0.0
-                    try:
-                        used, total = val.replace("GB", "").split("/")
-                        data["vram_used_gb"] = float(used)
-                        data["vram_total_gb"] = float(total)
-                    except Exception:
-                        pass
-                elif key == "mode":
-                    data["worker_mode"] = val
-                else:
-                    data[key] = val
-            else:
-                data["gpu"] = part
-        # Add bootstrap stub so wait_for_worker_healthy doesn't crash
-        data["bootstrap"] = {"phase": "ready" if data.get("status") == "ok" else "error"}
-        return data
+            return resp.read().decode().strip()
     except Exception:
         return None
 
@@ -1340,39 +1315,26 @@ def wait_for_worker_healthy(
             except Exception as exc:
                 logger.error("Failed to restart tunnel: %s", exc)
 
-        # Fetch full health detail (includes bootstrap status)
-        health_data = _get_worker_health_detail(url)
+        # Fetch raw health text from worker
+        health_text = _get_worker_health_text(url)
 
-        if health_data is not None:
+        if health_text is not None:
+            parts = health_text.split()
+            status = parts[0] if parts else "unknown"
+
             # --- Bootstrap error escalation ---
-            bootstrap = health_data.get("bootstrap") or {}
-            bootstrap_phase = bootstrap.get("phase", "")
-            bootstrap_detail = bootstrap.get("detail", "")
-            bootstrap_error = bootstrap.get("error", "")
-            bootstrap_category = bootstrap.get("error_category", "")
-
-            if bootstrap_phase == "error":
+            if status == "error":
                 logger.error(
-                    "BOOTSTRAP FAILED on %s worker (category=%s): %s",
-                    spec.role, bootstrap_category, bootstrap_error,
+                    "BOOTSTRAP FAILED on %s worker: %s",
+                    spec.role, health_text,
                 )
-                spec.bootstrap_error = bootstrap_error
-                spec.bootstrap_error_category = bootstrap_category
+                spec.bootstrap_error = health_text
+                spec.bootstrap_error_category = "runtime"
                 return False
 
-            # Log phase transitions
-            if bootstrap_phase and bootstrap_phase != last_bootstrap_phase:
-                logger.info(
-                    "  %s worker bootstrap phase: %s — %s (%ds)",
-                    spec.role, bootstrap_phase, bootstrap_detail, elapsed,
-                )
-                last_bootstrap_phase = bootstrap_phase
-                last_bootstrap_detail = bootstrap_detail
-
             # Check if model is loaded (healthy)
-            if health_data.get("status") == "ok":
-                loaded_key = f"{spec.capability}_loaded"
-                if health_data.get(loaded_key, False):
+            if status == "ok":
+                if f"{spec.capability}=yes" in health_text:
                     logger.info(
                         "%s worker at %s is HEALTHY after %ds",
                         spec.role, url, elapsed,
@@ -1380,8 +1342,8 @@ def wait_for_worker_healthy(
                     return True
                 if last_status != "reachable_not_loaded":
                     logger.info(
-                        "  %s worker reachable but model not loaded yet (%ds)",
-                        spec.role, elapsed,
+                        "  %s worker reachable but model not loaded yet (%ds): %s",
+                        spec.role, elapsed, health_text,
                     )
                     last_status = "reachable_not_loaded"
         else:
@@ -1686,17 +1648,17 @@ class WorkerProvisioner:
                     else:
                         logger.warning(
                             "VMAgent /status for %s: phase=%s, "
-                            "model_loaded=%s — waiting for /health fallback",
+                            "model_loaded=%s — waiting for GET / fallback",
                             spec.role, phase, model_loaded
                         )
             except Exception as status_exc:
                 logger.debug(
                     "VMAgent /status for %s unavailable (%s) — "
-                    "falling back to /health",
+                    "falling back to GET /",
                     spec.role, status_exc,
                 )
 
-            # Fallback to /health if /status wasn't available or not ready
+            # Fallback to GET / if /status wasn't available or not ready
             if not _status_ok:
                 if not check_worker_health(_url, spec.capability):
                     raise RuntimeError(
