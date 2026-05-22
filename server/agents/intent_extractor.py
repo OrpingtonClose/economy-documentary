@@ -180,18 +180,6 @@ LLMCallable = Callable[[str, str, str], str]
 _llm_client_factory: Optional[Callable[[], LLMCallable]] = None
 
 
-def set_llm_client_factory(
-    factory: Optional[Callable[[], LLMCallable]],
-) -> None:
-    """Install a zero-arg factory that returns an :data:`LLMCallable`.
-
-    Tests inject deterministic stubs here; production leaves the factory
-    unset and falls back to google-genai.
-    """
-    global _llm_client_factory
-    _llm_client_factory = factory
-
-
 def _default_llm_call(model: str, system: str, prompt: str) -> str:
     from google import genai  # optional dep
     from google.genai import types as genai_types
@@ -542,70 +530,6 @@ def extract_intent(brief: str, *, use_llm: bool = True) -> BriefIntent:
     return _heuristic_intent(brief)
 
 
-def run_intent_extractor(
-    state: MutableMapping[str, Any],
-    *,
-    brief_text: Optional[str] = None,
-    use_llm: bool = True,
-) -> BriefIntent:
-    """Extract intent and write it into ADK session state.
-
-    The canonical entry point from :mod:`agents.pipeline`.  Behaviour:
-
-    1. If ``state[BRIEF_INTENT_KEY]`` already parses to a valid
-       :class:`BriefIntent` we return it unchanged (idempotent for
-       B2-restore re-entry).
-    2. Otherwise we extract from ``brief_text`` or
-       ``state['original_brief']`` or ``state['topic']`` and write the
-       JSON form back under :data:`BRIEF_INTENT_KEY`.
-
-    Raises
-    ------
-    IntentExtractionError
-        When no brief text is available in any of the accepted sources.
-    """
-    existing = state.get(BRIEF_INTENT_KEY)
-    if existing:
-        try:
-            if isinstance(existing, BriefIntent):
-                return existing
-            if isinstance(existing, Mapping):
-                return BriefIntent.model_validate(dict(existing))
-            return BriefIntent.from_json(str(existing))
-        except Exception as exc:
-            logger.warning(
-                "intent_extractor: existing state[%s] is invalid, "
-                "re-extracting: %s",
-                BRIEF_INTENT_KEY, exc,
-            )
-
-    source = brief_text
-    if not source:
-        from callbacks.run_start_seed import ORIGINAL_BRIEF_KEY
-
-        raw = state.get(ORIGINAL_BRIEF_KEY) or state.get("topic") or ""
-        source = str(raw).strip()
-    if not source:
-        raise IntentExtractionError(
-            "intent_extractor: no brief_text, state['original_brief'], "
-            "or state['topic'] available"
-        )
-
-    intent = extract_intent(source, use_llm=use_llm)
-    state[BRIEF_INTENT_KEY] = intent.to_json()
-    _write_intent_backup(intent)
-    logger.info(
-        "intent_extractor: R0 extracted — duration_sec=%.1f ± %.1f, "
-        "audience=%s, required_topics=%d, forbidden_topics=%d",
-        intent.duration_sec,
-        intent.tolerance_sec,
-        intent.audience,
-        len(intent.required_topics),
-        len(intent.forbidden_topics),
-    )
-    return intent
-
-
 #: Backup file path for the restated brief (R0).  Persisted to disk so
 #: the ``/agui/restated_brief`` endpoint (INTENT-03) can serve R0 across
 #: process boundaries and reload after B2 restore.
@@ -684,6 +608,4 @@ __all__ = [
     "extract_intent",
     "get_brief_intent",
     "read_intent_backup",
-    "run_intent_extractor",
-    "set_llm_client_factory",
-]
+    ]

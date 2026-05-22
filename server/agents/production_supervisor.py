@@ -156,20 +156,6 @@ class _SupervisorCounters:
 _counters = _SupervisorCounters()
 
 
-def get_run_counters() -> dict[str, int]:
-    """Return a snapshot of supervisor counters (safe to call from anywhere)."""
-    return _counters.snapshot()
-
-
-def reset_run_counters() -> None:
-    """Reset supervisor counters at the start of a new run.
-
-    Called from the pipeline entry point (``run_pipeline``) and by tests.
-    """
-    _counters.reset()
-    logger.debug("Supervisor counters reset")
-
-
 def _emit_telemetry() -> None:
     """Emit supervisor counters via the active PipelineCollector, if any.
 
@@ -381,18 +367,6 @@ def _default_llm_call(model: str, system: str, prompt: str) -> str:
 _llm_client_factory: Any = _default_llm_call
 
 
-def set_llm_client_factory(fn: Any) -> Any:
-    """Override the LLM backend used by ``supervisor_escalate`` (for tests).
-
-    ``fn`` must accept ``(model: str, system: str, prompt: str) -> str``.
-    Returns the previous factory so tests can restore it.
-    """
-    global _llm_client_factory
-    prev = _llm_client_factory
-    _llm_client_factory = fn
-    return prev
-
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -485,33 +459,10 @@ def supervisor_escalate(
 # End-of-run invariant check
 # ---------------------------------------------------------------------------
 
-def assert_supervisor_invariant_at_end_of_run() -> None:
-    """Hard CI assertion -- call at the end of every pipeline run.
-
-    Fails loudly if any escalation happened without at least one LLM call.
-    This is the #102 acceptance criterion.
-
-    Raises:
-        EscalationInvariantViolation: invariant violated.
-    """
-    snap = _counters.snapshot()
-    assert_escalation_invariant(
-        escalations_per_run=snap["escalations_per_run"],
-        llm_calls_per_run=snap["llm_calls_per_run"],
-    )
-    logger.info(
-        "Supervisor invariant OK: escalations=%d llm_calls=%d",
-        snap["escalations_per_run"], snap["llm_calls_per_run"],
-    )
-
 
 __all__ = [
     "production_supervisor",
     "supervisor_escalate",
-    "get_run_counters",
-    "reset_run_counters",
-    "assert_supervisor_invariant_at_end_of_run",
-    "set_llm_client_factory",
     "EscalationAction",
     "EscalationActionError",
     "EscalationContext",

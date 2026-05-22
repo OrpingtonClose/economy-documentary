@@ -106,21 +106,6 @@ LLMCallable = Callable[[str, str, str], str]
 _llm_client_factory: Optional[Callable[[], LLMCallable]] = None
 
 
-def set_llm_client_factory(
-    factory: Optional[Callable[[], LLMCallable]],
-) -> None:
-    """Inject a fake LLM client factory for tests.
-
-    The factory is zero-arg and must return a callable with signature
-    ``(model, system, prompt) -> str``.  Pass ``None`` to restore the
-    default google-genai backend.  Mirrors the pattern used by
-    :mod:`server.agents.diagnostic_classifier` so both modules are testable
-    without provider keys.
-    """
-    global _llm_client_factory
-    _llm_client_factory = factory
-
-
 _INTERPRETER_MODEL = os.environ.get(
     "PREFERENCE_INTERPRETER_MODEL",
     os.environ.get("ADK_SYNTHESIS_MODEL", "gemini-2.0-flash"),
@@ -988,7 +973,6 @@ __all__ = [
     "PREFERENCE_INTERPRETER_SUMMARY_KEY",
     "InterpreterError",
     "LLMCallable",
-    "set_llm_client_factory",
     "interpret_directive",
     "preference_interpreter_agent",
 ]
