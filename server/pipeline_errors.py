@@ -17,15 +17,7 @@ class RetryableError(PipelineError):
         super().__init__(message, stage=stage, retryable=True)
 
 
-class InfrastructureError(PipelineError):
-    pass
-
-
 class WorkerUnavailableError(RetryableError):
-    pass
-
-
-class WorkerTimeoutError(RetryableError):
     pass
 
 
@@ -33,22 +25,5 @@ class ValidationError(PipelineError):
     pass
 
 
-class GateValidationError(ValidationError):
-    pass
-
-
 class ArtifactValidationError(ValidationError):
-    pass
-
-
-class FatalError(PipelineError):
-    def __init__(self, message: str, stage: str = "") -> None:
-        super().__init__(message, stage=stage, retryable=False)
-
-
-class ConfigError(PipelineError):
-    pass
-
-
-class ProgrammingError(PipelineError):
     pass
