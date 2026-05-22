@@ -1,112 +1,47 @@
+"""Video tools — call LTX-2.3 GPU worker to generate MP4 clips.
+
+The interface to the worker is pure text over HTTP:
+  GET /  → plain text status
+  POST / → plain text prompt, returns MP4 bytes
+
+No JSON, no schemas, no structured anything.
 """
-Video generation tools -- LTX-2.3 + ffprobe wrappers.
-
-Generates video clips using LTX-2.3 on a GPU worker.
-
-Rules:
-- ARCH-F3 (#164): ``duration_sec`` is honoured EXACTLY. No trim margin,
-  no overshoot. On the worker side the GPU renders at the requested
-  duration; on the client side we verify the file's measured length is
-  within :data:`callbacks.strict_assembler.CLIP_LENGTH_TOLERANCE_SEC`
-  of the request and raise :class:`ClipLengthMismatchError` INSIDE
-  ``_call_gpu_worker`` otherwise so ``execute_with_recovery`` routes
-  through REPLACE (regenerate). The assembler never trims.
-- bf16 only, no FP8, no quantization
-- All subprocess calls use list form (no shell=True)
-"""
-
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
 import os
-import subprocess
-import threading
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
+from pipeline_errors import (
+    WorkerUnavailableError,
+    ArtifactValidationError,
+)
+from worker_provisioner import _get_next_worker_url
+
 logger = logging.getLogger(__name__)
 
-_OUTPUT_BASE = os.environ.get(
-    "VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video"
-)
 
-# ARCH-F3 (#164): ``_TRIM_MARGIN`` was removed. Video generation now
-# honours the exact target ``duration_sec`` requested by the timeline;
-# no 15% overshoot, no trim pass.  Length mismatches at probe time are
-# raised as ``ClipLengthMismatchError`` inside ``_call_gpu_worker`` so
-# the recovery ladder triggers REPLACE (regenerate) rather than a
-# silent trim.
-
-# Round-robin state for distributing work across multiple GPU workers
-_worker_lock = threading.Lock()
-_worker_index = 0
-
-
-def _get_next_worker_url() -> str:
-    """Get the next GPU worker URL using health-aware dispatch.
-
-    Lazy provisioning: if no healthy worker exists, trigger provisioning
-    and block until ready.  The provisioner's thread-safe gate dedupes
-    concurrent calls so only one VM is created.
-    """
-    global _worker_index
-
-    # 1. Try InfraAgent healthy workers (health-aware, no queue side effects)
-    try:
-        from infra_agent import WorkerRole, get_infra_agent
-        agent = get_infra_agent()
-        if agent:
-            healthy = agent.get_healthy_workers(role=WorkerRole.VIDEO)
-            if healthy:
-                with _worker_lock:
-                    url = healthy[_worker_index % len(healthy)]
-                    _worker_index += 1
-                return url
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.warning("InfraAgent worker lookup failed, falling back to provisioner: %s", e)
-
-    # 2. Lazy provisioning via provisioner
-    from worker_provisioner import get_provisioner
-    provisioner = get_provisioner()
-    spec = provisioner.ensure_available("video")
-    return spec.worker_url or f"http://localhost:{spec.local_port}"
-
-
-def _generate_solid_color_mp4(
-    output_path: str,
-    duration: float,
-    width: int = 1280,
-    height: int = 720,
-    fps: int = 24,
-    color: str = "0x336699",
-) -> bool:
-    """Generate a solid-color MP4 file using ffmpeg (for testing)."""
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f", "lavfi",
-        "-i", f"color=c={color}:s={width}x{height}:d={duration:.2f}:r={fps}",
-        "-c:v", "libx264",
-        "-pix_fmt", "yuv420p",
-        "-t", f"{duration:.2f}",
-        output_path,
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            
+def _parse_video_response(resp) -> dict:
+    """Read MP4 bytes and metadata headers from worker response."""
+    result_bytes = resp.read()
+    if not result_bytes:
+        raise ArtifactValidationError("GPU worker returned empty response", stage="video")
+    if b"ftyp" not in result_bytes[:64]:
+        raise ArtifactValidationError(
+            f"GPU worker returned non-MP4 data (first 8 bytes: {result_bytes[:8]!r})",
+            stage="video",
         )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        logger.error("ffmpeg failed: %s", e)
-        return False
+    return {
+        "mp4_bytes": result_bytes,
+        "qa_quality": resp.headers.get("X-QA-Quality", "unknown"),
+        "qa_reason": resp.headers.get("X-QA-Reason", ""),
+        "qa_attempts": int(resp.headers.get("X-QA-Attempts", "1")),
+        "qa_seed": int(resp.headers.get("X-QA-Seed", "42")),
+        "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
+    }
 
 
 def generate_video_clip(
@@ -121,411 +56,39 @@ def generate_video_clip(
 ) -> str:
     """Generate a video clip using LTX-2.3.
 
-    Args:
-        prompt: Visual description prompt for video generation.
-        duration_sec: Target duration in seconds.  ARCH-F3 (#164): this
-            is honoured EXACTLY -- the generator does not overshoot and
-            the assembler does not trim.  A measured duration outside
-            :data:`callbacks.strict_assembler.CLIP_LENGTH_TOLERANCE_SEC`
-            of this value triggers REPLACE via the recovery ladder.
-        lora_id: LoRA style identifier.
-        lora_weight: LoRA weight (0.0-1.0).
-        output_path: Path for the output MP4 file.
-        negative_prompt: Per-clip negative prompt from visual_style.avoid.
-        visual_style: Movie-level visual style description for QA enforcement.
-
-    Returns:
-        JSON string with generation results.
+    The prompt text is sent raw to the worker.  Duration/resolution are
+    local defaults; the caller accepts what the worker returns.
     """
-    # ARCH-F3: exact target duration. No _TRIM_MARGIN overshoot.
-    #
-    # LTX-2.3 requires num_frames to be of the form 8k+1 at 24 fps, which
-    # means the set of durations the generator can actually produce is
-    # {9/24, 17/24, 25/24, 33/24, ...} -- a grid with 8/24 ≈ 0.333s
-    # spacing.  An arbitrary request such as 5.0s would otherwise floor
-    # to 113 frames = 4.708s, a 292ms delta that blows the per-clip
-    # length gate on every retry (creative amendments do not change
-    # num_frames).  Quantizing the request to the nearest LTX grid
-    # point here means the client and the worker agree on the exact
-    # duration BEFORE generation, the worker produces a clip at exactly
-    # that duration, and the length gate verifies the match within
-    # CLIP_LENGTH_TOLERANCE_SEC (16ms) of the grid point rather than of
-    # the original caller request.  Upstream callers that care about
-    # the total timeline duration should request grid-aligned durations;
-    # otherwise the per-clip quantization delta is absorbed into the
-    # narration/video timing budget by the assembler.
-    fps = 24
-    _raw_frames = max(9, int(round(float(duration_sec) * fps)))
-    # Round to the NEAREST 8k+1, not floor, so a request halfway
-    # between two grid points does not systematically undershoot.
-    _k_floor = (_raw_frames - 1) // 8
-    _k_ceil = _k_floor + 1
-    _frames_floor = _k_floor * 8 + 1
-    _frames_ceil = _k_ceil * 8 + 1
-    if abs(_raw_frames - _frames_floor) <= abs(_raw_frames - _frames_ceil):
-        num_frames = max(9, _frames_floor)
-    else:
-        num_frames = max(9, _frames_ceil)
-    actual_duration = num_frames / fps
-    if abs(actual_duration - float(duration_sec)) > 0.001:
-        logger.info(
-            "Quantized requested duration %.4fs to LTX 8k+1 grid: "
-            "num_frames=%d, effective=%.4fs (delta=%+.3fs)",
-            float(duration_sec), num_frames, actual_duration,
-            actual_duration - float(duration_sec),
-        )
-
-    # Production mode: call LTX-2.3 on GPU worker
-    # ARCHITECTURE INVARIANT: Video generation MUST use a real GPU worker.
-    # Never fall back to solid-color placeholder — that produces garbage that
-    # wastes all downstream assembly time and is unwatchable.
     gpu_worker_url = _get_next_worker_url()
     if not gpu_worker_url:
-        from recovery import escalate_pipeline_error
-        _no_worker_msg = (
-            "No video worker URL configured. Set VIDEO_WORKER_URLS or "
-            "GPU_WORKER_URL to at least one LTX-dedicated GPU VM. "
-            "The pipeline MUST NOT fall back to placeholder video."
+        raise WorkerUnavailableError(
+            "No video worker registered. Provision a worker first.",
+            stage="video",
         )
-        response = escalate_pipeline_error(
-            operation_name="video_worker_missing",
-            error_msg=_no_worker_msg,
-            severity="critical",
-            default_action="abort",
-            diagnosis_hint="No GPU worker is provisioned or healthy.",
-            agent_policy_type="production",
-        )
-        if response.get("action") != "skip":
-            raise RuntimeError(_no_worker_msg)
-        return json.dumps({
-            "status": "error",
-            "error": "Video generation skipped — no GPU worker available",
-        })
 
-    # ``num_frames`` and ``actual_duration`` were quantized to the LTX
-    # 8k+1 grid above -- the values flow directly into the worker call
-    # and the length gate.
+    worker_url = f"{gpu_worker_url.rstrip('/')}/"
+    req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
-    # Deterministic seed derived from prompt — each clip gets a unique but reproducible seed
-    seed = int(hashlib.sha256(prompt.encode()).hexdigest()[:8], 16) % (2**31)
-
-    video_url = f"{gpu_worker_url.rstrip('/')}/video"
-
-    # Use graduated recovery middleware instead of ad-hoc retry loops.
-    # The middleware handles: retry → creative amendment → env assessment → human escalation.
-    # Build payload from logical params inside the function so creative amendments
-    # (e.g. _video_amend_seed, _video_amend_steps) actually reach the GPU worker.
-    def _call_gpu_worker(
-        url=video_url,
-        prompt=prompt,
-        negative_prompt=negative_prompt,
-        visual_style=visual_style,
-        duration_sec=actual_duration,
-        width=512,
-        height=320,
-        num_frames=num_frames,
-        seed=seed,
-        num_inference_steps=30,
-        guidance_scale=3.0,
-        stg_scale=1.0,
-        modality_scale=3.0,
-        guidance_rescale=0.7,
-        stg_blocks=None,
-    ):
-        inner_payload = json.dumps({
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "visual_style": visual_style,
-            "duration_sec": duration_sec,
-            "width": width,
-            "height": height,
-            "num_frames": num_frames,
-            "seed": seed,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "stg_scale": stg_scale,
-            "modality_scale": modality_scale,
-            "guidance_rescale": guidance_rescale,
-            "stg_blocks": stg_blocks if stg_blocks is not None else [28],
-        }).encode("utf-8")
-        req_inner = Request(url, data=inner_payload, headers={"Content-Type": "application/json"})
-        try:
-            resp_ctx = urlopen(req_inner)
-        except URLError as e:
-            # Worker unreachable — fail honestly.  The pipeline's recovery
-            # system will handle this; tools must NOT provision VMs.
-            raise RuntimeError(
-                f"Video worker unreachable at {url}: {e}"
-            ) from e
-        with resp_ctx as resp:
-            result_bytes = resp.read()
-            qa_quality = resp.headers.get("X-QA-Quality", "unknown")
-            qa_reason_raw = resp.headers.get("X-QA-Reason", "")
-
-            # ── PERSIST FIRST ── save to disk + B2 before any QA gate ──
-            # Every generated clip is persisted for inspection regardless
-            # of QA outcome.  This happens INSIDE _call_gpu_worker so that
-            # QA rejection errors are still caught by execute_with_recovery
-            # and routed through the human escalation path (L4).
-            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            with open(output_path, "wb") as _f:
-                _f.write(result_bytes)
-
-            # Decode QA reason for status + error messages
-            import base64 as _b64
-            try:
-                _qa_reason = _b64.b64decode(qa_reason_raw).decode("utf-8") if qa_reason_raw else ""
-            except Exception:
-                _qa_reason = qa_reason_raw
-
-            _qa_attempts = int(resp.headers.get("X-QA-Attempts", "1"))
-            _qa_seed = int(resp.headers.get("X-QA-Seed", str(seed)))
-
-            # Write per-clip status.json
-            _clip_dir = os.path.dirname(output_path) or "."
-            _clip_name = os.path.splitext(os.path.basename(output_path))[0]
-            _status_path = os.path.join(_clip_dir, f"{_clip_name}_status.json")
-            try:
-                with open(_status_path, "w") as _sf:
-                    json.dump({
-                        "quality": qa_quality, "qa_reason": _qa_reason,
-                        "attempts": _qa_attempts, "seed": _qa_seed,
-                        "status": "completed", "prompt_preview": prompt[:200],
-                    }, _sf, indent=2)
-            except OSError:
-                pass
-
-            # Upload to B2 immediately
-            try:
-                from tools.b2_checkpoint import upload_video_clip
-                upload_video_clip(output_path, _status_path)
-            except Exception as _b2_err:
-                logger.warning("B2 upload failed for %s: %s", output_path, _b2_err)
-
-            # ── ARCH-F3 (#164) LENGTH GATE ──────────────────────────
-            # Verify the generated clip honours the exact requested
-            # duration within CLIP_LENGTH_TOLERANCE_SEC. A mismatch is
-            # a generation-time bug, NOT a render-time fixup: we raise
-            # ClipLengthMismatchError INSIDE the recovery context so
-            # execute_with_recovery routes through REPLACE (regenerate)
-            # rather than letting a wrong-length clip into the timeline.
-            from callbacks.strict_assembler import ensure_clip_length_matches
-            try:
-                _probe_json = json.loads(probe_clip(output_path))
-                _measured = float(_probe_json.get("duration", 0.0))
-            except Exception as _probe_exc:  # noqa: BLE001 - probe is best-effort here
-                logger.warning(
-                    "probe_clip failed during length gate (non-fatal signal, "
-                    "treating as zero): %s", _probe_exc,
-                )
-                _measured = 0.0
-            # NB: the length gate compares the on-disk duration against
-            # ``_call_gpu_worker``'s own ``duration_sec`` parameter --
-            # i.e. the LTX-grid-quantized duration that this particular
-            # invocation actually asked the worker to render.  Using the
-            # parameter (rather than the outer ``generate_video_clip``
-            # closure's ``actual_duration``) keeps the gate correct even
-            # if a future creative amendment swaps the duration for a
-            # retry, which current amendments do not do.
-            ensure_clip_length_matches(
-                clip_id=output_path,
-                declared=duration_sec,
-                actual=_measured,
-            )
-
-            # ── QA GATE ── raise INSIDE recovery context so
-            # non_retryable_patterns routes to human escalation (L4).
-            if qa_quality in ("rejected", "poor"):
-                # Raise a retryable error that the recovery middleware
-                # can catch. Include QA_HINTS so the creative amendment
-                # (_video_amend_prompt_with_qa_hints) can inject
-                # corrective guidance into the prompt for the next attempt.
-                #
-                # NOTE: Do NOT escalate here — execute_with_recovery
-                # wraps _call_gpu_worker and will try creative amendments
-                # (seed changes, prompt tweaks, step adjustments) first.
-                # Human escalation happens at L4 of the recovery ladder
-                # after all automated retries are exhausted.
-                raise RuntimeError(
-                    f"QA {qa_quality.upper()}: visual quality below threshold. "
-                    f"Clip saved at {output_path} for inspection. "
-                    f"QA_HINTS: {_qa_reason}"
-                )
-
-            result_meta = {
-                "gen_time": float(resp.headers.get("X-Gen-Time", "0")),
-                "qa_quality": qa_quality,
-                "qa_reason": _qa_reason,
-                "qa_attempts": _qa_attempts,
-                "qa_seed": _qa_seed,
-            }
-            return result_meta
-
-    from recovery import execute_with_recovery, VIDEO_POLICY
-    gpu_result = execute_with_recovery(
-        operation=_call_gpu_worker,
-        operation_name=f"video_gen_scene{prompt}",
-        kwargs={
-            "url": video_url,
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "visual_style": visual_style,
-            "duration_sec": actual_duration,
-            "width": 512,
-            "height": 320,
-            "num_frames": num_frames,
-            "seed": seed,
-            "num_inference_steps": 30,
-            "guidance_scale": 3.0,
-            "stg_scale": 1.0,
-            "modality_scale": 3.0,
-            "guidance_rescale": 0.7,
-            "stg_blocks": [28],
-        },
-        policy=VIDEO_POLICY,
-        context={"prompt": prompt, "duration": actual_duration},
-    )
-
-    # If recovery returned None (human chose "skip"), return error status
-    if gpu_result is None:
-        return json.dumps({
-            "status": "error",
-            "error": "Video generation skipped by human decision during recovery",
-        })
-
-    # File already persisted to disk + B2 inside _call_gpu_worker.
-    gen_time = gpu_result["gen_time"]
-    qa_quality = gpu_result["qa_quality"]
-    qa_reason = gpu_result["qa_reason"]
-    qa_attempts = gpu_result["qa_attempts"]
-    qa_seed = gpu_result["qa_seed"]
-
-    # QA "unknown" — handled outside recovery context as a degraded signal.
-    if qa_quality == "unknown":
-        logger.warning(
-            "Video clip QA returned 'unknown' for %s — treating as degraded.",
-            output_path,
-        )
-        if os.environ.get("STRICT_QA", "").lower() in ("1", "true"):
-            from recovery import escalate_pipeline_error
-            _strict_msg = (
-                f"Video clip QA unavailable (quality='unknown'): {qa_reason}. "
-                f"STRICT_QA mode requires all clips to pass QA."
-            )
-            response = escalate_pipeline_error(
-                operation_name="video_qa_unavailable",
-                error_msg=_strict_msg,
-                severity="warning",
-                default_action="abort",
-                diagnosis_hint="QA model could not evaluate clip quality.",
-                agent_policy_type="video",
-            )
-            if response.get("action") != "skip":
-                raise RuntimeError(_strict_msg)
-
-    # Probe the generated clip for actual duration (best-effort, never overwrites video)
-    actual_dur = actual_duration
     try:
-        probe_result = json.loads(probe_clip(output_path))
-        actual_dur = probe_result.get("duration", actual_duration)
-    except Exception as probe_exc:
-        logger.warning("probe_clip failed (non-fatal): %s", probe_exc)
+        with urlopen(req, timeout=600) as resp:
+            result = _parse_video_response(resp)
+    except URLError as e:
+        raise WorkerUnavailableError(
+            f"Video worker unreachable at {worker_url}: {e}",
+            stage="video",
+        ) from e
 
-    logger.info(
-        "Generated video clip %s (%.2fs, gen=%.1fs, lora=%s@%.2f, qa=%s)",
-        output_path, actual_dur, gen_time, lora_id, lora_weight, qa_quality,
-    )
-    return json.dumps(
-        {
-            "status": "generated",
-            "mode": "production",
-            "output_path": output_path,
-            "target_duration": round(duration_sec, 2),
-            "actual_duration": round(actual_dur, 2),
-            "lora_id": lora_id,
-            "lora_weight": lora_weight,
-            "prompt_preview": prompt[:200],
-            "prompt_full": prompt,
-            "gen_time": round(gen_time, 2),
-            "num_frames": num_frames,
-            "resolution": "512x320",
-            "qa_quality": qa_quality,
-            "qa_reason": qa_reason,
-            "qa_attempts": qa_attempts,
-            "qa_seed": qa_seed,
-        }
-    )
+    with open(output_path, "wb") as f:
+        f.write(result["mp4_bytes"])
 
-
-def probe_clip(mp4_path: str, tool_context=None) -> str:
-    """Probe an MP4 file for duration, resolution, and FPS using ffprobe.
-
-    Args:
-        mp4_path: Path to the MP4 file.
-
-    Returns:
-        JSON string with clip metadata.
-    """
-    if not os.path.exists(mp4_path):
-        return json.dumps({"error": f"File not found: {mp4_path}"})
-
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
-        "-print_format", "json",
-        "-show_format",
-        "-show_streams",
-        mp4_path,
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            
-        )
-        if result.returncode != 0:
-            return json.dumps(
-                {
-                    "error": f"ffprobe failed (rc={result.returncode})",
-                    "stderr": result.stderr[:500],
-                }
-            )
-
-        probe_data = json.loads(result.stdout)
-
-        # Extract info from first video stream
-        video_stream = None
-        for stream in probe_data.get("streams", []):
-            if stream.get("codec_type") == "video":
-                video_stream = stream
-                break
-
-        duration = float(probe_data.get("format", {}).get("duration", 0))
-        width = int(video_stream.get("width", 0)) if video_stream else 0
-        height = int(video_stream.get("height", 0)) if video_stream else 0
-        fps_str = video_stream.get("r_frame_rate", "0/1") if video_stream else "0/1"
-
-        # Parse fractional FPS
-        fps_parts = fps_str.split("/")
-        if len(fps_parts) == 2 and int(fps_parts[1]) > 0:
-            fps = round(int(fps_parts[0]) / int(fps_parts[1]), 2)
-        else:
-            fps = float(fps_parts[0]) if fps_parts[0] else 0.0
-
-        return json.dumps(
-            {
-                "mp4_path": mp4_path,
-                "duration": round(duration, 3),
-                "width": width,
-                "height": height,
-                "fps": fps,
-                "resolution": f"{width}x{height}",
-            }
-        )
-
-    except subprocess.TimeoutExpired:
-        return json.dumps({"error": "ffprobe timed out"})
-    except (json.JSONDecodeError, ValueError) as e:
-        return json.dumps({"error": f"ffprobe output parse error: {e}"})
-
+    return json.dumps({
+        "status": "generated",
+        "output_path": output_path,
+        "actual_duration": duration_sec,
+        "qa_quality": result["qa_quality"],
+        "qa_reason": result["qa_reason"],
+        "qa_attempts": result["qa_attempts"],
+        "qa_seed": result["qa_seed"],
+        "gen_time": result["gen_time"],
+        "size_bytes": len(result["mp4_bytes"]),
+    })

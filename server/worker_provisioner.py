@@ -342,7 +342,7 @@ def check_worker_health(url: str, capability: str) -> bool:
 
     Returns True if healthy, False otherwise.
     """
-    health_url = f"{url.rstrip('/')}/health"
+    health_url = f"{url.rstrip('/')}/"
     try:
         req = Request(health_url)
         with urlopen(req, timeout=10) as resp:
