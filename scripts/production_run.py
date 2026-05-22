@@ -166,22 +166,13 @@ def start_gpu_worker(vm: dict) -> str:
         time.sleep(2)
         try:
             result = run_cmd(
-                ssh_args + ["curl -s http://localhost:8880/health"],
+                ssh_args + ["curl -s http://localhost:8880/"],
                 timeout=10,
                 check=False,
             )
-            if '"status":"ok"' in result.stdout or '"status": "ok"' in result.stdout:
-                logger.info("GPU worker ready!")
-
-                # Pre-load models
-                logger.info("Pre-loading models...")
-                run_cmd(
-                    ssh_args + [
-                        "curl -s -X POST http://localhost:8880/load-models"
-                    ],
-                    timeout=300,
-                    check=False,
-                )
+            text = result.stdout.strip()
+            if text.startswith("ok"):
+                logger.info("GPU worker ready! (%s)", text)
                 return worker_url
         except Exception:
             pass

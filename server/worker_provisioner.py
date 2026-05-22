@@ -359,7 +359,8 @@ def check_worker_reachable(url: str) -> bool:
         with urlopen(req, timeout=5) as resp:
             resp.read()
         return True
-    except Exception:
+    except Exception as exc:
+        logger.debug("Worker %s not reachable: %s", url, exc)
         return False
 
 
@@ -1155,7 +1156,8 @@ def establish_direct_connection(
                     )
                     spec.worker_url = direct_url
                     return direct_url
-            except Exception:
+            except Exception as exc:
+                logger.debug("Direct connection attempt %d to %s failed: %s", attempt, spec.role, exc)
                 if attempt % 4 == 0:
                     # Periodic diagnostics via vastai tools
                     _log_vm_diagnostics(spec)
@@ -1625,36 +1627,28 @@ class WorkerProvisioner:
         try:
             self._provision_and_connect(spec)
 
-            # Verify via InfraAgent-style /status before marking healthy.
-            # This ensures the VM is fully bootstrapped (models loaded,
-            # GPU ready) before we declare success and start the next VM.
+            # Verify via plain-text GET / before marking healthy.
             _url = spec.worker_url or f"http://localhost:{spec.local_port}"
             _status_ok = False
             try:
                 from urllib.request import Request, urlopen
-                req = Request(f"{_url.rstrip('/')}/status")
+                req = Request(f"{_url.rstrip('/')}/")
                 with urlopen(req, timeout=10) as resp:
-                    status_data = json.loads(resp.read().decode())
-                    # VMAgent status: check bootstrap phase and model_loaded
-                    bootstrap = status_data.get("bootstrap", {})
-                    phase = bootstrap.get("phase", "")
-                    model_loaded = status_data.get("health", {}).get("model_loaded", False)
-                    if phase == "ready" and model_loaded:
-                        _status_ok = True
-                        logger.info(
-                            "VMAgent /status confirms %s is ready "
-                            "(model_loaded=%s)", spec.role, model_loaded
-                        )
-                    else:
-                        logger.warning(
-                            "VMAgent /status for %s: phase=%s, "
-                            "model_loaded=%s — waiting for GET / fallback",
-                            spec.role, phase, model_loaded
-                        )
+                    text = resp.read().decode().strip()
+                parts = text.split()
+                if parts and parts[0] == "ok" and f"{spec.capability}=yes" in text:
+                    _status_ok = True
+                    logger.info(
+                        "Worker GET / confirms %s is ready: %s", spec.role, text
+                    )
+                else:
+                    logger.warning(
+                        "Worker GET / for %s: not ready (%s)",
+                        spec.role, text,
+                    )
             except Exception as status_exc:
                 logger.debug(
-                    "VMAgent /status for %s unavailable (%s) — "
-                    "falling back to GET /",
+                    "Worker GET / for %s unavailable (%s)",
                     spec.role, status_exc,
                 )
 
@@ -1884,8 +1878,9 @@ class WorkerProvisioner:
                         "worker_url": spec.worker_url,
                     })
                     return spec
-            except Exception:
-                pass  # Not actually healthy, fall through to gate
+            except Exception as exc:
+                logger.debug("Health check failed for %s: %s", spec.worker_url, exc)
+                # Not actually healthy, fall through to gate
 
         while True:
             with self._lock:
@@ -1942,8 +1937,13 @@ class WorkerProvisioner:
                                         "worker_url": _url,
                                     })
                                     return spec
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                from maintainer import notify_maintainer
+                                notify_maintainer(
+                                    operation="ensure_available_health_check",
+                                    error=str(exc),
+                                    context={"vm_id": spec.vm_id, "worker_url": _url, "role": spec.role},
+                                )
                             # VM running but service won't come up — destroy
                             _trace(spec, "ensure_available_destroy_stuck", {
                                 "vm_id": spec.vm_id,
@@ -1952,8 +1952,13 @@ class WorkerProvisioner:
                             try:
                                 from tools.vastai_tools import terminate_vm
                                 terminate_vm(spec.vm_id)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                from maintainer import notify_maintainer
+                                notify_maintainer(
+                                    operation="terminate_stuck_vm",
+                                    error=str(exc),
+                                    context={"vm_id": spec.vm_id},
+                                )
                             spec.vm_id = ""
                 except Exception as e:
                     _trace(spec, "ensure_available_vm_check_failed", {
@@ -2023,8 +2028,13 @@ class WorkerProvisioner:
                         try:
                             from tools.vastai_tools import terminate_vm
                             terminate_vm(spec.vm_id)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            from maintainer import notify_maintainer
+                            notify_maintainer(
+                                operation="terminate_failed_vm",
+                                error=str(exc),
+                                context={"vm_id": spec.vm_id},
+                            )
                         spec.vm_id = ""
                     spec.error = str(exc)
                     _excluded.update({int(o.get("id", 0)) for o in []})
@@ -2057,7 +2067,13 @@ class WorkerProvisioner:
                 trace=list(spec.provision_trace),
             )
 
-        except Exception:
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer(
+                operation="ensure_available_outer_exception",
+                error=str(exc),
+                context={"role": spec.role, "vm_id": spec.vm_id},
+            )
             # Ensure waiters are unblocked even on unexpected errors
             with self._lock:
                 if spec.status == "provisioning":

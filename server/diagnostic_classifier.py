@@ -735,32 +735,29 @@ def short_diagnostic(
         logger.info("short_diagnostic: no worker_url provided")
         return result
 
-    health_url = f"{worker_url.rstrip('/')}/health"
+    health_url = f"{worker_url.rstrip('/')}/"
     try:
         req = Request(health_url)
         with urlopen(req, timeout=10) as resp:
-            import json
+            text = resp.read().decode().strip()
 
-            data = json.loads(resp.read().decode())
+        parts = text.split()
+        status_ok = parts[0] == "ok" if parts else False
+        model_loaded = f"{capability}=yes" in text
 
-        status_ok = data.get("status") == "ok"
-        loaded_key = f"{capability}_loaded"
-        model_loaded = data.get(loaded_key, False)
-
-        result["healthy"] = status_ok and bool(model_loaded)
+        result["healthy"] = status_ok and model_loaded
         result["details"] = {
-            "status": data.get("status", ""),
-            f"{loaded_key}": model_loaded,
-            "gpu": data.get("gpu", ""),
-            "worker_mode": data.get("worker_mode", ""),
+            "status": parts[0] if parts else "",
+            f"{capability}_loaded": model_loaded,
+            "health_text": text,
         }
 
         logger.info(
             "short_diagnostic: worker %s healthy=%s (status=%s, %s=%s)",
             worker_url,
             result["healthy"],
-            data.get("status"),
-            loaded_key,
+            parts[0] if parts else "",
+            f"{capability}_loaded",
             model_loaded,
         )
 

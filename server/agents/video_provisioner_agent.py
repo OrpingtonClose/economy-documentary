@@ -788,7 +788,8 @@ def _tool_check_worker_health(url: str, capability: str = "ltx") -> str:
                     "healthy": healthy,
                     "health_text": text,
                 }, indent=2)
-        except Exception:
+        except Exception as e:
+            logger.warning("Health text fetch failed for %s: %s", url, e)
             return json.dumps({"url": url, "healthy": healthy})
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -880,25 +881,21 @@ def _tool_render_clip(scene_num: int, phrase_idx: int, prompt: str,
             "phrase_idx": phrase_idx,
         })
 
-    payload = json.dumps({
-        "scene_num": scene_num,
-        "phrase_idx": phrase_idx,
-        "prompt": prompt,
-        "negative_prompt": negative_prompt,
-        "duration": duration,
-        "lora_id": lora_id,
-        "job_type": "video_render",
-    }).encode()
-
     try:
         req = Request(
             f"{worker_url.rstrip('/')}/",
-            data=payload,
-            headers={"Content-Type": "application/json"},
+            data=prompt.encode("utf-8"),
+            headers={"Content-Type": "text/plain"},
         )
-        with urlopen(req, timeout=600) as resp:
-            result = json.loads(resp.read().decode())
-            return json.dumps(result)
+        with urlopen(req) as resp:
+            mp4_bytes = resp.read()
+        return json.dumps({
+            "status": "generated",
+            "scene_num": scene_num,
+            "phrase_idx": phrase_idx,
+            "worker_url": worker_url,
+            "bytes": len(mp4_bytes),
+        })
     except URLError as e:
         return json.dumps({
             "error": f"GPU worker unreachable: {e}",
@@ -911,24 +908,18 @@ def _tool_render_clip(scene_num: int, phrase_idx: int, prompt: str,
 
 
 def _tool_check_clip(job_id: str, worker_url: str) -> str:
-    """Check the status of a GPU render job.
+    """DEPRECATED: Synchronous protocol has no job IDs.
 
-    GET /video/status/{job_id}.
-
-    Args:
-        job_id: The render job ID returned by render_clip.
-        worker_url: URL of the GPU worker.
+    Probes worker health via GET / instead.
     """
     if not worker_url:
         return json.dumps({"error": "No worker_url provided"})
 
     try:
-        req = Request(
-            f"{worker_url.rstrip('/')}/video/status/{job_id}",
-        )
-        with urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            return json.dumps(result)
+        req = Request(f"{worker_url.rstrip('/')}/")
+        with urlopen(req, timeout=10) as resp:
+            text = resp.read().decode().strip()
+        return json.dumps({"job_id": job_id, "worker_alive": text.startswith("ok"), "health": text})
     except Exception as e:
         return json.dumps({"error": str(e)})
 

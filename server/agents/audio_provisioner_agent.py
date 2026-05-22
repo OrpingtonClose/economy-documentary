@@ -615,6 +615,7 @@ def _tool_check_worker_health(url: str, capability: str) -> str:
             "health_text": text,
         })
     except Exception as e:
+        logger.warning("Health check failed for %s: %s", url, e)
         return json.dumps({
             "healthy": False,
             "url": url,

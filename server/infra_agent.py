@@ -222,105 +222,60 @@ class InfraAgent:
     # ------------------------------------------------------------------
 
     def _check_worker_health(self, worker: WorkerSnapshot) -> None:
-        """Read a VM agent's /status endpoint (rich data) with /health fallback.
+        """Probe worker via GET / (plain text).  No /status, no /health fallback.
 
-        The overseer prefers /status because it includes bootstrap phase,
-        health snapshot (GPU temp, disk), escalation log, and task tracking.
-        Falls back to /health for backward compat if /status is not available.
+        Plain-text protocol: ``ok {gpu} tts={yes|no} ltx={yes|no} vram={used}/{total}GB mode={mode}``
         Updates the worker snapshot in-place.
         """
-        # Try /status first (VMAgent endpoint)
-        status_url = f"{worker.url.rstrip('/')}/status"
-        data = None
-        used_status = False
+        health_url = f"{worker.url.rstrip('/')}/"
         try:
-            req = Request(status_url)
+            req = Request(health_url)
             with urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-            used_status = True
-        except Exception:
-            # Fall back to /health
-            health_url = f"{worker.url.rstrip('/')}/health"
-            try:
-                req = Request(health_url)
-                with urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-            except Exception as exc:
-                worker.status = WorkerStatus.UNREACHABLE
-                worker.consecutive_failures += 1
-                worker.last_error = str(exc)
-                worker.last_check = time.time()
-                worker.model_loaded = False
-                return
+                text = resp.read().decode().strip()
+        except Exception as exc:
+            worker.status = WorkerStatus.UNREACHABLE
+            worker.consecutive_failures += 1
+            worker.last_error = str(exc)
+            worker.last_check = time.time()
+            worker.model_loaded = False
+            return
 
         worker.last_check = time.time()
+        parts = text.split()
+        if not parts or parts[0] != "ok":
+            worker.status = WorkerStatus.DEGRADED
+            worker.consecutive_failures += 1
+            worker.last_error = f"unhealthy status: {parts[0] if parts else 'empty'}"
+            worker.model_loaded = False
+            return
 
-        if used_status:
-            # Rich data from VMAgent /status endpoint
-            health = data.get("health", {})
-            bootstrap = data.get("bootstrap", {})
-            models = data.get("models", {})
+        # Parse VRAM
+        vram_used = 0.0
+        vram_total = 0.0
+        gpu_name = ""
+        for part in parts[1:]:
+            if part.startswith("vram="):
+                vram_str = part.split("=", 1)[1]
+                if "/" in vram_str:
+                    used_str, total_str = vram_str.split("/", 1)
+                    vram_used = float(used_str)
+                    vram_total = float(total_str.replace("GB", ""))
+            elif not part.startswith(("tts=", "ltx=", "mode=")) and not "=" in part:
+                gpu_name = part
 
-            worker.gpu_name = health.get("gpu_name", "")
-            worker.vram_used_gb = float(health.get("vram_used_gb", 0))
-            worker.vram_total_gb = float(health.get("vram_total_gb", 0))
+        worker.gpu_name = gpu_name
+        worker.vram_used_gb = vram_used
+        worker.vram_total_gb = vram_total
 
-            # Check bootstrap phase
-            phase = bootstrap.get("phase", "")
-            if phase == "error":
-                worker.status = WorkerStatus.DEGRADED
-                worker.consecutive_failures += 1
-                worker.last_error = (
-                    f"Bootstrap failed ({bootstrap.get('error_category', 'unknown')}): "
-                    f"{bootstrap.get('error', '')[:200]}"
-                )
-                worker.model_loaded = False
-                return
+        capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
+        if f"{capability}=yes" not in text:
+            worker.status = WorkerStatus.DEGRADED
+            worker.consecutive_failures += 1
+            worker.last_error = f"{capability} not loaded"
+            worker.model_loaded = False
+            return
 
-            # Check model loaded
-            capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
-            loaded_key = f"{capability}_loaded"
-            if not models.get(loaded_key, False):
-                # Not loaded yet — could still be bootstrapping
-                if phase in ("idle", "deps", "models", "loading"):
-                    # Still bootstrapping — don't count as failure
-                    worker.status = WorkerStatus.DEGRADED
-                    worker.last_error = f"Bootstrapping: {bootstrap.get('detail', phase)}"
-                    worker.model_loaded = False
-                    # Don't increment consecutive_failures during bootstrap
-                    return
-                worker.status = WorkerStatus.DEGRADED
-                worker.consecutive_failures += 1
-                worker.last_error = f"{capability} model not loaded"
-                worker.model_loaded = False
-                return
-
-            # Process VM agent escalations
-            self._process_vm_escalations(worker, data)
-
-        else:
-            # Legacy /health data
-            worker.gpu_name = data.get("gpu", "")
-            worker.vram_used_gb = float(data.get("vram_used_gb", 0))
-            worker.vram_total_gb = float(data.get("vram_total_gb", 0))
-
-            if data.get("status") != "ok":
-                worker.status = WorkerStatus.DEGRADED
-                worker.consecutive_failures += 1
-                worker.last_error = f"unhealthy status: {data.get('status')}"
-                worker.model_loaded = False
-                return
-
-            capability = "tts" if worker.role == WorkerRole.TTS else "ltx"
-            loaded_key = f"{capability}_loaded"
-            if not data.get(loaded_key, False):
-                worker.status = WorkerStatus.DEGRADED
-                worker.consecutive_failures += 1
-                worker.last_error = f"{capability} model not loaded"
-                worker.model_loaded = False
-                return
-
-        # All good — model loaded, no errors
+        # All good
         if worker.consecutive_failures > 0:
             logger.info(
                 "Overseer: %s worker at %s recovered after %d failures",

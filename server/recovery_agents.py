@@ -827,7 +827,7 @@ def _tool_check_service_health(service: str) -> dict:
     from urllib.error import URLError
 
     checks = {
-        "tts": ("TTS service", "http://localhost:5050/health"),
+        "tts": ("TTS service", "http://localhost:5050/"),
         "llm": ("LLM API", "https://openrouter.ai/api/v1/models"),
         "b2": ("Backblaze B2", "https://api.backblazeb2.com"),
         "network": ("General network", "https://google.com"),

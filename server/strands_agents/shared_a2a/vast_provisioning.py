@@ -138,11 +138,13 @@ def provision_specific_offer(
         else:
             mode = "both"
 
-    # Dead simple onstart. No secrets, no nested quotes.
+    # Dead simple onstart. Install runtime deps, clone correct branch, start worker.
+    # Models are downloaded lazily by the worker's background bootstrap thread.
     onstart_cmd = (
-        f"cd /workspace && apt-get update -qq && apt-get install -y -qq git curl wget && "
-        f"pip install -q vastai && "
-        f"git clone --depth 1 https://github.com/OrpingtonClose/economy-documentary.git repo && "
+        f"cd /workspace && "
+        f"apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
+        f"pip install -q fastapi uvicorn soundfile && "
+        f"git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git repo && "
         f"nohup python repo/scripts/gpu_worker.py --mode {mode} --port 8880 > /workspace/worker.log 2>&1 & "
         f"echo started"
     )

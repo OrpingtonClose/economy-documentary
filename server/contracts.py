@@ -456,34 +456,23 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
     healthy = 0
     last_error = ""
     for u in urls:
-        health_url = f"{u.rstrip('/')}/health"
+        health_url = f"{u.rstrip('/')}/"
         try:
             req = Request(health_url)
             with urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode())
-            if data.get("status") != "ok":
-                last_error = f"{svc.name} at {u}: unhealthy status {data}"
+                text = resp.read().decode().strip()
+            parts = text.split()
+            if not parts or parts[0] != "ok":
+                last_error = f"{svc.name} at {u}: unhealthy status: {text[:200]}"
                 continue
-            loaded_key = f"{svc.capability}_loaded"
-            if not data.get(loaded_key, False):
+            if f"{svc.capability}=yes" not in text:
                 last_error = (
                     f"{svc.name} at {u}: {svc.capability} not loaded. "
                     f"Each model MUST run on its own dedicated VM."
                 )
                 continue
-            # GAP 5.1: Verify worker_mode matches expected capability
-            worker_mode = data.get("worker_mode", "")
-            if worker_mode and svc.capability not in ("tts", "ltx"):
-                pass  # unknown capability — skip mode check
-            elif worker_mode and worker_mode not in (svc.capability, "both"):
-                last_error = (
-                    f"{svc.name} at {u}: worker_mode='{worker_mode}' but "
-                    f"expected '{svc.capability}'. Each model MUST run on "
-                    f"its own dedicated VM — never swap or share."
-                )
-                continue
             healthy += 1
-        except (URLError, OSError, json.JSONDecodeError, TimeoutError) as exc:
+        except (URLError, OSError, TimeoutError) as exc:
             last_error = f"{svc.name} at {u}: unreachable ({exc})"
 
     if healthy == 0:
