@@ -341,50 +341,6 @@ class MeasuredClip:
 
 
 @dataclass
-class WhisperXOracle:
-    """Running ground-truth duration tracker.
-
-    After each TTS clip lands, call :meth:`record` with the WhisperX
-    measurement. Use :meth:`project_total` to compute the projected final
-    runtime given the remaining un-synthesised scene budgets, and
-    :meth:`check_projection` to fire a reflection event when the
-    projection falls below :data:`PROJECTION_ALARM_RATIO` of the target.
-
-    The PAG reference run (see :mod:`tests/test_otio_moments`) produced
-    a 72% ratio — measured 194s vs claimed 270s. This oracle would have
-    caught it at scene 3 and escalated before burning GPU time on the
-    remaining clips.
-    """
-
-    target_total_sec: float
-    clips: list[MeasuredClip] = field(default_factory=list)
-    scene_claimed: dict[int, float] = field(default_factory=dict)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-
-    def record(
-        self,
-        scene_num: int,
-        voice: str,
-        claimed_sec: float,
-        measured_sec: float,
-        wav_path: str = "",
-    ) -> MeasuredClip:
-        """Record a WhisperX measurement for a clip."""
-        clip = MeasuredClip(
-            scene_num=scene_num,
-            voice=voice,
-            claimed_sec=claimed_sec,
-            measured_sec=measured_sec,
-            wav_path=wav_path,
-        )
-        with self._lock:
-            self.clips.append(clip)
-        return clip
-
-    def measured_total(self) -> float:
-        """Sum of all measured durations so far."""
-        with self._lock:
-            return sum(c.measured_sec for c in self.clips)
 
 
 # ---------------------------------------------------------------------------
