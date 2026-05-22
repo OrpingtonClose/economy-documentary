@@ -454,31 +454,7 @@ def build_real_assembly_tools(
     return overrides
 
 
-def apply_real_assembly_overrides(
-    base_tools: list[Any],
-    overrides: dict[str, Any],
-) -> list[Any]:
-    """Replace the placeholder ``launch_assembly`` tool by ``.name`` match.
-
-    Mirrors
-    :func:`server.strands_agents.playground.pipeline_live_real_workers.apply_real_worker_overrides`
-    so the orchestrator only needs one swap pass per overlay class.
-    Preserves order; passes non-matching tools through unchanged.
-    """
-    if not overrides:
-        return list(base_tools)
-    out: list[Any] = []
-    for tool_obj in base_tools:
-        name = getattr(tool_obj, "name", None)
-        if name in overrides:
-            out.append(overrides[name])
-        else:
-            out.append(tool_obj)
-    return out
-
-
 __all__ = [
-    "apply_real_assembly_overrides",
     "build_real_assembly_tools",
     "compose_master_mp4",
     "make_real_assembly_tool",

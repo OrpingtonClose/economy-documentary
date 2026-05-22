@@ -380,26 +380,7 @@ def build_real_b2_tools(
     }
 
 
-def apply_real_b2_overrides(
-    base_tools: list[Any],
-    overrides: dict[str, Any],
-) -> list[Any]:
-    """Swap any tool whose ``.name`` matches a key in ``overrides``.
-
-    Preserves list order. Tools not in ``overrides`` pass through
-    unchanged. Returns a new list — never mutates the input.
-    """
-    if not overrides:
-        return list(base_tools)
-    result: list[Any] = []
-    for tool_obj in base_tools:
-        name = getattr(tool_obj, "name", None)
-        result.append(overrides[name] if name in overrides else tool_obj)
-    return result
-
-
 __all__ = [
-    "apply_real_b2_overrides",
     "build_real_b2_tools",
     "make_real_b2_sync_tool",
     "sync_run_artifacts",
