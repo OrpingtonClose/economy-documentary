@@ -5,4 +5,4 @@ source .env
 export VAST_API_KEY
 rm -rf /tmp/documentary-pipeline
 # Agent memory is NOT wiped — it persists across runs in server/agent_memory/
-/opt/homebrew/bin/python3 -m strands_agents.run_strands "$@" --api-key "$API_KEY"
+/opt/homebrew/bin/python3 -m strands_agents.run_strands "$@"

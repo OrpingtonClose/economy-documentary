@@ -407,8 +407,8 @@ def _check_output_dir(output_dir: str) -> CheckResult:
     return result
 
 
-def _check_disk() -> CheckResult:
-    result = _check_disk_space("/tmp", 5.0, "Disk space for video output")
+def _check_disk(output_dir: str) -> CheckResult:
+    result = _check_disk_space(output_dir, 2.0, "Disk space for video output")
     result.category = "filesystem"
     return result
 
@@ -437,7 +437,7 @@ def run_preflight(
         _check_tts_worker(),
         _check_otio(),
         _check_output_dir(output_dir),
-        _check_disk(),
+        _check_disk(output_dir),
     ]
 
     for check in checks:

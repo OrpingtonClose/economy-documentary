@@ -1,7 +1,10 @@
 """
-Strands pipeline entry point — all parameters explicit.
+Strands pipeline entry point — zero configuration.
 
-Defaults are defined in DEFAULTS dict below. All can be overridden via CLI.
+Usage:
+    python strands_agents/run_strands.py "Your documentary brief"
+
+All parameters are hardcoded below. Edit the file to change behavior.
 """
 
 from __future__ import annotations
@@ -16,14 +19,14 @@ _SERVER_DIR = os.path.dirname(_SCRIPT_DIR)
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
-import argparse
 import asyncio
 import json
 import logging
-import os
 import signal
 import sys
+import threading
 import time
+import traceback
 import uuid
 from typing import Any
 
@@ -41,18 +44,96 @@ from strands_agents.hooks.pipeline_hooks import (
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# DEFAULTS — edit these to change baseline behavior
+# HARD-CODED CONFIGURATION — edit these values to change behavior
 # =============================================================================
-DEFAULTS = {
-    "model": "deepseek-chat",
-    "base_url": "https://api.deepseek.com/v1",
-    "output_dir": "/tmp/documentary-pipeline",
-    "budget": 100.0,
-    "max_nodes": 200,
-    "max_retries": 3,
-    "approval": "auto_approve",
-}
+_DEFAULT_MODEL = "deepseek-chat"
+_DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+_DEFAULT_OUTPUT_DIR = "/Users/orpington/Documents/documentary-pipeline"
+_DEFAULT_BUDGET = 5.0
+_DEFAULT_MAX_NODES = 200
+_DEFAULT_MAX_RETRIES = 3
+_DEFAULT_APPROVAL = "auto_approve"
+_API_KEY_PATH = os.path.expanduser("~/api_keys/LLMS/deepseek_api.txt")
 # =============================================================================
+
+# ---------------------------------------------------------------------------
+# HANG MONITORING — never silently fail again
+# ---------------------------------------------------------------------------
+
+class _HangMonitor:
+    """Watchdog thread that dumps the main thread's stack every N seconds.
+
+    If the main thread is stuck in the same frame for >threshold seconds,
+    prints a loud warning and dumps the full traceback.
+    """
+    def __init__(self, interval: float = 30.0, threshold: float = 120.0) -> None:
+        self.interval = interval
+        self.threshold = threshold
+        self._thread = threading.Thread(target=self._run, daemon=True, name="hang-monitor")
+        self._last_frame: str = ""
+        self._last_change = time.time()
+        self._running = False
+
+    def start(self) -> None:
+        self._running = True
+        self._thread.start()
+        print(f"[MONITOR] Hang monitor started (interval={self.interval}s, threshold={self.threshold}s)")
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _run(self) -> None:
+        while self._running:
+            time.sleep(self.interval)
+            try:
+                main_thread = threading.main_thread()
+                frames = sys._current_frames()
+                frame = frames.get(main_thread.ident)
+                if frame is None:
+                    continue
+                summary = traceback.format_stack(frame, limit=3)[-1]
+                now = time.time()
+                if summary == self._last_frame:
+                    stuck = now - self._last_change
+                    if stuck > self.threshold:
+                        print(f"\n[MONITOR] ⚠️ MAIN THREAD STUCK for {stuck:.0f}s in:\n{summary}")
+                        print("[MONITOR] Dumping full traceback to stderr...")
+                        traceback.print_stack(frame)
+                else:
+                    self._last_frame = summary
+                    self._last_change = now
+            except Exception as exc:
+                print(f"[MONITOR] watchdog error: {exc}")
+
+
+# sys.monitoring: trace every function call if available (Python 3.12+)
+if hasattr(sys, "monitoring"):
+    try:
+        sys.monitoring.use_tool_id(0, "pipeline-tracer")
+        sys.monitoring.set_events(0, sys.monitoring.events.PY_START | sys.monitoring.events.PY_RETURN)
+        _call_counts: dict[str, int] = {}
+        def _monitor_callback(code, instruction_offset):
+            name = code.co_name
+            _call_counts[name] = _call_counts.get(name, 0) + 1
+            return _monitor_callback
+        sys.monitoring.register_callback(0, sys.monitoring.events.PY_START, _monitor_callback)
+    except Exception as exc:
+        print(f"[MONITOR] sys.monitoring init failed: {exc}")
+
+
+
+def _read_api_key() -> str:
+    """Read API key from the fixed path. Fail loudly if missing."""
+    if not os.path.exists(_API_KEY_PATH):
+        raise RuntimeError(
+            f"API key file not found: {_API_KEY_PATH}\n"
+            f"Create this file with the DeepSeek API key."
+        )
+    with open(_API_KEY_PATH) as f:
+        key = f.read().strip()
+    if not key:
+        raise RuntimeError(f"API key file is empty: {_API_KEY_PATH}")
+    return key
 
 
 def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
@@ -74,12 +155,14 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
     from openai import AsyncOpenAI
     from strands.models.openai import OpenAIModel
 
+    # NO TIMEOUT: per /cheat, the agent decides when something is taking too long.
+    # Hardcoded timeouts constrain agent reasoning. Use notify_maintainer instead.
     client = AsyncOpenAI(
         api_key=api_key,
-        base_url=base_url or DEFAULTS["base_url"],
+        base_url=base_url or _DEFAULT_BASE_URL,
     )
     # Keep full model ID for OpenRouter; strip prefix only for direct providers
-    if "openrouter" in (base_url or DEFAULTS["base_url"]):
+    if "openrouter" in (base_url or _DEFAULT_BASE_URL):
         model_name = model_id
     else:
         model_name = model_id.split("/")[-1]
@@ -162,15 +245,16 @@ def _release_pipeline_lock(lock_file: str) -> None:
 async def run_documentary(
     brief: str,
     *,
-    model_id: str,
-    api_key: str,
-    base_url: str | None = None,
-    output_dir: str = DEFAULTS["output_dir"],
-    budget_usd: float = DEFAULTS["budget"],
-    max_node_executions: int = DEFAULTS["max_nodes"],
-    max_retries: int = DEFAULTS["max_retries"],
-    approval_mode: str = DEFAULTS["approval"],
+    model_id: str = _DEFAULT_MODEL,
+    api_key: str | None = None,
+    base_url: str | None = _DEFAULT_BASE_URL,
+    output_dir: str = _DEFAULT_OUTPUT_DIR,
+    budget_usd: float = _DEFAULT_BUDGET,
+    max_node_executions: int = _DEFAULT_MAX_NODES,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
+    approval_mode: str = _DEFAULT_APPROVAL,
 ) -> dict[str, Any]:
+    api_key = api_key or _read_api_key()
     model = _get_model(model_id, api_key, base_url)
 
     # Prevent concurrent runs
@@ -194,7 +278,7 @@ async def run_documentary(
 
     _create_timeline_file(timeline_path)
     _write_pipeline_manifest(output_dir, timeline_path)
-    os.environ["PIPELINE_DIR"] = output_dir
+    # NO ENV VARS: pipeline_dir is passed explicitly to all tools
 
     approval_stages = set() if approval_mode == "auto_approve" else {"scenario", "audio", "video", "assembly"}
     hooks = [ImmutabilityHook(), ApprovalGateHook(gated_stages=approval_stages), ShellGuardHook()]
@@ -294,26 +378,22 @@ async def run_documentary(
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run documentary pipeline")
-    parser.add_argument("brief", nargs="+", help="Documentary brief")
-    parser.add_argument("--model", "-m", default=DEFAULTS["model"], help=f"Model ID (default: {DEFAULTS['model']})")
-    parser.add_argument("--api-key", "-k", required=True, help="API key")
-    parser.add_argument("--base-url", default=DEFAULTS.get("base_url"), help=f"Base URL (default: {DEFAULTS.get('base_url')})")
-    parser.add_argument("--output-dir", "-o", default=DEFAULTS["output_dir"], help=f"Output dir (default: {DEFAULTS['output_dir']})")
-    parser.add_argument("--budget", "-b", type=float, default=DEFAULTS["budget"], help=f"Budget USD (default: {DEFAULTS['budget']})")
-    parser.add_argument("--max-nodes", type=int, default=DEFAULTS["max_nodes"], help=f"Max node executions (default: {DEFAULTS['max_nodes']})")
-    parser.add_argument("--max-retries", type=int, default=DEFAULTS["max_retries"], help=f"Max retries (default: {DEFAULTS['max_retries']})")
-    parser.add_argument("--approval", "-a", choices=["auto_approve", "manual"], default=DEFAULTS["approval"], help=f"Approval mode (default: {DEFAULTS['approval']})")
+def main() -> None:
+    if len(sys.argv) < 2:
+        print("Usage: python strands_agents/run_strands.py <brief>", file=sys.stderr)
+        sys.exit(1)
 
-    args = parser.parse_args()
+    brief = " ".join(sys.argv[1:])
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-    # Handle Ctrl+C gracefully — destroy VMs before exiting
-    _provisioner_for_signal = None
+    # Start hang monitor
+    monitor = _HangMonitor(interval=30.0, threshold=120.0)
+    monitor.start()
 
-    def _sigint_handler(signum, frame):
+    # Handle Ctrl+C gracefully — destroy VMs before exiting
+    def _sigint_handler(signum: int, frame: Any) -> None:
         print("\n\n[INTERRUPT] Ctrl+C received — destroying VMs...")
+        monitor.stop()
         try:
             from worker_provisioner import get_provisioner
             prov = get_provisioner()
@@ -323,7 +403,7 @@ def main():
             print(f"[INTERRUPT] VM cleanup error: {exc}")
         # Release lock if held
         try:
-            lock = os.path.join(args.output_dir, ".pipeline.lock")
+            lock = os.path.join(_DEFAULT_OUTPUT_DIR, ".pipeline.lock")
             if os.path.exists(lock):
                 os.remove(lock)
         except Exception:
@@ -332,17 +412,22 @@ def main():
 
     signal.signal(signal.SIGINT, _sigint_handler)
 
-    result = asyncio.run(run_documentary(
-        brief=" ".join(args.brief),
-        model_id=args.model,
-        api_key=args.api_key,
-        base_url=args.base_url,
-        output_dir=args.output_dir,
-        budget_usd=args.budget,
-        max_node_executions=args.max_nodes,
-        max_retries=args.max_retries,
-        approval_mode=args.approval,
-    ))
+    print(f"\n[MONITOR] Starting pipeline for: {brief}")
+    start_time = time.time()
+    result: dict[str, Any] = {}
+    try:
+        result = asyncio.run(run_documentary(brief=brief))
+    except Exception as exc:
+        elapsed = time.time() - start_time
+        print(f"\n[MONITOR] Pipeline FAILED after {elapsed:.0f}s: {exc}")
+        traceback.print_exc()
+        result = {"status": "failed", "error": str(exc), "elapsed_sec": elapsed}
+    finally:
+        monitor.stop()
+        elapsed = time.time() - start_time
+        print(f"\n[MONITOR] Pipeline finished in {elapsed:.0f}s")
+        if result.get("status") != "completed":
+            print(f"[MONITOR] FAILURE REASON: {result.get('error', 'unknown')}")
 
     print("\n=== Result ===")
     for k, v in result.items():

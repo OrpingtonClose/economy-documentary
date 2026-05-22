@@ -19,8 +19,6 @@ from pipeline_errors import (
     WorkerUnavailableError,
     ArtifactValidationError,
 )
-from worker_provisioner import _get_next_worker_url
-
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +50,7 @@ def generate_video_clip(
     output_path: str,
     negative_prompt: str = "",
     visual_style: str = "",
+    worker_url: str = "",
     tool_context=None,
 ) -> str:
     """Generate a video clip using LTX-2.3.
@@ -59,14 +58,13 @@ def generate_video_clip(
     The prompt text is sent raw to the worker.  Duration/resolution are
     local defaults; the caller accepts what the worker returns.
     """
-    gpu_worker_url = _get_next_worker_url("video")
-    if not gpu_worker_url:
+    if not worker_url:
         raise WorkerUnavailableError(
-            "No video worker registered. Provision a worker first.",
+            "No worker_url provided. Agent must pass one.",
             stage="video",
         )
 
-    worker_url = f"{gpu_worker_url.rstrip('/')}/"
+    worker_url = f"{worker_url.rstrip('/')}/"
     req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
     try:

@@ -942,76 +942,6 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
 
 
 
-def wait_for_vm_running(spec: WorkerSpec) -> dict:
-    """Wait for a provisioned VM to reach 'running' status.
-
-    Returns the VM info dict with connection details.
-    Extracts both SSH proxy info (legacy fallback) and direct connection
-    info (public_ipaddr + port mapping) for direct HTTP access.
-
-    Waits indefinitely — no timeout. The operator decides when to stop.
-    """
-    logger.info(
-        "Waiting for %s VM %s to start (no timeout)...",
-        spec.role, spec.vm_id,
-    )
-    start = time.time()
-    while True:
-        try:
-            result = _vast_cmd(["show", "instance", spec.vm_id, "--raw"])
-            if isinstance(result, dict):
-                status = result.get(
-                    "actual_status", result.get("status_msg", "unknown")
-                )
-                elapsed = int(time.time() - start)
-                logger.info(
-                    "  %s VM %s: status=%s (%ds)",
-                    spec.role, spec.vm_id, status, elapsed,
-                )
-                if status == "running":
-                    # Legacy SSH proxy info
-                    spec.ssh_host = result.get("ssh_host", "")
-                    spec.ssh_port = int(result.get("ssh_port", 0))
-                    # Direct connection info
-                    spec.public_ipaddr = result.get("public_ipaddr", "")
-                    # Extract mapped port from Vast.ai ports dict.
-                    ports = result.get("ports", {}) or {}
-                    port_key = f"{spec.remote_port}/tcp"
-                    if port_key in ports:
-                        port_bindings = ports[port_key]
-                        if isinstance(port_bindings, list) and port_bindings:
-                            spec.direct_port = int(
-                                port_bindings[0].get("HostPort", 0)
-                            )
-                        elif isinstance(port_bindings, (int, str)):
-                            spec.direct_port = int(port_bindings)
-                    if spec.public_ipaddr and spec.direct_port:
-                        logger.info(
-                            "  %s VM %s direct connection: %s:%d",
-                            spec.role, spec.vm_id,
-                            spec.public_ipaddr, spec.direct_port,
-                        )
-                    return result
-        except Exception as exc:
-            logger.warning("  Error checking VM status: %s", exc)
-
-        # Agent decides when to intervene — no hardcoded timeout
-        # But notify maintainer if VM stuck for suspiciously long
-        if elapsed > 600 and elapsed % 300 < 15:
-            from maintainer import notify_maintainer
-            notify_maintainer(
-                operation="wait_for_vm_running",
-                error=f"VM {spec.vm_id} still not running after {elapsed}s",
-                context={"role": spec.role, "vm_id": spec.vm_id, "status": status},
-            )
-        time.sleep(15)
-
-
-# ---------------------------------------------------------------------------
-# SSH tunnel management
-# ---------------------------------------------------------------------------
-
-
 def setup_ssh_tunnel(
     spec: WorkerSpec, max_retries: int = 12, retry_delay: int = 15,
 ) -> subprocess.Popen:
@@ -1283,119 +1213,6 @@ def _get_worker_health_text(url: str, timeout: int = 10) -> str | None:
 # sees elapsed time + last known bootstrap phase at this cadence even
 # when the phase hasn't changed.
 WORKER_HEALTH_HEARTBEAT_SECONDS = 30
-
-
-def wait_for_worker_healthy(
-    spec: WorkerSpec,
-    poll_interval: int = 15,
-) -> bool:
-    """Wait for a worker to become healthy after provisioning.
-
-    The worker needs time to:
-    1. Boot the VM and start gpu_worker.py (FastAPI starts immediately)
-    2. Run bootstrap in background (install deps, download models)
-    3. Load the model into VRAM
-
-    This function waits INDEFINITELY until the worker reports healthy or
-    a bootstrap error.  There is no timeout — the operator decides when
-    to intervene, not a hardcoded clock.  A heartbeat is logged every
-    ``WORKER_HEALTH_HEARTBEAT_SECONDS`` (30s) showing elapsed time and
-    the last known bootstrap phase.
-    """
-    url = spec.worker_url or f"http://localhost:{spec.local_port}"
-    logger.info(
-        "Waiting for %s worker at %s to become healthy (no timeout)...",
-        spec.role, url,
-    )
-
-    start = time.time()
-    last_status = "unknown"
-    last_bootstrap_phase = ""
-    last_bootstrap_detail = ""
-    last_heartbeat = start
-    while True:
-        elapsed = int(time.time() - start)
-
-        # Check if tunnel is still alive (only relevant for SSH tunnel connections)
-        if spec.tunnel_proc and spec.tunnel_proc.poll() is not None:
-            logger.warning(
-                "SSH tunnel for %s died — restarting...", spec.role
-            )
-            try:
-                setup_ssh_tunnel(spec)
-            except Exception as exc:
-                logger.error("Failed to restart tunnel: %s", exc)
-
-        # Fetch raw health text from worker
-        health_text = _get_worker_health_text(url)
-
-        if health_text is not None:
-            parts = health_text.split()
-            status = parts[0] if parts else "unknown"
-
-            # --- Bootstrap error escalation ---
-            if status == "error":
-                logger.error(
-                    "BOOTSTRAP FAILED on %s worker: %s",
-                    spec.role, health_text,
-                )
-                spec.bootstrap_error = health_text
-                spec.bootstrap_error_category = "runtime"
-                return False
-
-            # Check if model is loaded (healthy)
-            if status == "ok":
-                if f"{spec.capability}=yes" in health_text:
-                    logger.info(
-                        "%s worker at %s is HEALTHY after %ds",
-                        spec.role, url, elapsed,
-                    )
-                    return True
-                if last_status != "reachable_not_loaded":
-                    logger.info(
-                        "  %s worker reachable but model not loaded yet (%ds): %s",
-                        spec.role, elapsed, health_text,
-                    )
-                    last_status = "reachable_not_loaded"
-        else:
-            if last_status != "unreachable":
-                logger.info(
-                    "  %s worker not yet reachable (%ds) — "
-                    "VM still bootstrapping...",
-                    spec.role, elapsed,
-                )
-                last_status = "unreachable"
-
-        # Periodic heartbeat so operators see progress even when no phase
-        # transition has occurred for a while.
-        now = time.time()
-        if now - last_heartbeat >= WORKER_HEALTH_HEARTBEAT_SECONDS:
-            last_heartbeat = now
-            phase = last_bootstrap_phase or last_status
-            detail = last_bootstrap_detail or ""
-            logger.info(
-                "  heartbeat: %s worker still waiting — elapsed=%ds "
-                "(phase=%s%s)",
-                spec.role, elapsed,
-                phase or "starting",
-                f", {detail}" if detail else "",
-            )
-
-        # Agent decides when to intervene — no hardcoded timeout
-        # But notify maintainer if worker stuck bootstrapping
-        if elapsed > 900 and elapsed % 300 < poll_interval:
-            from maintainer import notify_maintainer
-            notify_maintainer(
-                operation="wait_for_worker_healthy",
-                error=f"Worker {url} still not healthy after {elapsed}s",
-                context={"role": spec.role, "url": url, "health_text": health_text},
-            )
-        time.sleep(poll_interval)
-
-
-# ---------------------------------------------------------------------------
-# High-level orchestrator — parallel lazy provisioning
-# ---------------------------------------------------------------------------
 
 
 class WorkerProvisioner:
@@ -1811,33 +1628,27 @@ class WorkerProvisioner:
             role, spec.status,
         )
 
-        # Poll with short waits (1s) instead of one long blocking wait.
-        # This prevents the async event loop from freezing.
-        while not spec.ready_event.is_set():
-            spec.ready_event.wait()
-
+        # NON-BLOCKING: per /cheat, agent decides. Code does not constrain.
+        # If worker is not healthy, return False immediately. The agent
+        # will use provisioning tools to get one.
         if spec.status == "failed":
-            raise RuntimeError(
-                f"Cannot proceed: {role} worker provisioning failed: "
-                f"{spec.error}"
-            )
+            logger.error("Worker %s failed: %s", role, spec.error)
+            return False
 
         if spec.status in ("healthy", "externally_managed"):
-            # "externally_managed" = pre-set env var worker that wasn't
-            # immediately reachable; honour it per #65 (operator knows
-            # best — downstream pipeline contracts will surface any
-            # lingering unreachability).
             logger.info(
                 "%s worker is ready — stage may proceed (status=%s)",
                 role, spec.status,
             )
-            # Start InfraAgent once all workers are ready
             self._start_infra_agent_if_ready()
             return True
 
-        raise RuntimeError(
-            f"{role} worker in unexpected state: {spec.status}"
+        # Worker exists but is not ready — agent must provision
+        logger.info(
+            "%s worker not ready (status=%s) — agent must provision",
+            role, spec.status,
         )
+        return False
 
     def _get_spec(self, role: str) -> Optional[WorkerSpec]:
         """Get the WorkerSpec for a given role."""
@@ -1923,31 +1734,24 @@ class WorkerProvisioner:
                 logger.debug("Health check failed for %s: %s", spec.worker_url, exc)
                 # Not actually healthy, fall through to gate
 
-        while True:
-            with self._lock:
-                # Recheck under lock
-                if spec.status == "healthy":
-                    return spec
-                if spec.status == "provisioning":
-                    # Another thread is provisioning — wait and retry
-                    _event = spec.ready_event
-                    _wait = True
-                else:
-                    # We become the provisioning thread
-                    spec.status = "provisioning"
-                    spec.ready_event.clear()
-                    _event = None
-                    _wait = False
-
-            if _wait:
-                _trace(spec, "ensure_available_waiting", {
+        # NON-BLOCKING: per /cheat, agent decides. Code does not constrain.
+        with self._lock:
+            if spec.status == "healthy":
+                return spec
+            if spec.status == "provisioning":
+                _trace(spec, "ensure_available_not_ready", {
                     "reason": "another_thread_provisioning",
                 })
-                _event.wait()
-                # Loop back to check final status
-                continue
+                return None
+            # Mark as provisioning so the agent knows work is in progress
+            spec.status = "provisioning"
+            spec.ready_event.clear()
 
-            break  # We are the provisioning thread
+        # Return None — the agent must use provisioning tools
+        _trace(spec, "ensure_available_not_ready", {
+            "reason": "no_healthy_worker",
+        })
+        return None
 
         # We hold the "provisioning" token.  Do the work OUTSIDE the lock
         # so other threads can call _get_spec / get_worker_url concurrently.
@@ -2548,20 +2352,3 @@ def get_provisioner() -> WorkerProvisioner:
     return _provisioner
 
 
-def _get_next_worker_url(role: str = "video") -> str | None:
-    """Return a healthy worker URL, provisioning one if necessary.
-
-    This is the entry point used by video_tools and tts_tools.
-    """
-    provisioner = get_provisioner()
-    # Fast path: already healthy
-    url = provisioner.get_worker_url(role)
-    if url:
-        return url
-    # Provision and wait
-    try:
-        provisioner.ensure_available(role)
-    except Exception as exc:
-        logger.error("Provisioning failed for %s: %s", role, exc)
-    url = provisioner.get_worker_url(role)
-    return url

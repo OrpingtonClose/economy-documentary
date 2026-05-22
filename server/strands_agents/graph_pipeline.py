@@ -967,6 +967,40 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         _update_completed_stages(run_id, AUDIO)
         return json.dumps({"saved": True, "checkpoint_path": dest})
 
+    from strands import tool as _tool_decorator
+    from agents.audio_provisioner_agent import (
+        _tool_search_gpu_offers as _audio_search,
+        _tool_provision_vm as _audio_provision,
+        _tool_check_vm_status as _audio_check_vm,
+        _tool_check_worker_health as _audio_check_health,
+    )
+    from strands_agents.shared_a2a.vast_provisioning import ssh_run_command as _audio_ssh
+
+    @_tool_decorator
+    def search_gpu_offers(query: str) -> str:
+        """Search Vast.ai for GPU offers."""
+        return _audio_search(query)
+
+    @_tool_decorator
+    def provision_vm(offer_id: int, disk_gb: int = 64, worker_mode: str = "tts", docker_image: str = "") -> str:
+        """Provision a VM on Vast.ai."""
+        return _audio_provision(offer_id, disk_gb, worker_mode, docker_image)
+
+    @_tool_decorator
+    def check_vm_status(vm_id: str) -> str:
+        """Check the status of a provisioned VM."""
+        return _audio_check_vm(vm_id)
+
+    @_tool_decorator
+    def check_worker_health(url: str, capability: str = "tts") -> str:
+        """Check if a worker is healthy."""
+        return _audio_check_health(url, capability)
+
+    @_tool_decorator
+    def ssh_run_command(instance_id: int, command: str) -> str:
+        """Run a shell command on a Vast.ai instance via SSH."""
+        return _audio_ssh(instance_id, command)
+
     return Agent(
         name=AUDIO,
         system_prompt=(
@@ -974,14 +1008,19 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
-            "2. For EACH scene, use the 'narration_text' field as the text parameter to "
-            "generate_scene_narration. Call it once per scene (voice='V1' is sufficient). "
-            "The tool provisions a TTS worker automatically if none is available.\n"
-            "3. Add narration clips to the OTIO timeline with add_narration_to_timeline.\n"
-            "4. Run WhisperX alignment with align_narration_audio.\n"
-            "5. Evaluate timing with evaluate_audio_timing.\n"
-            "6. Persist state with persist_audio_to_otio.\n"
-            "7. Call save_audio_checkpoint to preserve the audio work.\n"
+            "2. Check if you have a TTS worker. If not, provision one:\n"
+            "   a. Call search_gpu_offers to find a suitable GPU.\n"
+            "   b. Call provision_vm with the offer_id.\n"
+            "   c. Call check_vm_status until the VM is running.\n"
+            "   d. Call check_worker_health with the VM URL until it returns healthy.\n"
+            "   e. Use ssh_run_command to troubleshoot if the worker fails to start.\n"
+            "3. For EACH scene, call generate_scene_narration with the worker_url.\n"
+            "   Pass the TTS worker URL explicitly. If it fails, fix the worker and retry.\n"
+            "4. Add narration clips to the OTIO timeline with add_narration_to_timeline.\n"
+            "5. Run WhisperX alignment with align_narration_audio.\n"
+            "6. Evaluate timing with evaluate_audio_timing.\n"
+            "7. Persist state with persist_audio_to_otio.\n"
+            "8. Call save_audio_checkpoint to preserve the audio work.\n"
             "Use your memory tools to recall GPU provisioning failures."
         ),
         tools=[
@@ -993,6 +1032,11 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             persist_audio_to_otio,
             check_resume_status,
             save_audio_checkpoint,
+            search_gpu_offers,
+            provision_vm,
+            check_vm_status,
+            check_worker_health,
+            _audio_ssh,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1144,6 +1188,40 @@ def _build_video_agent(model) -> Agent:
         write_pipeline_metadata(tp, "visual_concepts", concepts, provenance={"agent": VIDEO})
         return json.dumps({"persisted": True, "concept_count": len(concepts)})
 
+    from strands import tool as _tool_decorator
+    from agents.video_provisioner_agent import (
+        _tool_search_gpu_offers as _video_search,
+        _tool_provision_vm as _video_provision,
+        _tool_check_vm_status as _video_check_vm,
+        _tool_check_worker_health as _video_check_health,
+    )
+    from strands_agents.shared_a2a.vast_provisioning import ssh_run_command as _video_ssh
+
+    @_tool_decorator
+    def search_gpu_offers(query: str) -> str:
+        """Search Vast.ai for GPU offers."""
+        return _video_search(query)
+
+    @_tool_decorator
+    def provision_vm(offer_id: int, disk_gb: int = 300, worker_mode: str = "ltx", docker_image: str = "") -> str:
+        """Provision a VM on Vast.ai."""
+        return _video_provision(offer_id, disk_gb, worker_mode, docker_image)
+
+    @_tool_decorator
+    def check_vm_status(vm_id: str) -> str:
+        """Check the status of a provisioned VM."""
+        return _video_check_vm(vm_id)
+
+    @_tool_decorator
+    def check_worker_health(url: str, capability: str = "ltx") -> str:
+        """Check if a worker is healthy."""
+        return _video_check_health(url, capability)
+
+    @_tool_decorator
+    def ssh_run_command(instance_id: int, command: str) -> str:
+        """Run a shell command on a Vast.ai instance via SSH."""
+        return _video_ssh(instance_id, command)
+
     return Agent(
         name=VIDEO,
         system_prompt=(
@@ -1155,13 +1233,17 @@ def _build_video_agent(model) -> Agent:
             "2. Call persist_visual_concepts to save the concepts to OTIO metadata.\n"
             "3. Read scenes from OTIO and plan visuals with generate_production_plan.\n"
             "4. Evaluate the plan with evaluate_production_plan.\n"
-            "5. For EACH scene, call submit_gpu_production_job with job_type='video_render'. "
-            "This tool provisions a GPU worker if needed and renders the MP4 synchronously. "
-            "It returns a real video_path when rendering succeeds.\n"
-            "6. After each render succeeds, call add_video_clip_to_timeline with the video_path "
-            "returned by submit_gpu_production_job.\n"
-            "7. Finalize with finalize_production.\n"
-            "8. Call save_video_checkpoint to preserve the rendered clips.\n"
+            "5. Check if you have a video worker. If not, provision one:\n"
+            "   a. Call search_gpu_offers to find a suitable GPU.\n"
+            "   b. Call provision_vm with the offer_id.\n"
+            "   c. Call check_vm_status until the VM is running.\n"
+            "   d. Call check_worker_health with the VM URL until it returns healthy.\n"
+            "   e. Use ssh_run_command to troubleshoot if the worker fails to start.\n"
+            "6. For EACH scene, call submit_gpu_production_job with worker_url.\n"
+            "   Pass the video worker URL explicitly. If it fails, fix the worker and retry.\n"
+            "7. After each render succeeds, call add_video_clip_to_timeline with the video_path.\n"
+            "8. Finalize with finalize_production.\n"
+            "9. Call save_video_checkpoint to preserve the rendered clips.\n"
             "Use your memory tools to recall rendering failures."
         ),
         tools=[
@@ -1174,6 +1256,11 @@ def _build_video_agent(model) -> Agent:
             persist_visual_concepts,
             check_resume_status,
             save_video_checkpoint,
+            search_gpu_offers,
+            provision_vm,
+            check_vm_status,
+            check_worker_health,
+            _video_ssh,
         ] + _make_memory_tools(VIDEO),
         model=model,
     )

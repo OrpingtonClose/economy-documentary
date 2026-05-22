@@ -48,6 +48,7 @@ def generate_scene_narration(
     voice: str,
     text: str,
     output_dir: str = "",
+    worker_url: str = "",
 ) -> str:
     """Generate narration WAV for a single scene voice using Qwen3-TTS.
 
@@ -61,8 +62,16 @@ def generate_scene_narration(
         JSON with wav_path, duration, and generation metadata.
     """
     # ── Existence check — skip regeneration if WAV already present ────
+    if not output_dir:
+        return json.dumps({
+            "wav_path": "",
+            "duration": 8.0,
+            "scene_num": scene_num,
+            "voice": voice,
+            "error": "No output_dir provided. Pass it explicitly.",
+        })
     expected_path = os.path.join(
-        output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline"),
+        output_dir,
         "audio",
         f"scene_{scene_num:03d}_{voice}.wav",
     )
@@ -122,6 +131,7 @@ def generate_scene_narration(
             voice_role=voice,
             text=text,
             output_dir=output_dir,
+            worker_url=worker_url,
             tool_context=_ToolCtx(),
         )
         return result_json
@@ -205,7 +215,7 @@ def align_narration_audio(
             def __init__(self):
                 self.state = {
                     "pipeline_phase": "audio",
-                    "_output_dir": os.environ.get("_output_dir", "/tmp/documentary-pipeline"),
+                    "_output_dir": output_dir or "/tmp/documentary-pipeline",
                 }
 
         result = align_narration(
@@ -350,7 +360,8 @@ def _capture_audio_environment() -> dict:
         "arch": platform.machine(),
     }
     for var in ["TTS_WORKER_URL", "STRANDS_MODEL"]:
-        val = os.environ.get(var, "")
+        # NO ENV VARS: all values passed explicitly
+        val = ""
         if val:
             env[var.lower()] = val
     return env

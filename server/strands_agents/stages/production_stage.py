@@ -525,6 +525,8 @@ def submit_gpu_production_job(
     scene_num: int,
     phrase_idx: int = 0,
     job_type: str = "video_render",
+    worker_url: str = "",
+    output_dir: str = "",
     tool_context: ToolContext | None = None,
 ) -> dict[str, Any]:
     """Submit a GPU production job for a scene.
@@ -668,7 +670,12 @@ def submit_gpu_production_job(
         }
 
     # ── Render the clip ─────────────────────────────────────────────────
-    output_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    if not output_dir:
+        return {
+            "status": "failed",
+            "clip_id": clip_id,
+            "error": "No output_dir provided. Pass it explicitly.",
+        }
     output_path = os.path.join(output_dir, "renders", f"{clip_id}.mp4")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -681,6 +688,7 @@ def submit_gpu_production_job(
             lora_weight=lora_weight,
             output_path=output_path,
             negative_prompt=negative_prompt,
+            worker_url=worker_url,
         )
         result = json.loads(result_json)
     except Exception as exc:
