@@ -88,37 +88,6 @@ def _cache_key(voice_id: str, tts_engine_version: str) -> str:
     return f"{voice_id}::{tts_engine_version}"
 
 
-def load_cache(pipeline_state: dict[str, Any]) -> dict[str, CacheEntry]:
-    """Read the cache dict from pipeline_state, tolerating missing/bad data."""
-    raw = pipeline_state.get(_CACHE_KEY) if isinstance(pipeline_state, dict) else None
-    if isinstance(raw, str) and raw:
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("tts_ssml_smoke: cache JSON malformed, ignoring")
-            raw = None
-    if not isinstance(raw, dict):
-        return {}
-    out: dict[str, CacheEntry] = {}
-    for k, v in raw.items():
-        if not isinstance(v, dict):
-            continue
-        try:
-            out[k] = CacheEntry.from_dict(v)
-        except (TypeError, ValueError) as exc:
-            logger.warning("tts_ssml_smoke: dropping bad cache entry %s: %s", k, exc)
-    return out
-
-
-def save_cache(pipeline_state: dict[str, Any], cache: dict[str, CacheEntry]) -> None:
-    """Persist the cache dict into pipeline_state.
-
-    We store as a dict of plain dicts (not JSON string) so ``safe_state_dict``
-    and downstream serialisers can handle it uniformly.
-    """
-    pipeline_state[_CACHE_KEY] = {k: v.as_dict() for k, v in cache.items()}
-
-
 # ---------------------------------------------------------------------------
 # SSML helpers
 # ---------------------------------------------------------------------------
@@ -128,12 +97,6 @@ def save_cache(pipeline_state: dict[str, Any], cache: dict[str, CacheEntry]) -> 
 # a word, SSML is NOT honoured and we must rewrite literally.
 _PROBE_TOKEN = "PAG"
 _PROBE_EXPECTED = "p a g"
-
-
-def build_probe_ssml(token: str = _PROBE_TOKEN) -> str:
-    # Keep the wrapping minimal — some engines are strict about unknown
-    # elements.  <speak> is universal, <say-as> is the standard hook.
-    return f"<speak><say-as interpret-as=\"characters\">{token}</say-as></speak>"
 
 
 def _letter_spell(token: str) -> str:

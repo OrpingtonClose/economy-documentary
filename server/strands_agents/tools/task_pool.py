@@ -212,30 +212,3 @@ class AsyncTaskPool:
         with self._lock:
             self._shutdown = True
         self._executor.shutdown(wait=wait_for_completion)
-
-
-def make_task_tools(pool: AsyncTaskPool) -> dict[str, Callable[..., Any]]:
-    """Bind ``check_tasks`` / ``await_tasks`` tools to ``pool``.
-
-    Returns a dict of plain callables. Component PRs wrap these with
-    ``@tool`` (supplying the task-type-specific ``launch_*`` themselves)
-    so we don't couple the primitive to the Strands runtime here.
-
-    Args:
-        pool: The pool to bind. Callers are responsible for its lifetime.
-
-    Returns:
-        Mapping with keys ``"check_tasks"`` and ``"await_tasks"``.
-    """
-
-    def check_tasks(task_ids: list[str]) -> list[dict[str, Any]]:
-        """Return status snapshots for ``task_ids``; never blocks."""
-        return pool.check(task_ids)
-
-    def await_tasks(
-        task_ids: list[str], timeout: float | None = None
-    ) -> list[dict[str, Any]]:
-        """Block until every task in ``task_ids`` is terminal or ``timeout`` expires."""
-        return pool.await_all(task_ids, timeout=timeout)
-
-    return {"check_tasks": check_tasks, "await_tasks": await_tasks}

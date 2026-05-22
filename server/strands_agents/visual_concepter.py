@@ -701,66 +701,6 @@ class StyleLockEnforcer(HookProvider):
 # ---------------------------------------------------------------------------
 
 
-def build_visual_concepter_agent(
-    *,
-    model: Any = None,
-    window_size: int = 40,
-    enforce_contract: bool = True,
-    enforce_style_lock: bool = True,
-    tag_revisions: bool = False,
-) -> Agent:
-    """Return a configured visual-concepter :class:`Agent`.
-
-    Args:
-        model: Any value accepted by ``strands.Agent(model=...)``. When
-            ``None`` the SDK falls through to its default.
-        window_size: Messages kept by the
-            :class:`SlidingWindowConversationManager`. Forty covers a
-            ten-scene movie with ~5 phrases each without evicting the
-            movie-level style_lock from context.
-        enforce_contract: When True, wire :class:`ContractEnforcer`
-            for :data:`VISUAL_DIRECTION_CONTRACT`. Both pre- and
-            post-conditions are checked — the visual concepter
-            actually produces the ``visual_concepts`` key that the
-            contract gates.
-        enforce_style_lock: When True, wire :class:`StyleLockEnforcer`
-            so drifting concepts trigger ``propose_concept`` retries.
-        tag_revisions: When True, wire :class:`RevisionTagger` with
-            ``output_key="visual_concepts"`` and
-            ``retag_on_reproduce=True``. Off by default because the
-            preference ledger must be seeded before the agent runs;
-            downstream integrations flip this on once the pipeline
-            ledger is wired.
-
-    Returns:
-        Configured :class:`Agent` ready for ``.__call__`` invocations.
-    """
-    hooks: list[Any] = []
-    if enforce_contract:
-        hooks.append(ContractEnforcer(VISUAL_DIRECTION_CONTRACT))
-    if enforce_style_lock:
-        hooks.append(StyleLockEnforcer())
-    if tag_revisions:
-        hooks.append(
-            RevisionTagger(
-                "visual_concepts",
-                stage="visual_concepter",
-                retag_on_reproduce=True,
-            )
-        )
-
-    return Agent(
-        name="visual_concepter",
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[propose_concept, check_style_lock, persist_visual_concepts],
-        conversation_manager=SlidingWindowConversationManager(
-            window_size=window_size
-        ),
-        hooks=hooks,
-    )
-
-
 __all__ = [
     "CAMERA_MOVEMENTS",
     "DATA_SUITABLE_SHOT_TYPES",

@@ -160,50 +160,6 @@ VISUAL_LOOP_ITERATION_TOOLS: frozenset[str] = frozenset(
 )
 
 
-def build_visual_subagent(
-    *,
-    model: str | None = None,
-    extra_tools: tuple[Any, ...] = (),
-) -> dict[str, Any]:
-    """Build the ``visual`` SubAgent spec consumed by ``create_deep_agent``.
-
-    Args:
-        model: Override for the SubAgent's model. When ``None`` (the
-            default) the value of :data:`VISUAL_SUBAGENT_MODEL_ENV` is
-            used, falling back to :data:`VISUAL_SUBAGENT_DEFAULT_MODEL`.
-        extra_tools: Additional tool callables to append after the
-            eight leaves. Useful for wiring filesystem helpers
-            (``read_file``/``write_file``) in Component 14 without
-            hard-coding them into the visual SubAgent. The orchestrator
-            MUST NOT pass any ``launch_*`` tool here — the prompt
-            forbids such calls.
-
-    Returns:
-        A ``SubAgent`` TypedDict (as a plain ``dict``) matching the
-        shape documented in :mod:`deepagents.middleware.subagents`. The
-        dict keys are: ``name``, ``description``, ``system_prompt``,
-        ``tools``, ``model``.
-    """
-    resolved_model = (
-        model
-        if model is not None
-        else os.environ.get(VISUAL_SUBAGENT_MODEL_ENV, VISUAL_SUBAGENT_DEFAULT_MODEL)
-    )
-    tools = tuple(VISUAL_SUBAGENT_TOOLS) + tuple(extra_tools)
-    return {
-        "name": "visual",
-        "description": (
-            "Visual production planner. Invoke with the accepted scenes + "
-            "style_lock + whisperx_alignment. Returns concepts_by_scene, "
-            "coherence_verdict, and per_scene_report. Never dispatches "
-            "production — the parent orchestrator owns launch_* calls."
-        ),
-        "system_prompt": VISUAL_SUBAGENT_PROMPT,
-        "tools": tools,
-        "model": resolved_model,
-    }
-
-
 __all__ = [
     "VISUAL_LOOP_BOOTSTRAP_TOOLS",
     "VISUAL_LOOP_ITERATION_TOOLS",

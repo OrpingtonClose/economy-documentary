@@ -138,18 +138,6 @@ LLMCallable = Callable[[str, str, str], str]
 _llm_client_factory: Optional[Callable[[], LLMCallable]] = None
 
 
-def set_llm_client_factory(
-    factory: Optional[Callable[[], LLMCallable]],
-) -> None:
-    """Install a zero-arg factory that returns an :data:`LLMCallable`.
-
-    Tests inject deterministic stubs here; production leaves the factory
-    unset and falls back to the google-genai default used by A2.
-    """
-    global _llm_client_factory
-    _llm_client_factory = factory
-
-
 def _default_llm_call(model: str, system: str, prompt: str) -> str:
     """Default google-genai call, mirroring :mod:`agents.preference_interpreter`."""
     from google import genai  # Local import -- google-genai is optional at import time.

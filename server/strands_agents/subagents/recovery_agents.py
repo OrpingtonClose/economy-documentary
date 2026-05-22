@@ -447,63 +447,6 @@ Rules:
 """
 
 
-def build_diagnostic_classifier(
-    model: Any = None,
-    *,
-    window_size: int = 40,
-) -> Agent:
-    """Construct the diagnostic-classifier Strands agent.
-
-    Args:
-        model: Strands :class:`Model` / model id. ``None`` defers to the
-            Strands default (the agent can also be invoked via
-            :func:`classify` directly, no LLM needed).
-        window_size: Sliding window size — recovery may bounce between
-            classifier and remanifester over several turns; default 40.
-
-    Returns:
-        Configured :class:`strands.Agent` with the two classifier tools.
-    """
-    kwargs: dict[str, Any] = {
-        "tools": [classify, persist_classification],
-        "system_prompt": _CLASSIFIER_SYSTEM_PROMPT,
-        "conversation_manager": SlidingWindowConversationManager(
-            window_size=window_size
-        ),
-    }
-    if model is not None:
-        kwargs["model"] = model
-    return Agent(**kwargs)
-
-
-def build_remanifestation_agent(
-    model: Any = None,
-    *,
-    window_size: int = 20,
-) -> Agent:
-    """Construct the remanifestation Strands agent.
-
-    Args:
-        model: Strands :class:`Model` / model id. ``None`` defers to the
-            Strands default.
-        window_size: Sliding window size — a single remanifestation is
-            usually one propose + one diff turn; default 20.
-
-    Returns:
-        Configured :class:`strands.Agent` with the two remanifestation tools.
-    """
-    kwargs: dict[str, Any] = {
-        "tools": [propose_revised_concept, diff_concept],
-        "system_prompt": _REMANIFEST_SYSTEM_PROMPT,
-        "conversation_manager": SlidingWindowConversationManager(
-            window_size=window_size
-        ),
-    }
-    if model is not None:
-        kwargs["model"] = model
-    return Agent(**kwargs)
-
-
 __all__ = [
     "VALID_CLASSIFICATIONS",
     "build_diagnostic_classifier",

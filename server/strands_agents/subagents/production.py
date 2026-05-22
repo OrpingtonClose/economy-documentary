@@ -202,55 +202,6 @@ PRODUCTION_DISPATCH_TOOLS: frozenset[str] = frozenset(
 )
 
 
-def build_production_subagent(
-    *,
-    model: str | None = None,
-    extra_tools: tuple[Any, ...] = (),
-) -> dict[str, Any]:
-    """Build the ``production`` SubAgent spec consumed by ``create_deep_agent``.
-
-    Args:
-        model: Override for the SubAgent's model. When ``None`` the
-            value of :data:`PRODUCTION_SUBAGENT_MODEL_ENV` is used,
-            falling back to :data:`PRODUCTION_SUBAGENT_DEFAULT_MODEL`.
-        extra_tools: Additional tool callables to append after the
-            ten core leaves. Useful for wiring filesystem helpers
-            (``read_file``/``write_file``) in Component 14 without
-            hard-coding them here. The orchestrator MUST NOT pass any
-            additional ``launch_*`` tool beyond
-            ``launch_visual_production``.
-
-    Returns:
-        A ``SubAgent`` TypedDict (as a plain ``dict``) matching the
-        shape documented in :mod:`deepagents.middleware.subagents`.
-        Keys: ``name``, ``description``, ``system_prompt``, ``tools``,
-        ``model``.
-    """
-    resolved_model = (
-        model
-        if model is not None
-        else os.environ.get(
-            PRODUCTION_SUBAGENT_MODEL_ENV, PRODUCTION_SUBAGENT_DEFAULT_MODEL
-        )
-    )
-    tools = tuple(PRODUCTION_SUBAGENT_TOOLS) + tuple(extra_tools)
-    return {
-        "name": "production",
-        "description": (
-            "GPU dispatch specialist. Invoke after audio render and "
-            "visual concepts are complete. Dispatches "
-            "launch_visual_production per scene, runs deterministic "
-            "artifact QA, and drives retry / fix / skip recovery. "
-            "Returns a production_report with per-scene artifacts + "
-            "the recovery ledger. Escalates via request_escalation "
-            "when tactical recovery is exhausted."
-        ),
-        "system_prompt": PRODUCTION_SUBAGENT_PROMPT,
-        "tools": tools,
-        "model": resolved_model,
-    }
-
-
 __all__ = [
     "PRODUCTION_BOOTSTRAP_TOOLS",
     "PRODUCTION_DISPATCH_TOOLS",

@@ -436,44 +436,6 @@ Process:
 """
 
 
-def build_escalation_supervisor(
-    *,
-    model: str | None = None,
-) -> SubAgent:
-    """Construct the escalation supervisor :class:`SubAgent`.
-
-    Args:
-        model: Optional override. Defaults to the environment variable
-            ``STRANDS_THINKER_MODEL`` so this SubAgent points at the
-            largest available reasoning model in production.
-
-    Returns:
-        A fully-populated :class:`SubAgent` TypedDict ready to be
-        registered with ``create_deep_agent(..., subagents=[...])``.
-    """
-
-    resolved_model = model or os.environ.get(
-        "STRANDS_THINKER_MODEL", "openai/gpt-4o"
-    )
-    return SubAgent(
-        name="escalation",
-        description=(
-            "Escalation supervisor. Invoke when tactical recovery has "
-            "failed. Returns a decision: fix / retry / skip / "
-            "escalate_to_human / abort, and writes it to disk."
-        ),
-        system_prompt=ESCALATION_SUPERVISOR_PROMPT,
-        tools=[
-            decide_escalation_action,
-            write_escalation_decision,
-            read_file,
-            read_telemetry_snapshot,
-            request_human_approval,
-        ],
-        model=resolved_model,
-    )
-
-
 __all__ = [
     "Action",
     "ESCALATION_SUPERVISOR_PROMPT",
