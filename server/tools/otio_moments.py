@@ -324,20 +324,6 @@ def persist_scene_assembly_artifact(
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MeasuredClip:
-    """A single narration clip measured via WhisperX."""
-
-    scene_num: int
-    voice: str
-    claimed_sec: float      # scene.duration_sec share the TTS aimed for
-    measured_sec: float     # WhisperX ground truth
-    wav_path: str = ""
-
-    @property
-    def ratio(self) -> float:
-        if self.claimed_sec <= 0:
-            return 0.0
-        return self.measured_sec / self.claimed_sec
 
 
 @dataclass
