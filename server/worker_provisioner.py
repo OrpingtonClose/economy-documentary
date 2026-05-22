@@ -350,19 +350,6 @@ def check_worker_health(url: str, capability: str) -> bool:
     return f"{capability}=yes" in text
 
 
-def check_worker_reachable(url: str) -> bool:
-    """Check if a worker URL is reachable (responds to GET /, any status)."""
-    health_url = f"{url.rstrip('/')}/"
-    try:
-        req = Request(health_url)
-        with urlopen(req, timeout=5) as resp:
-            resp.read()
-        return True
-    except Exception as exc:
-        logger.debug("Worker %s not reachable: %s", url, exc)
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Vast.ai account & budget
 # ---------------------------------------------------------------------------
@@ -456,33 +443,6 @@ def calculate_weighted_budgets(
 
 
 # Keep the old function for backward compatibility (infra_agent etc.)
-def calculate_budget_per_worker(
-    num_workers: int,
-    estimated_hours: float = _ESTIMATED_RUN_HOURS,
-) -> float:
-    """Legacy equal-split budget.  Prefer calculate_weighted_budgets()."""
-    credits = get_account_credits()
-    usable = credits - _CREDIT_RESERVE
-    if usable <= 0:
-        from recovery import escalate_pipeline_error
-        _credit_msg = (
-            f"Insufficient Vast.ai credits: ${credits:.2f} "
-            f"(reserve=${_CREDIT_RESERVE:.2f}). "
-            f"Top up at https://cloud.vast.ai/billing/"
-        )
-        response = escalate_pipeline_error(
-            operation_name="vast_credits_insufficient",
-            error_msg=_credit_msg,
-            severity="critical",
-            default_action="abort",
-            diagnosis_hint="Vast.ai account has insufficient credits for provisioning.",
-        )
-        if response.get("action") != "skip":
-            raise RuntimeError(_credit_msg)
-        return 0.0  # skip: return zero budget so caller can handle gracefully
-    budget = usable / max(num_workers, 1) / max(estimated_hours, 0.5)
-    capped = min(budget, _VIDEO_PRICE_CEILING)
-    return capped
 
 
 # ---------------------------------------------------------------------------

@@ -52,11 +52,3 @@ class ConfigError(PipelineError):
 
 class ProgrammingError(PipelineError):
     pass
-
-
-def classify_exception(exc: Exception) -> str:
-    if isinstance(exc, RetryableError):
-        return "retryable"
-    if isinstance(exc, FatalError):
-        return "fatal"
-    return "unknown"
