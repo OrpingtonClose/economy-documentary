@@ -57,7 +57,7 @@ def generate_narration(
     The narration text is sent raw to the worker.  Voice and language
     are local defaults; the caller accepts what the worker returns.
     """
-    gpu_worker_url = _get_next_worker_url()
+    gpu_worker_url = _get_next_worker_url("tts")
     if not gpu_worker_url:
         raise WorkerUnavailableError(
             "No TTS worker registered. Provision a worker first.",

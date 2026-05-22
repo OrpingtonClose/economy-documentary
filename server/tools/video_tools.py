@@ -59,7 +59,7 @@ def generate_video_clip(
     The prompt text is sent raw to the worker.  Duration/resolution are
     local defaults; the caller accepts what the worker returns.
     """
-    gpu_worker_url = _get_next_worker_url()
+    gpu_worker_url = _get_next_worker_url("video")
     if not gpu_worker_url:
         raise WorkerUnavailableError(
             "No video worker registered. Provision a worker first.",

@@ -342,22 +342,18 @@ def check_worker_health(url: str, capability: str) -> bool:
 
     Returns True if healthy, False otherwise.
     """
-    health_url = f"{url.rstrip('/')}/"
-    try:
-        req = Request(health_url)
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-        if data.get("status") != "ok":
-            return False
-        loaded_key = f"{capability}_loaded"
-        return bool(data.get(loaded_key, False))
-    except (URLError, OSError, json.JSONDecodeError, TimeoutError, Exception):
+    detail = _get_worker_health_detail(url, timeout=10)
+    if detail is None:
         return False
+    if detail.get("status") != "ok":
+        return False
+    loaded_key = f"{capability}_loaded"
+    return bool(detail.get(loaded_key, False))
 
 
 def check_worker_reachable(url: str) -> bool:
-    """Check if a worker URL is reachable (responds to /health, any status)."""
-    health_url = f"{url.rstrip('/')}/health"
+    """Check if a worker URL is reachable (responds to GET /, any status)."""
+    health_url = f"{url.rstrip('/')}/"
     try:
         req = Request(health_url)
         with urlopen(req, timeout=5) as resp:
@@ -1257,15 +1253,42 @@ def _log_vm_diagnostics(spec: WorkerSpec) -> None:
 
 
 def _get_worker_health_detail(url: str, timeout: int = 10) -> dict | None:
-    """Fetch full health JSON from a worker, including bootstrap status.
+    """Fetch full health text from a worker and parse into a dict.
 
+    The worker returns plain text like:
+      "ok NVIDIA A100 tts=yes ltx=no vram=0.0/40.0GB mode=ltx"
     Returns the parsed dict, or None if unreachable.
     """
-    health_url = f"{url.rstrip('/')}/health"
+    health_url = f"{url.rstrip('/')}/"
     try:
         req = Request(health_url)
         with urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
+            text = resp.read().decode().strip()
+        parts = text.split()
+        data: dict = {"status": parts[0] if parts else "unknown"}
+        for part in parts[1:]:
+            if "=" in part:
+                key, val = part.split("=", 1)
+                if key in ("tts", "ltx"):
+                    data[f"{key}_loaded"] = val == "yes"
+                elif key == "vram":
+                    data["vram_used_gb"] = 0.0
+                    data["vram_total_gb"] = 0.0
+                    try:
+                        used, total = val.replace("GB", "").split("/")
+                        data["vram_used_gb"] = float(used)
+                        data["vram_total_gb"] = float(total)
+                    except Exception:
+                        pass
+                elif key == "mode":
+                    data["worker_mode"] = val
+                else:
+                    data[key] = val
+            else:
+                data["gpu"] = part
+        # Add bootstrap stub so wait_for_worker_healthy doesn't crash
+        data["bootstrap"] = {"phase": "ready" if data.get("status") == "ok" else "error"}
+        return data
     except Exception:
         return None
 
@@ -2504,3 +2527,22 @@ def get_provisioner() -> WorkerProvisioner:
         if _provisioner is None:
             _provisioner = WorkerProvisioner()
     return _provisioner
+
+
+def _get_next_worker_url(role: str = "video") -> str | None:
+    """Return a healthy worker URL, provisioning one if necessary.
+
+    This is the entry point used by video_tools and tts_tools.
+    """
+    provisioner = get_provisioner()
+    # Fast path: already healthy
+    url = provisioner.get_worker_url(role)
+    if url:
+        return url
+    # Provision and wait
+    try:
+        provisioner.ensure_available(role)
+    except Exception:
+        pass
+    url = provisioner.get_worker_url(role)
+    return url
