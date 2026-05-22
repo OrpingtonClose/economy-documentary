@@ -1427,6 +1427,29 @@ class WorkerProvisioner:
         # _specs so it doesn't race against the background launcher.
         self._specs_ready = threading.Event()
 
+    def register_worker(self, worker_url: str, role: str) -> None:
+        """Register an externally-provisioned worker URL.
+
+        Used when agentic tools provision VMs directly and need to
+        register them with the singleton for pipeline stages to find.
+        """
+        with self._lock:
+            # Check if already registered
+            for spec in self._specs:
+                if spec.worker_url == worker_url:
+                    return
+            spec = WorkerSpec(
+                role=role,
+                env_var="TTS_WORKER_URL" if role == "tts" else "VIDEO_WORKER_URL",
+                local_port=8880,
+                remote_port=8880,
+                capability="tts" if role == "tts" else "ltx",
+                worker_url=worker_url,
+                status="healthy",
+                vm_id="external",
+            )
+            self._specs.append(spec)
+
     # ------------------------------------------------------------------
     # Phase 1: Non-blocking — kick off background provisioning
     # ------------------------------------------------------------------
