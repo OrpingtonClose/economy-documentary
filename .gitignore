@@ -16,3 +16,5 @@ git-history-export*
 cache/
 graphify-out/
 server/agent_memory/
+*.acb
+coverage.json
