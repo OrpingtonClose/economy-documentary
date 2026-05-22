@@ -684,28 +684,3 @@ _AGENT_INSTRUCTION = (
     "reviewer — do not attempt to mask or re-interpret a FAIL "
     "verdict, the callback is authoritative.\n"
 )
-
-
-def build_narration_reconciliation_agent():
-    """Return a lightweight Agent wrapping the E2 reconciliation loop.
-
-    Same pattern as :func:`server.critique.stylistic_qa_agent.build_stylistic_qa_agent`:
-    the measurement callables are registered as plain ``tools=[...]``
-    so an LLM can invoke them for ad-hoc diagnosis, but the
-    stage-boundary invariant is enforced deterministically by the
-    ``after_agent_callback``. Cross-stage state (the report + the
-    pass gate) flows through the blackboard via ``output_key`` so
-    downstream callbacks like
-    :func:`server.callbacks.otio_state.authoritative_transition_callback`
-    can read it.
-    """
-
-    class _StubAgent:
-        name = _AGENT_NAME
-        tools = list(_AGENT_TOOLS)
-        after_agent_callback = staticmethod(
-            narration_reconciliation_after_agent_callback
-        )
-        output_key = NARRATION_RECONCILIATION_STATE_KEY
-
-    return _StubAgent()

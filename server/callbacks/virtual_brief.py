@@ -575,26 +575,6 @@ def virtual_brief_after_agent_callback(callback_context):  # pragma: no cover
     return None
 
 
-def build_virtual_brief_agent():
-    """Return a lightweight Agent that exposes the virtual-brief tool.
-
-    The agent is deliberately thin: assembly is deterministic, so we
-    register :func:`assemble_virtual_brief_tool` as a plain callable
-    under ``tools=[...]`` and rely on the ``after_agent_callback`` for
-    the stage-boundary hard-conflict gate. An LLM is attached so
-    dashboards / reviewers get a natural-language diagnostic when the
-    callback raises, but it must not be relied on to enforce the gate.
-    """
-
-    class _StubAgent:
-        name = "virtual_brief_agent"
-        output_key = VIRTUAL_BRIEF_OUTPUT_KEY
-        tools = [assemble_virtual_brief_tool]
-        after_agent_callback = staticmethod(virtual_brief_after_agent_callback)
-
-    return _StubAgent()
-
-
 __all__ = [
     "VIRTUAL_BRIEF_OUTPUT_KEY",
     "EffectiveDecision",
@@ -602,6 +582,5 @@ __all__ = [
     "VirtualBrief",
     "assemble_virtual_brief",
     "assemble_virtual_brief_tool",
-    "build_virtual_brief_agent",
-    "virtual_brief_after_agent_callback",
+        "virtual_brief_after_agent_callback",
 ]

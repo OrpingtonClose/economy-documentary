@@ -52,37 +52,3 @@ def safe_state_dict(state: Any) -> dict:
     except (TypeError, ValueError):
         logger.warning("Could not convert state to dict, returning empty")
         return {}
-
-
-def build_pipeline_state() -> dict:
-    """Return the initial pipeline session state."""
-    # Seed the Preference Ledger substrate (ARCH-A1, #131) and the artifact
-    # revision-tag map (ARCH-B1, #137) as empty JSON containers at pipeline
-    # start. An empty-but-present ledger represents revision 0 (no user
-    # directives yet) — ARCH-A3 will later parse the original brief into R0
-    # records at this same point. The revision-tag map is the universal
-    # back-edge store that the consistency checker (ARCH-A5, #135) walks.
-    from callbacks.preference_ledger import PREFERENCE_LEDGER_KEY
-    from callbacks.artifact_revision_tag import ARTIFACT_REVISION_TAGS_KEY
-
-    return {
-        "_pipeline_key": f"doc_{uuid.uuid4().hex[:8]}",
-        "topic": "",
-        "corpus_path": "",
-        "language": "en",
-        "scenes": "[]",
-        "content_analysis": "(not yet analyzed)",
-        "visual_concepts": "(not yet generated)",
-        "coherence_evaluation": "(not yet evaluated)",
-        "whisperx_alignment": "{}",
-        "otio_mutations": "[]",
-        "otio_violation": None,
-        "pipeline_phase": "idle",
-        "lora_selections": "{}",
-        "max_scene_duration": "45",
-        "max_words_per_scene": "112",
-        # ARCH-A1 / ARCH-B1 substrate — empty by default; producers tag as
-        # they emit artifacts, and the consistency checker reads both.
-        PREFERENCE_LEDGER_KEY: "[]",
-        ARTIFACT_REVISION_TAGS_KEY: "{}",
-    }

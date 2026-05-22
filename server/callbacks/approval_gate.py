@@ -75,29 +75,6 @@ def is_stage_approved(stage: str) -> bool:
     return state.get(stage, {}).get("approved", False)
 
 
-def reset_stage_approval(stage: str) -> None:
-    """Clear the approval for ``stage`` so the next :func:`wait_for_approval`
-    actually blocks for human review.
-
-    Required by ARCH-B3 (#139) reconstruction gating: a single pipeline run
-    may trigger multiple reconstruction plans (e.g. drift at the scenario
-    boundary, then drift at the audio boundary). Without resetting, the
-    second and later plans would short-circuit through
-    :func:`is_stage_approved` because the ``approved`` flag persists on
-    disk from the first approval, silently auto-approving every subsequent
-    reconstruction.
-    """
-    state = _read_approval_state()
-    if stage in state:
-        state[stage].pop("approved", None)
-        state[stage].pop("approved_at", None)
-        state[stage].pop("approved_by", None)
-        state[stage].pop("ready", None)
-        state[stage].pop("ready_at", None)
-        _write_approval_state(state)
-        logger.info("Stage '%s' approval reset for re-gating", stage)
-
-
 def mark_stage_ready(stage: str) -> None:
     """Mark a stage as ready for human review (but not yet approved)."""
     state = _read_approval_state()

@@ -346,88 +346,9 @@ def _emit_halt(verdict: GateVerdict, *, max_attempts: int) -> None:
         logger.debug("intent_gate: narrator halt_fired emit failed: %s", exc)
 
 
-def run_preflight_gate(
-    state: MutableMapping[str, Any],
-    *,
-    max_attempts: int = MAX_GATE_ATTEMPTS,
-) -> GateVerdict:
-    """Evaluate the gate against ``state`` and update gate bookkeeping.
-
-    Side effects:
-
-    * Writes the verdict under :data:`GATE_VERDICT_KEY`.
-    * On failure, writes the critique under :data:`GATE_CRITIQUE_KEY`
-      and increments the attempt counter.
-    * On pass, clears the critique and signals
-      :data:`INTENT_GATE_PASSED` (INTENT-05).
-    * On exhaustion (``attempt >= max_attempts`` and still failing),
-      emits a ``halt_fired`` narrator event and raises
-      :class:`IntentGateHalt`.
-    """
-    from agents.intent_extractor import get_brief_intent
-
-    intent = get_brief_intent(state)
-    if intent is None:
-        raise IntentGateHalt(
-            "intent_gate: no BriefIntent in session state — "
-            "intent_extractor must run before the gate"
-        )
-
-    attempt = int(state.get(GATE_ATTEMPT_KEY) or 0) + 1
-    state[GATE_ATTEMPT_KEY] = attempt
-
-    scenes = _extract_scenes(state)
-    verdict = evaluate_gate(intent, scenes, attempt=attempt)
-    _record_verdict(state, verdict)
-
-    if verdict.passed:
-        _clear_critique(state)
-        INTENT_GATE_PASSED.set()
-        logger.info(
-            "intent_gate: PASS on attempt %d (duration %.1fs, %d scenes)",
-            attempt, verdict.total_scene_duration_sec, len(scenes),
-        )
-        return verdict
-
-    logger.warning(
-        "intent_gate: FAIL on attempt %d/%d — %s",
-        attempt, max_attempts, "; ".join(verdict.failures),
-    )
-    _record_critique(state, build_critique(verdict))
-
-    if attempt >= max_attempts:
-        _emit_halt(verdict, max_attempts=max_attempts)
-        raise IntentGateHalt(
-            build_halt_message(verdict, max_attempts=max_attempts)
-        )
-    return verdict
-
-
 # ---------------------------------------------------------------------------
 # INTENT-05: lazy GPU gating helpers
 # ---------------------------------------------------------------------------
-
-
-def wait_for_intent_gate(timeout_sec: Optional[float] = None) -> bool:
-    """Block the caller until :data:`INTENT_GATE_PASSED` is signalled.
-
-    Returns ``True`` if the event fired, ``False`` on timeout.  The
-    worker provisioner (INTENT-05) waits on this before any call to
-    :func:`worker_provisioner.WorkerProvisioner.start_provisioning` so
-    cancelling a run before the gate passes costs zero GPU-seconds.
-    """
-    start = time.time()
-    fired = INTENT_GATE_PASSED.wait(timeout=timeout_sec)
-    logger.info(
-        "intent_gate: wait_for_intent_gate fired=%s after %.2fs",
-        fired, time.time() - start,
-    )
-    return fired
-
-
-def reset_intent_gate() -> None:
-    """Reset the cross-run signal — used by pipeline init and tests."""
-    INTENT_GATE_PASSED.clear()
 
 
 __all__ = [
@@ -441,7 +362,4 @@ __all__ = [
     "build_critique",
     "build_halt_message",
     "evaluate_gate",
-    "reset_intent_gate",
-    "run_preflight_gate",
-    "wait_for_intent_gate",
-]
+            ]

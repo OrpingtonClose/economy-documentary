@@ -246,25 +246,6 @@ def has_tag(state: Mapping[str, Any], artifact_key: str) -> bool:
     return artifact_key in _load_raw(state)
 
 
-def get_tag(
-    state: Mapping[str, Any], artifact_key: str
-) -> Optional[ArtifactRevisionTag]:
-    """Return the tag for ``artifact_key``, or ``None`` if absent.
-
-    Raises ``ValueError`` / ``TypeError`` if the stored tag is malformed —
-    no silent degradation.
-    """
-    if not isinstance(artifact_key, str) or not artifact_key:
-        raise ValueError(
-            f"artifact_key must be a non-empty string, got {artifact_key!r}"
-        )
-    raw = _load_raw(state)
-    entry = raw.get(artifact_key)
-    if entry is None:
-        return None
-    return ArtifactRevisionTag.from_dict(entry)
-
-
 def list_tags(state: Mapping[str, Any]) -> dict[str, ArtifactRevisionTag]:
     """Return all tags currently stored, keyed by artifact key.
 

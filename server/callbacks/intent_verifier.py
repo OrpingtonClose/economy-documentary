@@ -527,22 +527,6 @@ def emit_drift_narration(record: VerificationRecord) -> None:
         logger.debug("intent_verifier: halt narration failed: %s", exc)
 
 
-def verify_and_log(
-    stage: str,
-    state: MutableMapping[str, Any],
-) -> VerificationRecord:
-    """Convenience: verify + log + narrate on drift.
-
-    Callers that want fail-closed behaviour check ``record.passed`` on
-    the returned record and raise / short-circuit accordingly.
-    """
-    record = verify_stage_constraints(stage, state)
-    log_verification(record, state)
-    if not record.passed:
-        emit_drift_narration(record)
-    return record
-
-
 __all__ = [
     "STAGE_ASSEMBLY",
     "STAGE_AUDIO",
@@ -553,6 +537,5 @@ __all__ = [
     "VerificationRecord",
     "emit_drift_narration",
     "log_verification",
-    "verify_and_log",
-    "verify_stage_constraints",
+        "verify_stage_constraints",
 ]

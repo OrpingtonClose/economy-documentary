@@ -74,18 +74,6 @@ class _RecoveryLedger:
         self._fixes: dict[str, int] = {}
         self._skips: dict[str, dict[str, Any]] = {}
 
-    def increment_retry(self, scene_id: str) -> int:
-        with self._lock:
-            current = self._retries.get(scene_id, 0) + 1
-            self._retries[scene_id] = current
-            return current
-
-    def increment_fix(self, scene_id: str) -> int:
-        with self._lock:
-            current = self._fixes.get(scene_id, 0) + 1
-            self._fixes[scene_id] = current
-            return current
-
     def try_increment_retry(
         self, scene_id: str, budget: int
     ) -> tuple[int, int]:
@@ -182,20 +170,6 @@ def get_recovery_ledger() -> _RecoveryLedger:
     bootstrap.
     """
     return _LEDGER
-
-
-def set_recovery_ledger(ledger: _RecoveryLedger | None) -> None:
-    """Install a fresh recovery ledger (or reset to the default).
-
-    Args:
-        ledger: New ledger instance. Pass ``None`` to restore the
-            module-level default and clear its state.
-    """
-    global _LEDGER
-    if ledger is None:
-        _LEDGER = _RecoveryLedger()
-    else:
-        _LEDGER = ledger
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +373,5 @@ __all__ = [
     "get_recovery_ledger",
     "request_escalation",
     "retry_scene",
-    "set_recovery_ledger",
-    "skip_scene",
+        "skip_scene",
 ]
