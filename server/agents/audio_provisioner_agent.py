@@ -1453,23 +1453,3 @@ RULES:
 # ---------------------------------------------------------------------------
 # AudioProvisionerAgent class
 # ---------------------------------------------------------------------------
-
-class AudioProvisionerAgent(RecoveryAgent):
-    """Agent that owns TTS end-to-end: provision, generate, evaluate, cleanup.
-
-    Merges the provisioner with the audio agent.  Uses raw LLM reasoning
-    with vast CLI output + Letta-based memory.  No hardcoded model
-    registries — the agent searches Vast.ai, reads the results, and
-    reasons about what GPU to pick.
-
-    The agent tracks VMs in its working memory (not OTIO) because VMs
-    are ephemeral infrastructure.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(
-            name="audio_provisioner",
-            instruction=_AUDIO_PROVISIONER_INSTRUCTION,
-            tools=_AUDIO_PROVISIONER_TOOLS,
-            max_tool_rounds=12,  # May need many rounds: search, provision, wait, generate, evaluate
-        )

@@ -434,15 +434,6 @@ def get_narrator() -> Narrator:
     return _narrator
 
 
-def subscribe_narrator_events() -> collections.deque:
-    """Register a subscriber queue on the singleton narrator."""
-    return _narrator.subscribe()
-
-
-def unsubscribe_narrator_events(queue: collections.deque) -> None:
-    _narrator.unsubscribe(queue)
-
-
 def emit_narrator_event(
     kind: str,
     *,
