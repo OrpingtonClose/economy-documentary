@@ -70,7 +70,7 @@ def generate_video_clip(
     req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
     try:
-        with urlopen(req, timeout=600) as resp:
+        with urlopen(req) as resp:
             result = _parse_video_response(resp)
     except URLError as e:
         raise WorkerUnavailableError(

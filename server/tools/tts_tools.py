@@ -68,7 +68,7 @@ def generate_narration(
     req = Request(worker_url, data=text.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
     try:
-        with urlopen(req, timeout=120) as resp:
+        with urlopen(req) as resp:
             result = _parse_tts_response(resp)
     except URLError as e:
         raise WorkerUnavailableError(

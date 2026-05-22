@@ -133,8 +133,8 @@ def search_offers(
                 "results": len(catalog),
                 "agent_initiated": True,
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Trace failed (non-critical): %s", exc)
 
     return json.dumps(result)
 
@@ -182,8 +182,8 @@ def create_instance(
             spec = _prov.tts_spec
         elif role == "video" and hasattr(_prov, "video_spec"):
             spec = _prov.video_spec
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Spec lookup failed (non-critical): %s", exc)
 
     # Build onstart script
     b2_key_id = os.environ.get("B2_KEY_ID", "")
@@ -199,7 +199,8 @@ def create_instance(
         ).strip()
         if not _branch or _branch == "HEAD":
             _branch = "main"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Git branch detection failed, using 'main': %s", exc)
         _branch = "main"
 
     _min_torch = "2.7.0"
@@ -300,8 +301,8 @@ def create_instance(
         try:
             from tools.vastai_tools import register_owned_vm
             register_owned_vm(str(vm_id))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("register_owned_vm failed (non-critical): %s", exc)
         if spec:
             spec.vm_id = str(vm_id)
             _trace(spec, "agent_create_instance_success", {

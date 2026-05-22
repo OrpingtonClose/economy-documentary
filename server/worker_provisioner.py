@@ -500,7 +500,7 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
 
     cmd = ["vastai", "--api-key", api_key] + args
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(
                 f"vastai command failed (rc={result.returncode}): "
@@ -512,8 +512,6 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
             return result.stdout.strip()
     except FileNotFoundError:
         raise RuntimeError("vastai CLI not installed")
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("vastai command timed out")
 
 
 def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -> int:
@@ -770,7 +768,8 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         ).strip()
         if not _branch or _branch == "HEAD":
             _branch = "main"
-    except Exception:
+    except Exception as exc:
+        logger.warning("Git branch detection failed, using 'main': %s", exc)
         _branch = "main"
     logger.info("VMs will clone branch: %s", _branch)
 
@@ -1264,7 +1263,8 @@ def _get_worker_health_text(url: str, timeout: int = 10) -> str | None:
         req = Request(health_url)
         with urlopen(req, timeout=timeout) as resp:
             return resp.read().decode().strip()
-    except Exception:
+    except Exception as exc:
+        logger.debug("Health text fetch failed: %s", exc)
         return None
 
 
@@ -2442,8 +2442,8 @@ class WorkerProvisioner:
             if agent:
                 agent.shutdown()
                 logger.info("InfraAgent stopped")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("InfraAgent shutdown failed (non-critical): %s", exc)
 
     def get_worker_url(self, role: str) -> str | None:
         """Return the URL of a healthy worker for *role*, or None.
@@ -2504,7 +2504,7 @@ def _get_next_worker_url(role: str = "video") -> str | None:
     # Provision and wait
     try:
         provisioner.ensure_available(role)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.error("Provisioning failed for %s: %s", role, exc)
     url = provisioner.get_worker_url(role)
     return url
