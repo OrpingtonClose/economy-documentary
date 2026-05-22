@@ -361,14 +361,6 @@ class WhisperXOracle:
     scene_claimed: dict[int, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def register_scenes(self, scenes: list[dict]) -> None:
-        """Snapshot each scene's claimed ``duration_sec`` for projection math."""
-        with self._lock:
-            for s in scenes:
-                sn = int(s.get("scene_num", 0) or 0)
-                if sn > 0:
-                    self.scene_claimed[sn] = float(s.get("duration_sec", 0) or 0)
-
     def record(
         self,
         scene_num: int,
@@ -394,94 +386,10 @@ class WhisperXOracle:
         with self._lock:
             return sum(c.measured_sec for c in self.clips)
 
-    def measured_by_scene(self, scene_num: int) -> float:
-        """Sum of measured durations for clips of a single scene."""
-        with self._lock:
-            return sum(c.measured_sec for c in self.clips if c.scene_num == scene_num)
-
-    def project_total(self) -> float:
-        """Projected final runtime = measured_so_far + sum(remaining_targets).
-
-        "Remaining" = scenes that have no measured clips yet. For scenes
-        that are partially measured we trust the measurements as-is
-        (don't extrapolate), matching how the pipeline actually behaves.
-        """
-        with self._lock:
-            done_scenes = {c.scene_num for c in self.clips}
-            measured = sum(c.measured_sec for c in self.clips)
-            remaining = sum(
-                target
-                for sn, target in self.scene_claimed.items()
-                if sn not in done_scenes
-            )
-            return measured + remaining
-
 
 # ---------------------------------------------------------------------------
 # WhisperX integration — ground-truth duration measurement
 # ---------------------------------------------------------------------------
-
-def measure_actual_duration_with_whisperx(
-    wav_path: str,
-    text: str,
-    language: str = "en",
-) -> float:
-    """Measure spoken duration via WhisperX (authoritative, not TTS-reported).
-
-    Per SKILL.md rule 3, WhisperX is the duration oracle — the TTS
-    engine's self-reported duration is not trusted because Qwen3-TTS has
-    been observed to over-report by up to 30%.
-
-    FAIL LOUD: if WhisperX is unavailable or the alignment errors, this
-    raises :class:`RuntimeError`. There is no silent fallback to estimated
-    duration — that was the bug #82 tracked.
-
-    Returns:
-        Measured spoken duration in seconds (end timestamp of the last word).
-
-    Raises:
-        RuntimeError: WhisperX unreachable / aligned 0 words / WAV missing.
-    """
-    # Import lazily so tests can stub ``tools.whisperx_tools.align_narration``.
-    from tools.whisperx_tools import align_narration
-
-    raw = align_narration(wav_path=wav_path, text=text, language=language)
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError as e:
-        raise RuntimeError(
-            f"WhisperX returned non-JSON for {wav_path}: {e}"
-        ) from e
-
-    if not isinstance(data, dict):
-        raise RuntimeError(f"WhisperX returned non-dict result: {type(data)!r}")
-
-    if data.get("status") != "aligned":
-        raise RuntimeError(
-            f"WhisperX alignment failed for {wav_path}: "
-            f"status={data.get('status')!r} error={data.get('error')!r}"
-        )
-
-    # WhisperX reports per-word end timestamps. Duration is the last word's
-    # end time. ``total_duration`` is provided by align_narration but we
-    # compute from words to be defensive.
-    words = data.get("words") or []
-    if not words:
-        raise RuntimeError(
-            f"WhisperX aligned 0 words for {wav_path} — "
-            f"cannot trust duration (status={data.get('status')!r})"
-        )
-
-    total = float(data.get("total_duration") or 0.0)
-    if total <= 0:
-        total = max(float(w.get("end", 0) or 0) for w in words)
-
-    if total <= 0:
-        raise RuntimeError(
-            f"WhisperX measured duration 0s for {wav_path} — alignment is broken"
-        )
-
-    return total
 
 
 # ---------------------------------------------------------------------------

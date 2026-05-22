@@ -158,13 +158,6 @@ def get_run_id() -> str:
     return _run_id
 
 
-def set_run_id(run_id: str) -> None:
-    """Set the run ID explicitly (e.g. when restoring from B2)."""
-    global _run_id
-    _run_id = run_id
-    os.environ["B2_RUN_ID"] = run_id
-
-
 # ---------------------------------------------------------------------------
 # Upload helpers
 # ---------------------------------------------------------------------------
@@ -249,30 +242,6 @@ def _upload_json_key(data: dict | list | str, key: str) -> bool:
     except Exception as e:
         logger.error("B2 sidecar upload failed -> %s: %s", key, e)
         return False
-
-
-def upload_with_sidecar(
-    local_path: str,
-    b2_relative_path: str,
-    meta: dict,
-) -> bool:
-    """Upload a file to B2 **with** a mandatory ``_meta.json`` sidecar (#70).
-
-    Equivalent to ``upload_file(local_path, b2_relative_path, meta=meta)``;
-    exposed as a distinct entrypoint so callers reading b2_checkpoint can
-    tell at a glance which uploads are paper-trailed.
-
-    Sidecar shape (see :data:`SIDECAR_REQUIRED_KEYS`):
-
-    * ``creator_agent``         -- e.g. "audio_agent", "production_supervisor"
-    * ``prompt_used``           -- full LLM / TTS / video prompt
-    * ``qa_results_so_far``     -- list of {check_name, status, detail}
-    * ``validation_outcomes``   -- list of {phase, pass, error}
-    * ``parent_artifact_refs``  -- list of B2 keys this artifact derives from
-
-    Additional context-specific keys are preserved as-is.
-    """
-    return upload_file(local_path, b2_relative_path, meta=meta)
 
 
 def upload_file(
@@ -521,102 +490,6 @@ def upload_pipeline_state(state: dict) -> bool:
 # Restore helpers -- download artifacts from B2 to local disk on restart
 # ---------------------------------------------------------------------------
 
-def check_stage_complete(stage: str) -> bool:
-    """Check if a pipeline stage was already completed in B2.
-
-    Returns True if the stage marker exists in B2.
-    """
-    bucket = _get_bucket()
-    if bucket is None:
-        return False
-
-    # List the stage_markers/ folder and look for the specific .done file.
-    # NOTE: bucket.ls() treats its argument as a *folder prefix*, not an exact
-    # key.  Passing the full filename (e.g. "run/stage_markers/audio.done")
-    # returns nothing because B2 looks for files *inside* that "folder".
-    target_name = f"stage_markers/{stage}.done"
-    prefix = _b2_key("stage_markers/")
-    target_key = _b2_key(target_name)
-    try:
-        for file_version, _ in bucket.ls(prefix):
-            if file_version.file_name == target_key:
-                return True
-        return False
-    except Exception as exc:
-        from maintainer import notify_maintainer
-        notify_maintainer("b2_exists_check", str(exc), {"key": target_key})
-        return False
-
-
-def restore_state_json(b2_relative_path: str) -> Optional[str]:
-    """Download a JSON file from B2 and return its contents as a string.
-
-    Returns None if the file doesn't exist or download fails.
-    """
-    bucket = _get_bucket()
-    if bucket is None:
-        return None
-
-    key = _b2_key(b2_relative_path)
-    try:
-        import io
-        buffer = io.BytesIO()
-        bucket.download_file_by_name(key).save(buffer)
-        return buffer.getvalue().decode("utf-8")
-    except Exception as exc:
-        from maintainer import notify_maintainer
-        notify_maintainer("b2_restore_json", str(exc), {"path": b2_relative_path})
-        return None
-
-
-def restore_directory(b2_prefix: str, local_dir: str) -> int:
-    """Download all files under a B2 prefix to a local directory.
-
-    Args:
-        b2_prefix: Prefix within the run directory (e.g. "audio/").
-        local_dir: Local directory to write files to.
-
-    Returns:
-        Number of files restored.
-    """
-    bucket = _get_bucket()
-    if bucket is None:
-        return 0
-
-    full_prefix = _b2_key(b2_prefix)
-    os.makedirs(local_dir, exist_ok=True)
-    count = 0
-
-    try:
-        for file_version, _ in bucket.ls(full_prefix, recursive=True):
-            fname = file_version.file_name
-            # Strip the run_id prefix to get the relative path
-            rel = fname[len(get_run_id()) + 1:]  # +1 for the /
-            # Get just the filename (strip the b2_prefix part)
-            if rel.startswith(b2_prefix):
-                local_name = rel[len(b2_prefix):]
-            else:
-                local_name = os.path.basename(rel)
-
-            local_path = os.path.join(local_dir, local_name)
-            os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-
-            if os.path.exists(local_path) and os.path.getsize(local_path) == file_version.size:
-                logger.debug("B2 restore skip (already exists, same size): %s", local_path)
-                count += 1
-                continue
-
-            try:
-                bucket.download_file_by_name(fname).save_to(local_path)
-                count += 1
-                logger.info("B2 restored %s -> %s", fname, local_path)
-            except Exception as e:
-                logger.warning("B2 restore failed %s: %s", fname, e)
-    except Exception as e:
-        logger.error("B2 restore_directory failed for prefix %s: %s", full_prefix, e)
-
-    return count
-
 
 def _list_all_run_ids() -> list[str]:
     """List all run IDs in the B2 bucket by scanning for any sub-path.
@@ -666,52 +539,3 @@ def _read_run_state(run_id: str) -> Optional[dict]:
         from maintainer import notify_maintainer
         notify_maintainer("b2_restore_state", str(exc), {"path": b2_relative_path})
         return None
-
-
-def find_latest_run_id(topic: str = "") -> Optional[str]:
-    """Find the most recent run ID in the B2 bucket that matches the topic.
-
-    Content-addressable: scans every run's stored pipeline_state.json for a
-    matching ``topic`` field.  Falls back to prefix matching on the run ID
-    when the state file is missing or unreadable.  This means the pipeline
-    can resume from *any* prior run about the same topic regardless of how
-    the run_id was generated.
-
-    Returns:
-        The run_id string, or None if no matching runs found.
-    """
-    if not topic:
-        return None
-
-    all_runs = _list_all_run_ids()
-    if not all_runs:
-        return None
-
-    safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
-
-    # Pass 1 — content-addressable: check stored topic in pipeline_state.json
-    content_matches: list[str] = []
-    prefix_matches: list[str] = []
-    for rid in all_runs:
-        # Quick prefix check (cheap, no download)
-        if safe_topic and rid.startswith(safe_topic):
-            prefix_matches.append(rid)
-
-        # Deep content check (downloads state file)
-        state = _read_run_state(rid)
-        if state and state.get("topic", "").strip().lower() == topic.strip().lower():
-            content_matches.append(rid)
-            logger.info("B2: run '%s' matches topic '%s' (content match)", rid, topic)
-
-    # Prefer content matches, fall back to prefix matches
-    matches = content_matches or prefix_matches
-    if not matches:
-        logger.info("B2: no run matches topic '%s' (checked %d runs)", topic, len(all_runs))
-        return None
-
-    # Return the latest match
-    matches.sort()
-    best = matches[-1]
-    match_type = "content" if best in content_matches else "prefix"
-    logger.info("B2: selected run '%s' for topic '%s' (%s match)", best, topic, match_type)
-    return best

@@ -117,24 +117,6 @@ def title_card_for_topic(
     )
 
 
-def end_card_for_run(
-    channel: str,
-    cta: str = "Subscribe for more",
-    sources_line: str = "Sources in the description",
-    duration_sec: float = 4.0,
-    audio_bed_path: Optional[str] = None,
-) -> CardSpec:
-    """Build a standard end card (CTA + sources pointer + brand)."""
-    return CardSpec(
-        kind="end_card",
-        duration_sec=duration_sec,
-        title=channel,
-        subtitle=cta,
-        extra_lines=(sources_line,),
-        audio_bed_path=audio_bed_path,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------

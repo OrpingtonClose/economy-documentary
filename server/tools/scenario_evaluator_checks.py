@@ -769,18 +769,3 @@ def run_all_structural_checks(
             overall = cap_verdict(overall, r.verdict_cap)
 
     return EvaluatorReport(overall=overall, results=results)
-
-
-def format_report(report: EvaluatorReport) -> str:
-    """Human-readable, LLM-ingestible summary of a report."""
-    lines = [f"OVERALL_CAP: {report.overall}", ""]
-    for r in report.results:
-        status = "PASS" if r.passed else f"FAIL (cap={r.verdict_cap})"
-        lines.append(f"[{status}] {r.name}: {r.details}")
-    failed = report.failed()
-    if failed:
-        lines.append("")
-        lines.append("FAILURES REQUIRE REVISION:")
-        for r in failed:
-            lines.append(f"  - {r.name}: {r.details}")
-    return "\n".join(lines)
