@@ -68,7 +68,7 @@ def _probe_duration(path: str) -> Optional[float]:
     ]
     try:
         result = subprocess.run(
-            cmd, check=True, capture_output=True, text=True, timeout=30
+            cmd, check=True, capture_output=True, text=True
         )
         return float(result.stdout.strip())
     except (subprocess.CalledProcessError, ValueError, subprocess.TimeoutExpired) as exc:
@@ -131,7 +131,7 @@ def generate_video_placeholder(path: str, duration: float = 5.0) -> Optional[str
     ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+        subprocess.run(cmd, check=True, capture_output=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         logger.error("Placeholder generation failed for %s: %s", path, exc)
         return None
@@ -211,7 +211,7 @@ def concat_clips(
     ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=concat_timeout)
+        subprocess.run(cmd, check=True, capture_output=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         logger.error("Concatenation failed: %s", exc)
         return json.dumps({"error": f"Concatenation failed: {exc}"})
@@ -353,7 +353,7 @@ def assemble_documentary(
             audio_concat_path,
         ]
         try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+            subprocess.run(cmd, check=True, capture_output=True)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             logger.error("Audio concatenation failed: %s", exc)
             # Fallback: use first audio file only
@@ -391,7 +391,7 @@ def assemble_documentary(
         ]
 
     try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+        subprocess.run(cmd, check=True, capture_output=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         logger.error("Final mux failed: %s", exc)
         return json.dumps({"error": f"Final mux failed: {exc}"})

@@ -474,8 +474,9 @@ async def backfill_prompts():
         try:
             with open(style_path) as f:
                 style_data = json.load(f)
-        except Exception:
-            pass
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("agui_style_load", str(exc), {"style_path": style_path})
 
     # Build lookup of full prompts from concepts in style backup
     concept_prompts: dict[tuple[int, int], str] = {}
@@ -548,8 +549,9 @@ async def get_visual_concepts():
                 full_prompt = concept.get("prompt", "")
                 if full_prompt:
                     concept_full_prompts[key] = full_prompt
-        except Exception:
-            pass
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("agui_concept_load", str(exc))
 
     concepts: list[dict] = []
     pattern = os.path.join(agui_events._OUTPUT_DIR, "video", "*_status.json")
@@ -789,7 +791,9 @@ async def get_qa_results():
                 "message": f"Visual style generated with {concept_count} concepts",
                 "details": [{"style": vs.get("style", ""), "palette": vs.get("palette", ""), "concepts": concept_count}],
             })
-        except Exception:
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("agui_visual_style", str(exc))
             results.append({
                 "phase": "visual_direction",
                 "valid": True,
@@ -818,8 +822,9 @@ async def get_qa_results():
                     "attempts": sd.get("attempts", 0),
                     "has_video": os.path.exists(sf.replace("_status.json", ".mp4")),
                 })
-            except Exception:
-                pass
+            except Exception as exc:
+                from maintainer import notify_maintainer
+                notify_maintainer("agui_clip_detail", str(exc), {"path": path})
         passed = sum(1 for c in clip_details if c["quality"] in ("acceptable", "excellent", "good"))
         failed = sum(1 for c in clip_details if c["quality"] not in ("acceptable", "excellent", "good", "unknown"))
         results.append({

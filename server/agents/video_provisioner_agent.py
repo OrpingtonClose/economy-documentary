@@ -177,8 +177,8 @@ def _tool_find_video_gaps() -> str:
                         for v in vc_value
                         if isinstance(v, dict)
                     }
-        except Exception:
-            pass  # No visual concepts yet — all gaps need planning
+        except Exception as exc:
+            logger.debug("No visual concepts yet: %s", exc)
 
         gaps = []
         for track in timeline.tracks:
@@ -595,7 +595,8 @@ def _tool_provision_vm(offer_id: int, disk_gb: int = 224,
             ).strip()
             if not _branch or _branch == "HEAD":
                 _branch = "main"
-        except Exception:
+        except Exception as exc:
+            logger.debug("Git branch detection failed: %s", exc)
             _branch = "main"
 
         # Parse additional env vars
@@ -668,8 +669,8 @@ def _tool_provision_vm(offer_id: int, disk_gb: int = 224,
             try:
                 from tools.vastai_tools import register_owned_vm
                 register_owned_vm(str(vm_id))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("register_owned_vm failed for %s: %s", vm_id, exc)
             return json.dumps({
                 "status": "created",
                 "offer_id": offer_id,

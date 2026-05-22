@@ -579,7 +579,9 @@ def check_stage_complete(stage: str) -> bool:
             if file_version.file_name == target_key:
                 return True
         return False
-    except Exception:
+    except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer("b2_exists_check", str(exc), {"key": target_key})
         return False
 
 
@@ -598,7 +600,9 @@ def restore_state_json(b2_relative_path: str) -> Optional[str]:
         buffer = io.BytesIO()
         bucket.download_file_by_name(key).save(buffer)
         return buffer.getvalue().decode("utf-8")
-    except Exception:
+    except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer("b2_restore_json", str(exc), {"path": b2_relative_path})
         return None
 
 
@@ -695,7 +699,9 @@ def _read_run_state(run_id: str) -> Optional[dict]:
         buffer = io.BytesIO()
         bucket.download_file_by_name(key).save(buffer)
         return json.loads(buffer.getvalue().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer("b2_restore_state", str(exc), {"path": b2_relative_path})
         return None
 
 

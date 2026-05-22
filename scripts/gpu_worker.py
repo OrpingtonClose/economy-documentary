@@ -56,8 +56,8 @@ try:
             except OSError:
                 pass
     del _search_dirs, _site
-except Exception:
-    pass
+except Exception as exc:
+    logger.warning("CUDA lib preload failed: %s", exc)
 del _ctypes, _glob
 
 import numpy as np
@@ -311,15 +311,15 @@ class VMAgent:
             )
             if result.returncode == 0:
                 snap.gpu_temp_c = float(result.stdout.strip().split("\n")[0])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("GPU temp read failed: %s", exc)
         try:
             usage = shutil.disk_usage(self.models_dir)
             snap.disk_free_gb = usage.free / (1024**3)
             snap.disk_total_gb = usage.total / (1024**3)
             snap.disk_pct = usage.used / max(usage.total, 1) * 100
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Disk usage read failed: %s", exc)
 
         with self._lock:
             self._health = snap
@@ -688,7 +688,8 @@ def _ltx_generate_once(
         for chunk in video_iter:
             chunks.append(chunk.cpu().numpy())
         candidate_frames = np.concatenate(chunks, axis=0)
-    except Exception:
+    except Exception as exc:
+        logger.error("LTX generation failed: %s", exc)
         gc.collect()
         torch.cuda.empty_cache()
         raise

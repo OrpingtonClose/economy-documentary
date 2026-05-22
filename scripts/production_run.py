@@ -174,8 +174,8 @@ def start_gpu_worker(vm: dict) -> str:
             if text.startswith("ok"):
                 logger.info("GPU worker ready! (%s)", text)
                 return worker_url
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Worker health check failed (attempt %d): %s", i, exc)
         if i % 5 == 0:
             logger.info("  Waiting for worker... (%ds)", i * 2)
 

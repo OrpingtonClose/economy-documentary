@@ -107,8 +107,9 @@ def _tool_write_pipeline_data(
         try:
             tp = resolve_timeline_path()
             write_pipeline_metadata(tp, f"{key}_error", str(e))
-        except Exception:
-            pass
+        except Exception as inner_exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("otio_agent_persist_error", str(inner_exc), {"key": key})
         return json.dumps({"error": str(e), "key": key})
 
 

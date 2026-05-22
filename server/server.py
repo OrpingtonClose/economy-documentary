@@ -151,7 +151,9 @@ class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
                 response.body_iterator = wrapped_iterator()
 
             return response
-        except Exception:
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("server_pipeline_error", str(exc), {"run_id": run_id})
             collector.finalize(status="error")
             finalize_run(run_id, status="error")
             # Do NOT remove_collector on error — keep it in the registry

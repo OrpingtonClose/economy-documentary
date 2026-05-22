@@ -1344,8 +1344,10 @@ def _escalate_to_human(
                 current_kwargs.update(amended)
                 try:
                     return operation(**current_kwargs)
-                except Exception:
-                    pass  # Fall through to exhausted
+                except Exception as exc:
+                    from maintainer import notify_maintainer
+                    notify_maintainer("recovery_retry_failed", str(exc), {"operation": operation_name})
+                    # Fall through to exhausted
 
     # All levels exhausted
     raise RecoveryExhausted(

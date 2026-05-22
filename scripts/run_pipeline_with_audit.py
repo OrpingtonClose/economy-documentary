@@ -188,11 +188,12 @@ class PipelineAuditor:
                     ))
                     self._request_stop("provisioning_stuck")
                     return
-            except Exception:
+            except Exception as exc:
+                logger.error("Provisioning check failed: %s", exc)
                 self.metrics.gaps.append(Gap(
                     severity="CRITICAL",
                     clause="VM Provisioning: worker must boot within 20 min",
-                    finding=f"No VM provisioned after {elapsed/60:.1f} min",
+                    finding=f"No VM provisioned after {elapsed/60:.1f} min (check failed: {exc})",
                     fix="Reduce provisioner timeout or check Vast.ai API",
                 ))
                 self._request_stop("provisioning_stuck")
@@ -384,10 +385,10 @@ def main():
                     if test2.returncode == 0:
                         python_exe = candidate
                         break
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as exc:
+                    logger.debug("Python candidate %s rejected: %s", candidate, exc)
+    except Exception as exc:
+        logger.error("Python exe detection failed: %s", exc)
 
     # Kill orphan processes from previous runs on same output dir
     import signal
@@ -400,8 +401,8 @@ def main():
             try:
                 os.kill(int(orphan.strip()), signal.SIGTERM)
                 print(f"[AUDIT] Killed orphan process: {orphan.strip()}")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to kill orphan %s: %s", orphan.strip(), exc)
 
     cmd = [
         python_exe, "-m", "strands_agents.run_strands",

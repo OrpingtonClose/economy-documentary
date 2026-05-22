@@ -415,7 +415,8 @@ def _tool_provision_vm(
         ).strip()
         if not _branch or _branch == "HEAD":
             _branch = "main"
-    except Exception:
+    except Exception as exc:
+        logger.debug("Git branch detection failed: %s", exc)
         _branch = "main"
 
     # Parse extra env vars
@@ -779,24 +780,19 @@ def _tool_generate_narration(
             except OSError:
                 pass
 
-    # Call TTS worker
-    payload = json.dumps({
-        "text": text,
-        "voice": voice,
-        "language": lang,
-        "scene_num": scene_num,
-    }).encode("utf-8")
-
-    tts_url = f"{worker_url.rstrip('/')}/tts"
-    req = Request(tts_url, data=payload, headers={"Content-Type": "application/json"})
+    # Call TTS worker — plain-text protocol
+    tts_url = f"{worker_url.rstrip('/')}/"
+    req = Request(tts_url, data=text.encode("utf-8"),
+                  headers={"Content-Type": "text/plain"})
 
     try:
-        with urlopen(req, timeout=300) as resp:
+        with urlopen(req) as resp:
             wav_bytes = resp.read()
             actual_duration = float(resp.headers.get("X-Audio-Duration", "0"))
             actual_sample_rate = int(resp.headers.get("X-Sample-Rate", str(_SAMPLE_RATE)))
             gen_time = float(resp.headers.get("X-Gen-Time", "0"))
     except URLError as e:
+        logger.error("TTS worker unreachable at %s: %s", worker_url, e)
         return json.dumps({
             "scene_num": scene_num,
             "voice_role": voice_role,
@@ -804,6 +800,7 @@ def _tool_generate_narration(
             "error": f"TTS worker unreachable at {worker_url}: {e}",
         })
     except Exception as e:
+        logger.error("TTS generation failed: %s", e)
         return json.dumps({
             "scene_num": scene_num,
             "voice_role": voice_role,

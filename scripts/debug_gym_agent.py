@@ -524,13 +524,15 @@ Action: <tool_name>(arg1=val1, arg2=val2)
         try:
             if os.path.isdir(audio_dir):
                 audio_clips = len([f for f in os.listdir(audio_dir) if f.endswith(".wav")])
-        except Exception:
-            pass
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("debug_gym_audio_dir", str(exc))
         try:
             if os.path.isdir(video_dir):
                 video_clips = len([f for f in os.listdir(video_dir) if f.endswith(".mp4")])
-        except Exception:
-            pass
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("debug_gym_video_dir", str(exc))
 
         errors = [l for l in log_lines if "ERROR" in l][-10:]
         warnings = [l for l in log_lines if "WARN" in l][-10:]
@@ -592,7 +594,9 @@ Action: <tool_name>(arg1=val1, arg2=val2)
             credit = float(data.get("credit", 0))
             balance = float(data.get("balance", 0))
             return credit + max(0, balance)
-        except Exception:
+        except Exception as exc:
+            from maintainer import notify_maintainer
+            notify_maintainer("debug_gym_vast_credit", str(exc))
             return 0.0
 
     def _vast_key(self) -> str:
