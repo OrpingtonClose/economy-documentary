@@ -505,7 +505,7 @@ def _build_otio_gate_agent(model) -> Agent:
     def validate_scenario() -> str:
         """Validate scenario output: scenes must exist and be well-formed."""
         from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import metadata_key_exists, read_pipeline_metadata
+        from tools.otio_metadata import metadata_key_exists
         tp = resolve_timeline_path()
         errors = []
         if not metadata_key_exists(tp, MetadataSchema.SCENES):
@@ -1176,7 +1176,7 @@ def _build_video_agent(model) -> Agent:
         return _video_search(query)
 
     @_tool_decorator
-    def provision_vm(offer_id: int, disk_gb: int = 300, worker_mode: str = "ltx", docker_image: str = "") -> str:
+    def provision_vm(offer_id: int, disk_gb: int = 224, worker_mode: str = "ltx", docker_image: str = "") -> str:
         """Provision a VM on Vast.ai."""
         return _video_provision(offer_id, disk_gb, worker_mode, docker_image)
 
