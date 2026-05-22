@@ -127,91 +127,35 @@ def infra_ltx_video_worker_cases() -> (
             requests=[
                 {
                     "method": "POST",
-                    "path": "/video/render",
-                    "body": {
-                        "prompt": prompt,
-                        "duration_s": 2.0,
-                    },
+                    "path": "/",
+                    "body": prompt,
                 }
             ],
             expected_status=200,
-            expected_body_contains={
-                "worker_id": _WORKER_ID,
-                "engine": "stub",
-                "width": 1280,
-                "height": 720,
-                "fps": 24,
-                "duration_s": 2.0,
-            },
         ),
         _case(
-            "prompt_empty_422",
+            "prompt_empty_400",
             requests=[
                 {
                     "method": "POST",
-                    "path": "/video/render",
-                    "body": {"prompt": "", "duration_s": 2.0},
-                }
-            ],
-            expected_status=422,
-        ),
-        _case(
-            "duration_too_short_400",
-            requests=[
-                {
-                    "method": "POST",
-                    "path": "/video/render",
-                    "body": {"prompt": prompt, "duration_s": 0.01},
+                    "path": "/",
+                    "body": "",
                 }
             ],
             expected_status=400,
-        ),
-        _case(
-            "duration_zero_422",
-            requests=[
-                {
-                    "method": "POST",
-                    "path": "/video/render",
-                    "body": {"prompt": prompt, "duration_s": 0.0},
-                }
-            ],
-            expected_status=422,
-        ),
-        _case(
-            "duration_clamped_at_max",
-            requests=[
-                {
-                    "method": "POST",
-                    "path": "/video/render",
-                    "body": {
-                        "prompt": prompt,
-                        "duration_s": MAX_DURATION_S * 1.5,
-                    },
-                }
-            ],
-            expected_status=200,
-            expected_duration_clamped_to=MAX_DURATION_S,
         ),
         _case(
             "determinism_same_input_same_bytes",
             requests=[
                 {
                     "method": "POST",
-                    "path": "/video/render",
-                    "body": {
-                        "prompt": prompt,
-                        "duration_s": 1.0,
-                        "seed": 42,
-                    },
+                    "path": "/",
+                    "body": prompt,
                 },
                 {
                     "method": "POST",
-                    "path": "/video/render",
-                    "body": {
-                        "prompt": prompt,
-                        "duration_s": 1.0,
-                        "seed": 42,
-                    },
+                    "path": "/",
+                    "body": prompt,
                 },
             ],
             expected_status=200,
@@ -222,8 +166,8 @@ def infra_ltx_video_worker_cases() -> (
             requests=[
                 {
                     "method": "POST",
-                    "path": "/video/render",
-                    "body": {"prompt": prompt, "duration_s": 1.0},
+                    "path": "/",
+                    "body": prompt,
                 }
             ],
             expected_status=200,
@@ -231,20 +175,9 @@ def infra_ltx_video_worker_cases() -> (
         ),
         _case(
             "health_does_not_bump",
-            requests=[{"method": "GET", "path": "/health"}],
+            requests=[{"method": "GET", "path": "/"}],
             expected_status=200,
             expected_bump_count=0,
-        ),
-        _case(
-            "vram_endpoint_returns_peak",
-            requests=[{"method": "GET", "path": "/health/vram"}],
-            vram_samples=[(80, 48)],
-            expected_status=200,
-            expected_body_contains={
-                "worker_id": _WORKER_ID,
-                "vram_total_gb": 80,
-                "vram_peak_gb": 48,
-            },
         ),
     ]
 
@@ -277,7 +210,7 @@ def infra_ltx_video_worker_task(
 
     bumps = _BumpRecorder()
     bump_client = InfraAgentBumpClient(
-        url="http://127.0.0.1:29230/infra/bump",
+        url="http://127.0.0.1:29230/",
         http_post=bumps.post,
     )
     engine = StubVideoEngine()
@@ -307,18 +240,23 @@ def infra_ltx_video_worker_task(
             if method == "GET":
                 response = client.get(path)
             elif method == "POST":
-                response = client.post(path, json=req.get("body"))
+                body = req.get("body")
+                if body is not None:
+                    response = client.post(path, data=body.encode("utf-8"), headers={"Content-Type": "text/plain"})
+                else:
+                    response = client.post(path)
             else:
                 raise ValueError(f"unsupported method: {method}")
             final_status = response.status_code
-            try:
-                final_body = response.json()
-            except json.JSONDecodeError:
-                final_body = {"_text": response.text}
-            if isinstance(final_body, dict) and "mp4_base64" in final_body:
-                mp4_payloads.append(
-                    base64.b64decode(final_body["mp4_base64"])
-                )
+            content_type = response.headers.get("content-type", "")
+            if "video/mp4" in content_type:
+                mp4_payloads.append(response.content)
+                final_body = {"_bytes": len(response.content)}
+            else:
+                try:
+                    final_body = response.json()
+                except json.JSONDecodeError:
+                    final_body = {"_text": response.text}
 
     return {
         "output": {

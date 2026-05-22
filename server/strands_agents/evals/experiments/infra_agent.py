@@ -112,42 +112,35 @@ def infra_agent_cases() -> list[Case[dict[str, Any], dict[str, Any]]]:
     return [
         _case(
             "health_does_not_bump",
-            requests=[{"method": "GET", "path": "/health"}],
+            requests=[{"method": "GET", "path": "/"}],
             clock_ticks=[42.0],
             expected_status=200,
-            expected_body_contains={"ok": True},
+            expected_body_contains={"_text": "ok"},
             expected_final_state={"last_bump_ts": 0.0},
         ),
         _case(
             "status_bumps_timer",
-            requests=[{"method": "GET", "path": "/infra/status"}],
+            requests=[{"method": "POST", "path": "/", "body": "status"}],
             clock_ticks=[42.0],
             vram_samples=[(24, 10)],
             expected_status=200,
-            expected_body_contains={
-                "worker_id": "test-worker",
-                "idle_budget_s": _IDLE_S,
-            },
+            expected_body_contains={"_text": "worker_id=test-worker"},
             expected_final_state={"last_bump_ts": 42.0},
         ),
         _case(
             "explicit_bump_resets_idle",
-            requests=[{"method": "POST", "path": "/infra/bump"}],
+            requests=[{"method": "POST", "path": "/", "body": "bump"}],
             clock_ticks=[50.0],
             expected_status=200,
-            expected_body_contains={"ok": True, "last_bump_ts": 50.0},
+            expected_body_contains={"_text": "ok"},
             expected_final_state={"last_bump_ts": 50.0},
         ),
         _case(
             "destroy_latches_manual_flag",
-            requests=[{"method": "POST", "path": "/infra/destroy"}],
+            requests=[{"method": "POST", "path": "/", "body": "destroy"}],
             clock_ticks=[1.0],
             expected_status=200,
-            expected_body_contains={
-                "ok": True,
-                "manual_destroy_requested": True,
-                "reason": "manual",
-            },
+            expected_body_contains={"_text": "ok"},
             expected_final_state={"manual_destroy_requested": True},
         ),
         _case(
@@ -155,25 +148,25 @@ def infra_agent_cases() -> list[Case[dict[str, Any], dict[str, Any]]]:
             requests=[
                 {
                     "method": "POST",
-                    "path": "/infra/destroy",
-                    "body": {"reason": "operator_request"},
+                    "path": "/",
+                    "body": "destroy operator_request",
                 }
             ],
             clock_ticks=[1.0],
             expected_status=200,
-            expected_body_contains={"reason": "operator_request"},
+            expected_body_contains={"_text": "ok"},
             expected_final_state={"manual_destroy_requested": True},
         ),
         _case(
             "telemetry_tracks_peak",
             requests=[
-                {"method": "GET", "path": "/infra/status"},
-                {"method": "GET", "path": "/infra/status"},
+                {"method": "POST", "path": "/", "body": "status"},
+                {"method": "POST", "path": "/", "body": "status"},
             ],
             clock_ticks=[10.0, 20.0],
             vram_samples=[(24, 8), (24, 18)],
             expected_status=200,
-            expected_body_contains={"worker_id": "test-worker"},
+            expected_body_contains={"_text": "worker_id=test-worker"},
             expected_final_state={
                 "last_bump_ts": 20.0,
                 "vram_peak_gb": 18,
@@ -182,13 +175,13 @@ def infra_agent_cases() -> list[Case[dict[str, Any], dict[str, Any]]]:
         _case(
             "status_after_destroy_keeps_flag",
             requests=[
-                {"method": "POST", "path": "/infra/destroy"},
-                {"method": "GET", "path": "/infra/status"},
+                {"method": "POST", "path": "/", "body": "destroy"},
+                {"method": "POST", "path": "/", "body": "status"},
             ],
             clock_ticks=[1.0, 2.0],
             vram_samples=[(24, 12)],
             expected_status=200,
-            expected_body_contains={"manual_destroy_requested": True},
+            expected_body_contains={"_text": "manual_destroy=True"},
             expected_final_state={"manual_destroy_requested": True},
         ),
     ]
@@ -287,7 +280,11 @@ def infra_agent_task(
             if method == "GET":
                 response = client.get(path)
             elif method == "POST":
-                response = client.post(path, json=req.get("body"))
+                body = req.get("body")
+                if body is not None:
+                    response = client.post(path, data=body.encode("utf-8"), headers={"Content-Type": "text/plain"})
+                else:
+                    response = client.post(path)
             else:
                 raise ValueError(f"unsupported method: {method}")
             final_status = response.status_code

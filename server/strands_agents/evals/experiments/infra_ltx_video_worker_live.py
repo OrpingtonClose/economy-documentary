@@ -142,7 +142,8 @@ def infra_ltx_video_worker_live_task(
         "seed": int(payload.get("seed", 7)),
     }
 
-    trajectory: list[str] = [f"POST {worker_url}/video/render"]
+    prompt = payload.get("prompt", "")
+    trajectory: list[str] = [f"POST {worker_url}/"]
     final_status = 0
     final_body: Any = None
     mp4_bytes: bytes = b""
@@ -150,17 +151,21 @@ def infra_ltx_video_worker_live_task(
 
     try:
         with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-            response = client.post(f"{worker_url}/video/render", json=body)
+            response = client.post(
+                f"{worker_url.rstrip('/')}/",
+                content=prompt.encode("utf-8"),
+                headers={"Content-Type": "text/plain"},
+            )
         final_status = response.status_code
-        try:
-            final_body = response.json()
-        except ValueError:
-            final_body = {"_text": response.text}
-        if isinstance(final_body, dict) and "mp4_base64" in final_body:
+        content_type = response.headers.get("content-type", "")
+        if "video/mp4" in content_type:
+            mp4_bytes = response.content
+            final_body = {"_bytes": len(mp4_bytes)}
+        else:
             try:
-                mp4_bytes = base64.b64decode(final_body["mp4_base64"])
-            except (ValueError, TypeError) as exc:
-                error = f"mp4_base64 decode failed: {exc!r}"
+                final_body = response.json()
+            except ValueError:
+                final_body = {"_text": response.text}
     except httpx.HTTPError as exc:
         error = f"http error: {exc!r}"
 

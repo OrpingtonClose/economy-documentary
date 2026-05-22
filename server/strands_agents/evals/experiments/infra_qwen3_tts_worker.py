@@ -120,66 +120,36 @@ def infra_qwen3_tts_worker_cases() -> list[Case[dict[str, Any], dict[str, Any]]]
             requests=[
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": short_text,
-                        "voice_id": _PINNED_VOICE,
-                    },
+                    "path": "/",
+                    "body": short_text,
                 }
             ],
             expected_status=200,
-            expected_body_contains={
-                "worker_id": _WORKER_ID,
-                "voice_id": _PINNED_VOICE,
-                "engine": "stub",
-            },
             expected_wav_duration_s=len(short_text) / 15.0,
         ),
         _case(
-            "voice_mismatch_409",
+            "empty_text_400",
             requests=[
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": "hello",
-                        "voice_id": "wrong_voice",
-                    },
+                    "path": "/",
+                    "body": "",
                 }
             ],
-            expected_status=409,
-        ),
-        _case(
-            "empty_text_422",
-            requests=[
-                {
-                    "method": "POST",
-                    "path": "/tts/render",
-                    "body": {"text": "", "voice_id": _PINNED_VOICE},
-                }
-            ],
-            expected_status=422,
+            expected_status=400,
         ),
         _case(
             "determinism_same_input_same_bytes",
             requests=[
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": short_text,
-                        "voice_id": _PINNED_VOICE,
-                        "seed": 42,
-                    },
+                    "path": "/",
+                    "body": short_text,
                 },
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": short_text,
-                        "voice_id": _PINNED_VOICE,
-                        "seed": 42,
-                    },
+                    "path": "/",
+                    "body": short_text,
                 },
             ],
             expected_status=200,
@@ -190,11 +160,8 @@ def infra_qwen3_tts_worker_cases() -> list[Case[dict[str, Any], dict[str, Any]]]
             requests=[
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": long_text,
-                        "voice_id": _PINNED_VOICE,
-                    },
+                    "path": "/",
+                    "body": long_text,
                 }
             ],
             expected_status=200,
@@ -205,11 +172,8 @@ def infra_qwen3_tts_worker_cases() -> list[Case[dict[str, Any], dict[str, Any]]]
             requests=[
                 {
                     "method": "POST",
-                    "path": "/tts/render",
-                    "body": {
-                        "text": short_text,
-                        "voice_id": _PINNED_VOICE,
-                    },
+                    "path": "/",
+                    "body": short_text,
                 }
             ],
             expected_status=200,
@@ -217,20 +181,9 @@ def infra_qwen3_tts_worker_cases() -> list[Case[dict[str, Any], dict[str, Any]]]
         ),
         _case(
             "health_does_not_bump",
-            requests=[{"method": "GET", "path": "/health"}],
+            requests=[{"method": "GET", "path": "/"}],
             expected_status=200,
             expected_bump_count=0,
-        ),
-        _case(
-            "vram_endpoint_returns_peak",
-            requests=[{"method": "GET", "path": "/health/vram"}],
-            vram_samples=[(24, 12)],
-            expected_status=200,
-            expected_body_contains={
-                "worker_id": _WORKER_ID,
-                "vram_total_gb": 24,
-                "vram_peak_gb": 12,
-            },
         ),
     ]
 
@@ -263,7 +216,7 @@ def infra_qwen3_tts_worker_task(
 
     bumps = _BumpRecorder()
     bump_client = InfraAgentBumpClient(
-        url="http://127.0.0.1:29230/infra/bump",
+        url="http://127.0.0.1:29230/",
         http_post=bumps.post,
     )
     engine = StubTTSEngine()
@@ -294,18 +247,23 @@ def infra_qwen3_tts_worker_task(
             if method == "GET":
                 response = client.get(path)
             elif method == "POST":
-                response = client.post(path, json=req.get("body"))
+                body = req.get("body")
+                if body is not None:
+                    response = client.post(path, data=body.encode("utf-8"), headers={"Content-Type": "text/plain"})
+                else:
+                    response = client.post(path)
             else:
                 raise ValueError(f"unsupported method: {method}")
             final_status = response.status_code
-            try:
-                final_body = response.json()
-            except json.JSONDecodeError:
-                final_body = {"_text": response.text}
-            if isinstance(final_body, dict) and "wav_base64" in final_body:
-                wav_payloads.append(
-                    base64.b64decode(final_body["wav_base64"])
-                )
+            content_type = response.headers.get("content-type", "")
+            if "audio/wav" in content_type:
+                wav_payloads.append(response.content)
+                final_body = {"_bytes": len(response.content)}
+            else:
+                try:
+                    final_body = response.json()
+                except json.JSONDecodeError:
+                    final_body = {"_text": response.text}
 
     return {
         "output": {
