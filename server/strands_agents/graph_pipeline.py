@@ -169,33 +169,6 @@ def ensure_checkpoint_layout(run_id: str) -> str:
     return root
 
 
-def latest_checkpoint_path(run_id: str) -> str | None:
-    """Return the path to the most recent checkpoint file for a run.
-
-    Searches the agents/ and otio/ subtrees under the run checkpoint directory.
-    Returns None if no checkpoint files exist yet.
-    """
-    root = checkpoint_dir(run_id)
-    latest_path: str | None = None
-    latest_mtime: float = 0.0
-    for subdir in ("agents", "otio"):
-        search_dir = os.path.join(root, subdir)
-        if not os.path.isdir(search_dir):
-            continue
-        for dirpath, _dirnames, filenames in os.walk(search_dir):
-            for fname in filenames:
-                if fname.endswith(".otio"):
-                    fpath = os.path.join(dirpath, fname)
-                    try:
-                        mtime = os.path.getmtime(fpath)
-                    except OSError:
-                        continue
-                    if mtime > latest_mtime:
-                        latest_mtime = mtime
-                        latest_path = fpath
-    return latest_path
-
-
 def _discover_completed_stages(run_id: str) -> list[str]:
     """Discover which stages completed before a crash by reading checkpoint metadata.
 
