@@ -137,10 +137,6 @@ class MasterProfile:
             8: "7.1",
         }.get(self.audio_channels, "stereo")
 
-    def variant(self, **overrides) -> "MasterProfile":
-        """Return a copy with the given fields replaced."""
-        return replace(self, **overrides)
-
 
 # ---------------------------------------------------------------------------
 # Named profiles

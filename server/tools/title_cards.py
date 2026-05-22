@@ -101,21 +101,6 @@ class CardSpec:
 # Card builders (used by the assembler to construct a default title/end)
 # ---------------------------------------------------------------------------
 
-def title_card_for_topic(
-    topic: str,
-    channel: str,
-    duration_sec: float = 2.5,
-    audio_bed_path: Optional[str] = None,
-) -> CardSpec:
-    """Build a title card from the run's topic + channel/brand name."""
-    return CardSpec(
-        kind="title_card",
-        duration_sec=duration_sec,
-        title=topic,
-        subtitle=channel,
-        audio_bed_path=audio_bed_path,
-    )
-
 
 # ---------------------------------------------------------------------------
 # Renderer
