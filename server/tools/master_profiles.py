@@ -137,22 +137,6 @@ class MasterProfile:
             8: "7.1",
         }.get(self.audio_channels, "stereo")
 
-    def scale_filter(self) -> str:
-        """Return the ffmpeg ``-vf`` scale expression using lanczos.
-
-        Lanczos is the standard resampler for upscaling documentary
-        footage — it preserves edges better than bicubic at the cost of
-        modest ringing.  We pad via ``force_original_aspect_ratio`` so
-        that inputs that don't match the profile aspect ratio are
-        letterboxed rather than stretched.
-        """
-        return (
-            f"scale={self.width}:{self.height}:flags=lanczos:"
-            f"force_original_aspect_ratio=decrease,"
-            f"pad={self.width}:{self.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-            f"setsar=1"
-        )
-
     def variant(self, **overrides) -> "MasterProfile":
         """Return a copy with the given fields replaced."""
         return replace(self, **overrides)
@@ -236,14 +220,6 @@ PROFILES: Dict[str, MasterProfile] = {
 
 
 DEFAULT_PROFILE = YOUTUBE_1080P
-
-
-def get_profile(name: str) -> MasterProfile:
-    """Resolve a profile by name.  Raises KeyError if unknown."""
-    if name not in PROFILES:
-        known = ", ".join(sorted(PROFILES))
-        raise KeyError(f"Unknown master profile {name!r}; known: {known}")
-    return PROFILES[name]
 
 
 def guard_profile_for_filename(

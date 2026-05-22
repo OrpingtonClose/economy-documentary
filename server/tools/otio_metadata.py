@@ -94,20 +94,6 @@ def write_pipeline_metadata(
     return json.dumps({"written": True, "key": key})
 
 
-def read_all_metadata(timeline_path: str) -> dict:
-    """Read the entire ``"documentary"`` metadata dict from the timeline.
-
-    Args:
-        timeline_path: Absolute path to the ``.otio`` timeline file.
-
-    Returns:
-        A dict containing all keys under ``timeline.metadata["documentary"]``.
-        Returns an empty dict when the namespace does not exist.
-    """
-    timeline = otio_read(timeline_path)
-    return _to_native(dict(timeline.metadata.get("documentary", {})))
-
-
 def metadata_key_exists(timeline_path: str, key: str) -> bool:
     """Check whether a key exists in the documentary metadata namespace.
 
@@ -124,19 +110,3 @@ def metadata_key_exists(timeline_path: str, key: str) -> bool:
     timeline = otio_read(timeline_path)
     doc = timeline.metadata.get("documentary", {})
     return key in doc
-
-
-def list_metadata_keys(timeline_path: str) -> list[str]:
-    """List all keys in the documentary metadata namespace.
-
-    Args:
-        timeline_path: Absolute path to the ``.otio`` timeline file.
-
-    Returns:
-        A list of key names present under
-        ``timeline.metadata["documentary"]``.  Returns an empty list when
-        the namespace does not exist.
-    """
-    timeline = otio_read(timeline_path)
-    doc = timeline.metadata.get("documentary", {})
-    return list(doc.keys())

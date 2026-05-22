@@ -162,12 +162,6 @@ def set_content_analyst_helpers(
     _EXTRACTOR = phrase_extractor
 
 
-def clear_content_analyst_helpers() -> None:
-    """Reset injected helpers. Primarily for test isolation."""
-    global _EXTRACTOR
-    _EXTRACTOR = None
-
-
 class ContentAnalystHelperNotConfigured(RuntimeError):
     """Raised when an LLM-backed tool is invoked with no helper wired in."""
 

@@ -84,24 +84,6 @@ class LoudnessResult:
     measured_before: LoudnessStats
     measured_after: LoudnessStats
 
-    def as_log_dict(self) -> dict:
-        return {
-            "input_path": self.input_path,
-            "output_path": self.output_path,
-            "target_lufs": self.target_lufs,
-            "true_peak_db": self.true_peak_db,
-            "before": {
-                "i": self.measured_before.input_i,
-                "tp": self.measured_before.input_tp,
-                "lra": self.measured_before.input_lra,
-            },
-            "after": {
-                "i": self.measured_after.input_i,
-                "tp": self.measured_after.input_tp,
-                "lra": self.measured_after.input_lra,
-            },
-        }
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -261,44 +243,6 @@ def _two_pass_loudnorm(
 PER_CLIP_TARGET_LUFS = -23.0
 PER_CLIP_TRUE_PEAK_DB = -2.0
 PER_CLIP_LRA = 7.0
-
-
-def normalize_clip(
-    input_path: str,
-    output_path: str,
-    target_lufs: float = PER_CLIP_TARGET_LUFS,
-    true_peak_db: float = PER_CLIP_TRUE_PEAK_DB,
-    lra: float = PER_CLIP_LRA,
-    sample_rate: int = 48000,
-) -> LoudnessResult:
-    """Phase A: normalise a single TTS clip in place-style (writes output).
-
-    Uses a two-pass ``loudnorm`` so gain is applied linearly — critical
-    for narration where breath tails must not be over-compressed.
-
-    The caller (TTS callback) is expected to replace the original clip
-    with ``output_path`` and log pre/post stats for the dashboard.
-    """
-    result = _two_pass_loudnorm(
-        input_path=input_path,
-        output_path=output_path,
-        target_lufs=target_lufs,
-        true_peak_db=true_peak_db,
-        lra=lra,
-        sample_rate=sample_rate,
-        audio_codec=None,       # keep pcm_s16le for WAV intermediate
-        audio_bitrate=None,
-        timeout=300,
-    )
-    logger.info(
-        "Phase A loudnorm: %s I=%.2f->%.2f LUFS, LRA=%.2f->%.2f",
-        input_path,
-        result.measured_before.input_i,
-        result.measured_after.input_i,
-        result.measured_before.input_lra,
-        result.measured_after.input_lra,
-    )
-    return result
 
 
 # ---------------------------------------------------------------------------

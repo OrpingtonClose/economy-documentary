@@ -399,11 +399,6 @@ class WhisperXOracle:
         with self._lock:
             return sum(c.measured_sec for c in self.clips if c.scene_num == scene_num)
 
-    def completed_scene_nums(self) -> set[int]:
-        """Set of scene_nums that have at least one measured clip."""
-        with self._lock:
-            return {c.scene_num for c in self.clips}
-
     def project_total(self) -> float:
         """Projected final runtime = measured_so_far + sum(remaining_targets).
 
@@ -420,26 +415,6 @@ class WhisperXOracle:
                 if sn not in done_scenes
             )
             return measured + remaining
-
-    def check_projection(
-        self,
-        alarm_ratio: float = PROJECTION_ALARM_RATIO,
-    ) -> Optional[str]:
-        """Return an alarm string if projection is below ``alarm_ratio`` of target.
-
-        Returns ``None`` when projection is healthy.
-        """
-        if self.target_total_sec <= 0:
-            return None
-        projected = self.project_total()
-        if projected >= alarm_ratio * self.target_total_sec:
-            return None
-        return (
-            f"projected total {projected:.0f}s vs target "
-            f"{self.target_total_sec:.0f}s = "
-            f"{100 * projected / self.target_total_sec:.0f}%; "
-            f"need more scenes or longer ones"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -512,36 +487,6 @@ def measure_actual_duration_with_whisperx(
 # ---------------------------------------------------------------------------
 # Escalation helpers (#85, #86)
 # ---------------------------------------------------------------------------
-
-def fire_reflection_event(state: dict, context: str) -> None:
-    """Record a reflection event in session state + escalate to supervisor.
-
-    The event is a structured log entry the Reasoning Digest can surface
-    in the dashboard. It is ALSO sent to ``supervisor_escalate`` from the
-    production_supervisor agent (W3) so the supervisor's LLM can pick a
-    remediation action from its menu (add scenes, lengthen existing
-    scenes, accept the runtime as-is).
-
-    If W3 has not landed yet the ``supervisor_escalate`` import fails —
-    we log loudly and keep going so the rest of the pipeline continues
-    (per the SKILL.md rule 8, problems must be reported immediately;
-    they must not silently halt unrelated work).
-    """
-    import time
-
-    events = state.get("_reflection_events")
-    if not isinstance(events, list):
-        events = []
-    events.append({"at": time.time(), "context": context, "kind": "projection"})
-    state["_reflection_events"] = events
-    logger.warning("WhisperX oracle reflection: %s", context)
-
-    _invoke_supervisor_escalate(
-        kind="projection_shortfall",
-        context=context,
-        state=state,
-        actions=["add_scenes", "lengthen_scenes", "accept_runtime"],
-    )
 
 
 def fire_extension_escalation(

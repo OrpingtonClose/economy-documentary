@@ -165,11 +165,6 @@ def set_coherence_evaluator_helpers(
     )
 
 
-def clear_coherence_evaluator_helpers() -> None:
-    """Reset the helper registry. Primarily used by tests."""
-    set_coherence_evaluator_helpers(soft_scorer=None)
-
-
 def _require_scorer() -> _SoftScorer:
     if _SCORER is None:
         raise CoherenceEvaluatorHelperNotConfigured(

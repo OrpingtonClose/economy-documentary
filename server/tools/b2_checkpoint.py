@@ -457,22 +457,6 @@ def upload_visual_concepts(visual_concepts_json: str) -> bool:
     return ok
 
 
-def upload_video_clip(
-    mp4_path: str,
-    status_path: str = "",
-    meta: Optional[dict] = None,
-) -> None:
-    """Upload a video clip (and its QA status file) immediately.
-
-    If ``meta`` is supplied, a canonical ``_meta.json`` sidecar is
-    written next to the MP4 in B2 (#70).
-    """
-    basename = os.path.basename(mp4_path)
-    upload_file(mp4_path, f"video/{basename}", meta=meta)
-    if status_path and os.path.exists(status_path):
-        upload_file(status_path, f"video/{os.path.basename(status_path)}")
-
-
 def upload_timeline(otio_path: str, meta: Optional[dict] = None) -> None:
     """Upload OTIO timeline immediately.
 
@@ -482,27 +466,6 @@ def upload_timeline(otio_path: str, meta: Optional[dict] = None) -> None:
     """
     basename = os.path.basename(otio_path)
     upload_file(otio_path, f"timelines/{basename}", meta=meta)
-
-
-def upload_scene_assembly(
-    otio_path: str,
-    scene_num: int,
-    meta: Optional[dict] = None,
-) -> None:
-    """Upload a scene-level OTIO assembly artifact with its paper trail (#70, #84).
-
-    Lives under ``scene_assemblies/`` so it is distinct from the full
-    timeline.  The sidecar SHOULD include ``validation_outcomes`` with
-    the scene's compliance verdict.
-    """
-    basename = os.path.basename(otio_path) or f"scene_{scene_num:03d}_assembly.otio"
-    upload_file(otio_path, f"scene_assemblies/{basename}", meta=meta)
-
-
-def upload_assembly_file(local_path: str, meta: Optional[dict] = None) -> None:
-    """Upload an assembly intermediate file."""
-    basename = os.path.basename(local_path)
-    upload_file(local_path, f"assembly/{basename}", meta=meta)
 
 
 def upload_gatekeeper_report(report: dict, stage: str) -> bool:
@@ -752,121 +715,3 @@ def find_latest_run_id(topic: str = "") -> Optional[str]:
     match_type = "content" if best in content_matches else "prefix"
     logger.info("B2: selected run '%s' for topic '%s' (%s match)", best, topic, match_type)
     return best
-
-
-def restore_pipeline(topic: str, pipeline_base: str = "/tmp/documentary-pipeline") -> dict:
-    """Restore full pipeline state from B2 for a given topic.
-
-    Checks B2 for the latest run with this topic, downloads all artifacts
-    to the local pipeline directories, and returns info about which stages
-    are already complete.
-
-    Args:
-        topic: Documentary topic (used to find the matching run).
-        pipeline_base: Local base directory for pipeline artifacts.
-
-    Returns:
-        Dict with:
-            - run_id: The restored run ID (or empty if nothing found)
-            - stages_complete: List of completed stage names
-            - restored_files: Total number of files restored
-            - state: Restored pipeline state dict (or empty)
-    """
-    result = {
-        "run_id": "",
-        "stages_complete": [],
-        "restored_files": 0,
-        "state": {},
-    }
-
-    run_id = find_latest_run_id(topic)
-    if not run_id:
-        logger.info("B2: no previous run found for topic '%s'", topic)
-        return result
-
-    logger.info("B2: found previous run '%s', restoring...", run_id)
-    set_run_id(run_id)
-    result["run_id"] = run_id
-
-    # Check which stages are complete
-    for stage in ("scenario", "audio", "visual_direction", "production", "assembly"):
-        if check_stage_complete(stage):
-            result["stages_complete"].append(stage)
-            logger.info("B2: stage '%s' already complete", stage)
-
-    # Restore pipeline state
-    state_json = restore_state_json("state/pipeline_state.json")
-    if state_json:
-        try:
-            result["state"] = json.loads(state_json)
-            logger.info("B2: restored pipeline state (%d keys)", len(result["state"]))
-        except json.JSONDecodeError:
-            pass
-
-    # Restore individual state files
-    for name in ("scenes", "visual_style", "visual_concepts"):
-        content = restore_state_json(f"state/{name}.json")
-        if content:
-            result["state"][name] = content
-            logger.info("B2: restored state/%s.json", name)
-
-    # Restore directories
-    dirs_to_restore = {
-        "audio/": os.path.join(pipeline_base, "audio"),
-        "video/": os.path.join(pipeline_base, "video"),
-        "timelines/": os.path.join(pipeline_base, "timelines"),
-        "assembly/": os.path.join(pipeline_base, "assembly"),
-        "output/": os.path.join(pipeline_base, "output"),
-    }
-
-    total = 0
-    for b2_prefix, local_dir in dirs_to_restore.items():
-        n = restore_directory(b2_prefix, local_dir)
-        total += n
-        if n > 0:
-            logger.info("B2: restored %d files from %s -> %s", n, b2_prefix, local_dir)
-
-    result["restored_files"] = total
-
-    # Validate restored stages: if a stage is marked complete but its
-    # required files are missing from disk, remove it from stages_complete
-    # so the stage re-runs instead of crashing downstream.
-    _STAGE_FILE_REQUIREMENTS = {
-        "audio": (os.path.join(pipeline_base, "audio"), ".wav"),
-        "production": (os.path.join(pipeline_base, "video"), ".mp4"),
-        "assembly": (os.path.join(pipeline_base, "output"), ".mp4"),
-    }
-    invalid_stages = []
-    for stage, (required_dir, required_ext) in _STAGE_FILE_REQUIREMENTS.items():
-        if stage not in result["stages_complete"]:
-            continue
-        if not os.path.isdir(required_dir):
-            invalid_stages.append(stage)
-            logger.warning(
-                "B2: stage '%s' marked complete but directory %s missing — will re-run",
-                stage, required_dir,
-            )
-            continue
-        matching = [f for f in os.listdir(required_dir) if f.endswith(required_ext)]
-        if not matching:
-            invalid_stages.append(stage)
-            logger.warning(
-                "B2: stage '%s' marked complete but no %s files in %s — will re-run",
-                stage, required_ext, required_dir,
-            )
-
-    # Remove invalid stages and all stages that depend on them
-    if invalid_stages:
-        stage_order = ["scenario", "audio", "visual_direction", "production", "assembly"]
-        earliest_idx = min(stage_order.index(s) for s in invalid_stages if s in stage_order)
-        # Invalidate this stage and all subsequent stages
-        for s in stage_order[earliest_idx:]:
-            if s in result["stages_complete"]:
-                result["stages_complete"].remove(s)
-                logger.info("B2: invalidated stage '%s' (missing files or downstream dependency)", s)
-
-    logger.info(
-        "B2 restore complete: run_id=%s, stages=%s, files=%d",
-        run_id, result["stages_complete"], total,
-    )
-    return result

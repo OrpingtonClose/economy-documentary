@@ -112,12 +112,6 @@ def set_refiner_helpers(*, text_rewriter: _TextRewriter | None = None) -> None:
     _TEXT_REWRITER = text_rewriter
 
 
-def clear_refiner_helpers() -> None:
-    """Reset injected helpers. Primarily for test isolation."""
-    global _TEXT_REWRITER
-    _TEXT_REWRITER = None
-
-
 class ScenarioRefinerHelperNotConfigured(RuntimeError):
     """Raised when an LLM-backed tool is invoked with no helper wired in."""
 
