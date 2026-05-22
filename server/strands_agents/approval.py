@@ -166,34 +166,6 @@ def validate_decision(
             raise ValueError("respond decision requires 'content'")
 
 
-def resume_command_from_decision(
-    tool_name: str,
-    decision: ApprovalDecision,
-) -> Command:
-    """Turn a validated decision into a LangGraph :class:`Command`.
-
-    Emits the legacy single-decision shape
-    (``Command(resume={"type": ...})``). Use
-    :func:`langchain_resume_command_from_decision` instead when the
-    interrupt was raised by ``langchain.agents.middleware.HumanInTheLoopMiddleware``,
-    which expects ``Command(resume={"decisions": [...]})`` with one
-    entry per parallel ``action_request``.
-
-    Args:
-        tool_name: The intercepted tool name.
-        decision: Operator decision dict.
-
-    Returns:
-        A ``Command(resume={...})`` ready for ``agent.ainvoke(...)``.
-
-    Raises:
-        ValueError: If the decision fails :func:`validate_decision`.
-    """
-
-    validate_decision(tool_name, decision)
-    return Command(resume=dict(decision))
-
-
 def _to_langchain_decision(
     tool_name: str,
     decision: ApprovalDecision,
@@ -441,7 +413,6 @@ __all__ = [
     "DecisionType",
     "new_interrupt_id",
     "request_human_approval",
-    "resume_command_from_decision",
     "validate_decision",
     "write_approval_record",
     "write_pending_envelope",

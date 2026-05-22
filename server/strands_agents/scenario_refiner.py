@@ -345,39 +345,3 @@ def persist_refined_scenes(
 # ---------------------------------------------------------------------------
 # Agent builder
 # ---------------------------------------------------------------------------
-
-
-def build_scenario_refiner_agent(
-    *,
-    model: str = "openai/gpt-4o",
-    window_size: int = 10,
-) -> Agent:
-    """Construct the Strands refiner agent.
-
-    Args:
-        model: Strands model identifier. Defaults to ``"openai/gpt-4o"``.
-        window_size: Conversation window size for the
-            :class:`SlidingWindowConversationManager`. Refinement is a
-            single-pass mechanical job so 10 turns is more than enough.
-
-    Returns:
-        A configured :class:`strands.Agent` with the four tools and
-        hook stack wired up.
-    """
-    return Agent(
-        name="scenario_refiner",
-        model=model,
-        system_prompt=SYSTEM_PROMPT,
-        tools=[
-            adjust_scene_durations,
-            tweak_voice_text,
-            validate_pronunciation_hints,
-            persist_refined_scenes,
-        ],
-        hooks=[
-            ContractEnforcer(SCENARIO_CONTRACT, check_preconditions=False),
-            SkipIfTimingPassed(),
-            RevisionTagger("scenes", stage="scenario_refiner", retag_on_reproduce=True),
-        ],
-        conversation_manager=SlidingWindowConversationManager(window_size=window_size),
-    )

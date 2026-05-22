@@ -163,12 +163,3 @@ class ArtifactProvenance:
             "checker": checker,
             "check_at": time.time(),
         })
-
-    def append_escalation(self, escalation_type: str, stage: str, reason: str) -> None:
-        """Record that this artifact triggered an escalation."""
-        self.escalations.append({
-            "escalation_type": escalation_type,
-            "stage": stage,
-            "reason": reason,
-            "opened_at": time.time(),
-        })

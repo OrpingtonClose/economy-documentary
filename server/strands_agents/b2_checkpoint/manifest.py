@@ -89,10 +89,6 @@ class Manifest(BaseModel):
             return None
         return max(entry.revision_tag for entry in self.entries)
 
-    def entries_for_kind(self, kind: ArtifactKind) -> tuple[ManifestEntry, ...]:
-        """Return the subset of entries whose kind matches, in order."""
-        return tuple(e for e in self.entries if e.kind == kind)
-
 
 def dumps(manifest: Manifest) -> bytes:
     """Serialise a :class:`Manifest` to canonical-ordered JSON bytes.

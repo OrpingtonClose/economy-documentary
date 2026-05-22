@@ -214,19 +214,8 @@ def get_default_queue() -> PendingInterruptQueue:
     return _default_queue
 
 
-def reset_default_queue() -> None:
-    """Discard the process-wide queue singleton.
-
-    Exposed so tests can guarantee a clean slate between runs.
-    """
-
-    global _default_queue  # noqa: PLW0603  # module-level singleton, intentional
-    _default_queue = None
-
-
 __all__ = [
     "PendingInterrupt",
     "PendingInterruptQueue",
     "get_default_queue",
-    "reset_default_queue",
 ]

@@ -369,19 +369,3 @@ def _critical_env() -> dict[str, str]:
                     if key not in env or not env[key]:
                         env[key] = val.strip().strip('"').strip("'")
     return env
-
-
-def make_vast_tools() -> list:
-    """Return the list of Vast.ai provisioning tools for agent registration."""
-    return [
-        search_gpu_offers,
-        provision_specific_offer,
-        check_instance_status,
-        destroy_instance,
-        set_gpu_worker_url,
-        set_tts_worker_url,
-        get_registered_workers,
-        run_vast_cli,
-        run_bash_command,
-        ssh_run_command,
-    ]
