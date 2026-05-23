@@ -952,6 +952,10 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         check_worker_health as _check_worker_health,
         get_provisioning_guidance as _get_provisioning_guidance,
     )
+    from research_tools import (
+        research_model_requirements as _research_model_requirements,
+        evaluate_vastai_offers as _evaluate_vastai_offers,
+    )
 
     @_tool_decorator
     def bash_command(command: str) -> str:
@@ -976,23 +980,44 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
             "\n"
-            "VM PROVISIONING PROTOCOL (prevents death spiral):\n"
-            "1. BEFORE provisioning, call query_vm_registry(run_id=<the_run_id>, stage='audio').\n"
-            "   If a VM exists, call check_worker_health(instance_id=<id>) to verify it's ready.\n"
-            "2. If you think you need a new VM, call get_provisioning_guidance(run_id, 'audio', <your_reasoning>).\n"
-            "   The system will tell you if you should use an existing VM instead.\n"
-            "3. Only provision with bash_command if guidance says 'provision_new'.\n"
+            "VM PROVISIONING PROTOCOL — NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "\n"
+            "CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.\n"
+            "\n"
+            "1. CHECK MEMORY FIRST: recall_memory(query='TTS worker success', category='success')\n"
+            "   If memory exists of a successful TTS VM configuration, USE THAT EXACT CONFIGURATION.\n"
+            "   Same GPU, same disk, same image, same provider. Do not deviate.\n"
+            "\n"
+            "2. ONLY if no memory exists: call research_model_requirements('Qwen3 TTS')\n"
+            "   to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.\n"
+            "\n"
+            "3. BEFORE provisioning: query_vm_registry(run_id=<the_run_id>, stage='audio')\n"
+            "   If a VM exists, check_worker_health(instance_id=<id>).\n"
+            "   If the VM is healthy, USE IT. Do not provision a second VM.\n"
+            "\n"
+            "4. If you must provision: get_provisioning_guidance(run_id, 'audio', <your_reasoning>)\n"
+            "   Then search Vast.ai and call evaluate_vastai_offers('Qwen3 TTS', <raw_search_text>)\n"
+            "   Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer. Do not get creative.\n"
+            "\n"
+            "5. After provisioning succeeds: remember(text='TTS worker succeeded on <GPU> <VRAM>GB "
+            "   at <provider> with image <image>', category='success')\n"
+            "   After ANY failure: remember(text='TTS worker failed: <exact_error>', category='failure')\n"
+            "\n"
+            "6. IF A WORKER FAILS: Do NOT try to fix it. Do NOT SSH in and tinker.\n"
+            "   Call get_provisioning_guidance with your failure reasoning.\n"
+            "   If guidance says 'destroy_and_reprovision', destroy it and start fresh.\n"
+            "   If guidance says 'use_existing', the worker may still be loading — WAIT.\n"
+            "   NEVER troubleshoot. The system knows more than you do.\n"
             "\n"
             "WORKFLOW:\n"
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
-            "2. Query VM registry. Check worker health. Get guidance if needed.\n"
+            "2. Check memory → research → query registry → evaluate offers → provision.\n"
             "3. For EACH scene, call generate_scene_narration with the worker_url.\n"
             "4. Add narration clips with add_narration_to_timeline.\n"
             "5. Run WhisperX alignment with align_narration_audio.\n"
             "6. Evaluate timing with evaluate_audio_timing.\n"
             "7. Persist state with persist_audio_to_otio.\n"
             "8. Call save_audio_checkpoint to preserve the audio work.\n"
-            "Use your memory tools to recall GPU provisioning failures."
         ),
         tools=[
             generate_scene_narration,
@@ -1007,6 +1032,8 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             _query_vm_registry,
             _check_worker_health,
             _get_provisioning_guidance,
+            _research_model_requirements,
+            _evaluate_vastai_offers,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1189,24 +1216,45 @@ def _build_video_agent(model) -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_video_checkpoint and then STOP — do not render clips.\n"
             "\n"
-            "VM PROVISIONING PROTOCOL (prevents death spiral):\n"
-            "1. BEFORE provisioning, call query_vm_registry(run_id=<the_run_id>, stage='video').\n"
-            "   If a VM exists, call check_worker_health(instance_id=<id>) to verify it's ready.\n"
-            "2. If you think you need a new VM, call get_provisioning_guidance(run_id, 'video', <your_reasoning>).\n"
-            "   The system will tell you if you should use an existing VM instead.\n"
-            "3. Only provision with bash_command if guidance says 'provision_new'.\n"
+            "VM PROVISIONING PROTOCOL — NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "\n"
+            "CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.\n"
+            "\n"
+            "1. CHECK MEMORY FIRST: recall_memory(query='LTX video worker success', category='success')\n"
+            "   If memory exists of a successful video VM configuration, USE THAT EXACT CONFIGURATION.\n"
+            "   Same GPU, same disk, same image, same provider. Do not deviate.\n"
+            "\n"
+            "2. ONLY if no memory exists: call research_model_requirements('LTX Video')\n"
+            "   to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.\n"
+            "\n"
+            "3. BEFORE provisioning: query_vm_registry(run_id=<the_run_id>, stage='video')\n"
+            "   If a VM exists, check_worker_health(instance_id=<id>).\n"
+            "   If the VM is healthy, USE IT. Do not provision a second VM.\n"
+            "\n"
+            "4. If you must provision: get_provisioning_guidance(run_id, 'video', <your_reasoning>)\n"
+            "   Then search Vast.ai and call evaluate_vastai_offers('LTX Video', <raw_search_text>)\n"
+            "   Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer. Do not get creative.\n"
+            "\n"
+            "5. After provisioning succeeds: remember(text='LTX worker succeeded on <GPU> <VRAM>GB "
+            "   at <provider> with image <image>', category='success')\n"
+            "   After ANY failure: remember(text='LTX worker failed: <exact_error>', category='failure')\n"
+            "\n"
+            "6. IF A WORKER FAILS: Do NOT try to fix it. Do NOT SSH in and tinker.\n"
+            "   Call get_provisioning_guidance with your failure reasoning.\n"
+            "   If guidance says 'destroy_and_reprovision', destroy it and start fresh.\n"
+            "   If guidance says 'use_existing', the worker may still be loading — WAIT.\n"
+            "   NEVER troubleshoot. The system knows more than you do.\n"
             "\n"
             "WORKFLOW:\n"
             "1. Call generate_visual_concepts with style from OTIO visual_style.\n"
             "2. Call persist_visual_concepts to save to OTIO metadata.\n"
             "3. Read scenes and plan visuals with generate_production_plan.\n"
             "4. Evaluate with evaluate_production_plan.\n"
-            "5. Query VM registry. Check worker health. Get guidance if needed.\n"
+            "5. Check memory → research → query registry → evaluate offers → provision.\n"
             "6. For EACH scene, call submit_gpu_production_job with worker_url.\n"
             "7. After each render, call add_video_clip_to_timeline.\n"
             "8. Finalize with finalize_production.\n"
             "9. Call save_video_checkpoint.\n"
-            "Use your memory tools to recall rendering failures."
         ),
         tools=[
             generate_production_plan,
