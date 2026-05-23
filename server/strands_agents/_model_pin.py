@@ -70,7 +70,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 logger = logging.getLogger(__name__)
 
@@ -170,13 +170,13 @@ def _materialize_snapshot(pin: ModelPin) -> Path:
     """
     from huggingface_hub import snapshot_download  # noqa: PLC0415
 
-    kwargs: dict[str, object] = {
+    kwargs: dict[str, Any] = {
         "repo_id": pin.model_id,
         "revision": pin.revision,
     }
     if pin.download_allow_patterns is not None:
         kwargs["allow_patterns"] = list(pin.download_allow_patterns)
-    snapshot_dir = snapshot_download(**kwargs)
+    snapshot_dir = snapshot_download(**kwargs)  # type: ignore[arg-type]
     return Path(snapshot_dir)
 
 

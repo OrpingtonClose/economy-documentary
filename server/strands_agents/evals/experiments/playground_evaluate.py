@@ -19,9 +19,9 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from strands_agents.evals.experiments.playground_catalog import (
     SubsetMatchEvaluator,
@@ -39,7 +39,7 @@ PLAYGROUND_EVALUATE_EVALUATOR_THRESHOLDS: dict[str, tuple[float, bool]] = {
 
 
 def _client_with_env(env: dict[str, str]) -> TestClient:
-    from playground import router as playground_router  # noqa: PLC0415
+    from playground import router as playground_router  # type: ignore[attr-defined]  # noqa: PLC0415
 
     set_default_cache(ReachabilityCache(CredentialsProber(environ=lambda: env)))
     app = FastAPI()
@@ -226,9 +226,6 @@ def build_playground_evaluate_experiment() -> (
     )
 
 
-__all__ = [
-    "PLAYGROUND_EVALUATE_EVALUATOR_THRESHOLDS",
-    "build_playground_evaluate_experiment",
+__all__ = ["build_playground_evaluate_experiment",
     "playground_evaluate_cases",
-    "playground_evaluate_task",
-]
+    "playground_evaluate_task",]

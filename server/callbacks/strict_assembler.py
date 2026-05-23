@@ -26,6 +26,8 @@ without special handling, while still carrying structured context
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class UnpluggedGapError(RuntimeError):
     """Raised when the assembler encounters an OTIO Gap at render time.
@@ -248,7 +250,7 @@ def ensure_track_length_matches(
 
 
 def ensure_item_is_not_gap(
-    item: object,
+    item: Any,
     track: str,
     lang_suffix: str,
     idx: int,
@@ -281,13 +283,9 @@ def ensure_item_is_not_gap(
         )
 
 
-__all__ = [
-    "UnpluggedGapError",
+__all__ = ["UnpluggedGapError",
     "ClipLengthMismatchError",
-    "CLIP_LENGTH_TOLERANCE_SEC",
-    "TRACK_LENGTH_FLOOR_SEC",
     "ensure_clip_length_matches",
     "ensure_track_length_matches",
     "track_length_tolerance",
-    "ensure_item_is_not_gap",
-]
+    "ensure_item_is_not_gap",]

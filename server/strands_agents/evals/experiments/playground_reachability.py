@@ -27,9 +27,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from strands_agents.evals.experiments.playground_catalog import (
     SubsetMatchEvaluator,
@@ -107,9 +107,9 @@ def playground_reachability_task(
         call_counter = {"n": 0}
 
         class CountingProber:
-            def probe(self, m: DeclaredModel):
+            def probe(self, model: DeclaredModel):
                 call_counter["n"] += 1
-                return _prober_with_env(env).probe(m)
+                return _prober_with_env(env).probe(model)
 
         cache = ReachabilityCache(CountingProber(), ttl_seconds=60.0)
         first = cache.get(model)
@@ -127,17 +127,17 @@ def playground_reachability_task(
         # called twice.
         call_counter = {"n": 0}
 
-        class CountingProber:
-            def probe(self, m: DeclaredModel):
+        class CountingProber2:
+            def probe(self, model: DeclaredModel):
                 call_counter["n"] += 1
-                return _prober_with_env(env).probe(m)
+                return _prober_with_env(env).probe(model)
 
         # Use a tick-based clock so the second call falls strictly
         # after the entry's expiry. ``ReachabilityCache.get`` consults
         # ``clock`` once per call, so two ticks cover two ``get``s.
         ticks = iter([0.0, 1000.0])
         cache = ReachabilityCache(
-            CountingProber(), ttl_seconds=10.0, clock=lambda t=ticks: next(t)
+            CountingProber2(), ttl_seconds=10.0, clock=lambda t=ticks: next(t)
         )
         cache.get(model)
         cache.get(model)
@@ -283,10 +283,7 @@ def build_playground_reachability_experiment() -> Experiment[Any, Any]:
     )
 
 
-__all__ = [
-    "PLAYGROUND_REACHABILITY_EVALUATOR_THRESHOLDS",
-    "build_playground_reachability_experiment",
+__all__ = ["build_playground_reachability_experiment",
     "playground_reachability_cases",
     "playground_reachability_evaluators",
-    "playground_reachability_task",
-]
+    "playground_reachability_task",]

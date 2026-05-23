@@ -50,8 +50,6 @@ from typing import Any, Callable, Iterable, Mapping, MutableMapping, Optional
 
 from callbacks.consistency_checker import (
     LedgerDrift,
-    after_agent_consistency_check,
-    before_tool_consistency_check,
     check_consistency_at_gate,
     pending_drift_signals,
 )
@@ -165,9 +163,4 @@ def _iter_agent_tree(root: Any) -> Iterable[Any]:
                 stack.append(sub)
 
 
-__all__ = [
-    "gate_poll_consistency_check",
-    "make_after_agent_with_consistency",
-    "make_before_agent_with_consistency",
-    "make_before_tool_with_consistency",
-    ]
+__all__ = ["gate_poll_consistency_check",]

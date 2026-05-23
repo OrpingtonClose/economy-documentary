@@ -1,5 +1,4 @@
-"""
-After-model callback -- semaphore release + reasoning capture + dashboard tracking.
+"""After-model callback -- semaphore release + reasoning capture + dashboard tracking.
 
 Ported from MiroThinker. Adapted for documentary pipeline (no boxed answer
 extraction -- documentary pipeline uses OTIO timeline as output).
@@ -14,6 +13,7 @@ from typing import Any, Optional
 
 from callbacks.before_model import release_llm_semaphore_if_held
 from dashboard import get_active_collector
+from models.scene import Scene, VisualStyle
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def after_model_callback(
     2. Captures reasoning content from thinking models.
     3. Records LLM end in dashboard.
     """
-    state = callback_context.state
+    state: dict = callback_context.state  # type: ignore[union-attr]
 
     # Release LLM concurrency semaphore
     release_llm_semaphore_if_held(state)
@@ -73,17 +73,6 @@ def after_model_callback(
         )
 
     # -- Scene + visual_style capture (scenario_generator only) ---------------
-    # ADK output_key only saves the *final* text response.  When the generator
-    # outputs scenes and then calls create_timeline, the post-tool response is
-    # often empty → output_key silently discards the scenes.  We capture them
-    # from every LLM response and persist to disk + state so downstream agents
-    # always have them.
-    #
-    # STREAMING FIX: after_model fires per-chunk during streaming.  Individual
-    # chunks rarely contain complete JSON.  We accumulate the full generator
-    # text in state["_generator_accumulated_text"] so that downstream callbacks
-    # (_save_generator_scenes, clean_scenes_after_scenario) can parse the
-    # complete text even when no single chunk contained the full scenes array.
     agent_name = getattr(callback_context, "agent_name", "unknown")
     if agent_name == "scenario_generator" and response_text:
         # Accumulate full generator output across streaming chunks
@@ -91,28 +80,31 @@ def after_model_callback(
         accumulated = prev + response_text
         state["_generator_accumulated_text"] = accumulated
 
-        from callbacks.deterministic_steps import extract_json_array, extract_json_object
+        from callbacks.deterministic_steps import extract_json_object
 
         # --- Capture visual_style (JSON object) --------------------------------
-        # Try on accumulated text (more likely to contain complete JSON)
         vs_obj = extract_json_object(accumulated)
         if vs_obj and "style" in vs_obj and "avoid" in vs_obj:
-            vs_json = json.dumps(vs_obj, ensure_ascii=False)
-            state["visual_style"] = vs_json
-            os.makedirs(os.path.dirname(_VISUAL_STYLE_BACKUP) or ".", exist_ok=True)
-            with open(_VISUAL_STYLE_BACKUP, "w") as f:
-                f.write(vs_json)
-            logger.info(
-                "Captured visual_style from scenario_generator → state + %s (style=%s)",
-                _VISUAL_STYLE_BACKUP, vs_obj.get("style", "unknown"),
-            )
+            try:
+                vs = VisualStyle.model_validate(vs_obj)
+                vs_json = vs.model_dump_json(ensure_ascii=False)
+                state["visual_style"] = vs_json
+                os.makedirs(os.path.dirname(_VISUAL_STYLE_BACKUP) or ".", exist_ok=True)
+                with open(_VISUAL_STYLE_BACKUP, "w") as f:
+                    f.write(vs_json)
+                logger.info(
+                    "Captured visual_style from scenario_generator → state + %s (style=%s)",
+                    _VISUAL_STYLE_BACKUP, vs.style,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("VisualStyle validation failed: %s", exc)
 
-        # --- Capture scenes (JSON array of objects with scene_num) ---------------
-        # Try on accumulated text — complete JSON is only available after enough
-        # streaming chunks have been collected.
+        # --- Capture scenes (JSON array of objects with scene_num) -------------
         scenes = _extract_scenes_array(accumulated)
         if scenes and len(scenes) >= 2:  # At least 2 scenes = plausible
-            scenes_json = json.dumps(scenes, ensure_ascii=False)
+            scenes_json = json.dumps(
+                [s.model_dump(mode="json") for s in scenes], ensure_ascii=False
+            )
             # Persist to state immediately (survives within LoopAgent scope)
             state["scenes"] = scenes_json
             # Persist to disk (survives LoopAgent state scoping)
@@ -132,7 +124,7 @@ def after_model_callback(
     return None
 
 
-def _extract_scenes_array(text: str) -> list | None:
+def _extract_scenes_array(text: str) -> list[Scene] | None:
     """Extract the scenes JSON array from text that may contain other arrays.
 
     The LLM response often contains multiple JSON arrays (realism_anchors,
@@ -145,17 +137,16 @@ def _extract_scenes_array(text: str) -> list | None:
     if not text or not text.strip():
         return None
 
-    candidates: list[list] = []
+    candidates: list[list[Any]] = []
 
     # Strategy 1: Look inside markdown fences first
-    fence_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)```', re.DOTALL)
+    fence_pattern = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
     for match in fence_pattern.finditer(text):
         try:
             result = json.loads(match.group(1).strip())
             if isinstance(result, list):
                 candidates.append(result)
             elif isinstance(result, dict):
-                # Check for a "scenes" key inside fenced JSON
                 for key in ("scenes",):
                     if key in result and isinstance(result[key], list):
                         candidates.append(result[key])
@@ -164,18 +155,18 @@ def _extract_scenes_array(text: str) -> list | None:
 
     # Strategy 2: Find all [...] blocks in the text
     bracket_depth = 0
-    start_idx = None
+    start_idx: int | None = None
     for i, ch in enumerate(text):
-        if ch == '[' and bracket_depth == 0:
+        if ch == "[" and bracket_depth == 0:
             start_idx = i
             bracket_depth = 1
-        elif ch == '[':
+        elif ch == "[":
             bracket_depth += 1
-        elif ch == ']':
+        elif ch == "]":
             bracket_depth -= 1
             if bracket_depth == 0 and start_idx is not None:
                 try:
-                    result = json.loads(text[start_idx:i + 1])
+                    result = json.loads(text[start_idx : i + 1])
                     if isinstance(result, list):
                         candidates.append(result)
                 except (json.JSONDecodeError, ValueError):
@@ -186,19 +177,25 @@ def _extract_scenes_array(text: str) -> list | None:
     for candidate in candidates:
         if len(candidate) >= 2 and all(isinstance(item, dict) for item in candidate):
             if any("scene_num" in item for item in candidate):
-                return candidate
+                try:
+                    return [Scene.model_validate(c) for c in candidate]
+                except Exception:  # noqa: BLE001
+                    continue
 
     # Fallback: return the largest array of dicts that look like scenes.
-    # IMPORTANT: Require at least one dict to have "scene_num" or "voices" key.
-    # Without this check, the correction loop's voice-block arrays
-    # ([{voice, text, tone}, ...]) are mistaken for scenes and overwrite
-    # the real 10-scene array — causing the audio stage to generate 0 clips.
-    dict_arrays = [c for c in candidates if len(c) >= 2 and all(isinstance(item, dict) for item in c)]
+    dict_arrays = [
+        c for c in candidates
+        if len(c) >= 2 and all(isinstance(item, dict) for item in c)
+    ]
     scene_arrays = [
         c for c in dict_arrays
         if any("scene_num" in item or "voices" in item for item in c)
     ]
     if scene_arrays:
-        return max(scene_arrays, key=len)
+        best = max(scene_arrays, key=len)
+        try:
+            return [Scene.model_validate(b) for b in best]
+        except Exception:  # noqa: BLE001
+            pass
 
     return None

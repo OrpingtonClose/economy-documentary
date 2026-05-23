@@ -42,10 +42,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.playground.worker_registry import (
     HEARTBEAT_STALE_SECONDS,
@@ -487,11 +487,8 @@ def build_infra_worker_registry_experiment() -> (
     )
 
 
-__all__ = [
-    "INFRA_WORKER_REGISTRY_EVALUATOR_THRESHOLDS",
-    "RegistryDetailEvaluator",
+__all__ = ["RegistryDetailEvaluator",
     "RegistryOutcomeEvaluator",
     "build_infra_worker_registry_experiment",
     "infra_worker_registry_cases",
-    "infra_worker_registry_task",
-]
+    "infra_worker_registry_task",]

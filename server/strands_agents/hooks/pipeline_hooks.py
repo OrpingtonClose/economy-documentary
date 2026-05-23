@@ -21,7 +21,6 @@ Hook list:
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from strands.hooks import (
@@ -29,6 +28,7 @@ from strands.hooks import (
     BeforeNodeCallEvent,
     BeforeToolCallEvent,
     HookProvider,
+    HookRegistry,
 )
 
 logger = logging.getLogger(__name__)
@@ -97,11 +97,17 @@ class ImmutabilityHook(HookProvider):
         "re_render_clip", "modify_existing",
     })
 
+    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
+        registry.add_callback(BeforeToolCallEvent, self.on_before_tool_call)
+
     async def on_before_tool_call(self, event: BeforeToolCallEvent) -> None:
-        if event.tool_name in self.MUTATION_TOOLS:
-            event.cancel_tool(result="BLOCKED: Media immutability invariant — "
-                               "cannot overwrite generated media. Use re-generation instead.")
-            logger.warning("ImmutabilityHook: blocked tool '%s'", event.tool_name)
+        tool_name = event.tool_use.get("name", "") if isinstance(event.tool_use, dict) else ""
+        if tool_name in self.MUTATION_TOOLS:
+            event.cancel_tool = (
+                "BLOCKED: Media immutability invariant — "
+                "cannot overwrite generated media. Use re-generation instead."
+            )
+            logger.warning("ImmutabilityHook: blocked tool '%s'", tool_name)
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +126,9 @@ class BudgetHook(HookProvider):
     def __init__(self, budget_usd: float = 100.0) -> None:
         self._budget = budget_usd
         self._accrued = 0.0
+
+    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
+        registry.add_callback(AfterNodeCallEvent, self.on_after_node_call)
 
     @property
     def accrued(self) -> float:
@@ -154,17 +163,23 @@ class ApprovalGateHook(HookProvider):
     """
 
     def __init__(self, gated_stages: set[str] | None = None) -> None:
-        self._gated_stages = gated_stages or {"scenario", "audio", "visual", "production", "assembly"}
+        self._gated_stages = gated_stages if gated_stages is not None else {"scenario", "audio", "visual", "production", "assembly"}
+
+    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
+        registry.add_callback(BeforeNodeCallEvent, self.on_before_node_call)
 
     async def on_before_node_call(self, event: BeforeNodeCallEvent) -> None:
-        node_id = event.node_id if hasattr(event, 'node_id') else None
-        if node_id and node_id in self._gated_stages:
+        node_id = event.node_id
+        if node_id in self._gated_stages:
             # Check if the stage has been approved
             state = event.invocation_state or {}
             approval_key = f"_approved_{node_id}"
             if not state.get(approval_key):
-                event.interrupt()
-                logger.info("ApprovalGateHook: interrupting node '%s' for human approval", node_id)
+                event.cancel_node = (
+                    f"Approval gate for '{node_id}' — human review required. "
+                    f"Set state['{approval_key}'] = True to proceed."
+                )
+                logger.info("ApprovalGateHook: canceling node '%s' for human approval", node_id)
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +262,7 @@ class CheckpointHook(HookProvider):
         state = event.invocation_state or {}
         otio_manager = state.get("otio_manager")
         if otio_manager is not None and hasattr(otio_manager, "checkpoint"):
-            checkpoint = otio_manager.checkpoint(f"after_{node_id}")
+            otio_manager.checkpoint(f"after_{node_id}")
             logger.info("CheckpointHook: checkpoint 'after_%s' recorded", node_id)
         else:
             logger.debug("CheckpointHook: no otio_manager in invocation_state")
@@ -273,17 +288,21 @@ class ShellGuardHook(HookProvider):
 
     SHELL_TOOLS = frozenset({"shell", "shell_safe", "bash"})
 
+    def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
+        registry.add_callback(BeforeToolCallEvent, self.on_before_tool_call)
+
     async def on_before_tool_call(self, event: BeforeToolCallEvent) -> None:
-        if event.tool_name in self.SHELL_TOOLS:
+        tool_name = event.tool_use.get("name", "") if isinstance(event.tool_use, dict) else ""
+        if tool_name in self.SHELL_TOOLS:
             # Extract the command from the tool arguments
-            args = event.tool_args if hasattr(event, 'tool_args') else {}
+            args = event.tool_use.get("input", {}) if isinstance(event.tool_use, dict) else {}
             command = args.get("command", "") if isinstance(args, dict) else ""
             if command:
                 binary = command.strip().split()[0] if command.strip() else ""
                 if binary not in self.ALLOWED_BINARIES:
-                    event.cancel_tool(
-                        result=f"BLOCKED: '{binary}' not in allowlist. "
-                               f"Allowed: {sorted(self.ALLOWED_BINARIES)}"
+                    event.cancel_tool = (
+                        f"BLOCKED: '{binary}' not in allowlist. "
+                        f"Allowed: {sorted(self.ALLOWED_BINARIES)}"
                     )
                     logger.warning("ShellGuardHook: blocked command '%s'", binary)
 

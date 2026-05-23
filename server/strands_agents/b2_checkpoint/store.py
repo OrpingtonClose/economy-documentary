@@ -301,7 +301,7 @@ class LiveB2CheckpointStore:
         with self._lock:
             if self._bucket is not None:
                 return self._client, self._bucket  # type: ignore[return-value]
-            from b2sdk.v2 import B2Api, InMemoryAccountInfo
+            from b2sdk.v2 import B2Api, InMemoryAccountInfo  # type: ignore[import-not-found]
 
             info = InMemoryAccountInfo()
             api = B2Api(info)

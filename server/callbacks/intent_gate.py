@@ -28,9 +28,8 @@ from __future__ import annotations
 import json
 import logging
 import threading
-import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +108,13 @@ def _extract_scenes(state: Mapping[str, Any]) -> list[dict]:
     if raw is None:
         return []
     if isinstance(raw, list):
-        return [s for s in raw if isinstance(s, Mapping)]
+        return [dict(s) for s in raw if isinstance(s, Mapping)]
     try:
         data = json.loads(str(raw))
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
     if isinstance(data, list):
-        return [s for s in data if isinstance(s, Mapping)]
+        return [dict(s) for s in data if isinstance(s, Mapping)]
     return []
 
 
@@ -123,6 +122,8 @@ def _sum_scene_duration_sec(scenes: list[dict]) -> float:
     total = 0.0
     for scene in scenes:
         val = scene.get("duration_sec")
+        if val is None:
+            continue
         try:
             total += float(val)
         except (TypeError, ValueError):
@@ -255,13 +256,5 @@ def _emit_halt(verdict: GateVerdict, *, max_attempts: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-__all__ = [
-    "GATE_ATTEMPT_KEY",
-    "GATE_CRITIQUE_KEY",
-    "GATE_VERDICT_KEY",
-    "GateVerdict",
-    "INTENT_GATE_PASSED",
-    "IntentGateHalt",
-    "MAX_GATE_ATTEMPTS",
-        "build_halt_message",
-                ]
+__all__ = ["GateVerdict",
+    "build_halt_message",]

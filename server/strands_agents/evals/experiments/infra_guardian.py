@@ -37,13 +37,12 @@ pin them at the same time as the reason.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.infra_agent.guardian import (
     GuardianConfig,
@@ -352,11 +351,8 @@ def build_infra_guardian_experiment() -> Experiment[dict[str, Any], dict[str, An
     )
 
 
-__all__ = [
-    "INFRA_GUARDIAN_EVALUATOR_THRESHOLDS",
-    "GuardianElapsedEvaluator",
+__all__ = ["GuardianElapsedEvaluator",
     "GuardianReasonEvaluator",
     "build_infra_guardian_experiment",
     "infra_guardian_cases",
-    "infra_guardian_task",
-]
+    "infra_guardian_task",]

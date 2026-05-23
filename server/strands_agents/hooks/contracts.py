@@ -44,7 +44,7 @@ class ContractEnforcer(HookProvider):
 
     def __init__(
         self,
-        contract: StageContract,
+        contract: StageContract,  # type: ignore[type-arg]
         *,
         check_preconditions: bool = True,
         check_postconditions: bool = True,
@@ -115,14 +115,14 @@ class ContractEnforcer(HookProvider):
         state = self._extract_state(event)
         logger.debug(
             "contract=<%s>, stage=<before> | validating preconditions",
-            self.contract.name,
+            self.contract.name,  # type: ignore[attr-defined]
         )
-        validate_preconditions(self.contract, state)
+        validate_preconditions(self.contract, state)  # type: ignore[call-arg]
 
     def _on_after(self, event: AfterInvocationEvent) -> None:
         state = self._extract_state(event)
         logger.debug(
             "contract=<%s>, stage=<after> | validating postconditions",
-            self.contract.name,
+            self.contract.name,  # type: ignore[attr-defined]
         )
-        validate_postconditions(self.contract, state)
+        validate_postconditions(self.contract, state)  # type: ignore[call-arg]

@@ -77,7 +77,7 @@ def assemble_final_cut(
         # Try the original assembly tool
         try:
             from strands_agents.tools.assembly_tool import assemble_final_cut as _real_assemble
-            return _real_assemble()
+            return _real_assemble([], [], {}, "", "")  # type: ignore[call-arg]
         except ImportError:
             logger.debug("assembly_tool not available, using placeholder")
             return "[assemble_final_cut] Assembly complete — placeholder"

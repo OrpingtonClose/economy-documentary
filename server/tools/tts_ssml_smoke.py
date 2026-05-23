@@ -27,12 +27,9 @@ importable and unit-testable without any GPU worker configuration.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import re
-from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +111,4 @@ def _now() -> float:
     return time.time()
 
 
-__all__ = [
-    "CacheEntry",
-    "apply_pronunciation_hints",
-    "build_probe_ssml",
-    "is_voice_ssml_supported",
-    "load_cache",
-    "save_cache",
-    "smoke_test_voice",
-]
+__all__ = []

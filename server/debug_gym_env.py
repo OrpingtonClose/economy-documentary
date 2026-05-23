@@ -9,12 +9,11 @@ This module provides a RepoEnv subclass that:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
-from debug_gym.gym.envs.env import EvalOutput, RepoEnv
-from debug_gym.gym.terminals.local import LocalTerminal
+from debug_gym.gym.envs.env import EvalOutput, RepoEnv  # type: ignore[import-not-found]
+from debug_gym.gym.terminals.local import LocalTerminal  # type: ignore[import-not-found]
 
 
 class DocumentaryAuditEnv(RepoEnv):

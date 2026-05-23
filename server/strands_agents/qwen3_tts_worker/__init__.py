@@ -26,7 +26,7 @@ Shape per Wave 2 slice 4b of the next-wave plan:
 from __future__ import annotations
 
 from .app import build_app
-from .bump_client import InfraAgentBumpClient, bump_infra_agent
+from .bump_client import InfraAgentBumpClient
 from .engine import (
     StubTTSEngine,
     SynthesisRequest,
@@ -44,21 +44,4 @@ from .registry_client import (
 )
 from .runner import WorkerConfig, main
 
-__all__ = [
-    "InfraAgentBumpClient",
-    "PlaygroundRegistryClient",
-    "RegistryClientError",
-    "RegistryHeartbeatError",
-    "RegistryRegisterError",
-    "RegistryUnregisterError",
-    "RegistryVoicePinError",
-    "StubTTSEngine",
-    "SynthesisRequest",
-    "SynthesisResult",
-    "TTSEngine",
-    "TTSEngineError",
-    "WorkerConfig",
-    "build_app",
-    "bump_infra_agent",
-    "main",
-]
+__all__ = ['InfraAgentBumpClient', 'PlaygroundRegistryClient', 'RegistryClientError', 'RegistryHeartbeatError', 'RegistryRegisterError', 'RegistryUnregisterError', 'RegistryVoicePinError', 'StubTTSEngine', 'SynthesisRequest', 'SynthesisResult', 'TTSEngine', 'TTSEngineError', 'WorkerConfig', 'annotations', 'build_app', 'main']

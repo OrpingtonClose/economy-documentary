@@ -51,13 +51,13 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from langchain_core.language_models.fake_chat_models import (
+from langchain_core.language_models.fake_chat_models import (  # type: ignore[import-not-found]
     FakeMessagesListChatModel,
 )
-from langchain_core.messages import AIMessage
-from langchain_core.runnables import Runnable
-from langchain_core.tools import tool
-from langgraph.checkpoint.memory import InMemorySaver
+from langchain_core.messages import AIMessage  # type: ignore[import-not-found]
+from langchain_core.runnables import Runnable  # type: ignore[import-not-found]
+from langchain_core.tools import tool  # type: ignore[import-not-found]
+from langgraph.checkpoint.memory import InMemorySaver  # type: ignore[import-not-found]
 
 from strands_agents import _placeholders
 from strands_agents.approval import request_human_approval

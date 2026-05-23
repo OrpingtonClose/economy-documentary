@@ -11,6 +11,8 @@ import contextvars
 import threading
 from typing import Optional
 
+from .collector import PipelineCollector
+
 # Per-request collector (set by middleware for each AG-UI request)
 _active_collector: contextvars.ContextVar[Optional["PipelineCollector"]] = (
     contextvars.ContextVar("_active_collector", default=None)
@@ -59,3 +61,5 @@ def remove_collector(run_id: str) -> None:
     """Remove a collector from the shared registry."""
     with _registry_lock:
         _all_collectors.pop(run_id, None)
+
+__all__ = ['annotations', 'Optional', 'PipelineCollector']

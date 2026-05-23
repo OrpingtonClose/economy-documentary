@@ -32,7 +32,7 @@ import json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -91,13 +91,13 @@ def _load_scenes(state: Mapping[str, Any]) -> list[dict]:
     if raw is None:
         return []
     if isinstance(raw, list):
-        return [s for s in raw if isinstance(s, Mapping)]
+        return [dict(s) for s in raw if isinstance(s, Mapping)]
     try:
         parsed = json.loads(str(raw))
     except (TypeError, ValueError, json.JSONDecodeError):
         return []
     if isinstance(parsed, list):
-        return [s for s in parsed if isinstance(s, Mapping)]
+        return [dict(s) for s in parsed if isinstance(s, Mapping)]
     return []
 
 
@@ -439,12 +439,9 @@ _STAGE_DISPATCH = {
 # ---------------------------------------------------------------------------
 
 
-__all__ = [
-    "STAGE_ASSEMBLY",
+__all__ = ["STAGE_ASSEMBLY",
     "STAGE_AUDIO",
     "STAGE_PRODUCTION",
     "STAGE_SCENARIO",
     "STAGE_VISUAL",
-    "VERIFICATION_LOG_KEY",
-    "VerificationRecord",
-                ]
+    "VerificationRecord",]

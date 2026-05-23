@@ -50,10 +50,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.playground.pipeline_adapter import (
     default_simulation_stages,
@@ -617,11 +617,8 @@ def build_infra_pipeline_adapter_experiment() -> Experiment[
     )
 
 
-__all__ = [
-    "AdapterEventShapeEvaluator",
-    "INFRA_PIPELINE_ADAPTER_EVALUATOR_THRESHOLDS",
+__all__ = ["AdapterEventShapeEvaluator",
     "StageSequenceEvaluator",
     "build_infra_pipeline_adapter_experiment",
     "infra_pipeline_adapter_cases",
-    "infra_pipeline_adapter_task",
-]
+    "infra_pipeline_adapter_task",]

@@ -13,7 +13,7 @@ import os
 import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

@@ -32,7 +32,6 @@ Cases cover:
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import wave
@@ -40,10 +39,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.infra_agent.telemetry import ResourceTelemetry
 from strands_agents.qwen3_tts_worker.app import build_app
@@ -474,12 +473,9 @@ def build_infra_qwen3_tts_worker_experiment() -> (
     )
 
 
-__all__ = [
-    "INFRA_QWEN3_TTS_WORKER_EVALUATOR_THRESHOLDS",
-    "TTSInvariantEvaluator",
+__all__ = ["TTSInvariantEvaluator",
     "TTSResponseEvaluator",
     "TTSWavStructureEvaluator",
     "build_infra_qwen3_tts_worker_experiment",
     "infra_qwen3_tts_worker_cases",
-    "infra_qwen3_tts_worker_task",
-]
+    "infra_qwen3_tts_worker_task",]

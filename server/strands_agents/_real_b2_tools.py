@@ -42,7 +42,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # type: ignore[import-not-found]
 
 from strands_agents.b2_checkpoint import (
     B2CheckpointStore,

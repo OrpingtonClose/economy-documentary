@@ -21,7 +21,6 @@ stream mode for the component workbench and pipeline orchestrator.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any
@@ -142,7 +141,7 @@ def _event_to_agui(
                 type=EventType.TOOL_CALL_ARGS,
                 tool_call_id=tool_call_id,
                 delta=detail.get("args", ""),
-            ))
+            ))  # type: ignore[call-arg]
         events.append(ToolCallEndEvent(
             type=EventType.TOOL_CALL_END,
             tool_call_id=tool_call_id,
@@ -158,8 +157,8 @@ def _event_to_agui(
         events.append(TextMessageContentEvent(
             type=EventType.TEXT_MESSAGE_CONTENT,
             message_id=msg_id,
-            content=summary or str(detail),
-        ))
+            content=summary or str(detail),  # type: ignore[call-arg]
+        ))  # type: ignore[call-arg]
         events.append(TextMessageEndEvent(
             type=EventType.TEXT_MESSAGE_END,
             message_id=msg_id,
@@ -232,7 +231,7 @@ def add_playground_agui_endpoint(app: FastAPI, path: str = "/agui") -> None:
                         break
 
                     # Wait for new events (5s timeout = heartbeat window)
-                    new_events = await stream.wait_for_after(last_seq)
+                    new_events = await stream.wait_for_after(last_seq, timeout=5.0)
 
                     if new_events:
                         for event in new_events:

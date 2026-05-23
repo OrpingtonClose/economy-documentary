@@ -35,8 +35,6 @@ from orchestrator.escalation_menu import (
     EscalationAction,
     EscalationActionError,
     EscalationContext,
-    EscalationInvariantViolation,
-    assert_escalation_invariant,
 )
 
 logger = logging.getLogger(__name__)
@@ -332,8 +330,8 @@ def _default_llm_call(model: str, system: str, prompt: str) -> str:
     ``EscalationAction.__post_init__``) matches what Gemini's structured
     output supports (no oneOf).
     """
-    from google import genai
-    from google.genai import types as genai_types
+    from google import genai  # type: ignore
+    from google.genai import types as genai_types  # type: ignore[import-not-found]
 
     api_key = (
         os.environ.get("GOOGLE_API_KEY")
@@ -460,11 +458,5 @@ def supervisor_escalate(
 # ---------------------------------------------------------------------------
 
 
-__all__ = [
-    "production_supervisor",
-    "supervisor_escalate",
-    "EscalationAction",
-    "EscalationActionError",
-    "EscalationContext",
-    "EscalationInvariantViolation",
-]
+__all__ = ["production_supervisor",
+    "supervisor_escalate",]

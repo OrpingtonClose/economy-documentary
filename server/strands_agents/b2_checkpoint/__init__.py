@@ -92,21 +92,4 @@ def load_manifest(*, run_id: str, store: B2CheckpointStore) -> Manifest:
     return store.list_for_run(run_id)
 
 
-__all__ = [
-    "ARTIFACT_KINDS",
-    "ArtifactKind",
-    "B2CheckpointError",
-    "B2CheckpointStore",
-    "ChecksumMismatchError",
-    "DuplicateIdempotencyKeyError",
-    "InMemoryB2CheckpointStore",
-    "LiveB2CheckpointStore",
-    "Manifest",
-    "ManifestEntry",
-    "ManifestMissingError",
-    "ResumeState",
-    "StaleRevisionError",
-    "checkpoint_artifact",
-    "load_manifest",
-    "resume",
-]
+__all__ = ['ARTIFACT_KINDS', 'ArtifactKind', 'B2CheckpointError', 'B2CheckpointStore', 'ChecksumMismatchError', 'DuplicateIdempotencyKeyError', 'InMemoryB2CheckpointStore', 'LiveB2CheckpointStore', 'Manifest', 'ManifestEntry', 'ManifestMissingError', 'Path', 'ResumeState', 'StaleRevisionError', 'annotations', 'checkpoint_artifact', 'load_manifest', 'resume']

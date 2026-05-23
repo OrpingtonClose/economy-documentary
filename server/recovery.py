@@ -218,7 +218,7 @@ class RecoveryPolicy:
         if self.ladder_config is not None:
             budgets = getattr(self.ladder_config, "budgets", None)
             if budgets is not None and level in budgets:
-                return int(budgets[level])
+                return int(budgets[level])  # type: ignore[index,arg-type]
         if self.level_budget_labels and level in self.level_budget_labels:
             return int(self.level_budget_labels[level])
         return defaults.get(level, 1)
@@ -234,7 +234,7 @@ class RecoveryPolicy:
         if self.ladder_config is not None:
             budgets = getattr(self.ladder_config, "budgets", None)
             if budgets is not None and level in budgets:
-                return budgets[level]
+                return budgets[level]  # type: ignore[index,arg-type]
         if self.level_budget_labels and level in self.level_budget_labels:
             return self.level_budget_labels[level]
         return None
@@ -435,7 +435,7 @@ def _make_audio_agent_policy() -> RecoveryPolicy:
         # dashboard wiring that reads it directly still sees the
         # permissive label set.  Policies without a ladder_config fall
         # back to this field as before.
-        level_budget_labels=dict(config.budgets),
+        level_budget_labels=dict(getattr(config, "budgets", {})),
         retry_backoff_base=3.0,
         escalate_to_human=True,
     )
@@ -456,7 +456,7 @@ def _make_video_agent_policy() -> RecoveryPolicy:
     return RecoveryPolicy(
         agents=VIDEO_UNIT_AGENTS,
         ladder_config=config,
-        level_budget_labels=dict(config.budgets),
+        level_budget_labels=dict(getattr(config, "budgets", {})),
         retry_backoff_base=5.0,
         escalate_to_human=True,
     )
@@ -475,7 +475,7 @@ def _make_production_agent_policy() -> RecoveryPolicy:
 
 def _make_otio_agent_policy() -> RecoveryPolicy:
     """OTIO validation: OTIO Unit Agent owns the timeline structure."""
-    from recovery_agents import OTIO_UNIT_AGENTS, _resolve_otio_unit_agents
+    from recovery_agents import _resolve_otio_unit_agents
     agents = _resolve_otio_unit_agents()
     return RecoveryPolicy(
         agents=agents,
@@ -1326,7 +1326,7 @@ def _escalate_to_human(
             try:
                 result = operation(**current_kwargs)
                 return result
-            except Exception as e:
+            except Exception:
                 pass  # Fall through to exhausted
         elif action == "skip":
             logger.warning("Recovery L4: human chose to skip '%s'", operation_name)

@@ -31,7 +31,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 from strands_agents.playground.registry import DeclaredModel
@@ -220,7 +220,7 @@ class LiteLLMPingProber:
     def _resolve_complete(self) -> Callable[..., object]:
         if self._complete is not None:
             return self._complete
-        import litellm  # local import keeps module import side-effect-free
+        import litellm  # type: ignore[import-not-found]  # local import keeps module import side-effect-free
 
         return litellm.completion
 
@@ -360,15 +360,11 @@ def probe_models(
     return (cache or get_default_cache()).get_many(models)
 
 
-__all__ = [
-    "MODEL_UNREACHABLE",
-    "PLAYGROUND_LIVE_PING_ENV",
-    "CredentialsProber",
+__all__ = ["CredentialsProber",
     "LiteLLMPingProber",
     "ModelProber",
     "ReachabilityCache",
     "ReachabilityStatus",
     "get_default_cache",
     "probe_models",
-    "set_default_cache",
-]
+    "set_default_cache",]

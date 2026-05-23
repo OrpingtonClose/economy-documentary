@@ -32,9 +32,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import VISUAL_DIRECTION_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -498,10 +498,7 @@ def visual_loop_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "VISUAL_LOOP_EVALUATOR_THRESHOLDS",
-    "build_visual_loop_experiment",
+__all__ = ["build_visual_loop_experiment",
     "visual_loop_cases",
     "visual_loop_evaluators",
-    "visual_loop_task",
-]
+    "visual_loop_task",]

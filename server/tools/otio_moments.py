@@ -25,11 +25,8 @@ Closes #70, #82, #84, #85, #86.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import threading
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -323,12 +320,6 @@ def persist_scene_assembly_artifact(
 # WhisperX duration oracle (#86)
 # ---------------------------------------------------------------------------
 
-@dataclass
-
-
-@dataclass
-
-
 # ---------------------------------------------------------------------------
 # WhisperX integration — ground-truth duration measurement
 # ---------------------------------------------------------------------------
@@ -402,11 +393,11 @@ def _invoke_supervisor_escalate(
 
     try:
         supervisor_escalate(
-            kind=kind,
-            context=context,
-            state=state,
-            actions=actions,
-            extras=extras or {},
+            kind=kind,  # type: ignore
+            context=context,  # type: ignore
+            state=state,  # type: ignore
+            actions=actions,  # type: ignore
+            extras=extras or {},  # type: ignore
         )
     except Exception as e:  # noqa: BLE001 — must never crash the caller
         logger.error(

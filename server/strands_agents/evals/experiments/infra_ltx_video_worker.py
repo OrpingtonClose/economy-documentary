@@ -37,17 +37,16 @@ Cases cover:
 
 from __future__ import annotations
 
-import base64
 import json
 import struct
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.infra_agent.telemetry import ResourceTelemetry
 from strands_agents.ltx_video_worker.app import build_app
@@ -56,7 +55,6 @@ from strands_agents.ltx_video_worker.bump_client import (
     _BumpResponse,
 )
 from strands_agents.ltx_video_worker.engine import (
-    MAX_DURATION_S,
     StubVideoEngine,
 )
 
@@ -469,12 +467,9 @@ def build_infra_ltx_video_worker_experiment() -> (
     )
 
 
-__all__ = [
-    "INFRA_LTX_VIDEO_WORKER_EVALUATOR_THRESHOLDS",
-    "VideoInvariantEvaluator",
+__all__ = ["VideoInvariantEvaluator",
     "VideoMp4StructureEvaluator",
     "VideoResponseEvaluator",
     "build_infra_ltx_video_worker_experiment",
     "infra_ltx_video_worker_cases",
-    "infra_ltx_video_worker_task",
-]
+    "infra_ltx_video_worker_task",]

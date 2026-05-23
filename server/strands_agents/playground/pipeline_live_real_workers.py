@@ -33,7 +33,6 @@ block visual proof.
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import threading
@@ -42,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # type: ignore[import-not-found]
 
 from strands_agents import _placeholders
 from strands_agents._real_assembly_tools import build_real_assembly_tools
@@ -213,7 +212,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             wav_path=str(wav_path) if wav_path else None,
             duration_s=duration_sec,
             elapsed_ms=elapsed_ms,
-            engine=payload.get("engine") if isinstance(payload, dict) else None,
+            engine=None,
             alignment=alignment,
         )
 
@@ -302,12 +301,6 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
                 resolved_duration,
             )
 
-        body = {
-            "prompt": resolved_prompt,
-            "duration_s": resolved_duration,
-            "fps": _DEFAULT_FPS,
-            "seed": _DEFAULT_SEED,
-        }
         started_ms = _now_ms()
         try:
             with _video_dispatch_lock:

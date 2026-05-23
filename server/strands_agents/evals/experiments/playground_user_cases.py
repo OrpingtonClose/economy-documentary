@@ -37,10 +37,10 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
-from playground import router as playground_router
+from playground import router as playground_router  # type: ignore[attr-defined]
 from strands_agents.evals.experiments.playground_catalog import (
     SubsetMatchEvaluator,
 )
@@ -388,10 +388,7 @@ def build_playground_user_cases_experiment() -> Experiment[Any, Any]:
     )
 
 
-__all__ = [
-    "PLAYGROUND_USER_CASES_EVALUATOR_THRESHOLDS",
-    "build_playground_user_cases_experiment",
+__all__ = ["build_playground_user_cases_experiment",
     "playground_user_cases_cases",
     "playground_user_cases_task",
-    "reset_experiment_state",
-]
+    "reset_experiment_state",]

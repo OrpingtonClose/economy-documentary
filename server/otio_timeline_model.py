@@ -617,7 +617,7 @@ def _detect_finished_film(output_dir: str) -> Optional[FinishedFilm]:
 
     def _probe_dur(path: str) -> float:
         try:
-            from tools.video_tools import probe_clip  # local import
+            from tools.video_tools import probe_clip  # type: ignore[attr-defined]  # local import
             return float(json.loads(probe_clip(mp4_path=path)).get("duration", 0.0))
         except Exception:  # noqa: BLE001
             return 0.0

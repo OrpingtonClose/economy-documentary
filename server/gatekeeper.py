@@ -1202,7 +1202,7 @@ def check_stage_handoff(
             concepts = extract_json_array(str(concepts_json)) or []
         except Exception as exc:
             from maintainer import notify_maintainer
-            notify_maintainer("gatekeeper_parse_concepts", str(exc), {"run_id": run_id})
+            notify_maintainer("gatekeeper_parse_concepts", str(exc), {"run_id": state.get("run_id", "")})
             concepts = []
 
         concepts_by_scene: dict[int, int] = {}

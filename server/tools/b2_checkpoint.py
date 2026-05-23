@@ -48,7 +48,6 @@ import logging
 import os
 import threading
 import time
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -83,7 +82,7 @@ def _get_bucket():
             return None
 
         try:
-            from b2sdk.v2 import B2Api, InMemoryAccountInfo
+            from b2sdk.v2 import B2Api, InMemoryAccountInfo  # type: ignore[import-not-found]
             info = InMemoryAccountInfo()
             _b2_api = B2Api(info)
             _b2_api.authorize_account("production", key_id, app_key)
@@ -235,7 +234,7 @@ def _upload_json_key(data: dict | list | str, key: str) -> bool:
             payload = data.encode("utf-8")
         else:
             payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
-        from b2sdk.v2 import UploadSourceBytes
+        from b2sdk.v2 import UploadSourceBytes  # type: ignore[import-not-found]
         bucket.upload(UploadSourceBytes(payload), _b2_key(key))
         logger.info("B2 uploaded sidecar (%d bytes) -> %s", len(payload), _b2_key(key))
         return True
@@ -337,7 +336,7 @@ def upload_json(
         else:
             payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
-        from b2sdk.v2 import UploadSourceBytes
+        from b2sdk.v2 import UploadSourceBytes  # type: ignore[import-not-found]
         bucket.upload(UploadSourceBytes(payload), key)
         logger.info("B2 uploaded JSON (%d bytes) -> %s", len(payload), key)
     except Exception as e:
@@ -537,5 +536,5 @@ def _read_run_state(run_id: str) -> Optional[dict]:
         return json.loads(buffer.getvalue().decode("utf-8"))
     except Exception as exc:
         from maintainer import notify_maintainer
-        notify_maintainer("b2_restore_state", str(exc), {"path": b2_relative_path})
+        notify_maintainer("b2_restore_state", str(exc), {"path": key})
         return None

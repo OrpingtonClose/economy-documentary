@@ -29,7 +29,7 @@ import logging
 import os
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

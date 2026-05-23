@@ -625,13 +625,9 @@ async def replay_events_onto_stream(
             await asyncio.sleep(per_event_delay_s)
 
 
-__all__ = [
-    "APPROVAL_GATES",
-    "PIPELINE_STAGES",
-    "SimulatedStage",
+__all__ = ["SimulatedStage",
     "TranslatedEvent",
     "default_simulation_stages",
     "generate_simulation_events",
     "replay_events_onto_stream",
-    "translate_pipeline_event",
-]
+    "translate_pipeline_event",]

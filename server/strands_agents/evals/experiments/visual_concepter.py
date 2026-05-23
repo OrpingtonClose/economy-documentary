@@ -16,13 +16,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.coherence_evaluator import CoherenceEvaluator
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.evaluators.tool_selection_accuracy_evaluator import (
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.coherence_evaluator import CoherenceEvaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.tool_selection_accuracy_evaluator import (  # type: ignore[import-not-found]
     ToolSelectionAccuracyEvaluator,
 )
-from strands_evals.experiment import Experiment
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import VISUAL_DIRECTION_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -511,11 +511,8 @@ def visual_concepter_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "VISUAL_CONCEPTER_EVALUATOR_THRESHOLDS",
-    "VISUAL_CONCEPTER_TOOL_DESCRIPTIONS",
+__all__ = ["VISUAL_CONCEPTER_TOOL_DESCRIPTIONS",
     "build_visual_concepter_experiment",
     "visual_concepter_cases",
     "visual_concepter_evaluators",
-    "visual_concepter_task",
-]
+    "visual_concepter_task",]

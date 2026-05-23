@@ -30,7 +30,7 @@ downward after observing real peak VRAM / disk usage.
 from __future__ import annotations
 
 from .app import build_app
-from .bump_client import InfraAgentBumpClient, bump_infra_agent
+from .bump_client import InfraAgentBumpClient
 from .engine import (
     RenderRequest,
     RenderResult,
@@ -47,20 +47,4 @@ from .registry_client import (
 )
 from .runner import WorkerConfig, main
 
-__all__ = [
-    "InfraAgentBumpClient",
-    "PlaygroundRegistryClient",
-    "RegistryClientError",
-    "RegistryHeartbeatError",
-    "RegistryRegisterError",
-    "RegistryUnregisterError",
-    "RenderRequest",
-    "RenderResult",
-    "StubVideoEngine",
-    "VideoEngine",
-    "VideoEngineError",
-    "WorkerConfig",
-    "build_app",
-    "bump_infra_agent",
-    "main",
-]
+__all__ = ['InfraAgentBumpClient', 'PlaygroundRegistryClient', 'RegistryClientError', 'RegistryHeartbeatError', 'RegistryRegisterError', 'RegistryUnregisterError', 'RenderRequest', 'RenderResult', 'StubVideoEngine', 'VideoEngine', 'VideoEngineError', 'WorkerConfig', 'annotations', 'build_app', 'main']

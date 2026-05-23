@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from strands import tool
-from strands.tools.decorator import ToolContext
+from strands.tools.decorator import ToolContext  # type: ignore[attr-defined]
 
 logger = logging.getLogger(__name__)
 
@@ -378,14 +378,9 @@ def _persist_state(
     state.set("_audio_needs_regeneration", False)
 
 
-__all__ = [
-    "AudioHelpersNotConfigured",
+__all__ = ["AudioHelpersNotConfigured",
     "B2Upload",
     "LoudnessNormalize",
-    "TARGET_LUFS",
     "TtsGenerate",
     "WhisperxAlign",
-    "clear_audio_helpers",
-    "render_audio",
-    "set_audio_helpers",
-]
+    "render_audio",]

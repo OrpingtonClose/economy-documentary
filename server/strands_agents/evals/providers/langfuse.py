@@ -54,7 +54,7 @@ def get_langfuse_provider():  # noqa: ANN201 — LangfuseProvider is import-defe
             f"missing_env_vars=<{missing}> | set Langfuse credentials or skip"
         )
     try:
-        from strands_evals.providers.langfuse_provider import LangfuseProvider
+        from strands_evals.providers.langfuse_provider import LangfuseProvider  # type: ignore[import-not-found]
     except ImportError as exc:
         raise LangfuseUnavailableError(
             f"import_error=<{exc}> | install the `langfuse` extra"

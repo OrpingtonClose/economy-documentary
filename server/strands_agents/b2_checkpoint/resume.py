@@ -16,7 +16,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from strands_agents.b2_checkpoint.manifest import (
     ARTIFACT_KINDS,
@@ -28,7 +28,7 @@ from strands_agents.b2_checkpoint.manifest import (
 class _StoreForResume(Protocol):
     """The slice of :class:`B2CheckpointStore` that resume needs."""
 
-    def list_for_run(self, run_id: str):  # -> Manifest
+    def list_for_run(self, run_id: str) -> Any:
         ...
 
     def download(self, *, artifact_id: str, dest: Path) -> Path:
@@ -100,7 +100,7 @@ def resume(
 
     missing = tuple(
         kind for kind in ARTIFACT_KINDS if not by_kind[kind]
-    )
+    )  # type: ignore[assignment]
 
     stale: list[ManifestEntry] = []
     if latest is not None:
@@ -132,7 +132,7 @@ def resume(
         run_id=run_id,
         latest_revision_tag=latest,
         artifacts_by_kind=by_kind,
-        missing_kinds=missing,
+        missing_kinds=cast(tuple[ArtifactKind, ...], missing),
         stale_revision_entries=tuple(stale),
     )
 

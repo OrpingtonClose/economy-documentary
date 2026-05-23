@@ -28,10 +28,4 @@ from strands_agents.stages.visual_stage import build_visual_agent
 from strands_agents.stages.production_stage import build_production_agent
 from strands_agents.stages.assembly_stage import build_assembly_agent
 
-__all__ = [
-    "build_scenario_agent",
-    "build_audio_agent",
-    "build_visual_agent",
-    "build_production_agent",
-    "build_assembly_agent",
-]
+__all__ = ['annotations', 'build_assembly_agent', 'build_audio_agent', 'build_production_agent', 'build_scenario_agent', 'build_visual_agent']

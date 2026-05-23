@@ -26,8 +26,8 @@ import shutil
 import tempfile
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import ASSEMBLY_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -334,7 +334,7 @@ def assembly_task(case: Case) -> dict[str, Any]:
     timeline_path = (case.input or {}).get("timeline_path", "")
 
     try:
-        final_output = assemble_final_cut.__wrapped__(
+        final_output = assemble_final_cut.__wrapped__(  # type: ignore[attr-defined]
             scenes=scenes,
             clip_artifacts=clips,
             whisperx_alignment=alignment,

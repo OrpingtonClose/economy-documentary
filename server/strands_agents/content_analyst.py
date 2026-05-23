@@ -42,11 +42,8 @@ import json
 import logging
 from typing import Any, Callable
 
-from strands import Agent, ToolContext, tool
-from strands.agent.conversation_manager import SlidingWindowConversationManager
+from strands import ToolContext, tool
 
-from contracts import VISUAL_DIRECTION_CONTRACT
-from strands_agents.hooks import ContractEnforcer, RevisionTagger
 
 logger = logging.getLogger(__name__)
 

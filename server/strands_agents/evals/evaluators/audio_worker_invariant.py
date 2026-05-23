@@ -60,8 +60,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 _AUDIO_TOOL = "launch_audio_render"
 

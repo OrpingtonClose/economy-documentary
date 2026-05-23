@@ -11,17 +11,15 @@ Provides:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
@@ -29,23 +27,23 @@ load_dotenv()
 
 # AG-UI / CopilotKit imports removed — ADK pipeline deleted.
 # The playground router (Strands) is the active pipeline path.
-from dashboard import (
+from dashboard import (  # noqa: E402
     get_all_active_collectors,
     remove_collector,
     set_active_collector,
 )
-from dashboard.collector import PipelineCollector
-from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot
-from agui import (
+from dashboard.collector import PipelineCollector  # noqa: E402
+from dashboard.event_store import init_db, insert_run, finalize_run, insert_snapshot  # noqa: E402
+from agui import (  # noqa: E402
     router as agui_router,
     api_router as agui_api_router,
 )
-from dashboard.sse import router as dashboard_router
-from dashboard_directives import router as dashboard_directives_router
-from fleet.router import router as fleet_router
-from playground import router as playground_router
+from dashboard.sse import router as dashboard_router  # noqa: E402
+from dashboard_directives import router as dashboard_directives_router  # noqa: E402
+from fleet.router import router as fleet_router  # noqa: E402
+from playground import router as playground_router  # noqa: E402
 # plugins removed — ADK pipeline deleted
-from run_registry import get_run_registry
+from run_registry import get_run_registry  # noqa: E402
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -134,9 +132,8 @@ class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             # For SSE responses, we need to wrap the body iterator
-            if hasattr(response, "body_iterator"):
-                original_iterator = response.body_iterator
-
+            original_iterator = getattr(response, "body_iterator", None)
+            if original_iterator is not None:
                 async def wrapped_iterator():
                     try:
                         async for chunk in original_iterator:
@@ -148,7 +145,7 @@ class AGUIRunCollectorMiddleware(BaseHTTPMiddleware):
                         remove_collector(run_id)
                         logger.info("Pipeline run %s finalized", run_id)
 
-                response.body_iterator = wrapped_iterator()
+                response.body_iterator = wrapped_iterator()  # type: ignore[attr-defined]
 
             return response
         except Exception as exc:

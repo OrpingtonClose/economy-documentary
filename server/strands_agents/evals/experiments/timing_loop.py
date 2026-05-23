@@ -34,9 +34,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import TIMING_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -466,10 +466,7 @@ def timing_loop_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "TIMING_LOOP_EVALUATOR_THRESHOLDS",
-    "build_timing_loop_experiment",
+__all__ = ["build_timing_loop_experiment",
     "timing_loop_cases",
     "timing_loop_evaluators",
-    "timing_loop_task",
-]
+    "timing_loop_task",]

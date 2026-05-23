@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from typing import Any
 
 from strands import tool
 
@@ -75,7 +74,7 @@ def search_gpu_offers(
     query_parts = [
         f"gpu_ram>={vram_mb}",
         f"dph_total<={max_price_per_hour}",
-        f"rentable=true",
+        "rentable=true",
         f"reliability>{min_reliability}",
         f"disk_space>={min_disk_gb}",
     ]
@@ -350,13 +349,6 @@ def run_bash_command(command: str) -> str:
 
 
 def _critical_env() -> dict[str, str]:
-    keys = [
-        "VAST_API_KEY", "VAST_AI_KEY",
-        "B2_ACCOUNT_ID", "B2_APPLICATION_KEY",
-        "B2_APPLICATION_KEY_ID",
-        "DEEPSEEK_API_KEY", "OPENAI_API_KEY",
-        "HOME", "USER", "PATH",
-    ]
     env = dict(os.environ)
     env_path = os.path.expanduser("~/.env")
     if os.path.exists(env_path):

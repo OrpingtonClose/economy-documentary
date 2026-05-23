@@ -44,7 +44,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Mapping, MutableMapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -181,8 +181,8 @@ _llm_client_factory: Optional[Callable[[], LLMCallable]] = None
 
 
 def _default_llm_call(model: str, system: str, prompt: str) -> str:
-    from google import genai  # optional dep
-    from google.genai import types as genai_types
+    from google import genai  # type: ignore  # optional dep
+    from google.genai import types as genai_types  # type: ignore[import-not-found]
 
     client = genai.Client()
     config = genai_types.GenerateContentConfig(
@@ -556,13 +556,6 @@ def read_intent_backup() -> Optional["BriefIntent"]:
         return None
 
 
-__all__ = [
-    "BRIEF_INTENT_BACKUP_FILENAME",
-    "BRIEF_INTENT_KEY",
-    "BriefIntent",
-    "DEFAULT_DURATION_SEC",
-    "DEFAULT_TOLERANCE_SEC",
+__all__ = ["BriefIntent",
     "IntentExtractionError",
-        "get_brief_intent",
-    "read_intent_backup",
-    ]
+        "read_intent_backup",]

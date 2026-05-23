@@ -34,7 +34,7 @@ import logging
 import os
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ def _build_evaluate_tool() -> Any:
 
 def _build_create_timeline_tool() -> Any:
     """Closure factory for the deterministic ``create_timeline`` tool."""
-    from tools import otio_tools
+    from tools import otio_tools  # type: ignore[attr-defined]
 
     @tool
     def create_timeline(scenes: list[dict[str, Any]]) -> dict[str, Any]:

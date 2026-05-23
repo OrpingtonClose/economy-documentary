@@ -48,12 +48,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
+from dataclasses import dataclass
+from typing import Any, Mapping, MutableMapping, Optional
 
 from callbacks.preference_ledger import (
     PREFERENCE_LEDGER_KEY,
-    PreferenceRecord,
     _load_raw,
     current_revision,
 )

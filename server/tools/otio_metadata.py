@@ -12,7 +12,6 @@ provenance tracked under ``timeline.metadata["documentary"]["_provenance"]``.
 
 from __future__ import annotations
 
-import copy
 import json
 from typing import Any
 

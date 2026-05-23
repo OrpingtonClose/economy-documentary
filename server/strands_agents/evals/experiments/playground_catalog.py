@@ -30,12 +30,12 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
-from playground import router as playground_router
+from playground import router as playground_router  # type: ignore[attr-defined]
 from strands_agents.playground import iter_components
 
 
@@ -231,10 +231,7 @@ def build_playground_catalog_experiment() -> Experiment[Any, Any]:
     )
 
 
-__all__ = [
-    "PLAYGROUND_CATALOG_EVALUATOR_THRESHOLDS",
-    "build_playground_catalog_experiment",
+__all__ = ["build_playground_catalog_experiment",
     "playground_catalog_cases",
     "playground_catalog_evaluators",
-    "playground_catalog_task",
-]
+    "playground_catalog_task",]

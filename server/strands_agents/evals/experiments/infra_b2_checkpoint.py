@@ -49,10 +49,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.b2_checkpoint import (
     ARTIFACT_KINDS,
@@ -64,7 +64,6 @@ from strands_agents.b2_checkpoint import (
     ManifestMissingError,
     ResumeState,
     StaleRevisionError,
-    checkpoint_artifact,
     load_manifest,
     resume,
 )
@@ -433,7 +432,7 @@ def _apply_operation(
             )
         return _OpResult(
             op=name,
-            outcome=f"raises/UnknownOperation",
+            outcome="raises/UnknownOperation",
             detail={"op": name},
         )
     except StaleRevisionError as err:
@@ -751,11 +750,8 @@ def build_infra_b2_checkpoint_experiment() -> (
     )
 
 
-__all__ = [
-    "B2DetailEvaluator",
+__all__ = ["B2DetailEvaluator",
     "B2OutcomeEvaluator",
-    "INFRA_B2_CHECKPOINT_EVALUATOR_THRESHOLDS",
     "build_infra_b2_checkpoint_experiment",
     "infra_b2_checkpoint_cases",
-    "infra_b2_checkpoint_task",
-]
+    "infra_b2_checkpoint_task",]

@@ -17,14 +17,14 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
-from strands_evals.case import Case
-from strands_evals.evaluators.coherence_evaluator import CoherenceEvaluator
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.evaluators.faithfulness_evaluator import FaithfulnessEvaluator
-from strands_evals.evaluators.trajectory_evaluator import TrajectoryEvaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.coherence_evaluator import CoherenceEvaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.faithfulness_evaluator import FaithfulnessEvaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.trajectory_evaluator import TrajectoryEvaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import SCENARIO_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -443,7 +443,7 @@ def scenario_task(case: Case[str, dict[str, Any]]) -> dict[str, Any]:
     finally:
         clear_scenario_helpers(tokens)
 
-    output, trajectory = _extract_output_and_trajectory(messages)
+    output, trajectory = _extract_output_and_trajectory(cast(list[dict[str, Any]], messages))
     return {
         "output": output,
         "trajectory": trajectory,

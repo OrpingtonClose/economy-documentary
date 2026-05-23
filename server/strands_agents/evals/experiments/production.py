@@ -47,9 +47,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import PRODUCTION_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -697,10 +697,7 @@ def production_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "PRODUCTION_EVALUATOR_THRESHOLDS",
-    "build_production_experiment",
+__all__ = ["build_production_experiment",
     "production_cases",
     "production_evaluators",
-    "production_task",
-]
+    "production_task",]

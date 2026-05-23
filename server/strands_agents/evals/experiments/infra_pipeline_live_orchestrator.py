@@ -44,10 +44,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.playground.events import RunStream
 from strands_agents.playground.pipeline_live_demo import build_demo_live_agent
@@ -135,7 +135,7 @@ def infra_pipeline_live_orchestrator_task(
             agent = build_demo_live_agent(
                 run_dir,
                 topic=topic,
-                target_duration_sec=duration,
+                target_duration_sec=int(duration),
                 language=language,
             )
             stream = RunStream(
@@ -146,7 +146,7 @@ def infra_pipeline_live_orchestrator_task(
             stream.attach_loop(asyncio.get_running_loop())
             runner = LivePipelineRun(
                 topic=topic,
-                target_duration_sec=duration,
+                target_duration_sec=int(duration),
                 language=language,
                 agent=agent,
                 run_dir=run_dir,
@@ -412,12 +412,9 @@ def build_infra_pipeline_live_orchestrator_experiment() -> Experiment[
     )
 
 
-__all__ = [
-    "INFRA_PIPELINE_LIVE_ORCHESTRATOR_EVALUATOR_THRESHOLDS",
-    "LiveApprovalEvaluator",
+__all__ = ["LiveApprovalEvaluator",
     "LiveCoherenceEvaluator",
     "LiveTrajectoryEvaluator",
     "build_infra_pipeline_live_orchestrator_experiment",
     "infra_pipeline_live_orchestrator_cases",
-    "infra_pipeline_live_orchestrator_task",
-]
+    "infra_pipeline_live_orchestrator_task",]

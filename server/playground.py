@@ -28,8 +28,8 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from strands_evals.case import Case
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.playground import (
     Component,
@@ -401,6 +401,12 @@ def run_component(component_id: str, request: RunRequest) -> dict[str, Any]:
         raise HTTPException(
             status_code=400,
             detail="either case_name or custom_input is required",
+        )
+
+    if case is None:
+        raise HTTPException(
+            status_code=400,
+            detail="case could not be resolved",
         )
 
     task = component.task()
@@ -1458,7 +1464,7 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
             if await request.is_disconnected():
                 return
             tail = await stream.wait_for_after(
-                last_seq
+                last_seq, timeout=5.0
             )
             if tail:
                 for event in tail:
@@ -1473,7 +1479,7 @@ async def stream_run_events(run_id: str, request: Request) -> StreamingResponse:
                 return
 
     return StreamingResponse(
-        event_iter(),
+        event_iter(),  # type: ignore[arg-type]
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",

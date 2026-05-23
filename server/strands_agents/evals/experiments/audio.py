@@ -33,9 +33,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import AUDIO_CONTRACT
 from critique.store import get_critique_store
@@ -307,10 +307,7 @@ def audio_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "AUDIO_EVALUATOR_THRESHOLDS",
-    "audio_cases",
+__all__ = ["audio_cases",
     "audio_evaluators",
     "audio_task",
-    "build_audio_experiment",
-]
+    "build_audio_experiment",]

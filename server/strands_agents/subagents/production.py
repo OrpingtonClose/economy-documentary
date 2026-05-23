@@ -18,7 +18,6 @@ See ``docs/strands-migration/components/10-production-supervisor.md``.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from strands_agents.artifact_qa import evaluate_visual_artifact_quality
@@ -202,16 +201,4 @@ PRODUCTION_DISPATCH_TOOLS: frozenset[str] = frozenset(
 )
 
 
-__all__ = [
-    "PRODUCTION_BOOTSTRAP_TOOLS",
-    "PRODUCTION_DISPATCH_TOOLS",
-    "PRODUCTION_FIX_BUDGET",
-    "PRODUCTION_RECOVERY_TOOLS",
-    "PRODUCTION_RETRY_BUDGET",
-    "PRODUCTION_SUBAGENT_DEFAULT_MODEL",
-    "PRODUCTION_SUBAGENT_MODEL_ENV",
-    "PRODUCTION_SUBAGENT_PROMPT",
-    "PRODUCTION_SUBAGENT_TOOLS",
-    "PRODUCTION_SUBAGENT_TOOL_NAMES",
-    "build_production_subagent",
-]
+__all__ = []

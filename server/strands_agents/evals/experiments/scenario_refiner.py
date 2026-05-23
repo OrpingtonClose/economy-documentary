@@ -17,12 +17,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.deterministic.output import Contains
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.evaluators.output_evaluator import OutputEvaluator
-from strands_evals.evaluators.trajectory_evaluator import TrajectoryEvaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.deterministic.output import Contains  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.output_evaluator import OutputEvaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.trajectory_evaluator import TrajectoryEvaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import SCENARIO_CONTRACT
 from strands_agents.evals.evaluators import ContractComplianceEvaluator

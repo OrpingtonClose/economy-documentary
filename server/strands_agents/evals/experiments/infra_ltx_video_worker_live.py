@@ -30,17 +30,16 @@ must continue to call :func:`build_infra_ltx_video_worker_experiment`
 
 from __future__ import annotations
 
-import base64
 import os
 import struct
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 # Reuse the box-walking helpers from the stub experiment so structure
 # checks stay consistent across stub and live runs.
@@ -136,7 +135,7 @@ def infra_ltx_video_worker_live_task(
             "metadata": {"worker_url": ""},
         }
 
-    body = {
+    {
         "prompt": payload.get("prompt", ""),
         "duration_s": float(payload.get("duration_s", 2.0)),
         "seed": int(payload.get("seed", 7)),
@@ -314,11 +313,8 @@ def build_infra_ltx_video_worker_live_experiment() -> (
     )
 
 
-__all__ = [
-    "INFRA_LTX_VIDEO_WORKER_LIVE_EVALUATOR_THRESHOLDS",
-    "LiveVideoMp4Evaluator",
+__all__ = ["LiveVideoMp4Evaluator",
     "LiveVideoResponseEvaluator",
     "build_infra_ltx_video_worker_live_experiment",
     "infra_ltx_video_worker_live_cases",
-    "infra_ltx_video_worker_live_task",
-]
+    "infra_ltx_video_worker_live_task",]

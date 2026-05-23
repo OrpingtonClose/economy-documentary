@@ -50,7 +50,7 @@ def _estimate_tokens(contents: List[genai_types.Content]) -> int:
                     fc = part.function_call
                     total_chars += len(getattr(fc, "name", "") or "")
                     args = getattr(fc, "args", None)
-                    if args:
+                    if args is not None:
                         total_chars += len(str(args))
                 if hasattr(part, "function_response") and part.function_response:
                     fr = part.function_response
@@ -154,7 +154,10 @@ def _truncate_old_responses(
     for ci, pi, char_count in truncatable:
         if current_est <= target_tokens:
             break
-        part = contents[ci].parts[pi]
+        parts = contents[ci].parts
+        if parts is None:
+            continue
+        part = parts[pi]
         fr = part.function_response
         if fr and getattr(fr, "response", None):
             saved_chars = char_count - len(_TRUNCATION_MARKER)

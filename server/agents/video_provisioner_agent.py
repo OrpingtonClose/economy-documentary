@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -41,7 +40,7 @@ from tools.otio_file_ops import (
     TRACK_A1,
 )
 from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
-from tools.otio_lifecycle import guard_mutation, get_otio_lifecycle_state
+from tools.otio_lifecycle import guard_mutation
 
 logger = logging.getLogger(__name__)
 
@@ -489,50 +488,70 @@ def _tool_get_lora_details(lora_id: str) -> str:
 # 4. Provisioning tools (thin wrappers around vastai CLI)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _tool_search_gpu_offers(query: str) -> str:
+def _tool_search_gpu_offers(query: str = "", min_vram_gb: int = 48, max_price: float = 5.00) -> str:
     """Search Vast.ai for available GPU offers.
 
-    Runs `vastai search offers` with the given query string and returns
-    raw JSON.  The agent reads the results and reasons about what GPU
-    to pick — no hardcoded model registries.
+    Fetches ALL on-demand offers and filters client-side — CLI query-string
+    filtering is unreliable via subprocess.  Returns only offers that meet
+    hard constraints (VRAM, price, rentable, verified).
 
     Args:
-        query: Vast.ai search query string (e.g. "gpu_ram>=48 dph_total<=5.00 rentable=true")
+        query: Ignored — kept for backward compatibility.
+        min_vram_gb: Minimum VRAM in GB. Hard floor — NEVER compromised.
+        max_price: Maximum price per hour in USD. Hard ceiling.
     """
     try:
         from worker_provisioner import _vast_cmd
         result = _vast_cmd([
             "search", "offers",
             "--type", "on-demand",
-            "--order", "inet_down-",
             "--raw",
-            query,
         ])
-        if isinstance(result, list):
-            # Format for readability
-            offers = []
-            for o in result[:30]:
-                offers.append({
-                    "id": int(o.get("id", 0)),
-                    "gpu_name": o.get("gpu_name", "unknown"),
-                    "gpu_ram_gb": round(float(o.get("gpu_ram", 0)) / 1024, 1),
-                    "num_gpus": o.get("num_gpus", 1),
-                    "dph_total": round(float(o.get("dph_total", 0)), 4),
-                    "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
-                    "inet_down": round(float(o.get("inet_down", 0)), 0),
-                    "inet_up": round(float(o.get("inet_up", 0)), 0),
-                    "reliability": round(float(o.get("reliability", 0)), 3),
-                    "rentable": o.get("rentable", False),
-                    "verified": o.get("verified", False),
-                    "country": o.get("country", ""),
-                })
-            return json.dumps({
-                "query": query,
-                "total_offers": len(result),
-                "offers_returned": len(offers),
-                "offers": offers,
-            }, indent=2)
-        return json.dumps({"query": query, "raw_result": str(result)[:2000]})
+        if not isinstance(result, list):
+            return json.dumps({"error": "vastai search failed", "raw": str(result)[:500]})
+
+        min_vram_mb = min_vram_gb * 1024
+        offers = []
+        for o in result:
+            vram = float(o.get("gpu_ram", 0))
+            price = float(o.get("dph_total", 999))
+            rentable = o.get("rentable", False)
+            verified = o.get("verification") not in ("unverified",)
+
+            if vram < min_vram_mb:
+                continue
+            if price > max_price:
+                continue
+            if not rentable:
+                continue
+            if not verified:
+                continue
+
+            offers.append({
+                "id": int(o.get("id", 0)),
+                "gpu_name": o.get("gpu_name", "unknown"),
+                "gpu_ram_gb": round(vram / 1024, 1),
+                "num_gpus": o.get("num_gpus", 1),
+                "dph_total": round(price, 4),
+                "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
+                "inet_down": round(float(o.get("inet_down", 0)), 0),
+                "inet_up": round(float(o.get("inet_up", 0)), 0),
+                "reliability": round(float(o.get("reliability", 0)), 3),
+                "rentable": rentable,
+                "verified": verified,
+                "country": o.get("country", ""),
+            })
+
+        # Sort by price ascending
+        offers.sort(key=lambda x: x["dph_total"])
+
+        return json.dumps({
+            "min_vram_gb": min_vram_gb,
+            "max_price": max_price,
+            "total_offers_checked": len(result),
+            "offers_matching": len(offers),
+            "offers": offers[:30],
+        }, indent=2)
     except Exception as e:
         return json.dumps({"error": str(e)})
 

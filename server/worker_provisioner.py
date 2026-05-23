@@ -51,7 +51,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 from urllib.request import Request, urlopen
 
 logger = logging.getLogger(__name__)
@@ -1629,7 +1629,7 @@ class WorkerProvisioner:
         gpu_type: str | None = None,
         reliability_floor: float | None = None,
         max_attempts: int = 3,
-    ) -> WorkerSpec:
+    ) -> WorkerSpec | None:
         """Fix the worker for the given role. Local escalation only.
 
         Thread-safe: N concurrent calls dedupe to a single provisioning
@@ -1909,7 +1909,7 @@ class WorkerProvisioner:
             require_video=require_video,
         )
 
-        status = {"workers": [], "provisioned": [], "already_healthy": []}
+        status: dict[str, Any] = {"workers": [], "provisioned": [], "already_healthy": []}
 
         for spec in self._specs:
             try:
@@ -1977,26 +1977,9 @@ class WorkerProvisioner:
                 )
                 return
 
-            # Step 2: Wait for VM to be running (no timeout)
-            try:
-                wait_for_vm_running(spec)
-            except RuntimeError:
-                if attempt < _MAX_PROVISION_RETRIES:
-                    # Track this offer so we don't pick it again
-                    if selected_offer_id:
-                        _excluded_offers.add(selected_offer_id)
-                    logger.warning(
-                        "%s VM %s (offer %s) stuck loading — "
-                        "destroying and retrying on a different host "
-                        "(attempt %d/%d, excluded offers: %s)",
-                        spec.role, spec.vm_id, selected_offer_id,
-                        attempt + 2, 1 + _MAX_PROVISION_RETRIES,
-                        _excluded_offers,
-                    )
-                    self._destroy_and_reset_spec(spec)
-                    continue
-                else:
-                    raise  # all retries exhausted
+            # Step 2: VM running check (non-blocking — agent polls via
+            # check_vm_status if needed).  Connection step below handles
+            # its own retries.
 
             # Step 3: Connect to worker — try direct first, SSH tunnel as fallback.
             # Direct connection uses the VM's public IP + mapped port (no SSH).
@@ -2055,8 +2038,10 @@ class WorkerProvisioner:
                         f"all retries"
                     )
 
-            # Step 4: Wait for worker to be healthy (no timeout)
-            healthy = wait_for_worker_healthy(spec)
+            # Step 4: Check worker health (non-blocking one-shot)
+            healthy = check_worker_health(
+                spec.worker_url, spec.role,
+            )
             if healthy:
                 break  # VM running + connected + healthy — done
 
@@ -2101,7 +2086,7 @@ class WorkerProvisioner:
                 )
             raise RuntimeError(
                 f"{spec.role} worker on VM {spec.vm_id} did not become "
-                f"healthy within {remaining}s after provisioning"
+                f"healthy after provisioning"
             )
 
     def _destroy_and_reset_spec(self, spec: WorkerSpec) -> None:

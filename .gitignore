@@ -19,3 +19,4 @@ server/agent_memory/
 *.acb
 coverage.json
 *.acb-backups/
+.DS_Store

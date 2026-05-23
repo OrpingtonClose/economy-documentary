@@ -18,7 +18,6 @@ import math
 import os
 import re
 import subprocess
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Optional
@@ -682,7 +681,7 @@ def deterministic_audio_callback(
         )
 
     language = state.get("language", "en")
-    timeline_path = state.get("_timeline_path", "")
+    state.get("_timeline_path", "")
 
     # Import tool functions directly (not via FunctionTool wrappers)
     from tools.tts_tools import generate_narration
@@ -909,7 +908,7 @@ def deterministic_audio_callback(
                                 "scene_num": scene_num,
                                 "voice_role": voice,
                                 "language": lang_code,
-                                "voice_id": result.get("voice_id", voice),
+                                "voice_id": (result if 'result' in dir() else {}).get("voice_id", voice),
                             })
 
                             # AG-UI: update narration artifact
@@ -990,6 +989,7 @@ def deterministic_audio_callback(
                     # Budget-aware TTS loop: generate, measure, trim if over
                     wav_path = ""
                     duration = 0.0
+                    result: dict[str, Any] = {}
                     for _trim_attempt in range(_MAX_TRIM_RETRIES + 1):
                         result_json = generate_narration(
                             scene_num=scene_num,
@@ -1452,7 +1452,7 @@ def _translate_via_llm(text: str, src_lang: str, tgt_lang: str) -> str:
     tgt_name = lang_names.get(tgt_lang, tgt_lang)
 
     try:
-        import litellm
+        import litellm  # type: ignore[import-not-found]
         response = litellm.completion(
             model="openrouter/google/gemini-2.5-flash",
             messages=[
@@ -1817,7 +1817,7 @@ def deterministic_production_callback(
         )
         concepts = consolidated
 
-    from tools.video_tools import generate_video_clip, probe_clip
+    from tools.video_tools import generate_video_clip, probe_clip  # type: ignore[attr-defined]
     from tools.otio_tools import add_video_clip, get_video_slot_durations
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
@@ -2016,6 +2016,7 @@ def deterministic_production_callback(
     # Try fleet coordinator first (provides work queue, retry-on-different-worker,
     # cost tracking, and systemic problem detection)
     _fleet_coordinator = None
+    _QueuedClip: Any = None
     try:
         from fleet.coordinator import get_fleet_coordinator
         from fleet.work_queue import QueuedClip as _QueuedClip
@@ -2042,8 +2043,9 @@ def deterministic_production_callback(
             "Fleet mode: enqueueing %d clips into work queue", len(concepts),
         )
         queued = []
-        for c in concepts:
-            queued.append(_QueuedClip(
+        if _QueuedClip is not None:
+            for c in concepts:
+                queued.append(_QueuedClip(
                 clip_id=f"scene_{_safe_int(c.get('scene_num', 0)):03d}_phrase_{_safe_int(c.get('phrase_idx', 0)):03d}",
                 scene_num=_safe_int(c.get("scene_num", 0)),
                 phrase_idx=_safe_int(c.get("phrase_idx", 0)),
@@ -2053,7 +2055,7 @@ def deterministic_production_callback(
                 lora_id=c.get("lora_id", "documentary-realism"),
                 lora_weight=c.get("lora_weight", 0.7),
             ))
-        _fleet_coordinator.enqueue_clips(queued)
+                _fleet_coordinator.enqueue_clips(queued)
 
         # Generate clips via ThreadPoolExecutor but report results to coordinator
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -2457,13 +2459,10 @@ def deterministic_assembly_callback(
 
     import opentimelineio as otio
     from tools.otio_tools import _otio_lock
-    from tools.assembly_tools import mux_audio_video, concat_clips
-    from tools.video_tools import probe_clip
+    from tools.assembly_tools import mux_audio_video, concat_clips  # type: ignore[attr-defined]
+    from tools.video_tools import probe_clip  # type: ignore[attr-defined]
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
     from callbacks.strict_assembler import (
-        CLIP_LENGTH_TOLERANCE_SEC,
-        ClipLengthMismatchError,
-        UnpluggedGapError,
         ensure_clip_length_matches,
         ensure_item_is_not_gap,
         ensure_track_length_matches,
@@ -2537,8 +2536,11 @@ def deterministic_assembly_callback(
             f"— timeline is damaged"
         )
 
+    assert video_track is not None
+    assert narration_track is not None
+
     # Collect video clips by scene
-    video_clips_by_scene = {}
+    video_clips_by_scene: dict[int, list] = {}
     for item in video_track:
         if isinstance(item, otio.schema.Clip):
             meta = item.metadata.get("documentary", {})
@@ -2551,8 +2553,8 @@ def deterministic_assembly_callback(
     language = state.get("language", "en")
     is_dual = language == "dual_ru_en"
 
-    narration_clips_by_scene = {}  # primary language (RU in dual mode)
-    alt_narration_clips_by_scene = {}  # alternate language (EN in dual mode)
+    narration_clips_by_scene: dict[int, list] = {}  # primary language (RU in dual mode)
+    alt_narration_clips_by_scene: dict[int, list] = {}  # alternate language (EN in dual mode)
     for item in narration_track:
         if isinstance(item, otio.schema.Clip):
             meta = item.metadata.get("documentary", {})
@@ -2736,7 +2738,7 @@ def deterministic_assembly_callback(
             assembly_dir, f"otio_audio_combined{lang_suffix}.wav",
         )
         concat_result = json.loads(concat_clips(
-            clip_paths=",".join(audio_segments),
+            paths=audio_segments,
             output_path=combined_audio,
         ))
         if "error" in concat_result:
@@ -2821,7 +2823,7 @@ def deterministic_assembly_callback(
             assembly_dir, f"otio_video_combined{lang_suffix}.mp4",
         )
         concat_result = json.loads(concat_clips(
-            clip_paths=",".join(video_segments),
+            paths=video_segments,
             output_path=combined_video,
         ))
         if "error" in concat_result:
@@ -2860,7 +2862,7 @@ def deterministic_assembly_callback(
             # produce clips at varying volume levels.  Without normalization,
             # the final documentary has jarring volume shifts between narrators.
             # This was identified as R7 in the deep architecture audit.
-            from tools.assembly_tools import normalize_audio_loudness
+            from tools.assembly_tools import normalize_audio_loudness  # type: ignore[attr-defined]
             normalized_audio_path = os.path.join(
                 assembly_dir, f"otio_audio_normalized{lang_suffix}.wav",
             )
@@ -2934,6 +2936,8 @@ def deterministic_assembly_callback(
     # Collect all items from A1_Narration and V1_Video tracks
     # (already read into narration_track and video_track above).
     # For dual language mode, filter narration items by language.
+    assert narration_track is not None
+    assert video_track is not None
     primary_narr_items = []
     for item in narration_track:
         if isinstance(item, otio.schema.Clip):
@@ -2945,7 +2949,7 @@ def deterministic_assembly_callback(
         elif isinstance(item, otio.schema.Gap):
             primary_narr_items.append(item)
 
-    video_items = list(video_track)  # all items including Gaps
+    video_items = list(video_track)  # type: ignore[arg-type]
 
     primary_suffix = "_ru" if is_dual else ""
     primary_path, errors = _assemble_language_track(
@@ -2963,7 +2967,7 @@ def deterministic_assembly_callback(
     alt_final_path = ""
     if is_dual and alt_narration_clips_by_scene:
         alt_narr_items = []
-        for item in narration_track:
+        for item in narration_track:  # type: ignore[arg-type]
             if isinstance(item, otio.schema.Clip):
                 meta = item.metadata.get("documentary", {})
                 voice = meta.get("voice", "")

@@ -31,10 +31,8 @@ code — those live in their own modules.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import time
 from typing import Optional
 
 from fastapi import APIRouter, Request
@@ -43,11 +41,6 @@ from fastapi.responses import JSONResponse
 from agui_events import (
     emit_agui_event,
     get_feedback_store,
-    ArtifactType,
-    ArtifactStatus,
-    ArtifactEvent,
-    _emit_slot_state_from_artifact,
-    emit_otio_authoritative,
 )
 import agui_events  # for runtime agui_events._OUTPUT_DIR access (monkeypatching compat)
 

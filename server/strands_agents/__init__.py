@@ -9,4 +9,4 @@ migrated one-by-one behind the ``--pipeline=strands`` flag on
 
 from strands_agents._version import __version__
 
-__all__ = ["__version__"]
+__all__ = ['__version__']

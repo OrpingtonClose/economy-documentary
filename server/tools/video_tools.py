@@ -88,3 +88,17 @@ def generate_video_clip(
         "gen_time": result["gen_time"],
         "size_bytes": len(result["mp4_bytes"]),
     })
+
+
+
+
+def probe_clip(*, mp4_path: str) -> str:
+    """Probe an MP4 file and return its duration as a JSON string.
+
+    TODO: Currently unimplemented — stub so that import paths resolve.
+    The pipeline expects ``json.loads(probe_clip(mp4_path=...))["duration"]``.
+    """
+    raise NotImplementedError(
+        "probe_clip is not yet implemented. "
+        "Use ffprobe or a similar tool to extract duration from the MP4."
+    )

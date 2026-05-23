@@ -37,7 +37,7 @@ from strands.agent.conversation_manager import SlidingWindowConversationManager
 
 from contracts import SCENARIO_CONTRACT
 from strands_agents.hooks import ContractEnforcer, RevisionTagger
-from tools import otio_tools
+from tools import otio_tools  # type: ignore[import-not-found]
 from tools.scenario_evaluator_checks import (
     EvaluatorReport,
     run_all_structural_checks,
@@ -501,7 +501,7 @@ def build_scenario_agent(
     """
     hooks: list[Any] = []
     if enforce_contract:
-        hooks.append(ContractEnforcer(SCENARIO_CONTRACT))
+        hooks.append(ContractEnforcer(SCENARIO_CONTRACT))  # type: ignore[arg-type]
     if tag_revisions:
         hooks.append(RevisionTagger("scenes", stage="scenario"))
 

@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 import opentimelineio as otio
 
@@ -40,15 +39,12 @@ from tools.otio_file_ops import (
     otio_read_modify_write,
     TRACK_V1,
     TRACK_A1,
-    TRACK_A2,
 )
 from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
 from tools.otio_lifecycle import (
     get_otio_lifecycle_state,
     guard_mutation,
     OtioStateViolation,
-    begin_escalation,
-    end_escalation,
 )
 from recovery_agents import RecoveryAgent, AgentTool, _ESCALATION_TOOLS
 

@@ -15,7 +15,7 @@
 # tampered with via the Edit tool.
 
 from setuptools import setup, Extension
-from Cython.Build import cythonize
+from Cython.Build import cythonize  # type: ignore[import-not-found]
 import os
 
 # The enforcement layer — files that must not be tamperable at runtime

@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import importlib
 import sys
-from typing import Any, Callable
+from typing import Callable
 
-import pytest
+import pytest  # type: ignore[import-not-found]
 
-from strands_evals.experiment import Experiment
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-from pathlib import Path
 
 
 def _read_file(path: str) -> str:
@@ -90,7 +89,7 @@ class ContractVerifier:
     def _verify_audio_gate(self) -> None:
         path = self._path("server", "strands_agents", "graph_pipeline.py")
         if not os.path.exists(path):
-            self._fail("Stage Flow", f"graph_pipeline.py not found")
+            self._fail("Stage Flow", "graph_pipeline.py not found")
             return
         content = _read_file(path)
 

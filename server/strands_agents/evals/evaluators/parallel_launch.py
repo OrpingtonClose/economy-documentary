@@ -46,10 +46,10 @@ Hard gate: all supplied checks must pass.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 
 class ParallelLaunchEvaluator(Evaluator[Any, Any]):
@@ -226,11 +226,13 @@ def _batches_without_completion(
     the marker.
     """
     completion_turns = sorted(
-        call.get("at_turn")
-        for call in trajectory
-        if isinstance(call, dict)
-        and call.get("name") == completion_tool
-        and call.get("at_turn") is not None
+        cast(list[Any], [
+            call.get("at_turn")
+            for call in trajectory
+            if isinstance(call, dict)
+            and call.get("name") == completion_tool
+            and call.get("at_turn") is not None
+        ])
     )
     missing: list[Any] = []
     for batch_turn in batch_turns:

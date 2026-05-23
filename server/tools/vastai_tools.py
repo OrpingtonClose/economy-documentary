@@ -45,8 +45,8 @@ def register_owned_vm(vm_id: str) -> None:
 logger = logging.getLogger(__name__)
 
 
-import ast as _ast
-import re as _re
+import ast as _ast  # noqa: E402
+import re as _re  # noqa: E402
 
 
 def _vast_cmd(args: list[str]) -> dict | list:
@@ -75,7 +75,6 @@ def _vast_cmd(args: list[str]) -> dict | list:
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
         )
         if result.returncode != 0:
             return {
@@ -224,8 +223,11 @@ def provision_gpu_vm(
         ]
     )
 
-    if "error" in create_result:
+    if isinstance(create_result, dict) and "error" in create_result:
         return json.dumps(create_result)
+
+    if not isinstance(create_result, dict):
+        return json.dumps({"status": "error", "error": "Unexpected list response from vastai create", "response": create_result})
 
     instance_id = create_result.get("new_contract")
     if not instance_id:

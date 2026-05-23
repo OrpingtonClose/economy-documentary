@@ -16,7 +16,6 @@ parameters it decides.
 import json
 import logging
 import os
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +127,7 @@ def search_offers(
     try:
         _prov = get_provisioner()
         if _prov and hasattr(_prov, "tts_spec"):
-            _trace(_prov.tts_spec, "agent_search_offers", {
+            _trace(getattr(_prov, "tts_spec"), "agent_search_offers", {
                 "query": query,
                 "results": len(catalog),
                 "agent_initiated": True,
@@ -161,7 +160,7 @@ def create_instance(
         _vast_cmd,
         _trace,
         _HEALTH_CONTROL_PORT,
-        WorkerSpec,
+        _MODEL_MANIFEST,
         normalize_worker_mode,
         resolve_docker_image,
         get_provisioner,
@@ -179,9 +178,9 @@ def create_instance(
     try:
         _prov = get_provisioner()
         if role == "tts" and hasattr(_prov, "tts_spec"):
-            spec = _prov.tts_spec
+            spec = getattr(_prov, "tts_spec")
         elif role == "video" and hasattr(_prov, "video_spec"):
-            spec = _prov.video_spec
+            spec = getattr(_prov, "video_spec")
     except Exception as exc:
         logger.warning("Spec lookup failed (non-critical): %s", exc)
 
@@ -391,9 +390,9 @@ def get_provision_trace(role: str = "tts") -> str:
     try:
         _prov = get_provisioner()
         if role == "tts" and hasattr(_prov, "tts_spec"):
-            trace = _prov.tts_spec.provision_trace
+            trace = getattr(_prov, "tts_spec").provision_trace
         elif role == "video" and hasattr(_prov, "video_spec"):
-            trace = _prov.video_spec.provision_trace
+            trace = getattr(_prov, "video_spec").provision_trace
         else:
             trace = []
     except Exception as e:

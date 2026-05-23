@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, Field
-from strands_evals.simulation.tool_simulator import StateRegistry, ToolSimulator
+from strands_evals.simulation.tool_simulator import StateRegistry, ToolSimulator  # type: ignore[import-not-found]
 
 _SHARE_STATE_ID = "video_pipeline"
 
@@ -90,6 +90,7 @@ def build_gpu_worker_simulator(
             voice_locked_audio_url: B2 URL of the TTS audio the render
                 must lip-sync / beat-sync to.
         """
+        raise NotImplementedError  # type: ignore[return]
 
     @sim.tool(
         output_schema=JobStatus,
@@ -98,6 +99,7 @@ def build_gpu_worker_simulator(
     )
     def check_job_status(job_id: str) -> JobStatus:
         """Return the current state for a previously dispatched job."""
+        raise NotImplementedError  # type: ignore[return]
 
     @sim.tool(
         output_schema=WorkerHealth,
@@ -106,5 +108,6 @@ def build_gpu_worker_simulator(
     )
     def check_worker_health() -> WorkerHealth:
         """Return an aggregated health snapshot of the worker pool."""
+        raise NotImplementedError  # type: ignore[return]
 
     return sim

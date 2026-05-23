@@ -78,7 +78,7 @@ class ReasoningTraceHook(HookProvider):
         """Log tool call."""
         self._emit("reasoning_trace", {
             "phase": "tool_call",
-            "tool_name": event.tool_name if hasattr(event, 'tool_name') else "unknown",
+            "tool_name": getattr(event, 'tool_name', 'unknown') if hasattr(event, 'tool_name') else "unknown",
             "timestamp": time.time(),
         })
 
@@ -86,7 +86,7 @@ class ReasoningTraceHook(HookProvider):
         """Log tool result."""
         self._emit("reasoning_trace", {
             "phase": "tool_result",
-            "tool_name": event.tool_name if hasattr(event, 'tool_name') else "unknown",
+            "tool_name": getattr(event, 'tool_name', 'unknown') if hasattr(event, 'tool_name') else "unknown",
             "timestamp": time.time(),
             "exception": str(event.exception) if hasattr(event, 'exception') and event.exception else None,
         })

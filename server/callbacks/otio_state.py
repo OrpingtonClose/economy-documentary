@@ -32,7 +32,6 @@ import logging
 import os
 from typing import Any, Optional
 
-from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 

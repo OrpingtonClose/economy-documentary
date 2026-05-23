@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -415,6 +415,35 @@ class OTIOStateManager:
                         return entry["value"]
                     return entry
             return default
+
+    # -----------------------------------------------------------------------
+    # Internal helpers
+    # -----------------------------------------------------------------------
+
+    def _record_transition(self, from_state: str | None, to_state: str, reason: str) -> None:
+        """Record a state transition in the history."""
+        self._history.append({
+            "from": from_state,
+            "to": to_state,
+            "reason": reason,
+            "timestamp": time.time(),
+        })
+
+    def _clip_counts(self) -> dict[str, int]:
+        """Return clip counts per track."""
+        counts: dict[str, int] = {}
+        try:
+            import opentimelineio as otio
+            if isinstance(self._timeline, otio.schema.Timeline):
+                for track in self._timeline.tracks:
+                    counts[track.name] = len(track)
+                return counts
+        except ImportError:
+            pass
+        if isinstance(self._timeline, dict):
+            for name, clips in self._timeline.get("tracks", {}).items():
+                counts[name] = len(clips) if isinstance(clips, list) else 0
+        return counts
 
     # -----------------------------------------------------------------------
     # Full state read

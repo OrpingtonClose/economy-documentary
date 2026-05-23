@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Callable, Iterable, Optional, Sequence
 
-import numpy as np
+import numpy as np  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

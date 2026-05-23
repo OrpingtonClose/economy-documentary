@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os as _os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -57,7 +58,6 @@ def _get_otio_unit_agent_class():
 # LLM model for recovery agents (fast + cheap for quick decisions)
 # Honour RECOVERY_MODEL env var if set, otherwise use the same model
 # as the main pipeline (ADK_MODEL) or fall back to a fast default.
-import os as _os
 _RECOVERY_MODEL = (
     _os.environ.get("RECOVERY_MODEL", "")
     or _os.environ.get("ADK_MODEL", "").removeprefix("litellm/")
@@ -155,7 +155,7 @@ class RecoveryAgent:
         The LLM can make tool calls (executed locally), then returns a
         final JSON decision.
         """
-        import litellm
+        import litellm  # type: ignore[import-not-found]
 
         messages = self._build_messages(context)
         tool_schemas = [t.to_schema() for t in self.tools] or None
@@ -435,7 +435,7 @@ def _tool_rewrite_narration(
         target_duration_sec: Target duration in seconds.
         direction: "expand" to make longer, "trim" to make shorter.
     """
-    import litellm
+    import litellm  # type: ignore[import-not-found]
 
     target_words = int((target_duration_sec / 60) * 150)  # ~150 wpm
     current_words = len(current_text.split())
@@ -601,7 +601,7 @@ def _tool_rewrite_visual_prompt(
         rejection_reason: Why the QA rejected this clip.
         lora_id: The LoRA style being used.
     """
-    import litellm
+    import litellm  # type: ignore[import-not-found]
 
     try:
         response = litellm.completion(
@@ -733,7 +733,10 @@ def _tool_get_queue_status() -> dict:
         coordinator = get_fleet_coordinator()
         if coordinator is None:
             return {"error": "Fleet coordinator not running"}
-        return coordinator.work_queue.get_stats()
+        wq = getattr(coordinator, "work_queue", None)
+        if wq is None:
+            return {"error": "Fleet coordinator has no work queue"}
+        return wq.get_stats()
     except Exception as e:
         return {"error": f"Queue status check failed: {e}"}
 
@@ -890,7 +893,7 @@ def _tool_analyse_error_pattern(error_msg: str, previous_errors: str) -> dict:
         error_msg: The current error message.
         previous_errors: JSON array of previous error messages from retry attempts.
     """
-    import litellm
+    import litellm  # type: ignore[import-not-found]
 
     try:
         prev = json.loads(previous_errors) if previous_errors else []
@@ -1097,7 +1100,7 @@ def _tool_suggest_alternative(
         current_approach: Description of the current approach.
         failure_history: Summary of what's been tried and failed.
     """
-    import litellm
+    import litellm  # type: ignore[import-not-found]
 
     try:
         response = litellm.completion(
@@ -1133,7 +1136,7 @@ def _tool_suggest_alternative(
         return {"error": f"Alternative suggestion failed: {e}"}
 
 
-def _tool_list_available_models(model_type: str) -> dict:
+def _tool_list_available_models(model_type: str) -> list[dict[str, str]]:
     """List available models of a given type that could be used as alternatives.
 
     Args:
@@ -1244,7 +1247,7 @@ def _tool_request_from_agent(agent_name: str, request: str) -> dict:
             "assembly_director").
         request: Natural language description of what you need from the agent.
     """
-    import litellm
+    import litellm  # type: ignore[import-not-found]
 
     # Map agent names to their system instructions (simplified for recovery context)
     agent_instructions = {
@@ -1528,9 +1531,9 @@ def _get_provision_trace_fn(role: str) -> str:
         from worker_provisioner import get_provisioner
         prov = get_provisioner()
         if role == "tts" and hasattr(prov, "tts_spec"):
-            spec = prov.tts_spec
+            spec = getattr(prov, "tts_spec")
         elif role == "video" and hasattr(prov, "video_spec"):
-            spec = prov.video_spec
+            spec = getattr(prov, "video_spec")
         else:
             return json.dumps({"role": role, "entries": 0, "trace": []})
         return json.dumps({
@@ -1663,7 +1666,7 @@ OTIO_UNIT_AGENTS = {
 def _resolve_otio_unit_agents():
     """Resolve the lazy OTIO_UNIT_AGENTS reference."""
     if OTIO_UNIT_AGENTS[0] is None:
-        OTIO_UNIT_AGENTS[0] = _get_otio_unit_agent_class()()
+        OTIO_UNIT_AGENTS[0] = _get_otio_unit_agent_class()()  # type: ignore[assignment]
     return OTIO_UNIT_AGENTS
 
 # ── Legacy level-based configurations (backward compat) ──

@@ -29,17 +29,17 @@ def _load_catalog() -> dict:
     if _catalog is not None:
         return _catalog
 
+    catalog: dict = {}
     try:
         with open(_CATALOG_PATH, "r") as f:
-            _catalog = json.load(f)
-        logger.info("Loaded LoRA catalog: %d entries", len(_catalog))
+            catalog = json.load(f)
+        logger.info("Loaded LoRA catalog: %d entries", len(catalog))
     except FileNotFoundError:
         logger.warning("LoRA catalog not found at %s — using empty catalog", _CATALOG_PATH)
-        _catalog = {}
     except json.JSONDecodeError as exc:
         logger.warning("LoRA catalog contains invalid JSON (%s) — using empty catalog", exc)
-        _catalog = {}
-    return _catalog
+    _catalog = catalog
+    return catalog
 
 
 def _score_match(entry: dict, content_type: str, mood: str, tags: List[str]) -> float:
@@ -98,6 +98,8 @@ def query_lora_catalog(
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
     scored: list[tuple[str, float, dict]] = []
+    if catalog is None:
+        catalog = {}
     for lora_id, entry in catalog.items():
         score = _score_match(entry, content_type, mood, tag_list)
         scored.append((lora_id, score, entry))
@@ -132,6 +134,8 @@ def get_lora_details(lora_id: str, tool_context=None) -> str:
         JSON string with full LoRA details.
     """
     catalog = _load_catalog()
+    if catalog is None:
+        catalog = {}
 
     if lora_id not in catalog:
         return json.dumps(

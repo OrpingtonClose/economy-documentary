@@ -57,9 +57,8 @@ import asyncio
 import logging
 import os
 import statistics
-import time
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, Protocol, Sequence, Union, runtime_checkable
+from typing import Any, Iterable, Literal, Protocol, Union, cast, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +423,7 @@ class _OpenAICompatVideoVoter:
             client = self._client()
             response = client.chat.completions.create(
                 model=self._model_name,
-                messages=[
+                messages=cast(list[Any], [  # type: ignore[arg-type]
                     {
                         "role": "user",
                         "content": [
@@ -432,7 +431,7 @@ class _OpenAICompatVideoVoter:
                             {"type": "text", "text": prompt},
                         ],
                     }
-                ],
+                ]),
                 timeout=self._request_timeout_s,
             )
 
@@ -482,12 +481,7 @@ class _OpenAICompatVideoVoter:
 
 __all__ = [
     "AUDIO_ONLY_CHECKS",
-    "Artifact",
-    "CheckType",
-    "DashscopeQwenVoter",
     "FinalCut",
-    "GLMVoter",
-    "GeminiVoter",
     "JuryVerdict",
     "Scene",
     "TTSClip",
@@ -495,7 +489,4 @@ __all__ = [
     "Voter",
     "VoterCapabilities",
     "VoterVerdict",
-    "aggregate",
-    "assign_voters",
-    "summarize_reasoning",
 ]

@@ -65,8 +65,8 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from langchain_core.callbacks import AsyncCallbackHandler
-from langgraph.types import Command
+from langchain_core.callbacks import AsyncCallbackHandler  # type: ignore[import-not-found]
+from langgraph.types import Command  # type: ignore[import-not-found]
 
 from strands_agents.playground.events import RunStream
 from strands_agents.playground.pipeline_adapter import (

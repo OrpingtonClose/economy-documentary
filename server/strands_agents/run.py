@@ -22,12 +22,12 @@ Component 15 supplies two concrete resume handlers:
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langgraph.types import Command
+from langchain_core.language_models.chat_models import BaseChatModel  # type: ignore[import-not-found]
+from langgraph.types import Command  # type: ignore[import-not-found]
 
 from .approval import (
     ApprovalDecision,
@@ -137,6 +137,7 @@ def _ensure_interrupt_id(
     cache: dict[int, str] | None = None
     if isinstance(state, dict):
         cache = state.setdefault(_INTERRUPT_ID_CACHE_KEY, {})
+        assert cache is not None
         cached = cache.get(id(interrupt))
         if cached:
             return cached

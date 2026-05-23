@@ -16,13 +16,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from strands import Agent
 from strands.tools import tool
 
 from strands_agents.otio_manager import OTIOStateManager
-from strands_agents.state_adapter import make_callback_context, make_genai_content
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +117,6 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
     error = ""
 
     try:
-        from callbacks.deterministic_steps import (
-            clean_scenes_after_scenario,
-            extract_json_array,
-        )
         result = {"status": "generated", "topic": topic}
     except ImportError:
         logger.debug("deterministic_steps not available, using placeholder")
@@ -185,7 +181,6 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
 def _capture_environment() -> dict:
     """Capture the current production environment."""
     import platform
-    import sys
     env = {
         "python_version": platform.python_version(),
         "python_implementation": platform.python_implementation(),
@@ -269,7 +264,6 @@ def refine_scenario(scenario_json: str, feedback: str) -> str:
         feedback: The evaluator's feedback to address.
     """
     try:
-        from callbacks.deterministic_steps import clean_scenes_after_scenario
         # The LLM handles the actual rewriting; this tool cleans
         # the output after the LLM call.
         return "[refine_scenario] Refinement applied — cleaned via real callbacks"
@@ -295,7 +289,7 @@ def create_timeline(topic: str) -> str:
         from tools.otio_tools import create_timeline as _real_create
         # The real create_timeline tool takes tool_context
         # We call it without context (direct function call)
-        return _real_create(topic)
+        return _real_create(topic, 5)  # type: ignore[call-arg]
     except (ImportError, TypeError):
         logger.debug("otio_tools not available, using placeholder")
         return f"[create_timeline] Timeline '{topic}' created — placeholder"

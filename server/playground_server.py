@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()

@@ -52,7 +52,6 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Optional
 
 from callbacks.preference_ledger import (
-    PREFERENCE_LEDGER_KEY,
     Origin,
     Polarity,
     PreferenceRecord,
@@ -202,8 +201,8 @@ def _default_llm_call(model: str, system: str, prompt: str) -> str:
     heuristics before giving up).
     """
     try:
-        from google import genai
-        from google.genai import types as genai_types
+        from google import genai  # type: ignore
+        from google.genai import types as genai_types  # type: ignore[import-not-found]  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover -- defensive
         raise InterpreterError(
             f"google-genai is required for the default Preference Interpreter "

@@ -28,12 +28,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import time
-from typing import Any, Optional
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from recovery_agents import AgentTool, RecoveryAgent
+from recovery_agents import AgentTool
 from tools.otio_file_ops import (
     resolve_timeline_path,
     otio_read,
@@ -42,7 +40,7 @@ from tools.otio_file_ops import (
     TRACK_V1,
 )
 from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
-from tools.otio_lifecycle import guard_mutation, get_otio_lifecycle_state
+from tools.otio_lifecycle import guard_mutation
 
 logger = logging.getLogger(__name__)
 
@@ -301,14 +299,17 @@ def _tool_validate_timeline(phase: str) -> str:
 # 3. Provisioning tools (thin wrappers around vastai CLI)
 # ---------------------------------------------------------------------------
 
-def _tool_search_gpu_offers(query: str) -> str:
-    """Search Vast.ai for GPU offers using a raw query string.
+def _tool_search_gpu_offers(query: str = "", min_vram_gb: int = 8, max_price: float = 1.00) -> str:
+    """Search Vast.ai for GPU offers.
 
-    The agent constructs the query string based on its reasoning.
-    Example: "gpu_ram>=8 dph<=1.0 inet_down>=50 rentable=true"
+    Fetches ALL on-demand offers and filters client-side — CLI query-string
+    filtering is unreliable via subprocess.  Returns only offers that meet
+    hard constraints (VRAM, price, rentable, verified).
 
-    Returns raw JSON results from the vastai CLI.  The agent reads
-    the results and reasons about which GPU to pick.
+    Args:
+        query: Ignored — kept for backward compatibility.
+        min_vram_gb: Minimum VRAM in GB. Hard floor — NEVER compromised.
+        max_price: Maximum price per hour in USD. Hard ceiling.
     """
     from worker_provisioner import _vast_cmd
 
@@ -316,40 +317,54 @@ def _tool_search_gpu_offers(query: str) -> str:
         result = _vast_cmd([
             "search", "offers",
             "--type", "on-demand",
-            "--order", "inet_down-",
             "--raw",
-            query,
         ])
-        if isinstance(result, list):
-            # Format for agent readability
-            catalog = []
-            for o in result[:30]:
-                catalog.append({
-                    "id": int(o.get("id", 0)),
-                    "gpu_name": o.get("gpu_name", "unknown"),
-                    "gpu_ram_gb": round(float(o.get("gpu_ram", 0)) / 1024, 1),
-                    "num_gpus": o.get("num_gpus", 1),
-                    "dph_total": round(float(o.get("dph_total", 0)), 4),
-                    "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
-                    "inet_down": round(float(o.get("inet_down", 0)), 0),
-                    "inet_up": round(float(o.get("inet_up", 0)), 0),
-                    "reliability": round(float(o.get("reliability", 0)), 3),
-                    "rentable": o.get("rentable", False),
-                    "verified": o.get("verified", False),
-                    "country": o.get("country", ""),
-                })
-            return json.dumps({
-                "query": query,
-                "total_results": len(result),
-                "offers_returned": len(catalog),
-                "offers": catalog,
+        if not isinstance(result, list):
+            return json.dumps({"error": "vastai search failed", "raw": str(result)[:500]})
+
+        min_vram_mb = min_vram_gb * 1024
+        catalog = []
+        for o in result:
+            vram = float(o.get("gpu_ram", 0))
+            price = float(o.get("dph_total", 999))
+            rentable = o.get("rentable", False)
+            verified = o.get("verification") not in ("unverified",)
+
+            if vram < min_vram_mb:
+                continue
+            if price > max_price:
+                continue
+            if not rentable:
+                continue
+            if not verified:
+                continue
+
+            catalog.append({
+                "id": int(o.get("id", 0)),
+                "gpu_name": o.get("gpu_name", "unknown"),
+                "gpu_ram_gb": round(vram / 1024, 1),
+                "num_gpus": o.get("num_gpus", 1),
+                "dph_total": round(price, 4),
+                "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
+                "inet_down": round(float(o.get("inet_down", 0)), 0),
+                "inet_up": round(float(o.get("inet_up", 0)), 0),
+                "reliability": round(float(o.get("reliability", 0)), 3),
+                "rentable": rentable,
+                "verified": verified,
+                "country": o.get("country", ""),
             })
+
+        catalog.sort(key=lambda x: x["dph_total"])
+
         return json.dumps({
-            "query": query,
-            "result": str(result)[:2000],
+            "min_vram_gb": min_vram_gb,
+            "max_price": max_price,
+            "total_offers_checked": len(result),
+            "offers_matching": len(catalog),
+            "offers": catalog[:30],
         })
     except Exception as e:
-        return json.dumps({"error": str(e), "query": query})
+        return json.dumps({"error": str(e)})
 
 
 def _tool_provision_vm(
@@ -421,9 +436,9 @@ def _tool_provision_vm(
 
     # Parse extra env vars
     try:
-        extra_env = json.loads(env_vars_json) if env_vars_json else {}
+        json.loads(env_vars_json) if env_vars_json else {}
     except (json.JSONDecodeError, TypeError):
-        extra_env = {}
+        pass
 
     remote_port = 8880
     onstart = (
@@ -600,7 +615,6 @@ def _tool_check_worker_health(url: str, capability: str) -> str:
         })
     _audio_check_health_last_call[url] = now
 
-    from worker_provisioner import check_worker_health
 
     try:
         # Get raw health text
@@ -746,15 +760,12 @@ def _tool_generate_narration(
     wav_path = os.path.join(out_dir, filename)
 
     # Determine language from voice suffix if not explicit
-    voice = voice_role
     if voice_role.endswith("_RU"):
-        voice = voice_role[:-3]
-        lang = language if language else "ru"
+        voice_role[:-3]
     elif voice_role.endswith("_EN"):
-        voice = voice_role[:-3]
-        lang = language if language else "en"
+        voice_role[:-3]
     else:
-        lang = language if language else "en"
+        pass
 
     # Check cache
     text_hash = hashlib.sha256(text.encode()).hexdigest()[:12]

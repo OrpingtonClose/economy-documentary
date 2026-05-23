@@ -14,10 +14,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from contracts import (
     RECOVERY_CLASSIFIER_CONTRACT,
@@ -274,7 +274,8 @@ def recovery_task(case: Case) -> dict[str, Any]:
         )
         trajectory.append("diff_concept")
         diff_payload = _diff(case_input["concept"], revised_concept)
-        logger.record_remanifestation(artifact_id, diff_payload)
+        if diff_payload is not None:
+            logger.record_remanifestation(artifact_id, diff_payload)
 
     classifier_state: dict[str, Any] = {
         "recovery_event": {

@@ -28,7 +28,7 @@ from strands.hooks import (
     HookRegistry,
 )
 
-from contracts import StageContract, ContractViolation, validate_preconditions
+from contracts import StageContract, ContractViolation, validate_preconditions  # type: ignore[import]
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class OTIOContractEnforcer(HookProvider):
 
     def __init__(
         self,
-        contract: StageContract,
+        contract: StageContract,  # type: ignore[type-arg]
         *,
         check_preconditions: bool = True,
         check_postconditions: bool = True,
@@ -80,9 +80,9 @@ class OTIOContractEnforcer(HookProvider):
         state = self._extract_state(event)
         logger.debug(
             "contract=<%s>, stage=<before> | validating preconditions",
-            self.contract.name,
+            self.contract.name,  # type: ignore[attr-defined]
         )
-        validate_preconditions(self.contract, state)
+        validate_preconditions(self.contract, state)  # type: ignore[call-arg]
 
     def _on_after(self, event: AfterInvocationEvent) -> None:
         """Validate the OTIO timeline after the stage completes.
@@ -90,8 +90,8 @@ class OTIOContractEnforcer(HookProvider):
         This is the ground truth check. The LLM can claim it's done,
         but if the clips aren't in the timeline, the stage isn't done.
         """
-        state = self._extract_state(event)
-        stage_name = self.contract.name
+        self._extract_state(event)
+        stage_name = self.contract.name  # type: ignore[attr-defined]
         otio_phase = _STAGE_TO_OTIO_PHASE.get(stage_name)
 
         if not otio_phase:

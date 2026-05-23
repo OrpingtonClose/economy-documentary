@@ -16,10 +16,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.evaluators.output_evaluator import OutputEvaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.evaluators.output_evaluator import OutputEvaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from contracts import VISUAL_DIRECTION_CONTRACT
 from strands_agents.evals.evaluators import (
@@ -562,13 +562,10 @@ def coherence_evaluator_task(case: Case) -> dict[str, Any]:
     }
 
 
-__all__ = [
-    "COHERENCE_EVALUATOR_THRESHOLDS",
-    "COHERENCE_REPORT_RUBRIC",
+__all__ = ["COHERENCE_REPORT_RUBRIC",
     "COHERENCE_TOOL_DESCRIPTIONS",
     "COHERENCE_TRAJECTORY_RUBRIC",
     "build_coherence_evaluator_experiment",
     "coherence_evaluator_cases",
     "coherence_evaluator_evaluators",
-    "coherence_evaluator_task",
-]
+    "coherence_evaluator_task",]

@@ -125,7 +125,7 @@ Respond with a JSON object containing:
 }
 """
 
-_PRODUCTION_STAGE_SYSTEM_PROMPT = f"""\
+_PRODUCTION_STAGE_SYSTEM_PROMPT = """\
 You are the Production Supervisor for a documentary pipeline.
 
 Your job is to generate video clips for each scene. You have access to
@@ -262,7 +262,7 @@ def generate_production_plan(
     # Read worker configuration
     worker_urls = _read_state_list(state, "worker_urls")
     existing_clips = _read_state_dict(state, "existing_clips")
-    visual_style = _read_state_dict(state, "visual_style")
+    _read_state_dict(state, "visual_style")
 
     num_workers = max(1, len(worker_urls)) if worker_urls else 1
 

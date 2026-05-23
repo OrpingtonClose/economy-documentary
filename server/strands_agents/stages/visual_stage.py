@@ -32,25 +32,21 @@ See ``docs/strands-migration/components/09-visual-loop.md``.
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
-import time
-from typing import Any, Optional
+from typing import Any
 
 from strands import Agent, ToolContext, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
 from strands.hooks import (
     AfterInvocationEvent,
-    AfterToolCallEvent,
     BeforeInvocationEvent,
-    BeforeToolCallEvent,
     HookProvider,
     HookRegistry,
 )
 
 from contracts import VISUAL_DIRECTION_CONTRACT
-from strands_agents.hooks import ContractEnforcer, RevisionTagger
+from strands_agents.hooks import RevisionTagger
 from strands_agents.hooks.otio_contracts import OTIOContractEnforcer
 from strands_agents.otio_manager import OTIOStateManager
 from strands_agents.otio_tools import otio_read, otio_write
@@ -511,14 +507,16 @@ def generate_visual_concepts(
             vs = json.loads(visual_style_json)
         except (json.JSONDecodeError, TypeError):
             vs = {}
-    elif state:
-        raw = state.get("visual_style")
-        vs = raw if isinstance(raw, dict) else {}
-        if not vs:
-            try:
-                vs = json.loads(str(state.get("visual_style") or "")) if state.get("visual_style") else {}
-            except (json.JSONDecodeError, TypeError):
-                vs = {}
+    else:
+        vs = {}
+        if state:
+            raw = state.get("visual_style")
+            vs = raw if isinstance(raw, dict) else {}
+            if not vs:
+                try:
+                    vs = json.loads(str(state.get("visual_style") or "")) if state.get("visual_style") else {}
+                except (json.JSONDecodeError, TypeError):
+                    vs = {}
 
     # Generate deterministic concepts as fallback
     concepts = _generate_deterministic_concepts(ca, vs, state)
@@ -777,7 +775,7 @@ def evaluate_coherence(
     concepts = _resolve_json_arg(visual_concepts_json, state, "visual_concepts", [])
     if not isinstance(concepts, list):
         concepts = []
-    ca = _resolve_json_arg(content_analysis_json, state, "content_analysis", {})
+    _resolve_json_arg(content_analysis_json, state, "content_analysis", {})
     vs = _resolve_json_arg(visual_style_json, state, "visual_style", {})
 
     # Run structural checks
@@ -1174,7 +1172,7 @@ def build_visual_agent(
 
     # Contract enforcement
     if enforce_contract:
-        hooks.append(OTIOContractEnforcer(VISUAL_DIRECTION_CONTRACT))
+        hooks.append(OTIOContractEnforcer(VISUAL_DIRECTION_CONTRACT))  # type: ignore[arg-type]
 
     # Revision tagging
     if tag_revisions:
@@ -1241,9 +1239,7 @@ def build_visual_agent(
     return agent
 
 
-__all__ = [
-    "VISUAL_STAGE_SYSTEM_PROMPT",
-    "ChunkingHook",
+__all__ = ["ChunkingHook",
     "VisualMetadataHook",
     "VisualPhaseSetupHook",
     "build_visual_agent",
@@ -1255,5 +1251,4 @@ __all__ = [
     "query_lora_catalog",
     "skip_visual_stage",
     "validate_otio_compliance",
-    "validate_stage_output",
-]
+    "validate_stage_output",]

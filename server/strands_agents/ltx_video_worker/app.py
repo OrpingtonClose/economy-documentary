@@ -27,8 +27,6 @@ from strands_agents.infra_agent.telemetry import ResourceTelemetry
 
 from .bump_client import InfraAgentBumpClient
 from .engine import (
-    MAX_DURATION_S,
-    MIN_DURATION_S,
     RenderRequest,
     VideoEngine,
     VideoEngineError,

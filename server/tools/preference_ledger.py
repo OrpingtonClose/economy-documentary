@@ -23,15 +23,12 @@ Spec references:
 
 from __future__ import annotations
 
-import copy
-import json
 import logging
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
 
-from tools.otio_file_ops import resolve_timeline_path, otio_read_modify_write
-from tools.otio_metadata import read_pipeline_metadata, write_pipeline_metadata
+from tools.otio_file_ops import resolve_timeline_path
+from tools.otio_metadata import read_pipeline_metadata
 
 logger = logging.getLogger(__name__)
 

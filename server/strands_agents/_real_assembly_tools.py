@@ -42,9 +42,9 @@ import logging
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from langchain_core.tools import tool
+from langchain_core.tools import tool  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
@@ -276,9 +276,9 @@ def _default_helpers() -> tuple[MuxAudioVideoFn, ConcatClipsFn]:
     when the helpers are unavailable — :func:`build_real_assembly_tools`
     catches that and returns an empty override set.
     """
-    from tools.assembly_tools import concat_clips, mux_audio_video
+    from tools.assembly_tools import concat_clips, mux_audio_video  # type: ignore[attr-defined]
 
-    return mux_audio_video, concat_clips
+    return cast(tuple[MuxAudioVideoFn, ConcatClipsFn], (mux_audio_video, concat_clips))
 
 
 def make_real_assembly_tool(

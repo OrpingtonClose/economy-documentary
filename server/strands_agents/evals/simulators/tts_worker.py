@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel
-from strands_evals.simulation.tool_simulator import StateRegistry, ToolSimulator
+from strands_evals.simulation.tool_simulator import StateRegistry, ToolSimulator  # type: ignore[import-not-found]
 
 _SHARE_STATE_ID = "audio_pipeline"
 
@@ -83,6 +83,7 @@ def build_tts_worker_simulator(
             voice_id: Deterministic voice selector.
             language: BCP-47 language tag. Defaults to English.
         """
+        raise NotImplementedError  # type: ignore[return]
 
     @sim.tool(
         output_schema=WhisperXResponse,
@@ -91,6 +92,7 @@ def build_tts_worker_simulator(
     )
     def align_whisperx(wav_path: str, text: str, language: str = "en") -> WhisperXResponse:
         """Return word-level timestamps from WhisperX forced alignment."""
+        raise NotImplementedError  # type: ignore[return]
 
     @sim.tool(
         output_schema=TtsHealth,
@@ -99,5 +101,6 @@ def build_tts_worker_simulator(
     )
     def check_tts_health() -> TtsHealth:
         """Return a health snapshot of the TTS worker."""
+        raise NotImplementedError  # type: ignore[return]
 
     return sim

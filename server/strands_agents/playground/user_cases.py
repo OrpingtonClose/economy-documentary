@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from strands_evals.case import Case
+from strands_evals.case import Case  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

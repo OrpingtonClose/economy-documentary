@@ -35,11 +35,9 @@ from __future__ import annotations
 import copy
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from deepagents import SubAgent
 from strands import tool
 
 logger = logging.getLogger(__name__)
@@ -295,11 +293,12 @@ def _classify(payload: dict[str, Any]) -> EscalationDecision:
 def _enforce_human_summary(decision: EscalationDecision) -> EscalationDecision:
     """Fail-closed: every ``escalate_to_human`` needs a human summary."""
 
-    if decision["action"] == "escalate_to_human" and not decision.get("human_summary"):
+    if decision.get("action") == "escalate_to_human" and not decision.get("human_summary"):
         patched = copy.deepcopy(decision)
+        target = decision.get("target") or {}
         patched["human_summary"] = (
-            f"Escalation on {decision['target']['scope']}="
-            f"{decision['target']['id']}: {decision['rationale']}"
+            f"Escalation on {target.get('scope', 'unknown')}="
+            f"{target.get('id', 'unknown')}: {decision.get('rationale', '')}"
         )
         return patched
     return decision
@@ -436,16 +435,13 @@ Process:
 """
 
 
-__all__ = [
-    "Action",
+__all__ = ["Action",
     "ESCALATION_SUPERVISOR_PROMPT",
     "EscalationDecision",
     "EscalationTarget",
     "Scope",
-    "build_escalation_supervisor",
     "decide_escalation_action",
     "read_file",
     "read_telemetry_snapshot",
     "request_human_approval",
-    "write_escalation_decision",
-]
+    "write_escalation_decision",]

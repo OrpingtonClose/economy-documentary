@@ -27,7 +27,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from strands_evals.case import Case
+from strands_evals.case import Case  # type: ignore[import-not-found]
 
 
 #: Well-known pipeline-component identifiers. Ordering mirrors the
@@ -167,10 +167,10 @@ class Component:
         try:
             module = importlib.import_module(self.experiment_module)
             source: Any = getattr(module, self.cases_factory)
-            cases = source() if callable(source) else list(source)
+            cases = source() if callable(source) else list(source)  # type: ignore[call-overload]
         except Exception:  # noqa: BLE001 — partial rollout safety net
             cases = []
-        cases = [self._normalised_case(c, i) for i, c in enumerate(cases)]
+        cases = [self._normalised_case(c, i) for i, c in enumerate(cases)]  # type: ignore[arg-type]
         self._cache["cases"] = cases
         return cases
 
@@ -274,7 +274,7 @@ class Component:
                 self._cache["evaluator_instances"] = _MISSING_BUILDER
                 return []
             experiment = builder()
-            instances = list(experiment.evaluators)
+            instances = list(experiment.evaluators)  # type: ignore[union-attr]
         except Exception:  # noqa: BLE001 — partial rollout safety net
             self._cache["evaluator_instances"] = _MISSING_BUILDER
             return []
@@ -749,12 +749,8 @@ def get_component(component_id: str) -> Component | None:
     return None
 
 
-__all__ = [
-    "COMPONENT_IDS",
-    "INFRA_COMPONENT_IDS",
-    "Component",
+__all__ = ["Component",
     "DeclaredModel",
     "EvaluatorDeclaration",
     "get_component",
-    "iter_components",
-]
+    "iter_components",]

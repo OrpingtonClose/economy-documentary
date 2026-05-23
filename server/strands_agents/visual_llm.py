@@ -35,7 +35,7 @@ import json
 import logging
 from typing import Any, Callable
 
-import litellm
+import litellm  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

@@ -30,8 +30,8 @@ import re
 import threading
 import time
 from collections import defaultdict, deque
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +151,7 @@ class WorkerHealthTracker:
     def __init__(
         self,
         corroboration_window_sec: float = DEFAULT_CORROBORATION_WINDOW_SEC,
-        clock: Optional[callable] = None,
+        clock: Optional[Any] = None,
     ) -> None:
         if corroboration_window_sec <= 0:
             raise ValueError(

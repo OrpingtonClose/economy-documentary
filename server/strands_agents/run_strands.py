@@ -19,22 +19,22 @@ _SERVER_DIR = os.path.dirname(_SCRIPT_DIR)
 if _SERVER_DIR not in sys.path:
     sys.path.insert(0, _SERVER_DIR)
 
-import asyncio
-import json
-import logging
-import signal
-import sys
-import threading
-import time
-import traceback
-import uuid
-from typing import Any
-
-import opentimelineio as otio
-
-from strands_agents.graph_pipeline import build_documentary_graph, STAGE_ORDER
-from strands_agents.stages.preflight import run_preflight, PreflightError
-from strands_agents.hooks.pipeline_hooks import (
+import asyncio  # noqa: E402
+import json  # noqa: E402
+import logging  # noqa: E402
+import signal  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+import traceback  # noqa: E402
+import uuid  # noqa: E402
+from typing import Any  # noqa: E402
+  # noqa: E402
+import opentimelineio as otio  # noqa: E402
+  # noqa: E402
+from strands_agents.graph_pipeline import build_documentary_graph, STAGE_ORDER  # noqa: E402
+from strands_agents.stages.preflight import run_preflight, PreflightError  # noqa: E402
+from strands_agents.hooks.pipeline_hooks import (  # noqa: E402
     BudgetHook,
     ApprovalGateHook,
     ImmutabilityHook,
@@ -88,7 +88,10 @@ class _HangMonitor:
             try:
                 main_thread = threading.main_thread()
                 frames = sys._current_frames()
-                frame = frames.get(main_thread.ident)
+                ident = main_thread.ident
+                if ident is None:
+                    continue
+                frame = frames.get(ident)
                 if frame is None:
                     continue
                 summary = traceback.format_stack(frame, limit=3)[-1]
@@ -147,7 +150,7 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
 
     if model_lower.startswith("claude-") or model_lower.startswith("anthropic/"):
         from strands.models.anthropic import AnthropicModel
-        return AnthropicModel(model_id=model_id, params={"max_tokens": 8192})
+        return AnthropicModel(model_id=model_id, max_tokens=8192)
 
     # OpenAI-compatible: Kimi, Moonshot, DeepSeek, Qwen, local, etc.
     # OpenRouter requires the full prefix (e.g. moonshotai/kimi-k2.6)
@@ -170,7 +173,7 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
     # Kimi K2.6: disable thinking mode (reasoning_content not preserved by
     # Strands in multi-turn tool calls → 400 from Moonshot API).
     # Direct API requires temperature=0.6.
-    params = {"max_tokens": 8192}
+    params: dict[str, Any] = {"max_tokens": 8192}
     if "kimi" in model_lower or "moonshot" in model_lower:
         params["temperature"] = 0.6
         params["extra_body"] = {"thinking": {"type": "disabled"}}
@@ -257,6 +260,14 @@ async def run_documentary(
     api_key = api_key or _read_api_key()
     model = _get_model(model_id, api_key, base_url)
 
+    # Start CPython auto-tracer (sys.monitoring) + SQLite WAL store
+    run_id = f"run_{int(time.time())}"
+    db_path = os.path.join(output_dir, "traces", "pipeline.db")
+    from tracing import AutoTracer
+    auto_tracer = AutoTracer(db_path)
+    auto_tracer.start_run(run_id, topic=brief[:200])
+    auto_tracer.start()
+
     # Prevent concurrent runs
     lock_file = _acquire_pipeline_lock(output_dir)
     _provisioner = None
@@ -278,7 +289,7 @@ async def run_documentary(
 
     _create_timeline_file(timeline_path)
     _write_pipeline_manifest(output_dir, timeline_path)
-    # NO ENV VARS: pipeline_dir is passed explicitly to all tools
+    os.environ["PIPELINE_DIR"] = output_dir  # tools still reference this env var
 
     approval_stages = set() if approval_mode == "auto_approve" else {"scenario", "audio", "video", "assembly"}
     hooks = [ImmutabilityHook(), ApprovalGateHook(gated_stages=approval_stages), ShellGuardHook()]
@@ -294,7 +305,7 @@ async def run_documentary(
 
     # Print stage transitions for visibility
     print(f"\n{'='*60}")
-    print(f"  DOCUMENTARY PIPELINE")
+    print("  DOCUMENTARY PIPELINE")
     print(f"  Brief: {brief[:60]}")
     print(f"  Model: {model_id}")
     print(f"  Budget: ${budget_usd:.2f}")
@@ -319,8 +330,8 @@ async def run_documentary(
         try:
             from tools.otio_metadata import read_pipeline_metadata
             assembly_output = read_pipeline_metadata(timeline_path, "assembly_output_path")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("read_pipeline_metadata failed: %s", exc)
 
         master_mp4 = assembly_output or os.path.join(output_dir, "master.mp4")
         if os.path.exists(master_mp4):
@@ -333,7 +344,7 @@ async def run_documentary(
                 "output_size_mb": round(size_mb, 2),
             }
             print(f"\n{'='*60}")
-            print(f"  PIPELINE COMPLETE")
+            print("  PIPELINE COMPLETE")
             print(f"  Output: {master_mp4}")
             print(f"  Size: {size_mb:.1f} MB")
             print(f"{'='*60}")
@@ -344,7 +355,7 @@ async def run_documentary(
                 "timeline_path": timeline_path,
             }
             print(f"\n{'='*60}")
-            print(f"  PIPELINE FAILED — output file missing")
+            print("  PIPELINE FAILED — output file missing")
             print(f"  Expected: {master_mp4}")
             print(f"{'='*60}")
     except Exception as exc:
@@ -371,6 +382,13 @@ async def run_documentary(
                 print("  [CLEANUP] VMs destroyed.")
         except Exception as exc:
             logger.warning("VM cleanup failed (non-blocking): %s", exc)
+
+        # Stop auto-tracer
+        try:
+            auto_tracer.stop()
+            auto_tracer.end_run(status=result.get("status", "unknown"))
+        except Exception as exc:
+            logger.warning("Tracer stop failed: %s", exc)
 
         # Release lock
         _release_pipeline_lock(lock_file)
@@ -406,8 +424,8 @@ def main() -> None:
             lock = os.path.join(_DEFAULT_OUTPUT_DIR, ".pipeline.lock")
             if os.path.exists(lock):
                 os.remove(lock)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[INTERRUPT] lock release error: {exc}")
         sys.exit(130)
 
     signal.signal(signal.SIGINT, _sigint_handler)

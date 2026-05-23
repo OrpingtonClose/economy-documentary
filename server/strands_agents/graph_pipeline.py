@@ -17,6 +17,8 @@ from strands.multiagent.graph import (
 logger = logging.getLogger(__name__)
 
 
+
+
 # ---------------------------------------------------------------------------
 # Per-agent memory tools
 # ---------------------------------------------------------------------------
@@ -134,8 +136,8 @@ def _update_completed_stages(run_id: str, stage: str) -> None:
         try:
             with open(envelope, "r") as f:
                 meta.update(json.load(f))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("checkpoint read failed for %s: %s", envelope, exc)
     completed: list[str] = meta.get("completed_stages", [])
     if stage not in completed:
         completed.append(stage)
@@ -184,8 +186,8 @@ def _discover_completed_stages(run_id: str) -> list[str]:
             completed = meta.get("completed_stages")
             if isinstance(completed, list):
                 return completed
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("checkpoint read failed for %s: %s", envelope, exc)
 
     # NOTE: We do NOT infer completion from the presence of .otio files on
     # disk.  A checkpoint file may exist for a partially-failed stage, and
@@ -229,11 +231,14 @@ class RecoveryShell:
 
     async def run(
         self, task: str, initial_state: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> Any:
         """Execute the graph with automatic recovery on failure.
 
         Seeds the working timeline from the latest checkpoint on resume.
         """
+        if self.graph is None:
+            raise RuntimeError("RecoveryShell has no graph — build_documentary_graph() must be called first.")
+
         # On resume, seed the working timeline before first execution
         if self.resume and self.latest_checkpoint:
             self.seed_timeline()
@@ -667,12 +672,12 @@ def _build_otio_gate_agent(model) -> Agent:
         try:
             store = get_critique_store()
             store.append_qa(
-                artifact_type="timeline",
+                artifact_type="scenario",
                 artifact_id=f"{stage}_gate",
                 verdict=QaVerdict(
                     check_name=f"gate_{stage}",
-                    status=verdict,  # "pass", "warn", "fail"
-                    detail=json.loads(details_json) if details_json else {},
+                    verdict=verdict,  # type: ignore[arg-type]
+                    details=json.loads(details_json) if details_json else {},
                     source="otio_gate",
                 ),
             )
@@ -704,7 +709,7 @@ def _build_otio_gate_agent(model) -> Agent:
             return json.dumps({
                 "triggered": True,
                 "stage": stage,
-                "preview_path": manifest.output_path if hasattr(manifest, "output_path") else None,
+                "preview_path": manifest.preview_path if hasattr(manifest, "preview_path") else None,
                 "slot_count": len(manifest.slots) if hasattr(manifest, "slots") else 0,
             })
         except Exception as e:
@@ -910,8 +915,8 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
                 if track.name == "A1_Narration":
                     if len(list(track)) > 0:
                         return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "otio_clips_exist"})
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("audio completion check (otio) failed: %s", exc)
 
         # FIX: Check audio output directory for existing WAV files
         import glob
@@ -941,38 +946,23 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         return json.dumps({"saved": True, "checkpoint_path": dest})
 
     from strands import tool as _tool_decorator
-    from agents.audio_provisioner_agent import (
-        _tool_search_gpu_offers as _audio_search,
-        _tool_provision_vm as _audio_provision,
-        _tool_check_vm_status as _audio_check_vm,
-        _tool_check_worker_health as _audio_check_health,
-    )
-    from strands_agents.shared_a2a.vast_provisioning import ssh_run_command as _audio_ssh
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
 
     @_tool_decorator
-    def search_gpu_offers(query: str) -> str:
-        """Search Vast.ai for GPU offers."""
-        return _audio_search(query)
+    def bash_command(command: str) -> str:
+        """Run a shell command locally or via SSH.  YOU are the provisioner.
 
-    @_tool_decorator
-    def provision_vm(offer_id: int, disk_gb: int = 64, worker_mode: str = "tts", docker_image: str = "") -> str:
-        """Provision a VM on Vast.ai."""
-        return _audio_provision(offer_id, disk_gb, worker_mode, docker_image)
+        Use this for ALL VM operations:
+        - Search:  bash_command("vastai search offers --type on-demand --raw | head -20")
+        - Provision: bash_command("vastai create instance <offer_id> --image <img> --disk 64 --ssh --direct --env '-p 8880:8880'")
+        - Status:  bash_command("vastai show instance <id> --raw")
+        - Destroy: bash_command("vastai destroy instance <id>")
+        - SSH diag: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'curl -s http://localhost:8880/'")
+        - Check worker log: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'tail -30 /workspace/worker.log'")
 
-    @_tool_decorator
-    def check_vm_status(vm_id: str) -> str:
-        """Check the status of a provisioned VM."""
-        return _audio_check_vm(vm_id)
-
-    @_tool_decorator
-    def check_worker_health(url: str, capability: str = "tts") -> str:
-        """Check if a worker is healthy."""
-        return _audio_check_health(url, capability)
-
-    @_tool_decorator
-    def ssh_run_command(instance_id: int, command: str) -> str:
-        """Run a shell command on a Vast.ai instance via SSH."""
-        return _audio_ssh(instance_id, command)
+        The agent parses the raw CLI output and decides.
+        """
+        return _run_vast_cli(command)
 
     return Agent(
         name=AUDIO,
@@ -981,16 +971,20 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
-            "2. Check if you have a TTS worker. If not, provision one:\n"
-            "   a. Call search_gpu_offers to find a suitable GPU.\n"
-            "      Requirements: 8GB+ VRAM, any CUDA GPU (e.g. RTX 3070, GTX 1070).\n"
-            "      Budget: ~$0.05-0.30/hr.\n"
-            "   b. Call provision_vm with the offer_id.\n"
-            "      Pass disk_gb=64 (TTS model is ~8GB, no heavy downloads).\n"
-            "      Pass worker_mode='tts'.\n"
-            "   c. Call check_vm_status until the VM is running.\n"
-            "   d. Call check_worker_health with the VM URL until it returns healthy.\n"
-            "   e. Use ssh_run_command to troubleshoot if the worker fails to start.\n"
+            "2. Check if you have a TTS worker. If not, provision ONE using bash_command:\n"
+            "   a. bash_command(\"vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")\n"
+            "   b. Pick an offer with >=8GB VRAM, <$0.30/hr.\n"
+            "   c. bash_command(\"vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 64 --ssh --direct --env '-p 8880:8880'\")\n"
+            "   d. Parse the output for the new_contract ID.\n"
+            "   e. bash_command(\"vastai show instance <vm_id> --raw\") to get IP and SSH port.\n"
+            "   f. Wait 2 minutes, then SSH in: bash_command(\"ssh -o StrictHostKeyChecking=no root@<ip> -p <ssh_port> 'curl -s http://localhost:8880/'\")\n"
+            "   g. Wait for 'tts=yes' in the response before submitting ANY jobs.\n"
+            "   h. If the worker is stuck, SSH in and diagnose:\n"
+            "      bash_command(\"ssh ... 'tail -50 /workspace/worker.log'\")\n"
+            "      bash_command(\"ssh ... 'ps aux | grep python'\")\n"
+            "      bash_command(\"ssh ... 'df -h'\")\n"
+            "      bash_command(\"ssh ... 'nvidia-smi'\")\n"
+            "   i. Fix or destroy and reprovision ONLY if unfixable.\n"
             "3. For EACH scene, call generate_scene_narration with the worker_url.\n"
             "   Pass the TTS worker URL explicitly. If it fails, fix the worker and retry.\n"
             "4. Add narration clips to the OTIO timeline with add_narration_to_timeline.\n"
@@ -1009,11 +1003,7 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             persist_audio_to_otio,
             check_resume_status,
             save_audio_checkpoint,
-            search_gpu_offers,
-            provision_vm,
-            check_vm_status,
-            check_worker_health,
-            _audio_ssh,
+            bash_command,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1166,38 +1156,23 @@ def _build_video_agent(model) -> Agent:
         return json.dumps({"persisted": True, "concept_count": len(concepts)})
 
     from strands import tool as _tool_decorator
-    from agents.video_provisioner_agent import (
-        _tool_search_gpu_offers as _video_search,
-        _tool_provision_vm as _video_provision,
-        _tool_check_vm_status as _video_check_vm,
-        _tool_check_worker_health as _video_check_health,
-    )
-    from strands_agents.shared_a2a.vast_provisioning import ssh_run_command as _video_ssh
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
 
     @_tool_decorator
-    def search_gpu_offers(query: str) -> str:
-        """Search Vast.ai for GPU offers."""
-        return _video_search(query)
+    def bash_command(command: str) -> str:
+        """Run a shell command locally or via SSH.  YOU are the provisioner.
 
-    @_tool_decorator
-    def provision_vm(offer_id: int, disk_gb: int = 224, worker_mode: str = "ltx", docker_image: str = "") -> str:
-        """Provision a VM on Vast.ai."""
-        return _video_provision(offer_id, disk_gb, worker_mode, docker_image)
+        Use this for ALL VM operations:
+        - Search:  bash_command("vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")")
+        - Provision: bash_command("vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 150 --ssh --direct --env '-p 8880:8880'")
+        - Status:  bash_command("vastai show instance <id> --raw")
+        - Destroy: bash_command("vastai destroy instance <id>")
+        - SSH diag: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'curl -s http://localhost:8880/'")
+        - Check worker log: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'tail -30 /workspace/worker.log'")
 
-    @_tool_decorator
-    def check_vm_status(vm_id: str) -> str:
-        """Check the status of a provisioned VM."""
-        return _video_check_vm(vm_id)
-
-    @_tool_decorator
-    def check_worker_health(url: str, capability: str = "ltx") -> str:
-        """Check if a worker is healthy."""
-        return _video_check_health(url, capability)
-
-    @_tool_decorator
-    def ssh_run_command(instance_id: int, command: str) -> str:
-        """Run a shell command on a Vast.ai instance via SSH."""
-        return _video_ssh(instance_id, command)
+        The agent parses the raw CLI output and decides.
+        """
+        return _run_vast_cli(command)
 
     return Agent(
         name=VIDEO,
@@ -1210,17 +1185,20 @@ def _build_video_agent(model) -> Agent:
             "2. Call persist_visual_concepts to save the concepts to OTIO metadata.\n"
             "3. Read scenes from OTIO and plan visuals with generate_production_plan.\n"
             "4. Evaluate the plan with evaluate_production_plan.\n"
-            "5. Check if you have a video worker. If not, provision one:\n"
-            "   a. Call search_gpu_offers to find a suitable GPU.\n"
-            "      Requirements: 80GB+ VRAM (LTX-2.3 model needs ~46GB + 25GB Gemma + 8GB PyTorch + overhead).\n"
-            "      Budget: ~$1.50-4.00/hr. RTX PRO 6000 WS with 300GB+ disk is known good.\n"
-            "      Do NOT trust Vast.ai disk metadata — always over-provision.\n"
-            "   b. Call provision_vm with the offer_id.\n"
-            "      Pass disk_gb=150 or higher (LTX-2.3 needs 150GB+ for model downloads).\n"
-            "      Pass worker_mode='ltx'.\n"
-            "   c. Call check_vm_status until the VM is running.\n"
-            "   d. Call check_worker_health with the VM URL until it returns healthy.\n"
-            "   e. Use ssh_run_command to troubleshoot if the worker fails to start.\n"
+            "5. Check if you have a video worker. If not, provision ONE using bash_command:\n"
+            "   a. bash_command(\"vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")\n"
+            "   b. Pick an offer with >=80GB VRAM, <$4.00/hr. REJECT: T4, K80, RTX 3090, A100 40GB.\n"
+            "   c. bash_command(\"vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 150 --ssh --direct --env '-p 8880:8880'\")\n"
+            "   d. Parse the output for the new_contract ID.\n"
+            "   e. bash_command(\"vastai show instance <vm_id> --raw\") to get IP and SSH port.\n"
+            "   f. Wait 2 minutes, then SSH in: bash_command(\"ssh -o StrictHostKeyChecking=no root@<ip> -p <ssh_port> 'curl -s http://localhost:8880/'\")\n"
+            "   g. Wait for 'ltx=yes' in the response before submitting ANY render jobs.\n"
+            "   h. If the worker is stuck, SSH in and diagnose:\n"
+            "      bash_command(\"ssh ... 'tail -50 /workspace/worker.log'\")\n"
+            "      bash_command(\"ssh ... 'ps aux | grep python'\")\n"
+            "      bash_command(\"ssh ... 'df -h'\")\n"
+            "      bash_command(\"ssh ... 'nvidia-smi'\")\n"
+            "   i. Fix or destroy and reprovision ONLY if unfixable.\n"
             "6. For EACH scene, call submit_gpu_production_job with worker_url.\n"
             "   Pass the video worker URL explicitly. If it fails, fix the worker and retry.\n"
             "7. After each render succeeds, call add_video_clip_to_timeline with the video_path.\n"
@@ -1238,11 +1216,7 @@ def _build_video_agent(model) -> Agent:
             persist_visual_concepts,
             check_resume_status,
             save_video_checkpoint,
-            search_gpu_offers,
-            provision_vm,
-            check_vm_status,
-            check_worker_health,
-            _video_ssh,
+            bash_command,
         ] + _make_memory_tools(VIDEO),
         model=model,
     )
@@ -1370,8 +1344,8 @@ def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
         tp = resolve_timeline_path()
         if metadata_key_exists(tp, MetadataSchema.SCENES):
             return False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("scenario completion check failed: %s", exc)
     return True
 
 
@@ -1388,8 +1362,8 @@ def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
         for track in timeline.tracks:
             if track.name == "A1_Narration" and len(list(track)) > 0:
                 return False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("audio completion check failed: %s", exc)
     return True
 
 
@@ -1406,8 +1380,8 @@ def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
         for track in timeline.tracks:
             if track.name == "V1_Video" and len(list(track)) > 0:
                 return False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("video completion check failed: %s", exc)
     return True
 
 

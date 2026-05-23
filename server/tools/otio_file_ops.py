@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import fcntl
-import glob
 import json
 import logging
 import os
 import tempfile
-import time
 from typing import Any, Callable
 
 import opentimelineio as otio
@@ -192,7 +190,7 @@ class OTIOFileLock:
 
     def __init__(self, timeline_path: str) -> None:
         self._lock_path = f"{timeline_path}.lock"
-        self._lock_fd: object | None = None
+        self._lock_fd: Any | None = None
 
     def __enter__(self) -> "OTIOFileLock":
         lock_dir = os.path.dirname(self._lock_path) or "."

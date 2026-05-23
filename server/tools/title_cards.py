@@ -121,8 +121,8 @@ def _build_drawtext_chain(
     subtitle_size = max(16, profile.height // 22)
     extra_size = max(14, profile.height // 28)
 
-    title_y = f"(h/2)-(text_h*1.2)"
-    subtitle_y = f"(h/2)+(text_h*0.2)"
+    title_y = "(h/2)-(text_h*1.2)"
+    subtitle_y = "(h/2)+(text_h*0.2)"
 
     parts = [
         (

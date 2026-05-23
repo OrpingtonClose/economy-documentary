@@ -122,7 +122,7 @@ def generate_scene_narration(
         class _ToolCtx:
             def __init__(self):
                 self.state = {
-                    "_output_dir": output_dir or "/tmp/documentary-pipeline",
+                    "_output_dir": "/tmp/documentary-pipeline",
                     "pipeline_phase": "audio",
                 }
 
@@ -215,7 +215,7 @@ def align_narration_audio(
             def __init__(self):
                 self.state = {
                     "pipeline_phase": "audio",
-                    "_output_dir": output_dir or "/tmp/documentary-pipeline",
+                    "_output_dir": "/tmp/documentary-pipeline",
                 }
 
         result = align_narration(

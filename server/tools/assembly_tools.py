@@ -4,22 +4,13 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
-import tempfile
 from typing import List, Optional
 
 from .master_profiles import (
     DEFAULT_PROFILE,
     MasterProfile,
-    PreviewProfileForbidden,
-    guard_profile_for_filename,
 )
-from .loudness_normalization import (
-    LoudnessOutOfSpec,
-    normalize_master,
-)
-from .title_cards import CardSpec, render_card
 
 logger = logging.getLogger(__name__)
 
@@ -414,3 +405,31 @@ def assemble_documentary(
         "gaps": gaps,
         "status": "assembled",
     })
+
+
+def mux_audio_video(
+    *, audio_path: str, video_path: str, output_path: str
+) -> str:
+    """Mux audio and video streams into a single MP4.
+
+    TODO: Currently unimplemented — stub so that import paths resolve.
+    The pipeline expects ``json.loads(mux_audio_video(...))`` with keys
+    ``status`` or ``error``.
+    """
+    raise NotImplementedError(
+        "mux_audio_video is not yet implemented. "
+        "Use ffmpeg to combine audio and video streams."
+    )
+
+
+def normalize_audio_loudness(*, input_path: str, output_path: str) -> str:
+    """Normalize audio loudness to EBU R128 standard.
+
+    TODO: Currently unimplemented — stub so that import paths resolve.
+    The pipeline expects ``json.loads(normalize_audio_loudness(...))``
+    with key ``status`` in ("normalized", "copied_without_normalization").
+    """
+    raise NotImplementedError(
+        "normalize_audio_loudness is not yet implemented. "
+        "Use ffmpeg loudnorm or a similar EBU R128 tool."
+    )

@@ -39,7 +39,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Iterable, Mapping, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping, Optional
 
 logger = logging.getLogger(__name__)
 

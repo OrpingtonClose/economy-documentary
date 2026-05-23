@@ -215,7 +215,7 @@ class FleetScaler:
             )
 
             provisioner = WorkerProvisioner()
-            url = provisioner.provision_vm(spec)
+            url = getattr(provisioner, "provision_vm")(spec)
 
             if url:
                 with self._lock:
@@ -342,7 +342,7 @@ class FleetScaler:
         try:
             from worker_provisioner import WorkerProvisioner
             provisioner = WorkerProvisioner()
-            provisioner.destroy_vm(url)
+            getattr(provisioner, "destroy_vm")(url)
         except Exception as e:
             logger.warning("FleetScaler: could not destroy VM %s: %s", vm_id, e)
 

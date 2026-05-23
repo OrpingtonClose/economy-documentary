@@ -70,8 +70,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 _FAILURE_MARKER = "record_scene_failure"
 _REFINER_NOOP_MARKER = "record_refiner_noop"

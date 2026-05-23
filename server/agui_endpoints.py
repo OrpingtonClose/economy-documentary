@@ -27,9 +27,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from agui_events import (
-    emit_agui_event,
-    get_feedback_store,
-    FeedbackStore,
     ArtifactType,
     ArtifactStatus,
     ArtifactEvent,
@@ -824,7 +821,7 @@ async def get_qa_results():
                 })
             except Exception as exc:
                 from maintainer import notify_maintainer
-                notify_maintainer("agui_clip_detail", str(exc), {"path": path})
+                notify_maintainer("agui_clip_detail", str(exc), {"path": sf})
         passed = sum(1 for c in clip_details if c["quality"] in ("acceptable", "excellent", "good"))
         failed = sum(1 for c in clip_details if c["quality"] not in ("acceptable", "excellent", "good", "unknown"))
         results.append({

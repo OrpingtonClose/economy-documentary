@@ -36,7 +36,7 @@ import os
 import wave
 from typing import Any
 
-import numpy as np
+import numpy as np  # type: ignore[import-not-found]
 
 from strands_agents._model_pin import verify_pin
 
@@ -244,8 +244,8 @@ class Qwen3TTSEngine:
 
         # Local imports — torch + qwen_tts pull in heavy CUDA / CUDA
         # extension code we don't want in CI.
-        import torch  # noqa: PLC0415
-        from qwen_tts import Qwen3TTSModel  # noqa: PLC0415
+        import torch  # type: ignore[import-not-found]  # noqa: PLC0415
+        from qwen_tts import Qwen3TTSModel  # type: ignore[import-not-found]  # noqa: PLC0415
 
         dtype_lookup = {
             "bfloat16": torch.bfloat16,
@@ -262,7 +262,7 @@ class Qwen3TTSEngine:
         attn_impl = self._attn_implementation
         if attn_impl == "flash_attention_2":
             try:
-                import flash_attn  # noqa: PLC0415, F401
+                import flash_attn  # type: ignore[import-not-found]  # noqa: PLC0415, F401
             except ImportError:
                 logger.warning(
                     "flash_attn import failed; falling back to attn_implementation=<eager>",

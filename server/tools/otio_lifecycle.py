@@ -38,7 +38,7 @@ import copy
 import json
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from tools.otio_file_ops import otio_read, otio_read_modify_write
 
@@ -166,9 +166,8 @@ def set_otio_lifecycle_state(
                 },
             )
 
-    def _mutator(timeline: object) -> None:
+    def _mutator(timeline: Any) -> None:
         """Apply the state transition and append history entry."""
-        import opentimelineio as otio  # noqa: F811 — local for type access
 
         doc_meta = timeline.metadata.setdefault("documentary", {})
         doc_meta["state"] = new_state
@@ -242,7 +241,7 @@ def begin_escalation(
         "opened_at": time.time(),
     }
 
-    def _mutator(timeline: object) -> None:
+    def _mutator(timeline: Any) -> None:
         doc_meta = timeline.metadata.setdefault("documentary", {})
         doc_meta["escalation"] = record
 
@@ -268,7 +267,7 @@ def end_escalation(timeline_path: str) -> str:
         JSON string with ``{closed: True}``.
     """
 
-    def _mutator(timeline: object) -> None:
+    def _mutator(timeline: Any) -> None:
         doc_meta = timeline.metadata.setdefault("documentary", {})
         doc_meta.pop("escalation", None)
 

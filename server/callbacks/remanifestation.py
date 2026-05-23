@@ -81,7 +81,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import (
     Any,
@@ -89,7 +89,6 @@ from typing import (
     Mapping,
     MutableMapping,
     Optional,
-    Sequence,
 )
 
 from callbacks.artifact_revision_tag import (
@@ -1035,14 +1034,10 @@ def after_agent_remanifestation_callback(callback_context: Any) -> None:
     return None
 
 
-__all__ = [
-    "ALLOWED_ACTIONS",
-    "DriftHandlingReceipt",
+__all__ = ["DriftHandlingReceipt",
     "ImpactedArtifact",
     "InvalidPlanError",
     "PlanStep",
-    "REMANIFESTATION_QUEUE_KEY",
-    "REMANIFESTATION_RECEIPTS_KEY",
     "RemanifestationExecutionError",
     "RemanifestationPlan",
     "StepExecutor",
@@ -1051,5 +1046,4 @@ __all__ = [
     "execute_plan",
     "handle_drift",
     "plan_remanifestation",
-    "validate_plan",
-]
+    "validate_plan",]

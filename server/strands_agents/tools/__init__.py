@@ -11,10 +11,4 @@ from .assembly_tool import (
     set_assembly_helpers,
 )
 
-__all__ = [
-    "ASSEMBLY_TOOL_NAME",
-    "DURATION_TOLERANCE_SEC",
-    "assemble_final_cut",
-    "reset_assembly_helpers",
-    "set_assembly_helpers",
-]
+__all__ = ['ASSEMBLY_TOOL_NAME', 'DURATION_TOLERANCE_SEC', 'assemble_final_cut', 'reset_assembly_helpers', 'set_assembly_helpers']

@@ -69,7 +69,7 @@ def _resolve_complete(
     if complete is not None:
         return complete
     try:
-        import litellm
+        import litellm  # type: ignore[import-not-found]
     except ImportError:
         return None
     return litellm.completion

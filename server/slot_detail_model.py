@@ -30,7 +30,7 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from otio_timeline_model import (
     TRACK_A1_NARRATION,
@@ -231,7 +231,7 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
     to_dict = getattr(record, "to_dict", None)
     if callable(to_dict):
         try:
-            return to_dict()
+            return cast(dict[str, Any], to_dict())
         except Exception:  # noqa: BLE001
             pass
     try:
@@ -325,7 +325,9 @@ def _in_scope_ledger_records(
         td = getattr(rec, "to_dict", None)
         if callable(td):
             try:
-                return td()
+                result = td()
+                if isinstance(result, dict):
+                    return result
             except Exception:  # noqa: BLE001
                 pass
         return {}

@@ -74,8 +74,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 _LAUNCH_TOOL = "launch_visual_production"
 _HEALTH_TOOL = "check_worker_health"

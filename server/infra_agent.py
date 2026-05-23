@@ -46,7 +46,6 @@ Usage::
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import time
@@ -260,7 +259,7 @@ class InfraAgent:
                     used_str, total_str = vram_str.split("/", 1)
                     vram_used = float(used_str)
                     vram_total = float(total_str.replace("GB", ""))
-            elif not part.startswith(("tts=", "ltx=", "mode=")) and not "=" in part:
+            elif not part.startswith(("tts=", "ltx=", "mode=")) and "=" not in part:
                 gpu_name = part
 
         worker.gpu_name = gpu_name
@@ -395,8 +394,8 @@ class InfraAgent:
                 )
             if healthy_video == 0:
                 self._pause(
-                    f"All video workers are down during production stage. "
-                    f"Pipeline paused to prevent generating with placeholder video."
+                    "All video workers are down during production stage. "
+                    "Pipeline paused to prevent generating with placeholder video."
                 )
 
     # ------------------------------------------------------------------

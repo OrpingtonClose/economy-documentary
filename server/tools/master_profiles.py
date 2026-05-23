@@ -18,7 +18,7 @@ preview profile for a filename containing ``"final"``, unless the
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Dict
 
 

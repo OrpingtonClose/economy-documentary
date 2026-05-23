@@ -38,8 +38,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
-from langchain_core.tools import tool
-from langgraph.types import Command
+from langchain_core.tools import tool  # type: ignore[import-not-found]
+from langgraph.types import Command  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 
@@ -406,14 +406,11 @@ def request_human_approval(
     }
 
 
-__all__ = [
-    "INTERRUPT_GATE_CONFIG",
-    "ApprovalDecision",
+__all__ = ["ApprovalDecision",
     "ApprovalRecord",
     "DecisionType",
     "new_interrupt_id",
     "request_human_approval",
     "validate_decision",
     "write_approval_record",
-    "write_pending_envelope",
-]
+    "write_pending_envelope",]

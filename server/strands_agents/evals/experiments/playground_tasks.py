@@ -29,9 +29,9 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from strands_evals.case import Case
-from strands_evals.evaluators.evaluator import Evaluator
-from strands_evals.experiment import Experiment
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.evaluators.evaluator import Evaluator  # type: ignore[import-not-found]
+from strands_evals.experiment import Experiment  # type: ignore[import-not-found]
 
 from strands_agents.evals.experiments.playground_catalog import (
     SubsetMatchEvaluator,
@@ -52,7 +52,7 @@ PLAYGROUND_TASKS_EVALUATOR_THRESHOLDS: dict[str, tuple[float, bool]] = {
 def _client_with_env(env: dict[str, str]) -> TestClient:
     # Late import mirrors ``playground_run.py`` — fresh router view of
     # the module-level reachability cache per case.
-    from playground import router as playground_router  # noqa: PLC0415
+    from playground import router as playground_router  # type: ignore[attr-defined]  # noqa: PLC0415
 
     set_default_cache(ReachabilityCache(CredentialsProber(environ=lambda: env)))
     app = FastAPI()
@@ -185,10 +185,7 @@ def build_playground_tasks_experiment() -> Experiment[
     )
 
 
-__all__ = [
-    "PLAYGROUND_TASKS_EVALUATOR_THRESHOLDS",
-    "build_playground_tasks_experiment",
+__all__ = ["build_playground_tasks_experiment",
     "playground_tasks_cases",
     "playground_tasks_evaluators",
-    "playground_tasks_task",
-]
+    "playground_tasks_task",]

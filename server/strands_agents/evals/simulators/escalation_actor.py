@@ -10,8 +10,8 @@ metadata is consumed by :class:`EscalationDecisionEvaluator` and
 
 from __future__ import annotations
 
-from strands_evals.case import Case
-from strands_evals.simulation.actor_simulator import ActorSimulator
+from strands_evals.case import Case  # type: ignore[import-not-found]
+from strands_evals.simulation.actor_simulator import ActorSimulator  # type: ignore[import-not-found]
 
 MAX_TURNS = 8
 """Upper bound on turns per simulated escalation.

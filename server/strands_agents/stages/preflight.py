@@ -245,7 +245,7 @@ def _check_llm_access() -> CheckResult:
                     "Content-Type": "application/json",
                 },
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10):
                 return CheckResult(
                     name="llm_access", passed=True, category="credentials",
                     message=f"DeepSeek: valid, model {model_id}",
@@ -272,7 +272,7 @@ def _check_llm_access() -> CheckResult:
                 headers={"x-api-key": anthropic_key, "anthropic-version": "2023-06-01"},
                 method="GET",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=10):
                 return CheckResult(
                     name="llm_access", passed=True, category="credentials",
                     message=f"Anthropic: valid, model {model_id}",
