@@ -98,6 +98,38 @@ def after_tool_callback(
             result_chars=len(result_text),
         )
 
+    # -- Typed extraction from raw tool result --------------------------------
+    # "Types implied in text" — the tool returns raw JSON. The agent still
+    # reasons over text. But the system extracts structure for observability
+    # and recovery decisions.
+    try:
+        from tool_extract import extract_tool_result
+        outcome = extract_tool_result(tool_name, result_text)
+        if not outcome.success:
+            logger.warning(
+                "Tool %s failed: %s (suggested: %s)",
+                tool_name,
+                outcome.error_message,
+                outcome.suggested_action,
+            )
+        # Record to snapshot store
+        try:
+            from tracing.snapshot_store import get_store
+            store = get_store()
+            agent_name = getattr(tool_context, "agent_name", "pipeline")
+            store.record_tool_call(
+                agent=agent_name,
+                tool_name=tool_name,
+                args=dict(args),
+                result=outcome.model_dump(mode="json"),
+                duration_ms=duration * 1000,
+                run_id=tool_context.state.get("_run_id", "unknown"),
+            )
+        except Exception:
+            pass  # Snapshot store is best-effort
+    except Exception as exc:
+        logger.debug("Tool extraction failed for %s: %s", tool_name, exc)
+
     # -- Tool result truncation ------------------------------------------------
     truncated = _maybe_truncate_result(tool_name, result_text)
     if truncated != result_text:
