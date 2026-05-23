@@ -947,6 +947,11 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
 
     from strands import tool as _tool_decorator
     from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
+    from vm_registry_tools import (
+        query_vm_registry as _query_vm_registry,
+        check_worker_health as _check_worker_health,
+        get_provisioning_guidance as _get_provisioning_guidance,
+    )
 
     @_tool_decorator
     def bash_command(command: str) -> str:
@@ -970,24 +975,19 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "You are the Audio Agent. You own narration end-to-end.\n"
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
+            "\n"
+            "VM PROVISIONING PROTOCOL (prevents death spiral):\n"
+            "1. BEFORE provisioning, call query_vm_registry(run_id=<the_run_id>, stage='audio').\n"
+            "   If a VM exists, call check_worker_health(instance_id=<id>) to verify it's ready.\n"
+            "2. If you think you need a new VM, call get_provisioning_guidance(run_id, 'audio', <your_reasoning>).\n"
+            "   The system will tell you if you should use an existing VM instead.\n"
+            "3. Only provision with bash_command if guidance says 'provision_new'.\n"
+            "\n"
+            "WORKFLOW:\n"
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
-            "2. Check if you have a TTS worker. If not, provision ONE using bash_command:\n"
-            "   a. bash_command(\"vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")\n"
-            "   b. Pick an offer with >=8GB VRAM, <$0.30/hr.\n"
-            "   c. bash_command(\"vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 64 --ssh --direct --env '-p 8880:8880'\")\n"
-            "   d. Parse the output for the new_contract ID.\n"
-            "   e. bash_command(\"vastai show instance <vm_id> --raw\") to get IP and SSH port.\n"
-            "   f. Wait 2 minutes, then SSH in: bash_command(\"ssh -o StrictHostKeyChecking=no root@<ip> -p <ssh_port> 'curl -s http://localhost:8880/'\")\n"
-            "   g. Wait for 'tts=yes' in the response before submitting ANY jobs.\n"
-            "   h. If the worker is stuck, SSH in and diagnose:\n"
-            "      bash_command(\"ssh ... 'tail -50 /workspace/worker.log'\")\n"
-            "      bash_command(\"ssh ... 'ps aux | grep python'\")\n"
-            "      bash_command(\"ssh ... 'df -h'\")\n"
-            "      bash_command(\"ssh ... 'nvidia-smi'\")\n"
-            "   i. Fix or destroy and reprovision ONLY if unfixable.\n"
+            "2. Query VM registry. Check worker health. Get guidance if needed.\n"
             "3. For EACH scene, call generate_scene_narration with the worker_url.\n"
-            "   Pass the TTS worker URL explicitly. If it fails, fix the worker and retry.\n"
-            "4. Add narration clips to the OTIO timeline with add_narration_to_timeline.\n"
+            "4. Add narration clips with add_narration_to_timeline.\n"
             "5. Run WhisperX alignment with align_narration_audio.\n"
             "6. Evaluate timing with evaluate_audio_timing.\n"
             "7. Persist state with persist_audio_to_otio.\n"
@@ -1004,6 +1004,9 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             check_resume_status,
             save_audio_checkpoint,
             bash_command,
+            _query_vm_registry,
+            _check_worker_health,
+            _get_provisioning_guidance,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1157,6 +1160,11 @@ def _build_video_agent(model) -> Agent:
 
     from strands import tool as _tool_decorator
     from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
+    from vm_registry_tools import (
+        query_vm_registry as _query_vm_registry,
+        check_worker_health as _check_worker_health,
+        get_provisioning_guidance as _get_provisioning_guidance,
+    )
 
     @_tool_decorator
     def bash_command(command: str) -> str:
@@ -1180,30 +1188,24 @@ def _build_video_agent(model) -> Agent:
             "You are the Video Agent. You own visual planning and rendering end-to-end.\n"
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_video_checkpoint and then STOP — do not render clips.\n"
-            "1. Call generate_visual_concepts with a style description derived from the "
-            "visual_style in OTIO. This produces structured concepts for each scene.\n"
-            "2. Call persist_visual_concepts to save the concepts to OTIO metadata.\n"
-            "3. Read scenes from OTIO and plan visuals with generate_production_plan.\n"
-            "4. Evaluate the plan with evaluate_production_plan.\n"
-            "5. Check if you have a video worker. If not, provision ONE using bash_command:\n"
-            "   a. bash_command(\"vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")\n"
-            "   b. Pick an offer with >=80GB VRAM, <$4.00/hr. REJECT: T4, K80, RTX 3090, A100 40GB.\n"
-            "   c. bash_command(\"vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 150 --ssh --direct --env '-p 8880:8880'\")\n"
-            "   d. Parse the output for the new_contract ID.\n"
-            "   e. bash_command(\"vastai show instance <vm_id> --raw\") to get IP and SSH port.\n"
-            "   f. Wait 2 minutes, then SSH in: bash_command(\"ssh -o StrictHostKeyChecking=no root@<ip> -p <ssh_port> 'curl -s http://localhost:8880/'\")\n"
-            "   g. Wait for 'ltx=yes' in the response before submitting ANY render jobs.\n"
-            "   h. If the worker is stuck, SSH in and diagnose:\n"
-            "      bash_command(\"ssh ... 'tail -50 /workspace/worker.log'\")\n"
-            "      bash_command(\"ssh ... 'ps aux | grep python'\")\n"
-            "      bash_command(\"ssh ... 'df -h'\")\n"
-            "      bash_command(\"ssh ... 'nvidia-smi'\")\n"
-            "   i. Fix or destroy and reprovision ONLY if unfixable.\n"
+            "\n"
+            "VM PROVISIONING PROTOCOL (prevents death spiral):\n"
+            "1. BEFORE provisioning, call query_vm_registry(run_id=<the_run_id>, stage='video').\n"
+            "   If a VM exists, call check_worker_health(instance_id=<id>) to verify it's ready.\n"
+            "2. If you think you need a new VM, call get_provisioning_guidance(run_id, 'video', <your_reasoning>).\n"
+            "   The system will tell you if you should use an existing VM instead.\n"
+            "3. Only provision with bash_command if guidance says 'provision_new'.\n"
+            "\n"
+            "WORKFLOW:\n"
+            "1. Call generate_visual_concepts with style from OTIO visual_style.\n"
+            "2. Call persist_visual_concepts to save to OTIO metadata.\n"
+            "3. Read scenes and plan visuals with generate_production_plan.\n"
+            "4. Evaluate with evaluate_production_plan.\n"
+            "5. Query VM registry. Check worker health. Get guidance if needed.\n"
             "6. For EACH scene, call submit_gpu_production_job with worker_url.\n"
-            "   Pass the video worker URL explicitly. If it fails, fix the worker and retry.\n"
-            "7. After each render succeeds, call add_video_clip_to_timeline with the video_path.\n"
+            "7. After each render, call add_video_clip_to_timeline.\n"
             "8. Finalize with finalize_production.\n"
-            "9. Call save_video_checkpoint to preserve the rendered clips.\n"
+            "9. Call save_video_checkpoint.\n"
             "Use your memory tools to recall rendering failures."
         ),
         tools=[
@@ -1217,6 +1219,9 @@ def _build_video_agent(model) -> Agent:
             check_resume_status,
             save_video_checkpoint,
             bash_command,
+            _query_vm_registry,
+            _check_worker_health,
+            _get_provisioning_guidance,
         ] + _make_memory_tools(VIDEO),
         model=model,
     )
