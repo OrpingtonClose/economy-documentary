@@ -272,6 +272,9 @@ async def run_documentary(
     lock_file = _acquire_pipeline_lock(output_dir)
     _provisioner = None
 
+    # Make run_id available to tools and callbacks
+    os.environ["_RUN_ID"] = run_id
+
     report = run_preflight(output_dir=output_dir)
     if not report.passed:
         for f in report.failures:
@@ -297,7 +300,14 @@ async def run_documentary(
     budget_hook = BudgetHook(budget_usd=budget_usd)
     hooks.append(budget_hook)
 
-    graph, shell = build_documentary_graph(hooks=hooks, max_node_executions=max_node_executions, model=model)
+    # Snapshot hook — records every tool call and graph transition to SQLite
+    from tracing.snapshot_hooks import SnapshotHook
+    snapshot_hook = SnapshotHook(run_id=run_id)
+    hooks.append(snapshot_hook)
+
+    graph, shell = build_documentary_graph(
+        hooks=hooks, max_node_executions=max_node_executions, model=model, run_id=run_id
+    )
     shell.max_retries = max_retries
 
     logger.info("Brief: %s", brief[:80])
@@ -371,6 +381,17 @@ async def run_documentary(
             logger.info("Agent memory commit: %s", commit_result)
         except Exception as exc:
             logger.warning("Agent memory commit failed (non-blocking): %s", exc)
+
+        # Snapshot VM and OTIO state before cleanup
+        try:
+            from tracing.snapshot_hooks import snapshot_vm_state, snapshot_otio_state
+            from worker_provisioner import get_provisioner
+            prov = get_provisioner()
+            if prov:
+                snapshot_vm_state(run_id, prov)
+            snapshot_otio_state(run_id, timeline_path)
+        except Exception as exc:
+            logger.debug("Snapshot before cleanup failed: %s", exc)
 
         # CRITICAL: Destroy VMs to stop credit burn
         try:
