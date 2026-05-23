@@ -883,11 +883,17 @@ async def get_endpoint():
         vram_used = torch.cuda.memory_allocated(0) / 1e9
         vram_total = torch.cuda.get_device_properties(0).total_memory / 1e9
 
-    status = "error" if _bootstrap_status.phase == "error" else "ok"
-    tts = "yes" if _tts_model is not None else "no"
-    ltx = "yes" if _ltx_pipe is not None else "no"
+    if _bootstrap_status.phase == "error":
+        return Response(content=f"error {gpu_name} vram={vram_used:.1f}/{vram_total:.1f}GB", media_type="text/plain")
+
+    # Return 503 while the relevant model is still loading
+    if _worker_mode in ("tts", "both") and _tts_model is None:
+        return Response(content=f"loading {gpu_name} vram={vram_used:.1f}/{vram_total:.1f}GB", media_type="text/plain", status_code=503)
+    if _worker_mode in ("ltx", "both") and _ltx_pipe is None:
+        return Response(content=f"loading {gpu_name} vram={vram_used:.1f}/{vram_total:.1f}GB", media_type="text/plain", status_code=503)
+
     return Response(
-        content=f"{status} {gpu_name} tts={tts} ltx={ltx} vram={vram_used:.1f}/{vram_total:.1f}GB mode={_worker_mode}",
+        content=f"ok {gpu_name} vram={vram_used:.1f}/{vram_total:.1f}GB",
         media_type="text/plain",
     )
 
