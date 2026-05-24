@@ -25,11 +25,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from deepagents import SubAgent, create_deep_agent  # type: ignore[import-not-found]
-from deepagents.backends import FilesystemBackend  # type: ignore[import-not-found]
-from langchain_core.language_models.chat_models import BaseChatModel  # type: ignore[import-not-found]
-from langchain_core.tools import BaseTool  # type: ignore[import-not-found]
-from langgraph.checkpoint.base import BaseCheckpointSaver  # type: ignore[import-not-found]
+from deepagents import SubAgent, create_deep_agent
+from deepagents.backends import FilesystemBackend
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.tools import BaseTool
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from . import _placeholders
 from .approval import INTERRUPT_GATE_CONFIG, request_human_approval
@@ -426,8 +426,11 @@ def build_documentary_orchestrator(
     )
 
 
-__all__ = ["ORCHESTRATOR_PROMPT",
+__all__ = [
+    "INTERRUPT_TOOL_NAMES",
+    "ORCHESTRATOR_PROMPT",
     "build_default_subagents",
     "build_default_tools",
     "build_documentary_orchestrator",
-    "build_orchestrator",]
+    "build_orchestrator",
+]

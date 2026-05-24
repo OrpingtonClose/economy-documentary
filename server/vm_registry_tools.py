@@ -73,9 +73,15 @@ def check_worker_health(instance_id: str, worker_url: str = "") -> str:
             return f"VM {instance_id} has no worker URL or SSH info."
 
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with urllib.request.urlopen(url) as resp:
             raw_text = resp.read().decode("utf-8", errors="replace")
     except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer(
+            operation="worker_health_check",
+            error=str(exc),
+            context={"instance_id": instance_id, "url": url},
+        )
         return f"Worker at {url} is NOT reachable: {exc}"
 
     # Extract typed status from raw HTTP text

@@ -8,8 +8,10 @@ No JSON, no schemas, no structured anything.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -17,6 +19,8 @@ from pipeline_errors import (
     WorkerUnavailableError,
     ArtifactValidationError,
 )
+from worker_provisioner import _get_next_worker_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +52,6 @@ def generate_video_clip(
     output_path: str,
     negative_prompt: str = "",
     visual_style: str = "",
-    worker_url: str = "",
     tool_context=None,
 ) -> str:
     """Generate a video clip using LTX-2.3.
@@ -56,13 +59,14 @@ def generate_video_clip(
     The prompt text is sent raw to the worker.  Duration/resolution are
     local defaults; the caller accepts what the worker returns.
     """
-    if not worker_url:
+    gpu_worker_url = _get_next_worker_url("video")
+    if not gpu_worker_url:
         raise WorkerUnavailableError(
-            "No worker_url provided. Agent must pass one.",
+            "No video worker registered. Provision a worker first.",
             stage="video",
         )
 
-    worker_url = f"{worker_url.rstrip('/')}/"
+    worker_url = f"{gpu_worker_url.rstrip('/')}/"
     req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
     try:
@@ -88,17 +92,3 @@ def generate_video_clip(
         "gen_time": result["gen_time"],
         "size_bytes": len(result["mp4_bytes"]),
     })
-
-
-
-
-def probe_clip(*, mp4_path: str) -> str:
-    """Probe an MP4 file and return its duration as a JSON string.
-
-    TODO: Currently unimplemented — stub so that import paths resolve.
-    The pipeline expects ``json.loads(probe_clip(mp4_path=...))["duration"]``.
-    """
-    raise NotImplementedError(
-        "probe_clip is not yet implemented. "
-        "Use ffprobe or a similar tool to extract duration from the MP4."
-    )

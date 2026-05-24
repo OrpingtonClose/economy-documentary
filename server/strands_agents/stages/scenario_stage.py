@@ -116,17 +116,19 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
     status = "valid"
     error = ""
 
-    try:
-        result = {"status": "generated", "topic": topic}
-    except ImportError:
-        logger.debug("deterministic_steps not available, using placeholder")
-        result = {
-            "status": "generated",
-            "topic": topic,
-            "target_duration_sec": target_duration_sec,
-            "language": language,
-            "message": "placeholder — LLM generates the actual scenario",
-        }
+    # Call the real LLM-backed generator
+    from strands_agents.scenario_llm import make_generator
+    import litellm
+    model_id = os.environ.get("STRANDS_MODEL", "")
+    if not model_id:
+        raise RuntimeError("STRANDS_MODEL not set — cannot generate scenarios without an LLM")
+    generator = make_generator(model_id=model_id)
+    result = generator(
+        topic=topic,
+        num_scenes=max(1, target_duration_sec // 35),
+        style="documentary",
+        language=language,
+    )
 
     # Build provenance
     prov = ArtifactProvenance(
@@ -216,40 +218,22 @@ def evaluate_scenario(scenario_json: str) -> str:
 
     Returns verdict: GOOD, EXCELLENT, FAIR, or POOR.
     """
-    try:
-        from callbacks.deterministic_steps import extract_json_array
-        scenes = extract_json_array(scenario_json) if isinstance(scenario_json, str) else json.loads(scenario_json)
+    from tools.scenario_evaluator_checks import run_all_structural_checks
 
-        # Run structural checks
-        verdict = "GOOD"
-        issues = []
+    scenes = json.loads(scenario_json) if isinstance(scenario_json, str) else scenario_json
+    if isinstance(scenes, dict):
+        scenes = scenes.get("scenes", [])
 
-        for scene in scenes or []:
-            # Duration check
-            dur = scene.get("duration_sec", 0)
-            if dur > 45:
-                issues.append(f"Scene {scene.get('scene_num', '?')}: {dur}s exceeds 45s limit")
-                verdict = "POOR"
-
-            # Voices check
-            voices = scene.get("voices", [])
-            if len(voices) != 3:
-                issues.append(f"Scene {scene.get('scene_num', '?')}: {len(voices)} voices (need 3)")
-                verdict = "POOR"
-
-            # Pronunciation hints check
-            hints = scene.get("pronunciation_hints", {})
-            if not hints:
-                issues.append(f"Scene {scene.get('scene_num', '?')}: no pronunciation hints")
-
-        return json.dumps({"verdict": verdict, "issues": issues, "scene_count": len(scenes or [])})
-
-    except ImportError:
-        logger.debug("deterministic_steps not available, using placeholder")
-        return json.dumps({"verdict": "GOOD", "issues": [], "scene_count": 0, "placeholder": True})
-    except Exception as exc:
-        logger.error("Scenario evaluation failed: %s", exc)
-        return json.dumps({"verdict": "POOR", "issues": [str(exc)]})
+    report = run_all_structural_checks(
+        {"scenes": scenes, "style_lock": {}},
+        target_duration_sec=sum(s.get("duration_sec", 0) for s in scenes),
+    )
+    issues = [r.as_dict() for r in report.results if not r.passed]
+    return json.dumps({
+        "verdict": report.overall,
+        "issues": issues,
+        "scene_count": len(scenes),
+    })
 
 
 @tool
@@ -263,17 +247,17 @@ def refine_scenario(scenario_json: str, feedback: str) -> str:
         scenario_json: Current scenario as JSON string.
         feedback: The evaluator's feedback to address.
     """
-    try:
-        # The LLM handles the actual rewriting; this tool cleans
-        # the output after the LLM call.
-        return "[refine_scenario] Refinement applied — cleaned via real callbacks"
-    except ImportError:
-        logger.debug("deterministic_steps not available, using placeholder")
-        return json.dumps({
-            "status": "refined",
-            "feedback_addressed": feedback[:200],
-            "placeholder": True,
-        })
+    from strands_agents.scenario_llm import make_refiner
+    model_id = os.environ.get("STRANDS_MODEL", "")
+    if not model_id:
+        raise RuntimeError("STRANDS_MODEL not set — cannot refine scenarios without an LLM")
+    refiner = make_refiner(model_id=model_id)
+    scenes = json.loads(scenario_json) if isinstance(scenario_json, str) else scenario_json
+    if isinstance(scenes, dict):
+        scenes = scenes.get("scenes", [])
+    feedback_dict = json.loads(feedback) if isinstance(feedback, str) else feedback
+    result = refiner(scenes, feedback_dict)
+    return json.dumps(result)
 
 
 @tool
@@ -285,14 +269,8 @@ def create_timeline(topic: str) -> str:
     Args:
         topic: Documentary topic (used as timeline name).
     """
-    try:
-        from tools.otio_tools import create_timeline as _real_create
-        # The real create_timeline tool takes tool_context
-        # We call it without context (direct function call)
-        return _real_create(topic, 5)  # type: ignore[call-arg]
-    except (ImportError, TypeError):
-        logger.debug("otio_tools not available, using placeholder")
-        return f"[create_timeline] Timeline '{topic}' created — placeholder"
+    from tools.otio_tools import create_timeline as _real_create
+    return _real_create(topic, 5)
 
 
 # ---------------------------------------------------------------------------

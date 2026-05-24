@@ -1,406 +1,151 @@
-"""Agent-callable tools for GPU worker provisioning.
+"""Agent-facing tools for the provisioner agent.
 
-These tools give the escalation agent direct control over the
-provisioning process.  When the background provisioner fails, the
-agent can read the trace, reason about what happened, and call these
-tools to try different strategies — different GPU types, higher price
-ceilings, broader reliability filters, specific offers from the
-catalog.
+The provisioner agent:
+  1. Claims pending jobs from the queue
+  2. Provisions VMs via Vast.ai
+  3. Assigns jobs to workers
+  4. Monitors worker health
+  5. Marks jobs completed/failed
 
-The agent has full power within the unit.  It is not limited to
-suggesting "retry with broader constraints" — it directly calls
-search_offers, create_instance, and check_vm_status with whatever
-parameters it decides.
+It NEVER talks to media agents directly. The queue is the only coordination mechanism.
 """
 
-import json
-import logging
-import os
+from __future__ import annotations
 
-logger = logging.getLogger(__name__)
+from strands import tool
+
+from job_queue import (
+    claim_next_pending_job,
+    mark_job_completed,
+    mark_job_failed,
+    mark_job_running,
+)
 
 
-def search_offers(
-    min_vram_gb: int = 48,
-    max_price: float = 2.00,
-    min_disk_gb: int = 50,
-    gpu_type: str = "",
-    reliability_floor: float = 0.95,
-    inet_down_floor: int = 200,
-    rentable_only: bool = True,
-    limit: int = 20,
-) -> str:
-    """Search Vast.ai for available GPU offers matching the given constraints.
 
-    Returns a JSON string with the full offer catalog — every viable
-    offer with GPU name, VRAM, price, reliability, bandwidth, location.
-    The agent reads this to decide which offer to try next.
+# ---------------------------------------------------------------------------
+# Queue reading
+# ---------------------------------------------------------------------------
 
-    Args:
-        min_vram_gb: Minimum VRAM in GB. Hard floor — never compromised.
-        max_price: Maximum price per hour in USD.
-        min_disk_gb: Minimum disk space in GB.
-        gpu_type: Exact GPU name (e.g. "A100_SXM4"). Empty = any GPU.
-        reliability_floor: Minimum reliability score (0.0-1.0).
-        inet_down_floor: Minimum download speed in Mbps.
-        rentable_only: Only show rentable offers.
-        limit: Max offers to return (for tractability).
+@tool
+def claim_job(stage: str) -> str:
+    """Claim the next pending job for a stage. Returns job details or 'No jobs available.'
+
+    stage: 'audio' or 'video'
     """
-    from worker_provisioner import _vast_cmd, _trace, get_provisioner
+    job = claim_next_pending_job(stage)
+    if job is None:
+        return "No jobs available."
 
-    vram_mb = min_vram_gb * 1024
-
-    # Build query string
-    parts = []
-    if gpu_type:
-        parts.append(f"gpu_name={gpu_type}")
-    parts.append(f"gpu_ram>={min_vram_gb}")
-    parts.append(f"dph_total<={max_price}")
-    if rentable_only:
-        parts.append("rentable=true")
-    parts.append(f"reliability>{reliability_floor:.2f}")
-    parts.append(f"inet_down>{inet_down_floor}")
-    parts.append(f"disk_space>={min_disk_gb}")
-    query = " ".join(parts)
-
-    search_result = _vast_cmd([
-        "search", "offers",
-        "--type", "on-demand",
-        "--order", "inet_down-",
-        "--raw",
-        query,
-    ])
-
-    offers = search_result if isinstance(search_result, list) else []
-
-    # Python-side post-filter (CLI filters can be unreliable)
-    filtered = []
-    for o in offers:
-        o_vram = float(o.get("gpu_ram", 0))
-        o_price = float(o.get("dph_total", 999))
-        o_disk = float(o.get("disk_space", 0))
-        o_rel = float(o.get("reliability", 0))
-        o_inet = float(o.get("inet_down", 0))
-        if (
-            o_vram >= vram_mb
-            and o_price <= max_price
-            and o_disk >= min_disk_gb
-            and o_rel >= reliability_floor
-            and o_inet >= inet_down_floor
-        ):
-            filtered.append(o)
-
-    # Sort by download speed then price
-    sorted_offers = sorted(
-        filtered,
-        key=lambda o: (-float(o.get("inet_down", 0)), float(o.get("dph_total", 999))),
+    comments = " | ".join(job.qa_comments) if job.qa_comments else "none"
+    return (
+        f"Claimed job {job.job_id}\n"
+        f"  type: {job.job_type.value}\n"
+        f"  run_id: {job.run_id}\n"
+        f"  scene: {job.scene_num}\n"
+        f"  attempts: {job.attempts}/{job.max_attempts}\n"
+        f"  qa_comments: {comments}\n"
+        f"  payload: {job.payload}"
     )
 
-    # Format offers for the agent
-    catalog = []
-    for o in sorted_offers[:limit]:
-        catalog.append({
-            "id": int(o.get("id", 0)),
-            "gpu_name": o.get("gpu_name", "unknown"),
-            "gpu_ram_gb": round(float(o.get("gpu_ram", 0)) / 1024, 1),
-            "num_gpus": o.get("num_gpus", 1),
-            "dph_total": round(float(o.get("dph_total", 0)), 4),
-            "disk_space_gb": round(float(o.get("disk_space", 0)), 0),
-            "inet_down": round(float(o.get("inet_down", 0)), 0),
-            "inet_up": round(float(o.get("inet_up", 0)), 0),
-            "reliability": round(float(o.get("reliability", 0)), 3),
-            "rentable": o.get("rentable", False),
-            "verified": o.get("verified", False),
-            "country": o.get("country", ""),
-            "host_id": o.get("host_id", ""),
-        })
 
-    result = {
-        "query": query,
-        "raw_results": len(offers) if isinstance(offers, list) else 0,
-        "post_filter_results": len(filtered),
-        "offers_returned": len(catalog),
-        "offers": catalog,
-    }
-
-    # Trace the search
-    try:
-        _prov = get_provisioner()
-        if _prov and hasattr(_prov, "tts_spec"):
-            _trace(getattr(_prov, "tts_spec"), "agent_search_offers", {
-                "query": query,
-                "results": len(catalog),
-                "agent_initiated": True,
-            })
-    except Exception as exc:
-        logger.warning("Trace failed (non-critical): %s", exc)
-
-    return json.dumps(result)
+@tool
+def set_job_running(job_id: str, worker_id: str) -> str:
+    """Mark a job as running on a specific worker."""
+    mark_job_running(job_id, worker_id)
+    return f"Job {job_id} marked running on worker {worker_id}"
 
 
-def create_instance(
-    offer_id: int,
-    role: str = "tts",
-    disk_gb: int = 64,
-    worker_mode: str = "tts",
-) -> str:
-    """Create a Vast.ai instance from a specific offer.
+@tool
+def set_job_completed(job_id: str, b2_artifact_key: str) -> str:
+    """Mark a job as completed after the worker uploads the artifact to B2."""
+    mark_job_completed(job_id, b2_artifact_key)
+    return f"Job {job_id} completed. Artifact at B2 key: {b2_artifact_key}"
 
-    The agent calls this after reviewing the offer catalog from
-    search_offers and deciding which offer to try.  Returns the
-    instance ID on success, or an error on failure.
 
-    Args:
-        offer_id: The offer ID from search_offers results.
-        role: Worker role — "tts" or "video".
-        disk_gb: Disk size in GB for the instance.
-        worker_mode: Worker mode — "tts", "ltx", or "both".
+@tool
+def set_job_failed(job_id: str, error_message: str) -> str:
+    """Mark a job as failed (permanent or retryable depending on attempts)."""
+    mark_job_failed(job_id, error_message)
+    return f"Job {job_id} marked failed: {error_message}"
+
+
+# ---------------------------------------------------------------------------
+# VM provisioning wrappers (thin wrappers around vast CLI)
+# ---------------------------------------------------------------------------
+
+@tool
+def vast_search_offers(gpu_min_vram: float = 0, query: str = "") -> str:
+    """Search Vast.ai for GPU offers.
+
+    gpu_min_vram: minimum VRAM in GB (e.g. 24.0)
+    query: extra search terms (e.g. 'RTX 4090')
     """
-    from worker_provisioner import (
-        _vast_cmd,
-        _trace,
-        _HEALTH_CONTROL_PORT,
-        _MODEL_MANIFEST,
-        normalize_worker_mode,
-        resolve_docker_image,
-        get_provisioner,
-    )
-    import shlex
-    import subprocess
-    import uuid
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli
 
-    worker_mode = normalize_worker_mode(worker_mode)
-    _docker_image, _torch_index = resolve_docker_image(worker_mode)
-
-    # Get the spec for this role
-    remote_port = 8880 if role == "tts" else 8881
-    spec = None
-    try:
-        _prov = get_provisioner()
-        if role == "tts" and hasattr(_prov, "tts_spec"):
-            spec = getattr(_prov, "tts_spec")
-        elif role == "video" and hasattr(_prov, "video_spec"):
-            spec = getattr(_prov, "video_spec")
-    except Exception as exc:
-        logger.warning("Spec lookup failed (non-critical): %s", exc)
-
-    # Build onstart script
-    b2_key_id = os.environ.get("B2_KEY_ID", "")
-    b2_app_key = os.environ.get("B2_APPLICATION_KEY", "")
-    dashscope_key = os.environ.get("DASHSCOPE_API_KEY", "")
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-
-    try:
-        _branch = subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            text=True,
-        ).strip()
-        if not _branch or _branch == "HEAD":
-            _branch = "main"
-    except Exception as exc:
-        logger.warning("Git branch detection failed, using 'main': %s", exc)
-        _branch = "main"
-
-    _min_torch = "2.7.0"
-    for _key, _mspec in _MODEL_MANIFEST.items():
-        if _mspec.get("worker_mode") == worker_mode:
-            _min_torch = _mspec.get("min_torch", "2.7.0")
-            break
-
-    onstart = (
-        f"export B2_KEY_ID={shlex.quote(b2_key_id)} && "
-        f"export B2_APPLICATION_KEY={shlex.quote(b2_app_key)} && "
-        f"export WORKER_MODE={shlex.quote(worker_mode)} && "
-        f"export DASHSCOPE_API_KEY={shlex.quote(dashscope_key)} && "
-        f"export OPENROUTER_API_KEY={shlex.quote(openrouter_key)} && "
-        f"export TORCH_INDEX={shlex.quote(_torch_index)} && "
-        f"export MIN_TORCH_VERSION={shlex.quote(_min_torch)} && "
-        "export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True && "
-        "apt-get update && apt-get install -y git curl ffmpeg libsndfile1 sox libsox-dev && "
-        f"(git clone -b {shlex.quote(_branch)} --single-branch "
-        "https://github.com/OrpingtonClose/economy-documentary.git "
-        "/workspace/economy-documentary 2>&1 || "
-        "git clone -b main --single-branch "
-        "https://github.com/OrpingtonClose/economy-documentary.git "
-        "/workspace/economy-documentary 2>&1 || "
-        f"(cd /workspace/economy-documentary && git fetch origin {shlex.quote(_branch)} && "
-        f"git checkout {shlex.quote(_branch)} && git pull origin {shlex.quote(_branch)})) && "
-        "python3 -c 'import torch; print(f\"torch {torch.__version__} from {torch.__file__}\")' && "
-        "pip install --break-system-packages --no-cache-dir "
-        "'fastapi>=0.100.0' 'uvicorn>=0.20.0' 'pydantic>=2.0.0' "
-        "'numpy>=1.26.0,<2.0.0' 'soundfile>=0.12.0' && "
-        "cd /workspace/economy-documentary/server && "
-        f"python3 gpu_worker.py --mode {shlex.quote(worker_mode)} --port {remote_port}"
-    )
-
-    _run_id = os.environ.get("DOCUMENTARY_RUN_ID", uuid.uuid4().hex[:8])
-    _label = f"documentary-{role}-{_run_id}"
-
-    _env_ports = (
-        f"-p {remote_port}:{remote_port} "
-        f"-p {_HEALTH_CONTROL_PORT}:{_HEALTH_CONTROL_PORT}"
-    )
-
-    if spec:
-        _trace(spec, "agent_create_instance_attempt", {
-            "offer_id": offer_id,
-            "docker_image": _docker_image,
-            "disk_gb": disk_gb,
-            "worker_mode": worker_mode,
-            "agent_initiated": True,
-        })
-
-    try:
-        create_result = _vast_cmd([
-            "create", "instance",
-            str(offer_id),
-            "--image", _docker_image,
-            "--disk", str(disk_gb),
-            "--ssh",
-            "--direct",
-            "--env", _env_ports,
-            "--label", _label,
-            "--onstart-cmd", onstart,
-        ])
-    except RuntimeError as e:
-        if spec:
-            _trace(spec, "agent_create_instance_failed", {
-                "offer_id": offer_id,
-                "error": str(e),
-                "error_type": (
-                    "no_such_ask" if "no_such_ask" in str(e).lower()
-                    else "not_available" if "not available" in str(e).lower()
-                    else "other"
-                ),
-                "agent_initiated": True,
-            })
-        return json.dumps({
-            "status": "error",
-            "offer_id": offer_id,
-            "error": str(e),
-            "error_type": (
-                "no_such_ask" if "no_such_ask" in str(e).lower()
-                else "not_available" if "not available" in str(e).lower()
-                else "other"
-            ),
-        })
-
-    # Parse response
-    vm_id = None
-    if isinstance(create_result, dict):
-        vm_id = create_result.get("new_contract")
-    elif isinstance(create_result, str) and "new_contract" in create_result:
-        import re
-        match = re.search(r"'new_contract'\s*:\s*(\d+)", create_result)
-        if match:
-            vm_id = match.group(1)
-
-    if vm_id:
-        try:
-            from tools.vastai_tools import register_owned_vm
-            register_owned_vm(str(vm_id))
-        except Exception as exc:
-            logger.warning("register_owned_vm failed (non-critical): %s", exc)
-        if spec:
-            spec.vm_id = str(vm_id)
-            _trace(spec, "agent_create_instance_success", {
-                "offer_id": offer_id,
-                "vm_id": str(vm_id),
-                "agent_initiated": True,
-            })
-        return json.dumps({
-            "status": "created",
-            "offer_id": offer_id,
-            "vm_id": str(vm_id),
-        })
-
-    return json.dumps({
-        "status": "error",
-        "offer_id": offer_id,
-        "error": f"Unexpected response: {create_result}",
-    })
+    cmd = "vastai search offers --type on-demand --raw"
+    if gpu_min_vram:
+        cmd += f" 'gpu_ram>={int(gpu_min_vram * 1024)}'"
+    if query:
+        cmd += f" {query}"
+    result = run_vast_cli(cmd)
+    return result
 
 
-def check_vm_status(vm_id: str) -> str:
-    """Check the status of a Vast.ai VM instance.
+@tool
+def vast_create_instance(offer_id: str, image: str, disk_gb: int = 64) -> str:
+    """Provision a Vast.ai instance from an offer ID.
 
-    Returns VM status, connection details, and health endpoint
-    response if available.
-
-    Args:
-        vm_id: The instance ID returned by create_instance.
+    offer_id: the numeric offer ID from vast_search_offers
+    image: Docker image (e.g. 'pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime')
+    disk_gb: disk size in GB
     """
-    from worker_provisioner import _vast_cmd
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli
 
-    try:
-        result = _vast_cmd(["show", "instance", vm_id, "--raw"])
-    except RuntimeError as e:
-        return json.dumps({"status": "error", "vm_id": vm_id, "error": str(e)})
-
-    if not isinstance(result, dict):
-        return json.dumps({
-            "status": "error",
-            "vm_id": vm_id,
-            "raw": str(result)[:500],
-        })
-
-    actual_status = result.get("actual_status", "unknown")
-    public_ipaddr = result.get("public_ipaddr", "")
-    direct_port = result.get("direct_port", 0)
-    ssh_host = result.get("ssh_host", "")
-    ssh_port = result.get("ssh_port", 0)
-
-    # Try worker endpoint if running
-    health_text = None
-    if actual_status == "running" and public_ipaddr and direct_port:
-        try:
-            from urllib.request import Request, urlopen
-            health_url = f"http://{public_ipaddr}:{direct_port}/"
-            req = Request(health_url)
-            with urlopen(req, timeout=10) as resp:
-                health_text = resp.read().decode().strip()
-        except Exception as e:
-            health_text = f"error: {e}"
-
-    return json.dumps({
-        "status": actual_status,
-        "vm_id": vm_id,
-        "public_ipaddr": public_ipaddr,
-        "direct_port": direct_port,
-        "ssh_host": ssh_host,
-        "ssh_port": ssh_port,
-        "health_text": health_text,
-    })
+    cmd = (
+        f"vastai create instance {offer_id} "
+        f"--image {image} --disk {disk_gb} --ssh --direct --env '-p 8880:8880'"
+    )
+    return run_vast_cli(cmd)
 
 
-def get_provision_trace(role: str = "tts") -> str:
-    """Get the full provision trace for a worker role.
+@tool
+def vast_show_instance(instance_id: str) -> str:
+    """Get details of a Vast.ai instance."""
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli
 
-    Returns every trace entry — every search query, every offer
-    considered, every constraint applied, every create attempt, every
-    failure.  This is the agent's complete observation log for
-    reasoning about what happened and what to try next.
+    return run_vast_cli(f"vastai show instance {instance_id} --raw")
 
-    Args:
-        role: "tts" or "video".
+
+@tool
+def vast_destroy_instance(instance_id: str) -> str:
+    """Destroy a Vast.ai instance."""
+    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli
+
+    return run_vast_cli(f"vastai destroy instance {instance_id}")
+
+
+# ---------------------------------------------------------------------------
+# Registry integration
+# ---------------------------------------------------------------------------
+
+@tool
+def registry_query(run_id: str, stage: str = "") -> str:
+    """Query the VM registry for VMs associated with a run.
+
+    Returns plain-text summary of VMs, their status, and worker readiness.
     """
-    from worker_provisioner import get_provisioner
+    from vm_registry_tools import query_vm_registry
 
-    try:
-        _prov = get_provisioner()
-        if role == "tts" and hasattr(_prov, "tts_spec"):
-            trace = getattr(_prov, "tts_spec").provision_trace
-        elif role == "video" and hasattr(_prov, "video_spec"):
-            trace = getattr(_prov, "video_spec").provision_trace
-        else:
-            trace = []
-    except Exception as e:
-        return json.dumps({"error": str(e), "trace": []})
+    return query_vm_registry(run_id, stage)
 
-    return json.dumps({
-        "role": role,
-        "entries": len(trace),
-        "trace": trace,
-    })
 
+@tool
+def registry_check_health(instance_id: str, worker_url: str = "") -> str:
+    """Check if a worker VM is healthy.
+
+    Returns plain-text status. If not reachable, reports why.
+    """
+    from vm_registry_tools import check_worker_health
+
+    return check_worker_health(instance_id, worker_url)

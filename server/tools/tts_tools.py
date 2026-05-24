@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import wave
 from urllib.request import Request, urlopen
 from urllib.error import URLError
 
@@ -18,6 +19,8 @@ from pipeline_errors import (
     WorkerUnavailableError,
     ArtifactValidationError,
 )
+from worker_provisioner import _get_next_worker_url
+
 logger = logging.getLogger(__name__)
 
 _SAMPLE_RATE = 24000
@@ -47,7 +50,6 @@ def generate_narration(
     text: str,
     output_dir: str = "",
     language: str = "",
-    worker_url: str = "",
     tool_context=None,
 ) -> str:
     """Generate narration WAV for a scene.
@@ -55,13 +57,14 @@ def generate_narration(
     The narration text is sent raw to the worker.  Voice and language
     are local defaults; the caller accepts what the worker returns.
     """
-    if not worker_url:
+    gpu_worker_url = _get_next_worker_url("tts")
+    if not gpu_worker_url:
         raise WorkerUnavailableError(
-            "No worker_url provided. Agent must pass one.",
+            "No TTS worker registered. Provision a worker first.",
             stage="audio",
         )
 
-    worker_url = f"{worker_url.rstrip('/')}/"
+    worker_url = f"{gpu_worker_url.rstrip('/')}/"
     req = Request(worker_url, data=text.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
     try:
@@ -74,10 +77,7 @@ def generate_narration(
         ) from e
 
     if not output_dir:
-        raise WorkerUnavailableError(
-            "No output_dir provided. Pass it explicitly.",
-            stage="audio",
-        )
+        output_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
     os.makedirs(os.path.join(output_dir, "audio"), exist_ok=True)
     wav_path = os.path.join(output_dir, "audio", f"scene_{scene_num:03d}_narration.wav")
 

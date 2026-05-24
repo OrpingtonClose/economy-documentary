@@ -71,6 +71,7 @@ AUDIO = "audio"
 VIDEO = "video"
 OTIO = "otio"
 ASSEMBLY = "assembly"
+PROVISIONER = "provisioner"
 
 STAGE_ORDER = [SCENARIO, AUDIO, VIDEO, ASSEMBLY]
 
@@ -232,9 +233,10 @@ class RecoveryShell:
     async def run(
         self, task: str, initial_state: dict[str, Any] | None = None
     ) -> Any:
-        """Execute the graph with automatic recovery on failure.
+        """Execute the graph once. The agent decides retry via graph edges.
 
         Seeds the working timeline from the latest checkpoint on resume.
+        No algorithmic retry — the graph's backward edges handle recovery.
         """
         if self.graph is None:
             raise RuntimeError("RecoveryShell has no graph — build_documentary_graph() must be called first.")
@@ -243,32 +245,7 @@ class RecoveryShell:
         if self.resume and self.latest_checkpoint:
             self.seed_timeline()
 
-        state_overrides: dict[str, Any] = initial_state or {}
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                result = await self.graph.invoke_async(task)
-                state_overrides.pop("_recovery_target", None)
-                state_overrides.pop("_recovery_reason", None)
-                return result
-            except RuntimeError as exc:
-                if attempt >= self.max_retries:
-                    raise
-
-                failed_node = self._classify_failure(exc)
-                reason = str(exc)
-
-                logger.warning(
-                    "Graph failure on attempt %d/%d: node=%s reason=%s",
-                    attempt + 1,
-                    self.max_retries,
-                    failed_node,
-                    reason[:200],
-                )
-
-                state_overrides["_recovery_target"] = failed_node
-                state_overrides["_recovery_reason"] = reason
-                self._recovery_count += 1
+        return await self.graph.invoke_async(task)
 
     def seed_timeline(self) -> str | None:
         """On resume, copy the selected checkpoint to the working timeline path."""
@@ -381,6 +358,7 @@ def build_documentary_graph(
     video_agent = _build_video_agent(model)
     otio_gate_agent = _build_otio_gate_agent(model)
     assembly_agent = _build_assembly_agent(model)
+    provisioner_agent = _build_provisioner_agent(model)
 
     # Build nodes
     nodes = {
@@ -389,9 +367,11 @@ def build_documentary_graph(
         AUDIO: GraphNode(node_id=AUDIO, executor=audio_agent),
         VIDEO: GraphNode(node_id=VIDEO, executor=video_agent),
         ASSEMBLY: GraphNode(node_id=ASSEMBLY, executor=assembly_agent),
+        PROVISIONER: GraphNode(node_id=PROVISIONER, executor=provisioner_agent),
     }
 
     # Forward edges: scenario → otio → audio → otio → video → otio → assembly → otio
+    # Provisioner interleaves: otio → provisioner → otio whenever jobs are pending
     forward_edges = {
         GraphEdge(from_node=nodes[SCENARIO], to_node=nodes[OTIO]),
         GraphEdge(
@@ -412,6 +392,13 @@ def build_documentary_graph(
             condition=_assembly_not_completed,
         ),
         GraphEdge(from_node=nodes[ASSEMBLY], to_node=nodes[OTIO]),
+        # Provisioner loop — drains the job queue
+        GraphEdge(
+            from_node=nodes[OTIO],
+            to_node=nodes[PROVISIONER],
+            condition=_has_pending_jobs,
+        ),
+        GraphEdge(from_node=nodes[PROVISIONER], to_node=nodes[OTIO]),
     }
 
     # Backward edges: recovery — routes read from OTIO file
@@ -884,7 +871,6 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
     Uses real production tools from strands_agents.stages.audio_stage.
     Checkpoint/resume tools are added alongside."""
     from strands_agents.stages.audio_stage import (
-        generate_scene_narration,
         add_narration_to_timeline,
         align_narration_audio,
         evaluate_audio_timing,
@@ -896,17 +882,29 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed in a previous run.
+        """Check if this stage was already completed or is in progress.
 
-        CRITICAL FIX: Also checks disk state — if A1_Narration clips exist in OTIO
-        or WAV files exist in the audio directory, the stage is considered done.
-        This prevents regeneration when completed_stages is empty (reset_on_revisit).
+        Checks: checkpoint → job queue → OTIO clips → local WAV files.
+        Returns 'in_progress' if jobs exist in the queue but are not done yet.
         """
         shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+
         if shell and AUDIO in shell.completed_stages:
             return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "checkpoint"})
 
-        # FIX: Check actual timeline for clips (works even after graph reset)
+        # Check job queue FIRST — if jobs exist, stage is in progress
+        if run_id:
+            from job_queue import get_queue_summary
+            summary = get_queue_summary(run_id, AUDIO)
+            total = sum(summary.values())
+            if total > 0:
+                completed = summary.get("completed", 0)
+                if completed == total:
+                    return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "queue_all_done", "jobs": summary})
+                return json.dumps({"status": "in_progress", "stage": AUDIO, "jobs": summary})
+
+        # Check actual timeline for clips (works even after graph reset)
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         try:
             tp = resolve_timeline_path()
@@ -918,7 +916,7 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         except Exception as exc:
             logger.warning("audio completion check (otio) failed: %s", exc)
 
-        # FIX: Check audio output directory for existing WAV files
+        # Check audio output directory for existing WAV files
         import glob
         pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
         audio_dir = os.path.join(pipeline_dir, "audio")
@@ -945,82 +943,69 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         _update_completed_stages(run_id, AUDIO)
         return json.dumps({"saved": True, "checkpoint_path": dest})
 
-    from strands import tool as _tool_decorator
-    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
-    from vm_registry_tools import (
-        query_vm_registry as _query_vm_registry,
-        check_worker_health as _check_worker_health,
-        get_provisioning_guidance as _get_provisioning_guidance,
+    # Job queue tools — media agents never touch VMs directly
+    from tools.job_queue_tools import (
+        submit_render_job,
+        poll_completed_jobs,
+        qa_completed_job,
+        check_queue_status,
+        get_failed_job_details,
+        download_b2_artifact,
     )
-    from research_tools import (
-        research_model_requirements as _research_model_requirements,
-        evaluate_vastai_offers as _evaluate_vastai_offers,
-    )
-
-    @_tool_decorator
-    def bash_command(command: str) -> str:
-        """Run a shell command locally or via SSH.  YOU are the provisioner.
-
-        Use this for ALL VM operations:
-        - Search:  bash_command("vastai search offers --type on-demand --raw | head -20")
-        - Provision: bash_command("vastai create instance <offer_id> --image <img> --disk 64 --ssh --direct --env '-p 8880:8880'")
-        - Status:  bash_command("vastai show instance <id> --raw")
-        - Destroy: bash_command("vastai destroy instance <id>")
-        - SSH diag: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'curl -s http://localhost:8880/'")
-        - Check worker log: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'tail -30 /workspace/worker.log'")
-
-        The agent parses the raw CLI output and decides.
-        """
-        return _run_vast_cli(command)
 
     return Agent(
         name=AUDIO,
         system_prompt=(
             "You are the Audio Agent. You own narration end-to-end.\n"
-            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
-            "call save_audio_checkpoint and then STOP — do not regenerate narration.\n"
+            "BEFORE doing any work, call check_resume_status.\n"
+            "  - 'already_completed' → call save_audio_checkpoint and STOP.\n"
+            "  - 'in_progress' → poll completed jobs, download, QA, and proceed.\n"
+            "  - 'not_completed' → submit jobs for all scenes, then poll and proceed.\n"
             "\n"
-            "VM PROVISIONING PROTOCOL — NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "JOB QUEUE PROTOCOL — YOU DO NOT PROVISION VMs. YOU DO NOT TROUBLESHOOT.\n"
             "\n"
-            "CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.\n"
+            "Your only interaction with compute is via the job queue:\n"
+            "  1. submit_render_job — create a job for the provisioner to pick up\n"
+            "  2. poll_completed_jobs — check which jobs are done (artifact in B2)\n"
+            "  3. check_queue_status — see how many jobs are pending/running/completed/failed\n"
+            "  4. qa_completed_job — approve or reject with specific comments\n"
+            "  5. download_b2_artifact — fetch completed artifact from B2\n"
             "\n"
-            "1. CHECK MEMORY FIRST: recall_memory(query='TTS worker success', category='success')\n"
-            "   If memory exists of a successful TTS VM configuration, USE THAT EXACT CONFIGURATION.\n"
-            "   Same GPU, same disk, same image, same provider. Do not deviate.\n"
+            "You NEVER know worker URLs. You NEVER SSH anywhere.\n"
+            "Artifacts arrive via B2 keys in the completed job records.\n"
             "\n"
-            "2. ONLY if no memory exists: call research_model_requirements('Qwen3 TTS')\n"
-            "   to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.\n"
+            "NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "  - If a job fails after max attempts, report it and STOP.\n"
+            "  - If QA fails, requeue with SPECIFIC comments so the worker knows what to fix.\n"
             "\n"
-            "3. BEFORE provisioning: query_vm_registry(run_id=<the_run_id>, stage='audio')\n"
-            "   If a VM exists, check_worker_health(instance_id=<id>).\n"
-            "   If the VM is healthy, USE IT. Do not provision a second VM.\n"
-            "\n"
-            "4. If you must provision: get_provisioning_guidance(run_id, 'audio', <your_reasoning>)\n"
-            "   Then search Vast.ai and call evaluate_vastai_offers('Qwen3 TTS', <raw_search_text>)\n"
-            "   Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer. Do not get creative.\n"
-            "\n"
-            "5. After provisioning succeeds: remember(text='TTS worker succeeded on <GPU> <VRAM>GB "
-            "   at <provider> with image <image>', category='success')\n"
-            "   After ANY failure: remember(text='TTS worker failed: <exact_error>', category='failure')\n"
-            "\n"
-            "6. IF A WORKER FAILS: Do NOT try to fix it. Do NOT SSH in and tinker.\n"
-            "   Call get_provisioning_guidance with your failure reasoning.\n"
-            "   If guidance says 'destroy_and_reprovision', destroy it and start fresh.\n"
-            "   If guidance says 'use_existing', the worker may still be loading — WAIT.\n"
-            "   NEVER troubleshoot. The system knows more than you do.\n"
+            "CRITICAL: You make ONE pass per invocation.\n"
+            "  - Submit any missing jobs.\n"
+            "  - Poll once for completed jobs.\n"
+            "  - Download and QA any completed jobs.\n"
+            "  - If pending or running jobs remain, report status and STOP.\n"
+            "    The graph will re-invoke you when the pipeline cycles back.\n"
+            "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
-            "2. Check memory → research → query registry → evaluate offers → provision.\n"
-            "3. For EACH scene, call generate_scene_narration with the worker_url.\n"
-            "4. Add narration clips with add_narration_to_timeline.\n"
-            "5. Run WhisperX alignment with align_narration_audio.\n"
-            "6. Evaluate timing with evaluate_audio_timing.\n"
-            "7. Persist state with persist_audio_to_otio.\n"
-            "8. Call save_audio_checkpoint to preserve the audio work.\n"
+            "2. Call check_resume_status.\n"
+            "3. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "     job_type='narration', stage='audio', scene_num=N,\n"
+            "     payload='{\"text\":\"...\",\"voice_id\":\"...\"}'\n"
+            "4. Call poll_completed_jobs(run_id, stage='audio').\n"
+            "5. Call check_queue_status(run_id, stage='audio').\n"
+            "6. For each completed job: call download_b2_artifact(b2_key, local_path).\n"
+            "7. QA each downloaded file.\n"
+            "8. If QA passes: add narration clips with add_narration_to_timeline.\n"
+            "9. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "10. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "11. If failed > 0: call get_failed_job_details, report, STOP.\n"
+            "12. Run WhisperX alignment with align_narration_audio.\n"
+            "13. Evaluate timing with evaluate_audio_timing.\n"
+            "14. Persist state with persist_audio_to_otio.\n"
+            "15. Call save_audio_checkpoint.\n"
         ),
         tools=[
-            generate_scene_narration,
             add_narration_to_timeline,
             align_narration_audio,
             evaluate_audio_timing,
@@ -1028,12 +1013,12 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             persist_audio_to_otio,
             check_resume_status,
             save_audio_checkpoint,
-            bash_command,
-            _query_vm_registry,
-            _check_worker_health,
-            _get_provisioning_guidance,
-            _research_model_requirements,
-            _evaluate_vastai_offers,
+            submit_render_job,
+            poll_completed_jobs,
+            qa_completed_job,
+            check_queue_status,
+            get_failed_job_details,
+            download_b2_artifact,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1047,7 +1032,6 @@ def _build_video_agent(model) -> Agent:
     from strands_agents.stages.production_stage import (
         generate_production_plan,
         evaluate_production_plan,
-        submit_gpu_production_job,
         finalize_production,
     )
     from strands import tool
@@ -1121,10 +1105,40 @@ def _build_video_agent(model) -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed in a previous run."""
+        """Check if this stage was already completed or is in progress.
+
+        Checks: checkpoint → job queue → OTIO clips.
+        Returns 'in_progress' if jobs exist in the queue but are not done yet.
+        """
         shell = get_recovery_shell()
+        run_id = shell.run_id if shell else ""
+
         if shell and VIDEO in shell.completed_stages:
             return json.dumps({"status": "already_completed", "stage": VIDEO})
+
+        # Check job queue FIRST — if jobs exist, stage is in progress
+        if run_id:
+            from job_queue import get_queue_summary
+            summary = get_queue_summary(run_id, VIDEO)
+            total = sum(summary.values())
+            if total > 0:
+                completed = summary.get("completed", 0)
+                if completed == total:
+                    return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "queue_all_done", "jobs": summary})
+                return json.dumps({"status": "in_progress", "stage": VIDEO, "jobs": summary})
+
+        # Check actual timeline for clips
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
+        try:
+            tp = resolve_timeline_path()
+            timeline = otio_read(tp)
+            for track in timeline.tracks:
+                if track.name == "V1_Video":
+                    if len(list(track)) > 0:
+                        return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "otio_clips_exist"})
+        except Exception as exc:
+            logger.warning("video completion check (otio) failed: %s", exc)
+
         return json.dumps({"status": "not_completed", "stage": VIDEO})
 
     @tool
@@ -1185,29 +1199,15 @@ def _build_video_agent(model) -> Agent:
         write_pipeline_metadata(tp, "visual_concepts", concepts, provenance={"agent": VIDEO})
         return json.dumps({"persisted": True, "concept_count": len(concepts)})
 
-    from strands import tool as _tool_decorator
-    from strands_agents.shared_a2a.vast_provisioning import run_vast_cli as _run_vast_cli
-    from vm_registry_tools import (
-        query_vm_registry as _query_vm_registry,
-        check_worker_health as _check_worker_health,
-        get_provisioning_guidance as _get_provisioning_guidance,
+    # Job queue tools — media agents never touch VMs directly
+    from tools.job_queue_tools import (
+        submit_render_job,
+        poll_completed_jobs,
+        qa_completed_job,
+        check_queue_status,
+        get_failed_job_details,
+        download_b2_artifact,
     )
-
-    @_tool_decorator
-    def bash_command(command: str) -> str:
-        """Run a shell command locally or via SSH.  YOU are the provisioner.
-
-        Use this for ALL VM operations:
-        - Search:  bash_command("vastai search offers --type on-demand --raw | python3 -c \\\"import sys,json; offers=json.load(sys.stdin); [print(o['id'], o['gpu_name'], o['gpu_ram']/1024, o['dph_total']) for o in sorted(offers, key=lambda x:x['dph_total'])[:10]]\\\")")
-        - Provision: bash_command("vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 150 --ssh --direct --env '-p 8880:8880'")
-        - Status:  bash_command("vastai show instance <id> --raw")
-        - Destroy: bash_command("vastai destroy instance <id>")
-        - SSH diag: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'curl -s http://localhost:8880/'")
-        - Check worker log: bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'tail -30 /workspace/worker.log'")
-
-        The agent parses the raw CLI output and decides.
-        """
-        return _run_vast_cli(command)
 
     return Agent(
         name=VIDEO,
@@ -1216,63 +1216,73 @@ def _build_video_agent(model) -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_video_checkpoint and then STOP — do not render clips.\n"
             "\n"
-            "VM PROVISIONING PROTOCOL — NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "JOB QUEUE PROTOCOL — YOU DO NOT PROVISION VMs. YOU DO NOT TROUBLESHOOT.\n"
             "\n"
-            "CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.\n"
+            "Your only interaction with compute is via the job queue:\n"
+            "  1. submit_render_job — create a job for the provisioner to pick up\n"
+            "  2. poll_completed_jobs — check which jobs are done (artifact in B2)\n"
+            "  3. qa_completed_job — approve or reject with specific comments\n"
+            "  4. check_queue_status — see how many jobs are pending/running/completed/failed\n"
             "\n"
-            "1. CHECK MEMORY FIRST: recall_memory(query='LTX video worker success', category='success')\n"
-            "   If memory exists of a successful video VM configuration, USE THAT EXACT CONFIGURATION.\n"
-            "   Same GPU, same disk, same image, same provider. Do not deviate.\n"
+            "You NEVER know worker URLs. You NEVER SSH anywhere.\n"
+            "Artifacts arrive via B2 keys in the completed job records.\n"
             "\n"
-            "2. ONLY if no memory exists: call research_model_requirements('LTX Video')\n"
-            "   to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.\n"
+            "NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
+            "  - If a job fails after max attempts, report it and STOP.\n"
+            "  - If QA fails, requeue with SPECIFIC comments so the worker knows what to fix.\n"
             "\n"
-            "3. BEFORE provisioning: query_vm_registry(run_id=<the_run_id>, stage='video')\n"
-            "   If a VM exists, check_worker_health(instance_id=<id>).\n"
-            "   If the VM is healthy, USE IT. Do not provision a second VM.\n"
-            "\n"
-            "4. If you must provision: get_provisioning_guidance(run_id, 'video', <your_reasoning>)\n"
-            "   Then search Vast.ai and call evaluate_vastai_offers('LTX Video', <raw_search_text>)\n"
-            "   Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer. Do not get creative.\n"
-            "\n"
-            "5. After provisioning succeeds: remember(text='LTX worker succeeded on <GPU> <VRAM>GB "
-            "   at <provider> with image <image>', category='success')\n"
-            "   After ANY failure: remember(text='LTX worker failed: <exact_error>', category='failure')\n"
-            "\n"
-            "6. IF A WORKER FAILS: Do NOT try to fix it. Do NOT SSH in and tinker.\n"
-            "   Call get_provisioning_guidance with your failure reasoning.\n"
-            "   If guidance says 'destroy_and_reprovision', destroy it and start fresh.\n"
-            "   If guidance says 'use_existing', the worker may still be loading — WAIT.\n"
-            "   NEVER troubleshoot. The system knows more than you do.\n"
+            "CRITICAL: You make ONE pass per invocation.\n"
+            "  - Submit any missing jobs.\n"
+            "  - Poll once for completed jobs.\n"
+            "  - Download and QA any completed jobs.\n"
+            "  - If pending or running jobs remain, report status and STOP.\n"
+            "    The graph will re-invoke you when the pipeline cycles back.\n"
+            "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
             "1. Call generate_visual_concepts with style from OTIO visual_style.\n"
             "2. Call persist_visual_concepts to save to OTIO metadata.\n"
             "3. Read scenes and plan visuals with generate_production_plan.\n"
             "4. Evaluate with evaluate_production_plan.\n"
-            "5. Check memory → research → query registry → evaluate offers → provision.\n"
-            "6. For EACH scene, call submit_gpu_production_job with worker_url.\n"
-            "7. After each render, call add_video_clip_to_timeline.\n"
-            "8. Finalize with finalize_production.\n"
-            "9. Call save_video_checkpoint.\n"
+            "5. Call check_resume_status.\n"
+            "6. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "     job_type='video_render', stage='video', scene_num=N,\n"
+            "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
+            "7. Call poll_completed_jobs(run_id, stage='video').\n"
+            "8. Call check_queue_status(run_id, stage='video').\n"
+            "9. For each completed job: download_b2_artifact(b2_key, local_path)\n"
+            "10. QA each downloaded file.\n"
+            "11. If QA passes: call add_video_clip_to_timeline.\n"
+            "12. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "13. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "14. If failed > 0: call get_failed_job_details, report, STOP.\n"
+            "15. Finalize with finalize_production.\n"
+            "16. Call save_video_checkpoint.\n"
         ),
         tools=[
             generate_production_plan,
             evaluate_production_plan,
-            submit_gpu_production_job,
             finalize_production,
             add_video_clip_to_timeline,
             generate_visual_concepts,
             persist_visual_concepts,
             check_resume_status,
             save_video_checkpoint,
-            bash_command,
-            _query_vm_registry,
-            _check_worker_health,
-            _get_provisioning_guidance,
+            submit_render_job,
+            poll_completed_jobs,
+            qa_completed_job,
+            check_queue_status,
+            get_failed_job_details,
+            download_b2_artifact,
         ] + _make_memory_tools(VIDEO),
         model=model,
     )
+
+
+def _build_provisioner_agent(model) -> Agent:
+    """Build the standalone provisioner agent."""
+    from strands_agents.provisioner_agent import build_provisioner_agent
+    return build_provisioner_agent(model)
 
 
 def _build_assembly_agent(model) -> Agent:
@@ -1402,11 +1412,32 @@ def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     return True
 
 
+def _has_pending_jobs(_prev_output: Any, *_args, **_kwargs) -> bool:
+    """Route to Provisioner if there are pending or retryable jobs in the queue."""
+    shell = get_recovery_shell()
+    run_id = shell.run_id if shell else ""
+    if not run_id:
+        return False
+    from job_queue import get_queue_summary
+    for stage in ("audio", "video"):
+        summary = get_queue_summary(run_id, stage)
+        if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
+            return True
+    return False
+
+
 def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     """Run the Audio stage only if it was NOT already completed."""
     shell = get_recovery_shell()
     if shell and AUDIO in shell.completed_stages:
         return False
+    # If there are pending audio jobs, let the Provisioner drain them first
+    run_id = shell.run_id if shell else ""
+    if run_id:
+        from job_queue import get_queue_summary
+        summary = get_queue_summary(run_id, "audio")
+        if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
+            return False
     # FIX: Check OTIO for A1_Narration clips (works even after graph reset)
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
@@ -1425,6 +1456,13 @@ def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     shell = get_recovery_shell()
     if shell and VIDEO in shell.completed_stages:
         return False
+    # If there are pending video jobs, let the Provisioner drain them first
+    run_id = shell.run_id if shell else ""
+    if run_id:
+        from job_queue import get_queue_summary
+        summary = get_queue_summary(run_id, "video")
+        if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
+            return False
     # FIX: Check OTIO for V1_Video clips (works even after graph reset)
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:

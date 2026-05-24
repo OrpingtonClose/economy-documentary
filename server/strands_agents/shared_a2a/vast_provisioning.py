@@ -142,7 +142,7 @@ def provision_specific_offer(
     onstart_cmd = (
         f"cd /workspace && "
         f"apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
-        f"pip install -q fastapi uvicorn soundfile && "
+        f"pip install -q --break-system-packages fastapi uvicorn soundfile && "
         f"git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git repo && "
         f"nohup python repo/scripts/gpu_worker.py --mode {mode} --port 8880 > /workspace/worker.log 2>&1 & "
         f"echo started"
@@ -156,7 +156,6 @@ def provision_specific_offer(
             "--disk", str(disk_gb),
             "--ssh",
             "--direct",
-            "--env", "-p 8880:8880",
             "--label", label,
             "--onstart-cmd", onstart_cmd,
         ])
@@ -196,12 +195,22 @@ def check_instance_status(instance_id: int) -> str:
     for k, v in ports.items():
         port_bindings.append({"port": k, "binding": v})
 
+    # Build worker URL from direct port mapping for 8880
+    worker_url = None
+    public_ip = result.get("public_ipaddr")
+    port_8880 = ports.get("8880/tcp", [])
+    if public_ip and port_8880:
+        host_port = port_8880[0].get("HostPort")
+        if host_port:
+            worker_url = f"http://{public_ip}:{host_port}/"
+
     return json.dumps({
         "instance_id": instance_id,
         "status": status,
-        "public_ipaddr": result.get("public_ipaddr"),
+        "public_ipaddr": public_ip,
         "ssh_host": result.get("ssh_host"),
         "ssh_port": result.get("ssh_port"),
+        "worker_url": worker_url,
         "port_bindings": port_bindings,
         "gpu_name": result.get("gpu_name"),
     }, indent=2)
@@ -221,57 +230,37 @@ def destroy_instance(instance_id: int) -> str:
 def set_gpu_worker_url(worker_url: str) -> str:
     """Register a VIDEO worker URL with the WorkerProvisioner singleton.
 
-    After provisioning a Vast.ai instance for video generation (LTX),
-    call this with the worker URL.
+    Performs a SINGLE health check and registers immediately.
+    The agent decides whether to call this again or provision a new worker.
     """
-    import time
     from worker_provisioner import get_provisioner, check_worker_health
-    healthy = False
-    for attempt in range(1, 61):
-        healthy = check_worker_health(worker_url, "video")
-        if healthy:
-            break
-        time.sleep(10)
-    if not healthy:
-        return json.dumps({
-            "status": "warning",
-            "role": "video",
-            "worker_url": worker_url,
-            "warning": "Worker health check never passed — registered anyway but may fail",
-        })
+    healthy = check_worker_health(worker_url, "video")
     provisioner = get_provisioner()
     provisioner.register_worker(worker_url, "video")
     return json.dumps({
-        "status": "set",
+        "status": "set" if healthy else "set_unhealthy",
         "role": "video",
         "worker_url": worker_url,
+        "healthy": healthy,
     })
 
 
 @tool
 def set_tts_worker_url(worker_url: str) -> str:
-    """Register a TTS worker URL with the WorkerProvisioner singleton."""
-    import time
+    """Register a TTS worker URL with the WorkerProvisioner singleton.
+
+    Performs a SINGLE health check and registers immediately.
+    The agent decides whether to call this again or provision a new worker.
+    """
     from worker_provisioner import get_provisioner, check_worker_health
-    healthy = False
-    for attempt in range(1, 61):
-        healthy = check_worker_health(worker_url, "tts")
-        if healthy:
-            break
-        time.sleep(10)
-    if not healthy:
-        return json.dumps({
-            "status": "warning",
-            "role": "tts",
-            "worker_url": worker_url,
-            "warning": "Worker health check never passed — registered anyway but may fail",
-        })
+    healthy = check_worker_health(worker_url, "tts")
     provisioner = get_provisioner()
     provisioner.register_worker(worker_url, "tts")
     return json.dumps({
-        "status": "set",
+        "status": "set" if healthy else "set_unhealthy",
         "role": "tts",
         "worker_url": worker_url,
+        "healthy": healthy,
     })
 
 

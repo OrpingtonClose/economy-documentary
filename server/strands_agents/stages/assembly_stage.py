@@ -64,23 +64,14 @@ def assemble_final_cut(
     concatenates all scenes, validates the result, and uploads
     the final output. This is a deterministic leaf tool.
     """
-    try:
-        from tools.assembly_tools import assemble_documentary
-        from tools.otio_file_ops import resolve_timeline_path
-        tp = timeline_path or resolve_timeline_path()
-        pipeline_dir = output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
-        return assemble_documentary(
-            timeline_path=tp,
-            output_dir=os.path.join(pipeline_dir, "output"),
-        )
-    except ImportError:
-        # Try the original assembly tool
-        try:
-            from strands_agents.tools.assembly_tool import assemble_final_cut as _real_assemble
-            return _real_assemble([], [], {}, "", "")  # type: ignore[call-arg]
-        except ImportError:
-            logger.debug("assembly_tool not available, using placeholder")
-            return "[assemble_final_cut] Assembly complete — placeholder"
+    from tools.assembly_tools import assemble_documentary
+    from tools.otio_file_ops import resolve_timeline_path
+    tp = timeline_path or resolve_timeline_path()
+    pipeline_dir = output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    return assemble_documentary(
+        timeline_path=tp,
+        output_dir=os.path.join(pipeline_dir, "output"),
+    )
 
 
 @tool

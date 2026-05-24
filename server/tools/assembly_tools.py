@@ -410,26 +410,93 @@ def assemble_documentary(
 def mux_audio_video(
     *, audio_path: str, video_path: str, output_path: str
 ) -> str:
-    """Mux audio and video streams into a single MP4.
+    """Mux audio and video streams into a single MP4 using ffmpeg.
 
-    TODO: Currently unimplemented — stub so that import paths resolve.
-    The pipeline expects ``json.loads(mux_audio_video(...))`` with keys
-    ``status`` or ``error``.
+    Returns JSON with keys: status, output_path, or error.
     """
-    raise NotImplementedError(
-        "mux_audio_video is not yet implemented. "
-        "Use ffmpeg to combine audio and video streams."
-    )
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "128k",
+        "-shortest",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        logger.error("mux_audio_video failed: %s", exc)
+        return json.dumps({"error": f"Mux failed: {exc}"})
+
+    return json.dumps({"status": "muxed", "output_path": output_path})
 
 
 def normalize_audio_loudness(*, input_path: str, output_path: str) -> str:
-    """Normalize audio loudness to EBU R128 standard.
+    """Normalize audio loudness to EBU R128 standard using ffmpeg loudnorm.
 
-    TODO: Currently unimplemented — stub so that import paths resolve.
-    The pipeline expects ``json.loads(normalize_audio_loudness(...))``
-    with key ``status`` in ("normalized", "copied_without_normalization").
+    Two-pass loudnorm filter. Falls back to copying if analysis fails.
+    Returns JSON with keys: status, output_path, or error.
     """
-    raise NotImplementedError(
-        "normalize_audio_loudness is not yet implemented. "
-        "Use ffmpeg loudnorm or a similar EBU R128 tool."
-    )
+    # First pass: measure
+    measure_cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-af", "loudnorm=print_format=json",
+        "-f", "null", "-",
+    ]
+    try:
+        measure_result = subprocess.run(measure_cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as exc:
+        logger.error("loudnorm measurement failed: %s", exc)
+        return json.dumps({"error": f"Loudnorm measure failed: {exc}"})
+
+    # Parse JSON from stderr
+    stderr = measure_result.stderr
+    json_start = stderr.rfind("{")
+    json_end = stderr.rfind("}") + 1
+    if json_start == -1 or json_end <= json_start:
+        logger.warning("Could not parse loudnorm JSON, copying without normalization")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", input_path, "-c:a", "copy", output_path],
+                check=True, capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            return json.dumps({"error": f"Copy fallback failed: {exc}"})
+        return json.dumps({
+            "status": "copied_without_normalization",
+            "output_path": output_path,
+        })
+
+    try:
+        measured = json.loads(stderr[json_start:json_end])
+    except json.JSONDecodeError as exc:
+        logger.warning("loudnorm JSON parse failed: %s", exc)
+        return json.dumps({"status": "copied_without_normalization", "output_path": output_path})
+
+    # Second pass: apply measured normalization
+    measured_i = measured.get("output_i", "-23.0")
+    measured_tp = measured.get("output_tp", "-2.0")
+    measured_lra = measured.get("output_lra", "7.0")
+    measured_thresh = measured.get("output_thresh", "-30.0")
+    offset = measured.get("target_offset", "0.0")
+
+    apply_cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-af",
+        (
+            f"loudnorm=I=-23:TP=-2.0:LRA=7:"
+            f"measured_I={measured_i}:measured_TP={measured_tp}:"
+            f"measured_LRA={measured_lra}:measured_thresh={measured_thresh}:"
+            f"offset={offset}"
+        ),
+        "-c:a", "aac", "-b:a", "128k",
+        output_path,
+    ]
+    try:
+        subprocess.run(apply_cmd, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        logger.error("loudnorm apply failed: %s", exc)
+        return json.dumps({"error": f"Loudnorm apply failed: {exc}"})
+
+    return json.dumps({"status": "normalized", "output_path": output_path})

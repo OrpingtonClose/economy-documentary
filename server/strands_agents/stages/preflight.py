@@ -364,31 +364,21 @@ def _check_vast_funds() -> CheckResult:
 
 
 def _check_video_worker() -> CheckResult:
-    """GPU worker will be provisioned via Vast.ai during the run."""
-    url = os.environ.get("VIDEO_WORKER_URLS", "")
-    if not url:
-        return CheckResult(
-            name="video_worker", passed=False, soft=True, category="workers",
-            message="No GPU video worker running yet (will be provisioned)",
-            remedy="Provisioning starts when production stage runs",
-        )
-    result = _check_http_reachable(f"{url.rstrip('/')}/", "GPU video worker")
-    result.category = "workers"
-    return result
+    """Video worker will be provisioned on-demand via the SQLite queue."""
+    return CheckResult(
+        name="video_worker", passed=True, soft=False, category="workers",
+        message="Lazy provisioning via job queue — video worker provisioned on demand",
+        remedy="None needed",
+    )
 
 
 def _check_tts_worker() -> CheckResult:
-    """TTS worker will be provisioned via Vast.ai during the run."""
-    url = os.environ.get("TTS_WORKER_URL", "")
-    if not url:
-        return CheckResult(
-            name="tts_worker", passed=False, soft=True, category="workers",
-            message="No TTS worker running yet (will be provisioned)",
-            remedy="Provisioning starts when audio stage runs",
-        )
-    result = _check_http_reachable(f"{url.rstrip('/')}/", "TTS worker")
-    result.category = "workers"
-    return result
+    """TTS worker will be provisioned on-demand via the SQLite queue."""
+    return CheckResult(
+        name="tts_worker", passed=True, soft=False, category="workers",
+        message="Lazy provisioning via job queue — TTS worker provisioned on demand",
+        remedy="None needed",
+    )
 
 
 

@@ -57,7 +57,7 @@ def _search_brave(query: str, count: int = 3) -> str:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         results = data.get("web", {}).get("results", [])
         lines = [f"Brave search: '{query}'"]
@@ -66,6 +66,12 @@ def _search_brave(query: str, count: int = 3) -> str:
             lines.append(r.get("description", "No description"))
         return "\n".join(lines)
     except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer(
+            operation="brave_search",
+            error=str(exc),
+            context={"query": query},
+        )
         return f"Brave search failed: {exc}"
 
 
@@ -85,7 +91,7 @@ def _search_exa(query: str, count: int = 3) -> str:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         results = data.get("results", [])
         lines = [f"Exa search: '{query}'"]
@@ -94,6 +100,12 @@ def _search_exa(query: str, count: int = 3) -> str:
             lines.append(r.get("text", "No text")[:500])
         return "\n".join(lines)
     except Exception as exc:
+        from maintainer import notify_maintainer
+        notify_maintainer(
+            operation="exa_search",
+            error=str(exc),
+            context={"query": query},
+        )
         return f"Exa search failed: {exc}"
 
 

@@ -75,7 +75,7 @@ def _get_bucket():
 
         key_id = os.environ.get("B2_KEY_ID", "")
         app_key = os.environ.get("B2_APPLICATION_KEY", "")
-        bucket_name = os.environ.get("B2_BUCKET_NAME", "cloudberry-documentary-v2")
+        bucket_name = os.environ.get("B2_BUCKET_NAME", "bearnaise-pipeline-artifacts")
 
         if not key_id or not app_key:
             logger.warning("B2_KEY_ID / B2_APPLICATION_KEY not set -- B2 checkpoint disabled")
@@ -140,6 +140,13 @@ def _ensure_public_bucket(api, bucket_name: str):
         # b2sdk v2 signature: create_bucket(name, bucket_type, ...)
         # bucket_type must be "allPublic" or "allPrivate".
         return api.create_bucket(bucket_name, bucket_type=B2_BUCKET_TYPE_PUBLIC)
+
+
+def set_run_id(run_id: str) -> None:
+    """Set the global run ID for all subsequent B2 operations."""
+    global _run_id
+    _run_id = run_id
+    os.environ["B2_RUN_ID"] = run_id
 
 
 def get_run_id() -> str:
@@ -538,3 +545,33 @@ def _read_run_state(run_id: str) -> Optional[dict]:
         from maintainer import notify_maintainer
         notify_maintainer("b2_restore_state", str(exc), {"path": key})
         return None
+
+
+def download_file(b2_key: str, local_path: str) -> bool:
+    """Download a single file from B2 to a local path.
+
+    Args:
+        b2_key: Full B2 object key (e.g. "run_abc123/audio/scene_001.wav").
+        local_path: Where to write the file on local disk.
+
+    Returns:
+        True on success, False on failure (never raises).
+    """
+    bucket = _get_bucket()
+    if bucket is None:
+        return False
+
+    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    try:
+        t0 = time.time()
+        bucket.download_file_by_name(b2_key).save_to(local_path)
+        elapsed = time.time() - t0
+        size = os.path.getsize(local_path)
+        logger.info(
+            "B2 downloaded %s (%.1f MB, %.1fs) -> %s",
+            b2_key, size / 1e6, elapsed, local_path,
+        )
+        return True
+    except Exception as e:
+        logger.error("B2 download failed %s -> %s: %s", b2_key, local_path, e)
+        return False

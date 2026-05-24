@@ -259,12 +259,12 @@ def generate_production_plan(
             "error": "No visual concepts found on state and could not derive from scenes",
         }
 
-    # Read worker configuration
-    worker_urls = _read_state_list(state, "worker_urls")
     existing_clips = _read_state_dict(state, "existing_clips")
-    _read_state_dict(state, "visual_style")
 
-    num_workers = max(1, len(worker_urls)) if worker_urls else 1
+    # With lazy provisioning, workers are provisioned on-demand by the
+    # provisioner agent — there is no pre-known worker pool.  Batch size
+    # is set to a reasonable default (2 parallel queue jobs).
+    num_workers = 2
 
     # Build plan structure
     batches = _build_batches(concepts, num_workers, existing_clips)
@@ -507,26 +507,28 @@ def submit_gpu_production_job(
     scene_num: int,
     phrase_idx: int = 0,
     job_type: str = "video_render",
-    worker_url: str = "",
     output_dir: str = "",
     tool_context: ToolContext | None = None,
 ) -> dict[str, Any]:
     """Submit a GPU production job for a scene.
 
-    Provisions a video worker on Vast.ai if none is available, looks up
-    the visual concept for the scene, and renders a real MP4 clip via
-    LTX-2.3.  If the target clip already exists on disk, returns a reuse
-    JSON instead of submitting a new GPU job.
+    Jobs are ALWAYS enqueued in the SQLite job queue for lazy provisioning.
+    There is NO direct worker dispatch path — the provisioner agent picks up
+    the job and provisions a GPU VM on demand.
+
+    If the target clip already exists on disk, returns a reuse JSON instead
+    of submitting a new GPU job.
 
     Args:
         scene_num: Scene number to render.
         phrase_idx: Phrase index within the scene.
         job_type: GPU job type (default ``video_render``).
+        output_dir: Directory for rendered output.
         tool_context: Framework-injected context.
 
     Returns:
-        Dict with job status. When the clip already exists, the dict
-        contains a ``"reused"`` status and the reuse JSON payload.
+        Dict with job_id and queue status. The agent must poll the queue
+        for completion.
     """
     clip_id = f"s{int(scene_num):03d}_p{int(phrase_idx):03d}"
     state = tool_context.agent.state if tool_context else None
@@ -576,8 +578,6 @@ def submit_gpu_production_job(
         tp = _resolve_timeline_path()
         concepts = read_pipeline_metadata(tp, "visual_concepts", []) or []
 
-    # Derive visual concepts from scenes if none were explicitly set
-    # (same fallback as generate_production_plan)
     if not concepts:
         scenes = _read_scenes()
         for scene in scenes:
@@ -619,29 +619,6 @@ def submit_gpu_production_job(
             lora_weight = float(concept.get("lora_weight", 0.75))
             break
 
-    # Fallback: derive from scenes metadata
-    if not prompt:
-        for scene in _read_scenes():
-            sid = scene.get("scene_num")
-            if sid is None:
-                sid_raw = scene.get("scene_id", "")
-                if isinstance(sid_raw, str) and sid_raw.startswith("S"):
-                    try:
-                        sid = int(sid_raw[1:])
-                    except ValueError:
-                        sid = 0
-                else:
-                    sid = scene.get("num", 0)
-            if sid == scene_num:
-                prompt = (
-                    scene.get("visual_prompt", "")
-                    or scene.get("prompt", "")
-                    or scene.get("visual_notes", "")
-                    or scene.get("description", "")
-                )
-                duration = float(scene.get("duration_sec", scene.get("duration", 5.0)))
-                break
-
     if not prompt:
         return {
             "status": "failed",
@@ -651,53 +628,36 @@ def submit_gpu_production_job(
             "error": f"No visual concept or scene data found for scene {scene_num}",
         }
 
-    # ── Render the clip ─────────────────────────────────────────────────
+    # ── Queue the job ───────────────────────────────────────────────────
     if not output_dir:
-        return {
-            "status": "failed",
-            "clip_id": clip_id,
-            "error": "No output_dir provided. Pass it explicitly.",
-        }
+        output_dir = "/tmp/documentary-pipeline"
     output_path = os.path.join(output_dir, "renders", f"{clip_id}.mp4")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    try:
-        from tools.video_tools import generate_video_clip
-        result_json = generate_video_clip(
-            prompt=prompt,
-            duration_sec=min(duration, 10.0),
-            lora_id=lora_id,
-            lora_weight=lora_weight,
-            output_path=output_path,
-            negative_prompt=negative_prompt,
-            worker_url=worker_url,
-        )
-        result = json.loads(result_json)
-    except Exception as exc:
-        logger.error("Video generation failed for clip <%s>: %s", clip_id, exc)
-        return {
-            "status": "failed",
+    from job_queue import create_job
+    from models.job import JobType
+    job = create_job(
+        job_type=JobType.VIDEO_RENDER,
+        run_id=f"scene_{scene_num}_p{phrase_idx}",
+        stage="video",
+        scene_num=scene_num,
+        payload={
+            "prompt": prompt,
+            "duration_sec": min(duration, 10.0),
+            "lora_id": lora_id,
+            "lora_weight": lora_weight,
+            "negative_prompt": negative_prompt,
+            "output_path": output_path,
             "clip_id": clip_id,
-            "error": f"Video generation failed: {exc}",
-        }
-
-    if result.get("status") != "generated":
-        return {
-            "status": "failed",
-            "clip_id": clip_id,
-            "error": result.get("error", "Video generation failed"),
-        }
-
-    logger.info("Rendered clip <%s> at %s (%.2fs)", clip_id, output_path, result.get("actual_duration", duration))
+        },
+    )
     return {
-        "status": "rendered",
+        "status": "queued",
+        "job_id": job.job_id,
         "clip_id": clip_id,
         "scene_num": scene_num,
         "phrase_idx": phrase_idx,
-        "video_path": result.get("output_path", output_path),
-        "duration": result.get("actual_duration", duration),
-        "job_type": job_type,
-        "message": f"Rendered clip {clip_id}",
+        "prompt": prompt,
     }
 
 

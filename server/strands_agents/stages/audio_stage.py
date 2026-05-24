@@ -19,8 +19,14 @@ You are the Audio Agent for a documentary pipeline.
 
 Your job is to generate narration audio for every scene. First read the
 scenes from the OTIO timeline with read_scenes_from_otio. For each scene,
-for each voice (V1, V2, V3), call generate_scene_narration. Then add
-each clip to the OTIO timeline with add_narration_to_timeline.
+for each voice (V1, V2, V3), call generate_scene_narration.
+
+IMPORTANT: generate_scene_narration may return {"status": "queued", "job_id": ...}
+instead of a WAV path. When this happens, call poll_narration_job(job_id)
+repeatedly until it returns {"status": "completed", "wav_path": ...} or
+{"status": "failed", "error": ...}. Do NOT proceed without the actual WAV.
+
+Then add each clip to the OTIO timeline with add_narration_to_timeline.
 
 After all narration is generated, run WhisperX alignment with
 align_narration_audio for each clip. Then evaluate timing with
@@ -28,12 +34,7 @@ evaluate_audio_timing.
 
 CRITICAL: After all audio processing, call persist_audio_to_otio to
 write alignment data to the OTIO timeline. The visual stage reads
-from OTIO — not from agent state. Creation and persistence are one
-operation: every clip gets written to disk, B2, and OTIO immediately
-with full provenance, even on error.
-
-If timing drift exceeds 15%, the pipeline will loop back to adjust
-scenes. You don't need to handle that — just report the results.
+from OTIO — not from agent state.
 
 IMPORTANT: Call tools for each scene individually. Do not skip any scene
 or voice. The pipeline cannot proceed without complete narration.
@@ -48,9 +49,12 @@ def generate_scene_narration(
     voice: str,
     text: str,
     output_dir: str = "",
-    worker_url: str = "",
 ) -> str:
     """Generate narration WAV for a single scene voice using Qwen3-TTS.
+
+    Jobs are ALWAYS enqueued in the SQLite job queue for lazy provisioning.
+    There is NO direct worker dispatch path — the provisioner agent picks up
+    the job and provisions a GPU VM on demand.
 
     Args:
         scene_num: Scene number (0-based).
@@ -59,92 +63,58 @@ def generate_scene_narration(
         output_dir: Optional output directory override.
 
     Returns:
-        JSON with wav_path, duration, and generation metadata.
+        JSON with job_id and queue status. The agent must poll
+        poll_narration_job(job_id) until status is "completed".
     """
-    # ── Existence check — skip regeneration if WAV already present ────
-    if not output_dir:
-        return json.dumps({
-            "wav_path": "",
-            "duration": 8.0,
-            "scene_num": scene_num,
-            "voice": voice,
-            "error": "No output_dir provided. Pass it explicitly.",
-        })
-    expected_path = os.path.join(
-        output_dir,
-        "audio",
-        f"scene_{scene_num:03d}_{voice}.wav",
+    from job_queue import create_job
+    from models.job import JobType
+
+    job = create_job(
+        job_type=JobType.NARRATION,
+        run_id=f"scene_{scene_num}_{voice}",
+        stage="audio",
+        scene_num=scene_num,
+        payload={"text": text, "voice": voice, "output_dir": output_dir},
     )
-    if os.path.exists(expected_path):
-        logger.info(
-            "scene=%d voice=%s: WAV exists at %s — skipping TTS",
-            scene_num,
-            voice,
-            expected_path,
-        )
-        try:
-            result = subprocess.run(
-                [
-                    "ffprobe",
-                    "-v",
-                    "quiet",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "csv=p=0",
-                    expected_path,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            duration = (
-                float(result.stdout.strip())
-                if result.returncode == 0 and result.stdout.strip()
-                else 8.0
-            )
-        except Exception:
-            duration = 8.0
-        return json.dumps(
-            {
-                "wav_path": expected_path,
-                "duration": duration,
-                "scene_num": scene_num,
-                "voice": voice,
-                "text": text,
-                "note": "reused existing file",
-            }
-        )
+    return json.dumps({
+        "status": "queued",
+        "job_id": job.job_id,
+        "scene_num": scene_num,
+        "voice": voice,
+        "text": text,
+    })
 
-    try:
-        from tools.tts_tools import generate_narration
 
-        class _ToolCtx:
-            def __init__(self):
-                self.state = {
-                    "_output_dir": "/tmp/documentary-pipeline",
-                    "pipeline_phase": "audio",
-                }
+@tool
+def poll_narration_job(job_id: str) -> str:
+    """Poll a queued narration job for completion.
 
-        result_json = generate_narration(
-            scene_num=scene_num,
-            voice_role=voice,
-            text=text,
-            output_dir=output_dir,
-            worker_url=worker_url,
-            tool_context=_ToolCtx(),
-        )
-        return result_json
-    except Exception as exc:
-        logger.error("generate_narration failed scene=%d voice=%s: %s", scene_num, voice, exc)
-        # Return a placeholder so the pipeline can continue
+    Call this when generate_scene_narration returns
+    {'status': 'queued', 'job_id': ...}. Poll repeatedly
+    until status is 'completed' or 'failed'.
+
+    Returns JSON with status, wav_path (if completed), or error.
+    """
+    from job_queue import get_job
+    job = get_job(job_id)
+    if job.status.value == "completed":
         return json.dumps({
-            "wav_path": "",
-            "duration": 8.0,
-            "scene_num": scene_num,
-            "voice": voice,
-            "text": text,
-            "note": f"placeholder: TTS unavailable ({exc})",
+            "status": "completed",
+            "wav_path": job.b2_artifact_key or "",
+            "job_id": job_id,
+        })
+    elif job.status.value == "failed":
+        return json.dumps({
+            "status": "failed",
+            "error": job.qa_comments or "unknown error",
+            "job_id": job_id,
+        })
+    else:
+        return json.dumps({
+            "status": "pending",
+            "job_id": job_id,
+            "attempts": job.attempts,
+            "max_attempts": job.max_attempts,
         })
 
 
@@ -208,32 +178,22 @@ def align_narration_audio(
     Returns:
         JSON with alignment data.
     """
-    try:
-        from tools.whisperx_tools import align_narration
+    from tools.whisperx_tools import align_narration
 
-        class _ToolCtx:
-            def __init__(self):
-                self.state = {
-                    "pipeline_phase": "audio",
-                    "_output_dir": "/tmp/documentary-pipeline",
-                }
+    class _ToolCtx:
+        def __init__(self):
+            self.state = {
+                "pipeline_phase": "audio",
+                "_output_dir": "/tmp/documentary-pipeline",
+            }
 
-        result = align_narration(
-            wav_path=wav_path,
-            text=text,
-            language=language,
-            tool_context=_ToolCtx(),
-        )
-        return result
-    except ImportError:
-        logger.warning("WhisperX tools not available — returning placeholder alignment")
-        return json.dumps({
-            "alignment": "placeholder",
-            "note": "WhisperX not installed",
-        })
-    except Exception as exc:
-        logger.error("WhisperX alignment failed: %s", exc)
-        return json.dumps({"error": str(exc), "note": "alignment failed"})
+    result = align_narration(
+        wav_path=wav_path,
+        text=text,
+        language=language,
+        tool_context=_ToolCtx(),
+    )
+    return result
 
 
 @tool
@@ -387,6 +347,7 @@ def build_audio_agent(
 
     tools = [
         generate_scene_narration,
+        poll_narration_job,
         add_narration_to_timeline,
         align_narration_audio,
         evaluate_audio_timing,

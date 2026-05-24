@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from .plan import FeaturePlan
 from .scene import Scene, VisualStyle, VoiceLine
+from .job import Job, JobResult, JobStatus, JobType, QAResult
 from .tool_result import (
     NarrationResult,
     OTIOClipResult,
@@ -17,8 +18,13 @@ from .vm_state import VMRegistryDecision, VMState, WorkerStatus
 
 __all__ = [
     "FeaturePlan",
+    "Job",
+    "JobResult",
+    "JobStatus",
+    "JobType",
     "NarrationResult",
     "OTIOClipResult",
+    "QAResult",
     "Scene",
     "ToolCallOutcome",
     "VideoRenderResult",
