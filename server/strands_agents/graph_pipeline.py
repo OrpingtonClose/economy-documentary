@@ -783,7 +783,6 @@ def _build_scenario_agent(model) -> Agent:
     """Build the scenario agent — generates scenes and locks visual style."""
     from strands import tool
     from strands_agents.stages.scenario_stage import (
-        generate_scenario,
         evaluate_scenario,
         refine_scenario,
     )
@@ -859,16 +858,46 @@ def _build_scenario_agent(model) -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_scenario_checkpoint and then STOP — do not regenerate scenes.\n"
             f"{constraint_text}"
+            "You are the Scenario Director for an ADHD-friendly documentary pipeline.\n"
+            "Your ONLY job is to produce a SINGLE JSON object containing the full scenario.\n"
+            "\n"
+            "The user's message is the BRIEF — the documentary topic and target duration.\n"
+            "\n"
+            "OUTPUT FORMAT — you MUST return a JSON object with exactly these top-level keys:\n"
+            "  - scenes: array of scene objects (length = ceil(target_duration_sec / 35))\n"
+            "  - visual_style: {style, realism_anchors[], avoid[], palette, camera_language, reference_genre}\n"
+            "  - style_lock: {dominant_style, forbidden_styles[], positive_fragment, negative_fragment}\n"
+            "\n"
+            "Each scene object MUST include:\n"
+            "  - scene_num: 1-based integer, contiguous\n"
+            "  - title: short scene title\n"
+            "  - duration_sec: float seconds (30-45 per scene, max 45, sum within +/-10% of target)\n"
+            "  - narration: spoken script, ~150 words/min. NO rhetorical questions.\n"
+            "  - pronunciation_hints: list of {text, ipa} entries (may be empty)\n"
+            "  - visual_notes: brief imagery description respecting dominant_style\n"
+            "  - dopamine_hook: one short concrete phrase\n"
+            "  - voices: array of exactly 3 voice blocks (V1 Hook, V2 Expert, V3 Storyteller)\n"
+            "Scene 1 MUST include hook_spec: {topic_specific_motif, motion_description, narrative_pull}\n"
+            "The FINAL scene MUST include outro_spec: {closing_shot, recap_sentence, cta, brand_card}\n"
+            "\n"
+            "RULES:\n"
+            "1. Pick ONE dominant_style for the whole documentary.\n"
+            "2. Every visual_notes must respect it.\n"
+            "3. No rhetorical questions anywhere in narration.\n"
+            "4. Return STRICT JSON only. No markdown fences. No prose outside the object.\n"
+            "\n"
             "WORKFLOW:\n"
-            "1. Call generate_scenario(corpus_path='', topic=<from brief>, target_duration_sec=<from brief>, language='en')\n"
-            "   to generate scenes, visual_style, and style_lock. The tool writes directly to OTIO.\n"
-            "2. Call evaluate_scenario with the JSON result to check ADHD compliance.\n"
-            "3. If the evaluator returns FAIR or POOR, call refine_scenario with the feedback.\n"
-            "4. Call save_scenario_checkpoint to preserve the narrative planning.\n"
+            "1. Produce the JSON object in your response.\n"
+            "2. Call write_scenes with the 'scenes' array.\n"
+            "3. Call write_visual_style with the 'visual_style' object.\n"
+            "   write_visual_style also sets style_lock automatically.\n"
+            "4. Call evaluate_scenario with the full JSON to check ADHD compliance.\n"
+            "5. If the evaluator returns FAIR or POOR, call refine_scenario with the feedback.\n"
+            "   Then re-write with write_scenes + write_visual_style.\n"
+            "6. Call save_scenario_checkpoint to preserve the narrative planning.\n"
             "You are stateless — all output goes to the OTIO file.\n"
-            "NEVER call write_scenes or write_visual_style directly — generate_scenario handles persistence."
         ),
-        tools=[generate_scenario, evaluate_scenario, refine_scenario, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
+        tools=[evaluate_scenario, refine_scenario, write_scenes, write_visual_style, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
         model=model,
     )
 

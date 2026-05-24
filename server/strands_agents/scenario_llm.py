@@ -91,7 +91,6 @@ def _parse_completion(resp: Any) -> dict[str, Any]:
 
 
 def make_generator(
-    *,
     model_id: str,
     extra: dict[str, Any] | None = None,
 ) -> Callable[[str, int, str, str], dict[str, Any]]:

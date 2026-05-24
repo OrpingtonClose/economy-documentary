@@ -95,87 +95,33 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
                       language: str = "en", max_scene_duration: int = 45) -> str:
     """Generate a documentary scenario from a research corpus.
 
-    Reads the corpus, creates a visual style, style lock, and scene array.
-    Writes ALL output to the OTIO timeline immediately — scenes, visual
-    style, and style lock — with full provenance. Even on error, the
-    partial output and error are persisted. The QA/escalation system
-    handles bad output; the pipeline never discards it.
+    This is a PURE LLM call — it returns JSON only. It does NOT write
+    to OTIO. The scenario agent must call write_scenes and
+    write_visual_style separately to persist to OTIO.
 
     Args:
-        corpus_path: Path to the research corpus file.
+        corpus_path: Path to the research corpus file (ignored if empty).
         topic: The documentary topic.
         target_duration_sec: Target total duration in seconds.
         language: Language mode (en, ru, dual_ru_en).
         max_scene_duration: Maximum seconds per scene.
     """
     import time as _time
-    from strands_agents.artifact_provenance import ArtifactProvenance
 
     started = _time.time()
-    result = {}
-    status = "valid"
-    error = ""
 
     # Call the real LLM-backed generator
     from strands_agents.scenario_llm import make_generator
-    import litellm
     model_id = os.environ.get("STRANDS_MODEL", "")
     if not model_id:
         raise RuntimeError("STRANDS_MODEL not set — cannot generate scenarios without an LLM")
-    generator = make_generator(model_id=model_id)
+    generator = make_generator(model_id=model_id)  # type: ignore
     result = generator(
         topic=topic,
         num_scenes=max(1, target_duration_sec // 35),
         style="documentary",
         language=language,
     )
-
-    # Build provenance
-    prov = ArtifactProvenance(
-        artifact_type="scene_plan",
-        creator_agent="scenario",
-        creator_tool="generate_scenario",
-        created_at=started,
-        prompt=f"corpus={corpus_path} topic={topic} duration={target_duration_sec} lang={language}",
-        parent_artifacts=[corpus_path] if corpus_path else [],
-        upstream_stage="",
-        status=status,
-        error=error,
-        content_meta={
-            "scene_count": len(result.get("scenes", [])),
-            "total_duration_sec": target_duration_sec,
-            "language": language,
-        },
-    )
-    prov.environment = _capture_environment()
-    prov.tool_calls = [{
-        "tool": "generate_scenario",
-        "args": {"corpus_path": corpus_path, "topic": topic, "target_duration_sec": target_duration_sec},
-        "duration_ms": int((_time.time() - started) * 1000),
-    }]
-
-    # Persist to OTIO — creation and persistence are atomic
-    if _otio_manager is not None:
-        prov_dict = prov.to_dict()
-        try:
-            _otio_manager.set_pipeline_metadata("scenes", result.get("scenes", []), provenance=prov_dict)
-            _otio_manager.set_pipeline_metadata("visual_style", result.get("visual_style", {}), provenance=prov_dict)
-            _otio_manager.set_pipeline_metadata("style_lock", result.get("style_lock", {}), provenance=prov_dict)
-        except Exception as exc:
-            logger.error("Failed to persist scenario to OTIO: %s", exc)
-            prov.status = "error"
-            prov.error = str(exc)
-            try:
-                _otio_manager.set_pipeline_metadata("scenario_error", str(exc), provenance=prov_dict)
-            except Exception:
-                pass
-
-        # Upload to B2 immediately
-        try:
-            from tools.b2_checkpoint import upload_scenario
-            upload_scenario(json.dumps(result.get("scenes", [])), json.dumps(result.get("visual_style", {})))
-        except Exception as b2_err:
-            logger.warning("B2 upload failed for scenario: %s", b2_err)
 
     return json.dumps(result)
 
