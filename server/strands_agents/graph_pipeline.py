@@ -30,42 +30,55 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _make_memory_tools(agent_name: str) -> list:
-    """Create remember + recall_memory tools scoped to a specific agent."""
+    """Create remember + recall_memory tools scoped to a specific agent.
+
+    MEMORY POISONING DEFENSE:
+    - NEVER remember failures. Only remember successes and facts.
+    - Failed runs produce stale, misleading memories that poison future runs.
+    - If you need to clear old memories, call forget_all.
+    """
     from strands import tool
 
     @tool
     def remember(text: str, category: str = "fact") -> str:
-        """Write a durable memory that survives across pipeline runs.
+        """Write a durable memory — ONLY successes and facts. NEVER failures.
 
-        Use this when you learn something that future runs should know:
-        - GPU offers that failed (and why)
-        - Disk size requirements, boot times
-        - Tool bugs or workarounds
-        - What configurations actually worked
-        category: 'failure', 'success', or 'fact'
+        category MUST be 'success' or 'fact'. 'failure' is rejected.
+        Examples:
+        - success: "GPU offer 123 worked with 24GB VRAM"
+        - fact: "Disk needs 150GB for LTX-2.3"
+        - failure: REJECTED — failures poison future runs
         """
+        if category == "failure":
+            return json.dumps({"remembered": False, "reason": "FAILURES ARE NOT REMEMBERED. They poison future runs. Only success and fact categories allowed."})
         from agent_memory import remember as _remember
         return _remember(agent_name, text, category)
 
-    # Rename to avoid collision when multiple agents exist
     remember.__name__ = f"remember_{agent_name}"
 
     @tool
     def recall_memory(query: str = "", category: str = "", limit: int = 20) -> str:
-        """Recall memories from previous pipeline runs.
-
-        Searches your persistent memory by keyword match.
-        Use this at the start of your work to check what you've learned before.
-        query: search term (case-insensitive). Empty = return all.
-        category: 'failure', 'success', 'fact'. Empty = all.
-        limit: max results.
-        """
+        """Recall memories from previous pipeline runs."""
         from agent_memory import recall_memory as _recall
         return _recall(agent_name, query, category, limit)
 
     recall_memory.__name__ = f"recall_memory_{agent_name}"
 
-    return [remember, recall_memory]
+    @tool
+    def forget_all() -> str:
+        """Clear ALL memories for this agent. Use at start of every run."""
+        import shutil
+        from pathlib import Path
+        d = Path(__file__).parent.parent / "agent_memory" / agent_name
+        if d.exists():
+            for f in d.glob("*"):
+                if f.is_file():
+                    f.unlink()
+        return json.dumps({"forgotten": True, "agent": agent_name})
+
+    forget_all.__name__ = f"forget_all_{agent_name}"
+
+    return [remember, recall_memory, forget_all]
 
 
 # ---------------------------------------------------------------------------
@@ -595,18 +608,64 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
 
     @tool
     def ingest_scenario(text: str) -> str:
-        """Store scenario text in OTIO metadata. No parsing — raw text only."""
+        """Parse raw scenario text via instructor and store structured data to OTIO."""
         if not text.strip():
             return json.dumps({"error": "Empty scenario text received."})
 
+        try:
+            from structured_extract import extract
+            from pydantic import BaseModel, Field
+            from typing import List
+
+            class Scene(BaseModel):
+                title: str = Field(description="Scene title")
+                duration_sec: int = Field(description="Duration in seconds")
+                narration_v1_hook: str = Field(default="", description="V1 Hook narration")
+                narration_v2_expert: str = Field(default="", description="V2 Expert narration")
+                narration_v3_storyteller: str = Field(default="", description="V3 Storyteller narration")
+                visual_notes: str = Field(default="", description="Visual description")
+                dopamine_hook: str = Field(default="", description="Dopamine hook phrase")
+                pronunciation_hints: str = Field(default="", description="Pronunciation hints")
+
+            class VisualStyle(BaseModel):
+                style: str = Field(default="", description="Dominant visual style")
+                realism_anchors: List[str] = Field(default_factory=list)
+                avoid: List[str] = Field(default_factory=list)
+                palette: str = Field(default="")
+                camera_language: str = Field(default="")
+                reference_genre: str = Field(default="")
+
+            class StyleLock(BaseModel):
+                dominant_style: str = Field(default="")
+                forbidden_styles: List[str] = Field(default_factory=list)
+                positive_fragment: str = Field(default="")
+                negative_fragment: str = Field(default="")
+
+            class ScenarioDoc(BaseModel):
+                scenes: List[Scene] = Field(description="List of scenes")
+                visual_style: VisualStyle = Field(default_factory=VisualStyle)
+                style_lock: StyleLock = Field(default_factory=StyleLock)
+
+            doc = extract(
+                ScenarioDoc,
+                text,
+                system_prompt="Parse the documentary scenario text into structured data. Extract all scenes with their narration scripts, visual notes, and timing.",
+            )
+        except Exception as exc:
+            return json.dumps({"error": f"Instructor parsing failed: {exc}"})
+
+        # Write to OTIO
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        # Store raw text — downstream agents parse what they need
         write_pipeline_metadata(tp, "scenario_raw", text, provenance={"agent": "otio_gate"})
+        write_pipeline_metadata(tp, MetadataSchema.SCENES, [s.model_dump() for s in doc.scenes], provenance={"agent": "otio_gate"})
+        write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, doc.visual_style.model_dump(), provenance={"agent": "otio_gate"})
+        write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, doc.style_lock.model_dump(), provenance={"agent": "otio_gate"})
 
         return json.dumps({
             "ingested": True,
+            "scene_count": len(doc.scenes),
             "raw_length": len(text),
         })
 
@@ -1092,7 +1151,8 @@ def _build_audio_agent(model) -> Agent:
         name=AUDIO,
         system_prompt=(
             "You are the Audio Agent. You own narration end-to-end.\n"
-            "BEFORE doing any work, call check_resume_status.\n"
+            "BEFORE doing any work, call forget_all to clear stale memories.\n"
+            "Then call check_resume_status.\n"
             "  - 'already_completed' → call save_audio_checkpoint and STOP.\n"
             "  - 'in_progress' → poll completed jobs, download, QA, and proceed.\n"
             "  - 'not_completed' → submit jobs for all scenes, then poll and proceed.\n"
@@ -1323,7 +1383,8 @@ def _build_video_agent(model) -> Agent:
         name=VIDEO,
         system_prompt=(
             "You are the Video Agent. You own visual planning and rendering end-to-end.\n"
-            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "BEFORE doing any work, call forget_all to clear stale memories.\n"
+            "Then call check_resume_status. If it returns 'already_completed', "
             "call save_video_checkpoint and then STOP — do not render clips.\n"
             "\n"
             "JOB QUEUE PROTOCOL — YOU DO NOT PROVISION VMs. YOU DO NOT TROUBLESHOOT.\n"
@@ -1453,7 +1514,8 @@ def _build_assembly_agent(model) -> Agent:
         name=ASSEMBLY,
         system_prompt=(
             "You are the Assembly Agent. You produce the final deliverable.\n"
-            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
+            "BEFORE doing any work, call forget_all to clear stale memories.\n"
+            "Then call check_resume_status. If it returns 'already_completed', "
             "call save_assembly_checkpoint and then STOP — do not re-assemble.\n"
             "1. Read the OTIO timeline with read_timeline.\n"
             "2. Validate with validate_assembly.\n"
@@ -1547,14 +1609,15 @@ def _needs_assembly_retry(state: GraphState) -> bool:
 # ---------------------------------------------------------------------------
 
 def _scenario_not_completed(state: GraphState) -> bool:
-    """Run Scenario only if scenes don't exist in OTIO."""
+    """Run Scenario only if raw scenario text doesn't exist in OTIO."""
     if _gate_recovery_target(state):
         return False
     from tools.otio_file_ops import resolve_timeline_path
-    from tools.otio_metadata import metadata_key_exists
+    from tools.otio_metadata import read_pipeline_metadata
     try:
         tp = resolve_timeline_path()
-        if metadata_key_exists(tp, MetadataSchema.SCENES):
+        text = read_pipeline_metadata(tp, "scenario_raw")
+        if text and "SCENES:" in text:
             return False
     except Exception as exc:
         logger.warning("scenario routing check failed: %s", exc)
