@@ -154,6 +154,22 @@ def check_worker_health(instance_id: str, worker_url: str = "") -> str:
 
 
 @tool
+def get_artifact_path(stage: str, scene_num: int) -> str:
+    """Return the local file path where an artifact should be saved.
+
+    Use this BEFORE dispatching a job so the output_path is deterministic.
+    Audio artifacts: {PIPELINE_DIR}/artifacts/scene_{scene_num:03d}.wav
+    Video artifacts: {PIPELINE_DIR}/artifacts/scene_{scene_num:03d}.mp4
+    """
+    import os
+    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    artifact_dir = os.path.join(pipeline_dir, "artifacts")
+    os.makedirs(artifact_dir, exist_ok=True)
+    suffix = "wav" if stage == "audio" else "mp4"
+    return os.path.join(artifact_dir, f"scene_{scene_num:03d}.{suffix}")
+
+
+@tool
 def get_provisioning_guidance(stage: str, agent_reasoning: str) -> str:
     """Get system-corrected guidance for VM provisioning."""
     from vm_registry_tools import get_provisioning_guidance as _guide
@@ -379,9 +395,10 @@ WORKFLOW:
 2. For each claimed job:
    a. Call set_job_running(job_id, worker_id=instance_id).
    b. Ensure a healthy worker exists for the job's stage.
-   c. Dispatch the job to the worker via dispatch_tts_job(text, output_path, instance_id=instance_id)
+   c. Call get_artifact_path(stage, scene_num) to get the deterministic output path.
+   d. Dispatch the job to the worker via dispatch_tts_job(text, output_path, instance_id=instance_id)
       or dispatch_video_job(prompt, output_path, instance_id=instance_id).
-   d. Call set_job_completed(job_id, output_path) with the local file path.
+   e. Call set_job_completed(job_id, output_path) with the local file path.
 3. If dispatch fails, call set_job_failed(job_id, error_message).
 4. After all claimed jobs are processed, call check_queue_status(stage)
    for both stages.
@@ -420,6 +437,7 @@ def build_provisioner_agent(model) -> Any:
             dispatch_video_job,
             record_vm,
             update_vm_worker_url,
+            get_artifact_path,
         ] + _make_memory_tools(PROVISIONER),
         model=model,
     )
