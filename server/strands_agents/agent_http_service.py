@@ -36,18 +36,16 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
 
     @app.get("/")
     def _inspect() -> Response:
-        """Inspect agent without interrupting."""
+        """Inspect agent without interrupting. Returns free-flowing text."""
         uptime = __import__("time").time() - _uptime_start
-        parts = [
-            f"agent={name}",
-            f"uptime_s={round(uptime, 1)}",
-        ]
+        lines = [f"I am the {name} agent."]
         if _last_task:
-            parts.append(f"last_task={_last_task[:80]!r}")
+            lines.append(f"My last task was: {_last_task[:200]}")
         if _last_result:
-            parts.append(f"last_result={_last_result[:80]!r}")
+            lines.append(f"My last result was: {_last_result[:200]}")
+        lines.append(f"I have been running for {round(uptime, 1)} seconds.")
         return Response(
-            content=" ".join(parts),
+            content="\n".join(lines),
             media_type="text/plain",
         )
 
