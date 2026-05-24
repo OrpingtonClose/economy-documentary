@@ -8,12 +8,12 @@ from typing import Any
 
 from strands import Agent
 from strands.hooks import HookProvider
+from strands.multiagent.base import Status
 from strands.multiagent.graph import (
     Graph,
     GraphEdge,
     GraphNode,
     GraphState,
-    Status,
 )
 
 logger = logging.getLogger(__name__)
@@ -364,7 +364,6 @@ def build_documentary_graph(
     max_node_executions: int = 50,
     model: Any | None = None,
     run_id: str = "",
-    use_http: bool = False,
     agent_urls: dict[str, str] | None = None,
 ) -> tuple[Graph, RecoveryShell]:
     """Construct the documentary pipeline Graph.
@@ -425,37 +424,29 @@ def build_documentary_graph(
     except Exception as exc:
         logger.warning("Failed to inject OTIOStateManager into stage modules: %s", exc)
 
-    # Resolve agent executors — either local Agent objects or HTTP client proxies
-    if use_http:
-        from strands_agents.agent_http_client import AgentHTTPClient
+    # All agents are remote HTTP services. The Graph communicates with them
+    # via AgentHTTPClient proxies. Each agent runs in its own process.
+    from strands_agents.agent_http_client import AgentHTTPClient
 
-        urls = agent_urls or {}
-        scenario_agent = AgentHTTPClient(
-            urls.get(SCENARIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[SCENARIO]}"), SCENARIO
-        )
-        audio_agent = AgentHTTPClient(
-            urls.get(AUDIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[AUDIO]}"), AUDIO
-        )
-        video_agent = AgentHTTPClient(
-            urls.get(VIDEO, f"http://localhost:{_DEFAULT_AGENT_PORTS[VIDEO]}"), VIDEO
-        )
-        otio_gate_agent = AgentHTTPClient(
-            urls.get(OTIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[OTIO]}"), OTIO
-        )
-        assembly_agent = AgentHTTPClient(
-            urls.get(ASSEMBLY, f"http://localhost:{_DEFAULT_AGENT_PORTS[ASSEMBLY]}"), ASSEMBLY
-        )
-        provisioner_agent = AgentHTTPClient(
-            urls.get(PROVISIONER, f"http://localhost:{_DEFAULT_AGENT_PORTS[PROVISIONER]}"), PROVISIONER
-        )
-    else:
-        # Build stage agents as Strands Agents with stateless OTIO tools
-        scenario_agent = _build_scenario_agent(model)
-        audio_agent = _build_audio_agent(model)
-        video_agent = _build_video_agent(model)
-        otio_gate_agent = _build_otio_gate_agent(model)
-        assembly_agent = _build_assembly_agent(model)
-        provisioner_agent = _build_provisioner_agent(model)
+    urls = agent_urls or {}
+    scenario_agent = AgentHTTPClient(
+        urls.get(SCENARIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[SCENARIO]}"), SCENARIO
+    )
+    audio_agent = AgentHTTPClient(
+        urls.get(AUDIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[AUDIO]}"), AUDIO
+    )
+    video_agent = AgentHTTPClient(
+        urls.get(VIDEO, f"http://localhost:{_DEFAULT_AGENT_PORTS[VIDEO]}"), VIDEO
+    )
+    otio_gate_agent = AgentHTTPClient(
+        urls.get(OTIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[OTIO]}"), OTIO
+    )
+    assembly_agent = AgentHTTPClient(
+        urls.get(ASSEMBLY, f"http://localhost:{_DEFAULT_AGENT_PORTS[ASSEMBLY]}"), ASSEMBLY
+    )
+    provisioner_agent = AgentHTTPClient(
+        urls.get(PROVISIONER, f"http://localhost:{_DEFAULT_AGENT_PORTS[PROVISIONER]}"), PROVISIONER
+    )
 
     # Build nodes
     nodes = {
