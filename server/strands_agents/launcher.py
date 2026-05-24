@@ -45,7 +45,11 @@ _DEFAULT_PORTS: dict[str, int] = {
 
 
 def _build_agent(node_id: str, model: Any | None) -> Any:
-    """Build a strands.Agent for the given node."""
+    """Build a strands.Agent for the given node.
+
+    Each child process builds its own model instance to avoid
+    pickling AsyncOpenAI clients across process boundaries.
+    """
     from strands_agents.graph_pipeline import (
         _build_scenario_agent,
         _build_audio_agent,
@@ -72,11 +76,23 @@ def _build_agent(node_id: str, model: Any | None) -> Any:
 def _run_service(
     node_id: str,
     port: int,
-    model: Any | None,
+    model_id: str,
+    api_key: str,
+    base_url: str | None,
     pipeline_dir: str,
     agent_registry: dict[str, str],
 ) -> None:
-    """Worker process: build agent, inject shared state, wrap in FastAPI, serve."""
+    """Worker process: build agent, inject shared state, wrap in FastAPI, serve.
+
+    Each child process builds its own model instance from credential strings.
+    AsyncOpenAI clients cannot be pickled across process boundaries.
+    """
+    # Build model locally in child process
+    model = None
+    if api_key:
+        from strands_agents.run_strands import _get_model
+        model = _get_model(model_id or "deepseek-chat", api_key, base_url)
+
     # Inject shared OTIO manager into stage modules so tools can read/write pipeline metadata
     try:
         from strands_agents.otio_manager import OTIOStateManager
@@ -116,12 +132,6 @@ def main() -> None:
     parser.add_argument("--base-url", default="", help="Base URL for model")
     args = parser.parse_args()
 
-    # Build model if credentials provided
-    model = None
-    if args.api_key:
-        from strands_agents.run_strands import _get_model
-        model = _get_model(args.model_id or "deepseek-chat", args.api_key, args.base_url or None)
-
     pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
     processes: list[multiprocessing.Process] = []
 
@@ -148,7 +158,7 @@ def main() -> None:
         port = getattr(args, f"{node_id}_port")
         p = multiprocessing.Process(
             target=_run_service,
-            args=(node_id, port, model, pipeline_dir, agent_registry),
+            args=(node_id, port, args.model_id, args.api_key, args.base_url, pipeline_dir, agent_registry),
             name=f"agent-{node_id}",
         )
         p.start()
