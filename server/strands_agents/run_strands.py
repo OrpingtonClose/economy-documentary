@@ -159,6 +159,31 @@ def _release_pipeline_lock(lock_file: str) -> None:
         pass
 
 
+def _destroy_all_vms() -> None:
+    """Destroy all VMs recorded in the VM registry."""
+    import subprocess
+    from vm_registry import list_vms
+
+    vms = list_vms()
+    if not vms:
+        return
+    destroyed = 0
+    for vm in vms:
+        if vm.instance_id:
+            try:
+                subprocess.run(
+                    ["vastai", "destroy", "instance", vm.instance_id],
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+                destroyed += 1
+            except Exception:
+                pass
+    if destroyed:
+        print(f"  [CLEANUP] Destroyed {destroyed} VM(s).")
+
+
 async def run_documentary(
     brief: str,
     *,
@@ -279,12 +304,9 @@ async def run_documentary(
 
         # CRITICAL: Destroy VMs to stop credit burn
         try:
-            from worker_provisioner import get_provisioner
-            _provisioner = get_provisioner()
-            if _provisioner:
-                print("\n  [CLEANUP] Destroying VMs...")
-                _provisioner.cleanup(destroy_vms=True)
-                print("  [CLEANUP] VMs destroyed.")
+            print("\n  [CLEANUP] Destroying VMs...")
+            _destroy_all_vms()
+            print("  [CLEANUP] VMs destroyed.")
         except Exception as exc:
             logger.warning("VM cleanup failed (non-blocking): %s", exc)
 
@@ -315,10 +337,7 @@ def main():
     def _sigint_handler(signum, frame):
         print("\n\n[INTERRUPT] Ctrl+C received — destroying VMs...")
         try:
-            from worker_provisioner import get_provisioner
-            prov = get_provisioner()
-            if prov:
-                prov.cleanup(destroy_vms=True)
+            _destroy_all_vms()
         except Exception as exc:
             print(f"[INTERRUPT] VM cleanup error: {exc}")
         # Release lock if held

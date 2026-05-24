@@ -948,7 +948,6 @@ def _build_audio_agent(model) -> Agent:
         qa_completed_job,
         check_queue_status,
         get_failed_job_details,
-        download_b2_artifact,
     )
 
     return Agent(
@@ -969,7 +968,8 @@ def _build_audio_agent(model) -> Agent:
             "  4. qa_completed_job — approve or reject with specific comments\n"
             "\n"
             "You NEVER know worker URLs. You NEVER SSH anywhere.\n"
-            "The provisioner executes jobs and puts results in the pipeline directory.\n"
+            "The provisioner executes jobs and saves results locally.\n"
+            "The local file path is in the completed job's b2_artifact_key field.\n"
             "\n"
             "NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
             "  - If a job fails after max attempts, report it and STOP.\n"
@@ -978,7 +978,7 @@ def _build_audio_agent(model) -> Agent:
             "CRITICAL: You make ONE pass per invocation.\n"
             "  - Submit any missing jobs.\n"
             "  - Poll once for completed jobs.\n"
-            "  - QA any completed jobs.\n"
+            "  - QA any completed jobs (read the local file from b2_artifact_key).\n"
             "  - If pending or running jobs remain, report status and STOP.\n"
             "    The graph will re-invoke you when the pipeline cycles back.\n"
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
@@ -991,15 +991,16 @@ def _build_audio_agent(model) -> Agent:
             "     payload='{\"text\":\"...\",\"voice_id\":\"...\"}'\n"
             "4. Call poll_completed_jobs(stage='audio').\n"
             "5. Call check_queue_status(stage='audio').\n"
-            "6. QA each completed job.\n"
-            "7. If QA passes: add narration clips with add_narration_to_timeline.\n"
-            "8. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "9. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "10. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
-            "11. Run WhisperX alignment with align_narration_audio.\n"
-            "12. Evaluate timing with evaluate_audio_timing.\n"
-            "13. Persist state with persist_audio_to_otio.\n"
-            "14. Call save_audio_checkpoint.\n"
+            "6. For each completed job, read the local file from b2_artifact_key.\n"
+            "7. QA each file.\n"
+            "8. If QA passes: add narration clips with add_narration_to_timeline.\n"
+            "9. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "10. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "11. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
+            "12. Run WhisperX alignment with align_narration_audio.\n"
+            "13. Evaluate timing with evaluate_audio_timing.\n"
+            "14. Persist state with persist_audio_to_otio.\n"
+            "15. Call save_audio_checkpoint.\n"
         ),
         tools=[
             add_narration_to_timeline,
@@ -1014,7 +1015,6 @@ def _build_audio_agent(model) -> Agent:
             qa_completed_job,
             check_queue_status,
             get_failed_job_details,
-            download_b2_artifact,
         ] + _make_memory_tools(AUDIO),
         model=model,
     )
@@ -1200,7 +1200,6 @@ def _build_video_agent(model) -> Agent:
         qa_completed_job,
         check_queue_status,
         get_failed_job_details,
-        download_b2_artifact,
     )
 
     return Agent(
@@ -1214,12 +1213,13 @@ def _build_video_agent(model) -> Agent:
             "\n"
             "Your only interaction with compute is via the job queue:\n"
             "  1. submit_render_job — create a job for the provisioner to pick up\n"
-            "  2. poll_completed_jobs — check which jobs are done (artifact in B2)\n"
+            "  2. poll_completed_jobs — check which jobs are done\n"
             "  3. qa_completed_job — approve or reject with specific comments\n"
             "  4. check_queue_status — see how many jobs are pending/running/completed/failed\n"
             "\n"
             "You NEVER know worker URLs. You NEVER SSH anywhere.\n"
-            "Artifacts arrive via B2 keys in the completed job records.\n"
+            "The provisioner executes jobs and saves results locally.\n"
+            "The local file path is in the completed job's b2_artifact_key field.\n"
             "\n"
             "NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
             "  - If a job fails after max attempts, report it and STOP.\n"
@@ -1228,7 +1228,7 @@ def _build_video_agent(model) -> Agent:
             "CRITICAL: You make ONE pass per invocation.\n"
             "  - Submit any missing jobs.\n"
             "  - Poll once for completed jobs.\n"
-            "  - Download and QA any completed jobs.\n"
+            "  - QA any completed jobs (read the local file from b2_artifact_key).\n"
             "  - If pending or running jobs remain, report status and STOP.\n"
             "    The graph will re-invoke you when the pipeline cycles back.\n"
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
@@ -1244,13 +1244,14 @@ def _build_video_agent(model) -> Agent:
             "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
             "7. Call poll_completed_jobs(stage='video').\n"
             "8. Call check_queue_status(stage='video').\n"
-            "9. QA each completed job.\n"
-            "10. If QA passes: call add_video_clip_to_timeline.\n"
-            "11. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "12. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "13. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
-            "14. Finalize with finalize_production.\n"
-            "15. Call save_video_checkpoint.\n"
+            "9. For each completed job, read the local file from b2_artifact_key.\n"
+            "10. QA each file.\n"
+            "11. If QA passes: call add_video_clip_to_timeline.\n"
+            "12. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "13. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "14. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
+            "15. Finalize with finalize_production.\n"
+            "16. Call save_video_checkpoint.\n"
         ),
         tools=[
             generate_production_plan,
@@ -1266,7 +1267,6 @@ def _build_video_agent(model) -> Agent:
             qa_completed_job,
             check_queue_status,
             get_failed_job_details,
-            download_b2_artifact,
         ] + _make_memory_tools(VIDEO),
         model=model,
     )

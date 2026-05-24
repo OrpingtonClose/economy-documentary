@@ -57,10 +57,10 @@ def set_job_running(job_id: str, worker_id: str) -> str:
 
 
 @tool
-def set_job_completed(job_id: str, b2_artifact_key: str) -> str:
-    """Mark a job as completed after the worker uploads the artifact to B2."""
-    mark_job_completed(job_id, b2_artifact_key)
-    return f"Job {job_id} completed. Artifact at B2 key: {b2_artifact_key}"
+def set_job_completed(job_id: str, artifact_path: str) -> str:
+    """Mark a job as completed. artifact_path is the local file path."""
+    mark_job_completed(job_id, artifact_path)
+    return f"Job {job_id} completed. Artifact at: {artifact_path}"
 
 
 @tool

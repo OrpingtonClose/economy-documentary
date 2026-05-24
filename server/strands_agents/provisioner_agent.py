@@ -108,11 +108,11 @@ def set_job_running(job_id: str, worker_id: str) -> str:
 
 
 @tool
-def set_job_completed(job_id: str, b2_artifact_key: str) -> str:
-    """Mark a job as completed after the worker uploads the artifact to B2."""
+def set_job_completed(job_id: str, artifact_path: str) -> str:
+    """Mark a job as completed. artifact_path is the local file path."""
     from tools.provisioner_tools import set_job_completed as _completed
 
-    return _completed(job_id, b2_artifact_key)
+    return _completed(job_id, artifact_path)
 
 
 @tool
@@ -317,7 +317,7 @@ def _make_memory_tools(agent_name: str) -> list:
 _PROVISIONER_INSTRUCTION = """\
 You are the Provisioner Agent. You are the ONLY entity that provisions GPU VMs and executes jobs.
 
-Your job: read the job queue, claim jobs, ensure healthy workers exist, dispatch jobs, upload artifacts to B2, and mark jobs complete.
+Your job: read the job queue, claim jobs, ensure healthy workers exist, dispatch jobs, and mark jobs complete.
 
 NEVER TROUBLESHOOT. ONLY CERTAINTY.
 
@@ -360,8 +360,7 @@ WORKFLOW:
    a. Call set_job_running(job_id, worker_id).
    b. Ensure a healthy worker exists for the job's stage.
    c. Dispatch the job to the worker via dispatch_tts_job or dispatch_video_job.
-   d. Upload the result to B2 via upload_artifact.
-   e. Call set_job_completed(job_id, b2_key).
+   d. Call set_job_completed(job_id, output_path) with the local file path.
 3. If dispatch fails, call set_job_failed(job_id, error_message).
 4. After all claimed jobs are processed, call check_queue_status(stage)
    for both stages.
@@ -398,7 +397,6 @@ def build_provisioner_agent(model) -> Any:
             get_provisioning_guidance,
             dispatch_tts_job,
             dispatch_video_job,
-            upload_artifact,
         ] + _make_memory_tools(PROVISIONER),
         model=model,
     )
