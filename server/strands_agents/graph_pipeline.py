@@ -20,41 +20,6 @@ from strands.multiagent.graph import (
 from search_tools import search_brave, search_perplexity, search_exa
 _SEARCH_TOOLS = [search_brave, search_perplexity, search_exa]
 
-# ---------------------------------------------------------------------------
-# Instructor-based parsing for downstream agents
-# ---------------------------------------------------------------------------
-
-try:
-    from pydantic import BaseModel, Field
-    from typing import List
-
-    class AudioScene(BaseModel):
-        title: str = Field(description="Scene title")
-        duration_sec: int = Field(description="Scene duration in seconds")
-        narration_v1_hook: str = Field(description="V1 Hook narration script")
-        narration_v2_expert: str = Field(description="V2 Expert narration script")
-        narration_v3_storyteller: str = Field(description="V3 Storyteller narration script")
-        pronunciation_hints: str = Field(default="", description="Pronunciation hints if any")
-
-    class AudioScenes(BaseModel):
-        scenes: List[AudioScene] = Field(description="List of audio scenes with narration scripts")
-
-    class VideoScene(BaseModel):
-        title: str = Field(description="Scene title")
-        duration_sec: int = Field(description="Scene duration in seconds")
-        visual_notes: str = Field(description="Visual description for this scene")
-        dopamine_hook: str = Field(default="", description="Dopamine hook phrase")
-
-    class VideoScenes(BaseModel):
-        scenes: List[VideoScene] = Field(description="List of video scenes with visual data")
-        visual_style: dict = Field(default_factory=dict, description="Overall visual style")
-        style_lock: dict = Field(default_factory=dict, description="Style lock constraints")
-
-    _INSTRUCTOR_AVAILABLE = True
-except Exception:
-    _INSTRUCTOR_AVAILABLE = False
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -658,15 +623,15 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
         elif "SCENES:" not in text:
             errors.append("Scenario text missing 'SCENES:' section")
         if errors:
-            return json.dumps({"valid": False, "errors": errors, "recovery_target": SCENARIO})
-        # Include the full scenario text so downstream agents receive it in their prompt
-        return json.dumps({"valid": True, "next_stage": AUDIO, "scenario_text": text})
+            return "VALIDATION FAILED\n" + "\n".join(errors) + "\nROUTE BACKWARD TO: scenario"
+        # Return plain text with the full scenario so downstream agents can use it
+        return f"VALIDATION PASSED\nNEXT STAGE: audio\n\n--- SCENARIO TEXT ---\n{text}\n--- END SCENARIO ---"
 
     @tool
     def validate_audio() -> str:
         """Validate audio output: narration clips must exist."""
         from tools.otio_file_ops import resolve_timeline_path, otio_read
-        from tools.otio_metadata import metadata_key_exists, read_pipeline_metadata
+        from tools.otio_metadata import read_pipeline_metadata
         tp = resolve_timeline_path()
         errors = []
 
@@ -685,11 +650,11 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             errors.append(f"Error reading timeline: {e}")
 
         if errors:
-            return json.dumps({"valid": False, "errors": errors, "recovery_target": AUDIO})
+            return "VALIDATION FAILED\n" + "\n".join(errors) + "\nROUTE BACKWARD TO: audio"
 
         # Include scenario text so video agent receives it in its prompt
         text = read_pipeline_metadata(tp, "scenario_raw")
-        return json.dumps({"valid": True, "next_stage": VIDEO, "scenario_text": text or ""})
+        return f"VALIDATION PASSED\nNEXT STAGE: video\n\n--- SCENARIO TEXT ---\n{text or ''}\n--- END SCENARIO ---"
 
     @tool
     def validate_video() -> str:
@@ -711,8 +676,8 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
         except Exception as e:
             errors.append(f"Error reading timeline: {e}")
         if errors:
-            return json.dumps({"valid": False, "errors": errors, "recovery_target": VIDEO})
-        return json.dumps({"valid": True, "next_stage": ASSEMBLY})
+            return "VALIDATION FAILED\n" + "\n".join(errors) + "\nROUTE BACKWARD TO: video"
+        return "VALIDATION PASSED\nNEXT STAGE: assembly"
 
     @tool
     def validate_assembly() -> str:
@@ -881,9 +846,14 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             "- You are stateless. All state lives in the OTIO file on disk.\n"
             "- Never assume memory of previous runs. Always read the OTIO file first.\n"
             "- If validation fails, be specific about what is missing so the recovery agent knows what to fix.\n"
-            "- If validation passes, INCLUDE THE FULL SCENARIO TEXT in your response.\n"
+            "- If validation passes, return PLAIN TEXT (not JSON). Format:\n"
+            "    VALIDATION PASSED\n"
+            "    NEXT STAGE: <stage>\n"
+            "    --- SCENARIO TEXT ---\n"
+            "    <full scenario text>\n"
+            "    --- END SCENARIO ---\n"
             "  Downstream agents (audio, video) receive your entire response as their input.\n"
-            "  They parse the scenario text directly from your output.\n"
+            "  They extract the scenario text from between the markers.\n"
         ),
         tools=[
             read_pipeline_data,
@@ -1152,7 +1122,7 @@ def _build_audio_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Your prompt is a JSON object from the OTIO Gate. Extract the 'scenario_text' field.\n"
+            "1. Your prompt is plain text from the OTIO Gate. Extract the scenario text from between the '--- SCENARIO TEXT ---' and '--- END SCENARIO ---' markers.\n"
             "2. Parse the scenario text to get scene titles, durations, and narration scripts.\n"
             "3. Call check_resume_status.\n"
             "4. For EACH scene not yet in queue, call submit_render_job with:\n"
@@ -1381,7 +1351,7 @@ def _build_video_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Your prompt is a JSON object from the OTIO Gate. Extract the 'scenario_text' field.\n"
+            "1. Your prompt is plain text from the OTIO Gate. Extract the scenario text from between the '--- SCENARIO TEXT ---' and '--- END SCENARIO ---' markers.\n"
             "2. Parse the scenario text to get scene titles, durations, and visual notes.\n"
             "3. Call generate_visual_concepts with style extracted from the scenario text.\n"
             "4. Call persist_visual_concepts to save to OTIO metadata.\n"
@@ -1509,9 +1479,9 @@ def _build_assembly_agent(model) -> Agent:
 # ---------------------------------------------------------------------------
 
 def _gate_recovery_target(state: GraphState) -> str:
-    """Extract recovery_target from OTIO gate's output in GraphState.
+    """Extract recovery target from OTIO gate's plain text output.
 
-    Returns the recovery_target string if the gate requested recovery,
+    Returns the stage name if the gate requested recovery,
     or empty string if validation passed / gate hasn't run yet.
     """
     try:
@@ -1522,14 +1492,18 @@ def _gate_recovery_target(state: GraphState) -> str:
         if otio_result is None:
             return ""
         text = str(otio_result.result)
-        data = json.loads(text)
-        return data.get("recovery_target", "")
+        # Parse plain text: "VALIDATION FAILED\n...\nROUTE BACKWARD TO: <stage>"
+        if "VALIDATION FAILED" in text:
+            for line in text.split("\n"):
+                if line.startswith("ROUTE BACKWARD TO:"):
+                    return line.split(":", 1)[1].strip()
+        return ""
     except Exception:
         return ""
 
 
 def _gate_next_stage(state: GraphState) -> str:
-    """Extract next_stage from OTIO gate's output in GraphState."""
+    """Extract next stage from OTIO gate's plain text output."""
     try:
         from strands.multiagent.graph import GraphState
         if not isinstance(state, GraphState):
@@ -1538,8 +1512,12 @@ def _gate_next_stage(state: GraphState) -> str:
         if otio_result is None:
             return ""
         text = str(otio_result.result)
-        data = json.loads(text)
-        return data.get("next_stage", "")
+        # Parse plain text: "VALIDATION PASSED\nNEXT STAGE: <stage>"
+        if "VALIDATION PASSED" in text:
+            for line in text.split("\n"):
+                if line.startswith("NEXT STAGE:"):
+                    return line.split(":", 1)[1].strip()
+        return ""
     except Exception:
         return ""
 
