@@ -494,6 +494,70 @@ def _build_otio_gate_agent(model) -> Agent:
         return json.dumps(summary)
 
     @tool
+    def ingest_scenario() -> str:
+        """Read the raw scenario text from disk, parse it, and write structured data to OTIO.
+
+        The scenario agent writes raw text to scenario_raw.txt.
+        This tool reads that text, parses it into scenes/visual_style/style_lock,
+        and persists to OTIO metadata.  If parsing fails, returns an error.
+        """
+        import os
+        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        raw_path = os.path.join(pipeline_dir, "scenario_raw.txt")
+        if not os.path.exists(raw_path):
+            return json.dumps({"error": "No scenario_raw.txt found — scenario agent has not written raw text yet."})
+
+        with open(raw_path) as f:
+            raw_text = f.read()
+
+        if not raw_text.strip():
+            return json.dumps({"error": "scenario_raw.txt is empty."})
+
+        # Parse via LLM — the text format is well-structured
+        from strands_agents.scenario_llm import make_generator
+        model_id = os.environ.get("STRANDS_MODEL", "")
+        if not model_id:
+            return json.dumps({"error": "STRANDS_MODEL not set — cannot parse scenario text"})
+
+        try:
+            # Use the LLM to convert text → structured JSON
+            parse_prompt = (
+                "Parse the following documentary scenario text into strict JSON.\n"
+                "Return a JSON object with exactly these keys:\n"
+                "  scenes: array of scene objects\n"
+                "  visual_style: object\n"
+                "  style_lock: object\n\n"
+                "SCENARIO TEXT:\n" + raw_text
+            )
+            import litellm
+            resp = litellm.completion(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": "You parse documentary scenario text into strict JSON. Output JSON only, no markdown fences."},
+                    {"role": "user", "content": parse_prompt},
+                ],
+                response_format={"type": "json_object"},
+            )
+            content = resp.choices[0].message.content  # type: ignore[reportAttributeAccessIssue]
+            parsed = json.loads(content)  # type: ignore[reportArgumentType]
+        except Exception as exc:
+            return json.dumps({"error": f"Failed to parse scenario text: {exc}"})
+
+        # Write to OTIO
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import write_pipeline_metadata
+        tp = resolve_timeline_path()
+        write_pipeline_metadata(tp, MetadataSchema.SCENES, parsed.get("scenes", []), provenance={"agent": "otio_gate"})
+        write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, parsed.get("visual_style", {}), provenance={"agent": "otio_gate"})
+        write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, parsed.get("style_lock", {}), provenance={"agent": "otio_gate"})
+
+        return json.dumps({
+            "ingested": True,
+            "scene_count": len(parsed.get("scenes", [])),
+            "raw_length": len(raw_text),
+        })
+
+    @tool
     def validate_scenario() -> str:
         """Validate scenario output: scenes must exist and be well-formed."""
         from tools.otio_file_ops import resolve_timeline_path
@@ -735,6 +799,7 @@ def _build_otio_gate_agent(model) -> Agent:
         tools=[
             read_pipeline_data,
             read_timeline,
+            ingest_scenario,
             validate_scenario,
             validate_audio,
             validate_video,
@@ -780,12 +845,9 @@ def _read_directives() -> dict | None:
 
 
 def _build_scenario_agent(model) -> Agent:
-    """Build the scenario agent — generates scenes and locks visual style."""
+    """Build the scenario agent — generates documentary structure as raw text."""
     from strands import tool
-    from strands_agents.stages.scenario_stage import (
-        evaluate_scenario,
-        refine_scenario,
-    )
+    from strands_agents.stages.scenario_stage import evaluate_scenario
 
     # Inject scope constraints from debug-gym directives
     constraint_text = ""
@@ -804,30 +866,9 @@ def _build_scenario_agent(model) -> Agent:
                 )
 
     @tool
-    def write_scenes(scenes_json: str) -> str:
-        """Write generated scenes to OTIO metadata."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        scenes = json.loads(scenes_json)
-        write_pipeline_metadata(tp, MetadataSchema.SCENES, scenes, provenance={"agent": SCENARIO})
-        return json.dumps({"written": True, "scene_count": len(scenes)})
-
-    @tool
-    def write_visual_style(style_json: str) -> str:
-        """Write visual style and lock to OTIO metadata."""
-        from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import write_pipeline_metadata
-        tp = resolve_timeline_path()
-        style = json.loads(style_json)
-        write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, style, provenance={"agent": SCENARIO})
-        write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, True, provenance={"agent": SCENARIO})
-        return json.dumps({"written": True})
-
-    @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed in a previous run.
-        If completed, call save_scenario_checkpoint and return immediately."""
+        If completed, call save_scenario_checkpoint and then STOP."""
         shell = get_recovery_shell()
         if shell and SCENARIO in shell.completed_stages:
             return json.dumps({"status": "already_completed", "stage": SCENARIO})
@@ -847,57 +888,83 @@ def _build_scenario_agent(model) -> Agent:
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, "scenario_timeline.otio")
         shutil.copy2(tp, dest)
-        # Record completion in checkpoint metadata envelope
         _update_completed_stages(run_id, SCENARIO)
         return json.dumps({"saved": True, "checkpoint_path": dest})
+
+    @tool
+    def write_raw_scenario(text: str) -> str:
+        """Write the raw scenario text to a file for the OTIO gate to parse.
+
+        The OTIO gate — not you — parses this text and writes structured data to OTIO.
+        """
+        import os
+        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        path = os.path.join(pipeline_dir, "scenario_raw.txt")
+        with open(path, "w") as f:
+            f.write(text)
+        return json.dumps({"written": True, "path": path, "length": len(text)})
 
     return Agent(
         name=SCENARIO,
         system_prompt=(
-            "You are the Scenario Agent. You generate the documentary structure.\n"
-            "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
-            "call save_scenario_checkpoint and then STOP — do not regenerate scenes.\n"
-            f"{constraint_text}"
             "You are the Scenario Director for an ADHD-friendly documentary pipeline.\n"
-            "Your ONLY job is to produce a SINGLE JSON object containing the full scenario.\n"
+            "BEFORE doing any work, call check_resume_status. If 'already_completed', "
+            "call save_scenario_checkpoint and STOP.\n"
+            f"{constraint_text}"
             "\n"
             "The user's message is the BRIEF — the documentary topic and target duration.\n"
             "\n"
-            "OUTPUT FORMAT — you MUST return a JSON object with exactly these top-level keys:\n"
-            "  - scenes: array of scene objects (length = ceil(target_duration_sec / 35))\n"
-            "  - visual_style: {style, realism_anchors[], avoid[], palette, camera_language, reference_genre}\n"
-            "  - style_lock: {dominant_style, forbidden_styles[], positive_fragment, negative_fragment}\n"
+            "YOUR JOB: Write the complete documentary scenario as PLAIN TEXT.\n"
+            "You do NOT produce JSON. You do NOT write to OTIO. You write TEXT.\n"
+            "The OTIO Gate will parse your text and write structured data to OTIO.\n"
             "\n"
-            "Each scene object MUST include:\n"
-            "  - scene_num: 1-based integer, contiguous\n"
-            "  - title: short scene title\n"
-            "  - duration_sec: float seconds (30-45 per scene, max 45, sum within +/-10% of target)\n"
-            "  - narration: spoken script, ~150 words/min. NO rhetorical questions.\n"
-            "  - pronunciation_hints: list of {text, ipa} entries (may be empty)\n"
-            "  - visual_notes: brief imagery description respecting dominant_style\n"
-            "  - dopamine_hook: one short concrete phrase\n"
-            "  - voices: array of exactly 3 voice blocks (V1 Hook, V2 Expert, V3 Storyteller)\n"
-            "Scene 1 MUST include hook_spec: {topic_specific_motif, motion_description, narrative_pull}\n"
-            "The FINAL scene MUST include outro_spec: {closing_shot, recap_sentence, cta, brand_card}\n"
+            "OUTPUT FORMAT — plain text with clear structure:\n"
+            "\n"
+            "VISUAL STYLE:\n"
+            "  Style: <one dominant style for the whole film>\n"
+            "  Realism anchors: <list>\n"
+            "  Avoid: <list>\n"
+            "  Palette: <description>\n"
+            "  Camera language: <description>\n"
+            "  Reference genre: <description>\n"
+            "\n"
+            "STYLE LOCK:\n"
+            "  Dominant style: <the one style>\n"
+            "  Forbidden styles: <list>\n"
+            "  Positive fragment: <what to include>\n"
+            "  Negative fragment: <what to exclude>\n"
+            "\n"
+            "SCENES:\n"
+            "  Scene 1 — <title> (<duration_sec>s)\n"
+            "    Narration (V1 Hook): <script>\n"
+            "    Narration (V2 Expert): <script>\n"
+            "    Narration (V3 Storyteller): <script>\n"
+            "    Visual notes: <description>\n"
+            "    Dopamine hook: <concrete phrase>\n"
+            "    Pronunciation hints: TOKEN = IPA, ...\n"
+            "    Hook spec: topic_specific_motif=<...>, motion_description=<...>, narrative_pull=<...>\n"
+            "  ...\n"
+            "  Scene N — <title> (<duration_sec>s)\n"
+            "    ...\n"
+            "    Outro spec: closing_shot=<...>, recap_sentence=<...>, cta=<...>, brand_card=<...>\n"
             "\n"
             "RULES:\n"
-            "1. Pick ONE dominant_style for the whole documentary.\n"
-            "2. Every visual_notes must respect it.\n"
-            "3. No rhetorical questions anywhere in narration.\n"
-            "4. Return STRICT JSON only. No markdown fences. No prose outside the object.\n"
+            "- Each scene MUST be 30-45 seconds (~75-110 words per voice block at 150 wpm).\n"
+            "- Each scene MUST have all 3 voices (V1 Hook, V2 Expert, V3 Storyteller).\n"
+            "- No rhetorical questions anywhere.\n"
+            "- Sum of all duration_sec MUST be within +/-10% of target_duration_sec.\n"
+            "- Visual variety — no repetitive descriptions.\n"
+            "- Dopamine hooks must be concrete and specific.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Produce the JSON object in your response.\n"
-            "2. Call write_scenes with the 'scenes' array.\n"
-            "3. Call write_visual_style with the 'visual_style' object.\n"
-            "   write_visual_style also sets style_lock automatically.\n"
-            "4. Call evaluate_scenario with the full JSON to check ADHD compliance.\n"
-            "5. If the evaluator returns FAIR or POOR, call refine_scenario with the feedback.\n"
-            "   Then re-write with write_scenes + write_visual_style.\n"
-            "6. Call save_scenario_checkpoint to preserve the narrative planning.\n"
-            "You are stateless — all output goes to the OTIO file.\n"
+            "1. Draft the full scenario text in your response.\n"
+            "2. Call evaluate_scenario with your text to check ADHD compliance.\n"
+            "3. If the evaluator finds issues, revise the text.\n"
+            "4. Call write_raw_scenario with your final text.\n"
+            "5. Call save_scenario_checkpoint.\n"
+            "6. STOP. The OTIO Gate will parse your text and write to OTIO.\n"
         ),
-        tools=[evaluate_scenario, refine_scenario, write_scenes, write_visual_style, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
+        tools=[write_raw_scenario, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
         model=model,
     )
 
