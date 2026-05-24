@@ -494,24 +494,15 @@ def _build_otio_gate_agent(model) -> Agent:
         return json.dumps(summary)
 
     @tool
-    def ingest_scenario() -> str:
-        """Read the raw scenario text from disk, parse it, and write structured data to OTIO.
+    def ingest_scenario(text: str) -> str:
+        """Parse raw scenario text and write structured data to OTIO.
 
-        The scenario agent writes raw text to scenario_raw.txt.
-        This tool reads that text, parses it into scenes/visual_style/style_lock,
+        The scenario agent sends its text directly via the graph.
+        This tool receives that text, parses it into scenes/visual_style/style_lock,
         and persists to OTIO metadata.  If parsing fails, returns an error.
         """
-        import os
-        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
-        raw_path = os.path.join(pipeline_dir, "scenario_raw.txt")
-        if not os.path.exists(raw_path):
-            return json.dumps({"error": "No scenario_raw.txt found — scenario agent has not written raw text yet."})
-
-        with open(raw_path) as f:
-            raw_text = f.read()
-
-        if not raw_text.strip():
-            return json.dumps({"error": "scenario_raw.txt is empty."})
+        if not text.strip():
+            return json.dumps({"error": "Empty scenario text received."})
 
         # Parse via LLM — the text format is well-structured
         from strands_agents.scenario_llm import make_generator
@@ -520,14 +511,13 @@ def _build_otio_gate_agent(model) -> Agent:
             return json.dumps({"error": "STRANDS_MODEL not set — cannot parse scenario text"})
 
         try:
-            # Use the LLM to convert text → structured JSON
             parse_prompt = (
                 "Parse the following documentary scenario text into strict JSON.\n"
                 "Return a JSON object with exactly these keys:\n"
                 "  scenes: array of scene objects\n"
                 "  visual_style: object\n"
                 "  style_lock: object\n\n"
-                "SCENARIO TEXT:\n" + raw_text
+                "SCENARIO TEXT:\n" + text
             )
             import litellm
             resp = litellm.completion(
@@ -550,11 +540,13 @@ def _build_otio_gate_agent(model) -> Agent:
         write_pipeline_metadata(tp, MetadataSchema.SCENES, parsed.get("scenes", []), provenance={"agent": "otio_gate"})
         write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, parsed.get("visual_style", {}), provenance={"agent": "otio_gate"})
         write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, parsed.get("style_lock", {}), provenance={"agent": "otio_gate"})
+        # Store raw text for retry — scenario agent reads this on backward edge
+        write_pipeline_metadata(tp, "scenario_raw", text, provenance={"agent": "otio_gate"})
 
         return json.dumps({
             "ingested": True,
             "scene_count": len(parsed.get("scenes", [])),
-            "raw_length": len(raw_text),
+            "raw_length": len(text),
         })
 
     @tool
@@ -780,16 +772,23 @@ def _build_otio_gate_agent(model) -> Agent:
             "6. After every validation (pass OR fail): write a critique record and trigger a preview\n"
             "7. Manage escalation windows via begin_escalation/end_escalation when authoritative OTIO must change\n\n"
             "CRITICAL DATA MODEL:\n"
-            "- The scenario agent writes ONE key: 'scenes' (an array of scene dicts).\n"
-            "  Each scene dict contains: title, description, visual_notes, audio_notes, duration_seconds, start_time, end_time.\n"
+            "- The scenario agent produces PLAIN TEXT (not JSON).\n"
+            "  You receive that text directly — no files pass between agents.\n"
+            "  Call ingest_scenario(text=<the text you received>) to parse it and write to OTIO.\n"
+            "  Then call validate_scenario to check the structured data.\n"
             "- Downstream agents DERIVE what they need from 'scenes'. Do NOT demand\n"
             "  separate 'scene_data', 'visual_concepts', 'narration_text', or 'target_duration' keys.\n"
             "- Audio agent derives narration_text from scene['description'] and scene['audio_notes'].\n"
             "- Video agent derives visual prompts from scene['visual_notes'] and scene['description'].\n"
-            "- The scenario gate ONLY checks: scenes exist, visual_style exists, style_lock is true.\n"
+            "- The scenario gate checks: scenes exist, visual_style exists, style_lock is true.\n"
             "- The audio gate checks: A1_Narration track has clips OR whisperx_alignment exists.\n"
             "- The video gate checks: V1_Video track has clips.\n"
             "- The assembly gate checks: assembly_output_path exists.\n\n"
+            "WORKFLOW PER STAGE:\n"
+            "1. SCENARIO: call ingest_scenario(text=<text from scenario agent>) → validate_scenario → transition_to_authoritative\n"
+            "2. AUDIO: validate_audio\n"
+            "3. VIDEO: validate_video\n"
+            "4. ASSEMBLY: validate_assembly\n\n"
             "Rules:\n"
             "- You are stateless. All state lives in the OTIO file on disk.\n"
             "- Never assume memory of previous runs. Always read the OTIO file first.\n"
@@ -892,17 +891,15 @@ def _build_scenario_agent(model) -> Agent:
         return json.dumps({"saved": True, "checkpoint_path": dest})
 
     @tool
-    def write_raw_scenario(text: str) -> str:
-        """Write the raw scenario text to a file for the OTIO gate to parse.
-
-        The OTIO gate — not you — parses this text and writes structured data to OTIO.
-        """
-        import os
-        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
-        path = os.path.join(pipeline_dir, "scenario_raw.txt")
-        with open(path, "w") as f:
-            f.write(text)
-        return json.dumps({"written": True, "path": path, "length": len(text)})
+    def read_scenario_raw() -> str:
+        """Read the previously ingested scenario text from OTIO metadata (for retry)."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        tp = resolve_timeline_path()
+        text = read_pipeline_metadata(tp, "scenario_raw")
+        if text is None:
+            return "No previous scenario text found in OTIO."
+        return str(text)
 
     return Agent(
         name=SCENARIO,
@@ -912,11 +909,13 @@ def _build_scenario_agent(model) -> Agent:
             "call save_scenario_checkpoint and STOP.\n"
             f"{constraint_text}"
             "\n"
-            "The user's message is the BRIEF — the documentary topic and target duration.\n"
+            "The user's message is either:\n"
+            "  (a) a BRIEF — the documentary topic and target duration, OR\n"
+            "  (b) VALIDATION ERRORS from the OTIO Gate — revise the previous scenario.\n"
             "\n"
-            "YOUR JOB: Write the complete documentary scenario as PLAIN TEXT.\n"
+            "YOUR JOB: Write the complete documentary scenario as PLAIN TEXT in your response.\n"
             "You do NOT produce JSON. You do NOT write to OTIO. You write TEXT.\n"
-            "The OTIO Gate will parse your text and write structured data to OTIO.\n"
+            "The OTIO Gate receives your text directly — no files pass between agents.\n"
             "\n"
             "OUTPUT FORMAT — plain text with clear structure:\n"
             "\n"
@@ -958,13 +957,14 @@ def _build_scenario_agent(model) -> Agent:
             "\n"
             "WORKFLOW:\n"
             "1. Draft the full scenario text in your response.\n"
-            "2. Call evaluate_scenario with your text to check ADHD compliance.\n"
-            "3. If the evaluator finds issues, revise the text.\n"
-            "4. Call write_raw_scenario with your final text.\n"
-            "5. Call save_scenario_checkpoint.\n"
-            "6. STOP. The OTIO Gate will parse your text and write to OTIO.\n"
+            "2. Review it yourself for ADHD compliance.\n"
+            "3. When satisfied, call save_scenario_checkpoint and STOP.\n"
+            "   Your response text will be passed directly to the OTIO Gate.\n"
+            "\n"
+            "RETRY: If your task contains validation errors, call read_scenario_raw to get\n"
+            "your previous text, revise it, and output the new text.\n"
         ),
-        tools=[write_raw_scenario, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
+        tools=[read_scenario_raw, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
         model=model,
     )
 
