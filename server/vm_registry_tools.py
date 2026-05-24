@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 from strands import tool
-from vm_registry import get_vm, list_vms, record_health_check
+from vm_registry import get_vm, list_vms, record_health_check, record_provisioning
 
 logger = logging.getLogger(__name__)
 
@@ -143,3 +143,43 @@ def get_provisioning_guidance(stage: str, agent_reasoning: str) -> str:
             f"Reason: {decision.reason}\n"
             f"Confidence: {decision.confidence:.0%}"
         )
+
+
+@tool
+def record_vm(stage: str, raw_cli_output: str) -> str:
+    """Record a newly provisioned VM in the registry.
+
+    After calling bash_command("vastai create instance ...") you get raw
+    output. Then call bash_command("vastai show instance <id> --raw") to get
+    full details. Pass that full output here so the system can extract SSH
+    host, port, GPU info, and store it.
+
+    Args:
+        stage: 'audio' or 'video' — which stage this VM serves.
+        raw_cli_output: Raw text output from "vastai show instance <id> --raw".
+    """
+    vm = record_provisioning(raw_cli_output, stage)
+    return (
+        f"Recorded VM {vm.instance_id} for stage={stage}.\n"
+        f"Status: {vm.status}, SSH: {vm.ssh_host}:{vm.ssh_port}, "
+        f"GPU: {vm.gpu_name}, VRAM: {vm.vram_gb}GB, "
+        f"Price: ${vm.price_per_hour}/hr"
+    )
+
+
+@tool
+def update_vm_worker_url(instance_id: str, worker_url: str) -> str:
+    """Update the worker URL for a VM in the registry.
+
+    Use this after starting a worker so dispatch tools can find it.
+
+    Args:
+        instance_id: Vast.ai instance ID.
+        worker_url: HTTP endpoint of the worker, e.g. "http://1.2.3.4:8880/".
+    """
+    from vm_registry import update_worker_url as _update
+
+    changed = _update(instance_id, worker_url)
+    if changed:
+        return f"Updated VM {instance_id} worker_url to {worker_url}."
+    return f"VM {instance_id} not found — no update made."

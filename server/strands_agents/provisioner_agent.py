@@ -26,6 +26,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 from strands import tool
+from vm_registry_tools import record_vm, update_vm_worker_url
 
 logger = logging.getLogger(__name__)
 
@@ -165,15 +166,32 @@ def get_provisioning_guidance(stage: str, agent_reasoning: str) -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def dispatch_tts_job(worker_url: str, text: str, output_path: str) -> str:
+def dispatch_tts_job(
+    text: str,
+    output_path: str,
+    instance_id: str = "",
+    worker_url: str = "",
+) -> str:
     """Send narration text to a TTS worker and save the WAV result.
 
     Args:
-        worker_url: URL of the TTS worker (e.g. "http://1.2.3.4:8880").
         text: Narration text to synthesize.
         output_path: Local path to save the WAV file.
+        instance_id: VM instance ID (looked up in registry if worker_url not given).
+        worker_url: URL of the TTS worker (e.g. "http://1.2.3.4:8880").
     """
     import wave
+
+    if not worker_url:
+        if instance_id:
+            from vm_registry import get_vm
+            vm = get_vm(instance_id)
+            if vm and vm.worker_url:
+                worker_url = vm.worker_url
+            elif vm and vm.ssh_host:
+                worker_url = f"http://{vm.ssh_host}:8880/"
+        if not worker_url:
+            return json.dumps({"status": "failed", "error": "No worker_url or instance_id provided"})
 
     worker_url = worker_url.rstrip("/") + "/"
     req = Request(worker_url, data=text.encode("utf-8"), headers={"Content-Type": "text/plain"})
@@ -214,14 +232,31 @@ def dispatch_tts_job(worker_url: str, text: str, output_path: str) -> str:
 
 
 @tool
-def dispatch_video_job(worker_url: str, prompt: str, output_path: str) -> str:
+def dispatch_video_job(
+    prompt: str,
+    output_path: str,
+    instance_id: str = "",
+    worker_url: str = "",
+) -> str:
     """Send a video prompt to a GPU worker and save the MP4 result.
 
     Args:
-        worker_url: URL of the video worker (e.g. "http://1.2.3.4:8880").
         prompt: LTX-2.3 video prompt.
         output_path: Local path to save the MP4 file.
+        instance_id: VM instance ID (looked up in registry if worker_url not given).
+        worker_url: URL of the video worker (e.g. "http://1.2.3.4:8880").
     """
+    if not worker_url:
+        if instance_id:
+            from vm_registry import get_vm
+            vm = get_vm(instance_id)
+            if vm and vm.worker_url:
+                worker_url = vm.worker_url
+            elif vm and vm.ssh_host:
+                worker_url = f"http://{vm.ssh_host}:8880/"
+        if not worker_url:
+            return json.dumps({"status": "failed", "error": "No worker_url or instance_id provided"})
+
     worker_url = worker_url.rstrip("/") + "/"
     req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
 
@@ -318,8 +353,14 @@ CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.
    b. Search Vast.ai: bash_command("vastai search offers --type on-demand --raw | head -20")
    c. Evaluate offers: evaluate_vastai_offers('<model_name>', <raw_search_text>)
    d. Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer.
-   e. Provision: bash_command("vastai create instance <offer_id> ...")
-   f. Wait for health: check_worker_health() or bash_command("ssh ... 'curl ...'")
+   e. Provision: bash_command("vastai create instance <offer_id> --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 64 --ssh --direct --env '-p 8880:8880'")
+   f. Get instance details: bash_command("vastai show instance <new_contract_id> --raw")
+   g. Record the VM: record_vm(stage, <raw_show_output>)
+   h. SSH into the VM and START the worker:
+      bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'cd /workspace && git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary && cd /workspace/economy-documentary && python3 -m pip install -e . && nohup python3 scripts/gpu_worker.py --mode tts --port 8880 > worker.log 2>&1 &'")
+      (Use --mode ltx for video jobs)
+   i. Update registry with worker URL: update_vm_worker_url(instance_id, "http://<ip>:8880/")
+   j. Wait for health: check_worker_health(instance_id) or bash_command("ssh ... 'curl ...'")
 
 5. After provisioning succeeds:
    remember(text='<stage> worker succeeded on <GPU> <VRAM>GB with image <image>', category='success')
@@ -336,9 +377,10 @@ WORKFLOW:
 1. Call claim_job(stage='audio') then claim_job(stage='video').
    Process jobs for BOTH stages in a single invocation if possible.
 2. For each claimed job:
-   a. Call set_job_running(job_id, worker_id).
+   a. Call set_job_running(job_id, worker_id=instance_id).
    b. Ensure a healthy worker exists for the job's stage.
-   c. Dispatch the job to the worker via dispatch_tts_job or dispatch_video_job.
+   c. Dispatch the job to the worker via dispatch_tts_job(text, output_path, instance_id=instance_id)
+      or dispatch_video_job(prompt, output_path, instance_id=instance_id).
    d. Call set_job_completed(job_id, output_path) with the local file path.
 3. If dispatch fails, call set_job_failed(job_id, error_message).
 4. After all claimed jobs are processed, call check_queue_status(stage)
@@ -376,6 +418,8 @@ def build_provisioner_agent(model) -> Any:
             get_provisioning_guidance,
             dispatch_tts_job,
             dispatch_video_job,
+            record_vm,
+            update_vm_worker_url,
         ] + _make_memory_tools(PROVISIONER),
         model=model,
     )

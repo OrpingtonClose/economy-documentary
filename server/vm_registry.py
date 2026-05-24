@@ -210,6 +210,17 @@ instance_id."""
     )
 
 
+def update_worker_url(instance_id: str, worker_url: str) -> bool:
+    """Update the HTTP worker URL for a VM."""
+    with _LOCK, _conn() as conn:
+        cur = conn.execute(
+            "UPDATE vms SET worker_url = ? WHERE instance_id = ?",
+            (worker_url, instance_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
 def list_vms(stage: str = "") -> list[VMState]:
     """Return all VMs, optionally filtered by stage."""
     with _LOCK, _conn() as conn:
