@@ -12,6 +12,7 @@ from strands.multiagent.graph import (
     Graph,
     GraphEdge,
     GraphNode,
+    GraphState,
 )
 
 logger = logging.getLogger(__name__)
@@ -1452,52 +1453,77 @@ def _build_assembly_agent(model) -> Agent:
 
 
 # ---------------------------------------------------------------------------
-# Backward edge conditions
+# ---------------------------------------------------------------------------
+# Routing helpers — Strands passes GraphState to edge conditions
 # ---------------------------------------------------------------------------
 
+def _gate_recovery_target(state: GraphState) -> str:
+    """Extract recovery_target from OTIO gate's output in GraphState.
 
-def _needs_scenario_retry(prev_output: Any, *_args, **_kwargs) -> bool:
-    """Check if OTIO gate requested scenario recovery."""
+    Returns the recovery_target string if the gate requested recovery,
+    or empty string if validation passed / gate hasn't run yet.
+    """
     try:
-        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
-        return data.get("recovery_target") == SCENARIO
+        from strands.multiagent.graph import GraphState
+        if not isinstance(state, GraphState):
+            return ""
+        otio_result = state.results.get(OTIO)
+        if otio_result is None:
+            return ""
+        text = str(otio_result.result)
+        data = json.loads(text)
+        return data.get("recovery_target", "")
     except Exception:
-        return False
+        return ""
 
 
-def _needs_audio_retry(prev_output: Any, *_args, **_kwargs) -> bool:
-    """Check if OTIO gate requested audio recovery."""
+def _gate_next_stage(state: GraphState) -> str:
+    """Extract next_stage from OTIO gate's output in GraphState."""
     try:
-        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
-        return data.get("recovery_target") == AUDIO
+        from strands.multiagent.graph import GraphState
+        if not isinstance(state, GraphState):
+            return ""
+        otio_result = state.results.get(OTIO)
+        if otio_result is None:
+            return ""
+        text = str(otio_result.result)
+        data = json.loads(text)
+        return data.get("next_stage", "")
     except Exception:
-        return False
+        return ""
 
 
-def _needs_video_retry(prev_output: Any, *_args, **_kwargs) -> bool:
-    """Check if OTIO gate requested video recovery."""
-    try:
-        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
-        return data.get("recovery_target") == VIDEO
-    except Exception:
-        return False
+# ---------------------------------------------------------------------------
+# Backward edge conditions — gate requests recovery for a specific stage
+# ---------------------------------------------------------------------------
+
+def _needs_scenario_retry(state: GraphState) -> bool:
+    return _gate_recovery_target(state) == SCENARIO
 
 
-def _needs_assembly_retry(prev_output: Any, *_args, **_kwargs) -> bool:
-    """Check if OTIO gate requested assembly recovery."""
-    try:
-        data = json.loads(prev_output) if isinstance(prev_output, str) else prev_output
-        return data.get("recovery_target") == ASSEMBLY
-    except Exception:
-        return False
+def _needs_audio_retry(state: GraphState) -> bool:
+    return _gate_recovery_target(state) == AUDIO
 
 
-def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
-    """Run the Scenario stage only if it was NOT already completed."""
+def _needs_video_retry(state: GraphState) -> bool:
+    return _gate_recovery_target(state) == VIDEO
+
+
+def _needs_assembly_retry(state: GraphState) -> bool:
+    return _gate_recovery_target(state) == ASSEMBLY
+
+
+# ---------------------------------------------------------------------------
+# Forward edge conditions — only fire when gate passed (no recovery)
+# ---------------------------------------------------------------------------
+
+def _scenario_not_completed(state: GraphState) -> bool:
+    """Run Scenario only if not already completed (gate passed or entry point)."""
+    if _gate_recovery_target(state):
+        return False  # Gate requested recovery — don't start new stage
     shell = get_recovery_shell()
     if shell and SCENARIO in shell.completed_stages:
         return False
-    # FIX: Also check OTIO for scenes metadata
     from tools.otio_file_ops import resolve_timeline_path
     from tools.otio_metadata import metadata_key_exists
     try:
@@ -1509,8 +1535,10 @@ def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     return True
 
 
-def _has_pending_jobs(_prev_output: Any, *_args, **_kwargs) -> bool:
-    """Route to Provisioner if there are pending or retryable jobs in the queue."""
+def _has_pending_jobs(state: GraphState) -> bool:
+    """Route to Provisioner only when gate passed and jobs are pending."""
+    if _gate_recovery_target(state):
+        return False  # Gate requested recovery — provisioner shouldn't run
     from job_queue import get_queue_summary
     for stage in ("audio", "video"):
         summary = get_queue_summary(stage)
@@ -1519,17 +1547,17 @@ def _has_pending_jobs(_prev_output: Any, *_args, **_kwargs) -> bool:
     return False
 
 
-def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
-    """Run the Audio stage only if it was NOT already completed."""
+def _audio_not_completed(state: GraphState) -> bool:
+    """Run Audio only if gate passed, audio not done, no pending jobs."""
+    if _gate_recovery_target(state):
+        return False
     shell = get_recovery_shell()
     if shell and AUDIO in shell.completed_stages:
         return False
-    # If there are pending audio jobs, let the Provisioner drain them first
     from job_queue import get_queue_summary
     summary = get_queue_summary("audio")
     if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-        return False
-    # FIX: Check OTIO for A1_Narration clips (works even after graph reset)
+        return False  # Let provisioner drain first
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
@@ -1542,18 +1570,31 @@ def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     return True
 
 
-def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
-    """Run the Video stage only if it was NOT already completed."""
+def _video_not_completed(state: GraphState) -> bool:
+    """Run Video only if audio is done, gate passed, no pending jobs."""
+    if _gate_recovery_target(state):
+        return False
     shell = get_recovery_shell()
     if shell and VIDEO in shell.completed_stages:
         return False
-    # If there are pending video jobs, let the Provisioner drain them first
+    # SEQUENTIAL: audio must be complete before video runs
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
+    try:
+        tp = resolve_timeline_path()
+        timeline = otio_read(tp)
+        has_audio = False
+        for track in timeline.tracks:
+            if track.name == "A1_Narration" and len(list(track)) > 0:
+                has_audio = True
+                break
+        if not has_audio:
+            return False  # Audio not done — don't run video yet
+    except Exception:
+        pass
     from job_queue import get_queue_summary
     summary = get_queue_summary("video")
     if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-        return False
-    # FIX: Check OTIO for V1_Video clips (works even after graph reset)
-    from tools.otio_file_ops import resolve_timeline_path, otio_read
+        return False  # Let provisioner drain first
     try:
         tp = resolve_timeline_path()
         timeline = otio_read(tp)
@@ -1565,21 +1606,18 @@ def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     return True
 
 
-def _assembly_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
-    """Run the Assembly stage only if it was NOT already completed."""
+def _assembly_not_completed(state: GraphState) -> bool:
+    """Run Assembly only if video is done, gate passed."""
+    if _gate_recovery_target(state):
+        return False
     shell = get_recovery_shell()
     if shell and ASSEMBLY in shell.completed_stages:
         return False
-    # FIX: Check OTIO for assembly_output_path AND V1_Video clips
+    # SEQUENTIAL: video must be complete before assembly runs
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     from tools.otio_metadata import read_pipeline_metadata
     try:
         tp = resolve_timeline_path()
-        # Already assembled?
-        output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
-        if output_path and os.path.exists(output_path):
-            return False
-        # Video must be done before assembly
         timeline = otio_read(tp)
         has_video = False
         for track in timeline.tracks:
@@ -1587,9 +1625,11 @@ def _assembly_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
                 has_video = True
                 break
         if not has_video:
-            return False  # Can't assemble without video
+            return False  # Video not done — can't assemble
+        output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
+        if output_path and os.path.exists(output_path):
+            return False
     except Exception:
-        # Fallback: if OTIO check fails, use completed_stages logic
         if shell and VIDEO not in shell.completed_stages:
             return False
     return True
