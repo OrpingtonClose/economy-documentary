@@ -13,6 +13,7 @@ from strands.multiagent.graph import (
     GraphEdge,
     GraphNode,
     GraphState,
+    Status,
 )
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,11 @@ class RecoveryShell:
     async def run(
         self, task: str, initial_state: dict[str, Any] | None = None
     ) -> Any:
-        """Execute the graph once. The agent decides retry via graph edges.
+        """Execute the graph, handling interrupts for external intervention.
+
+        The graph may pause when an InterventionHook raises an interrupt
+        (e.g. a human queued an instruction via POST /agents/{node_id}).
+        This method polls for responses and resumes automatically.
 
         Seeds the working timeline from the latest checkpoint on resume.
         No algorithmic retry — the graph's backward edges handle recovery.
@@ -246,7 +251,58 @@ class RecoveryShell:
         if self.resume and self.latest_checkpoint:
             self.seed_timeline()
 
-        return await self.graph.invoke_async(task)
+        from strands_agents.agent_intervention import (
+            wait_for_interrupt_response,
+            get_intervention_store,
+        )
+
+        store = get_intervention_store()
+        current_task: Any = task
+        rounds = 0
+        max_rounds = 50  # safety cap — misbehaving graph cannot loop forever
+
+        while rounds < max_rounds:
+            rounds += 1
+            result = await self.graph.invoke_async(current_task, invocation_state=initial_state)
+
+            # Record node results for HTTP inspection
+            for node_id, node_result in result.results.items():
+                store.record_node_result(node_id, {
+                    "status": node_result.status.value if hasattr(node_result.status, "value") else str(node_result.status),
+                    "execution_time_ms": node_result.execution_time,
+                })
+
+            if result.status != Status.INTERRUPTED:
+                return result
+
+            # Handle interrupts — wait for external responses
+            interrupt_responses: list[dict[str, Any]] = []
+            for interrupt in result.interrupts:
+                logger.info(
+                    "Graph interrupted (%s) for node — waiting for response...",
+                    interrupt.id,
+                )
+                response = await wait_for_interrupt_response(interrupt.id)
+                if response is None:
+                    raise RuntimeError(
+                        f"Interrupt {interrupt.id} timed out waiting for response. "
+                        f"POST to /agents/resume/{interrupt.id} to resume."
+                    )
+                interrupt_responses.append({
+                    "interruptResponse": {
+                        "interruptId": interrupt.id,
+                        "response": response,
+                    }
+                })
+
+            # Resume the graph with responses
+            if interrupt_responses:
+                current_task = interrupt_responses
+            else:
+                # No responses but still interrupted — should not happen
+                raise RuntimeError("Graph interrupted but no interrupts found in result")
+
+        raise RuntimeError(f"Max interrupt rounds ({max_rounds}) exceeded")
 
     def seed_timeline(self) -> str | None:
         """On resume, copy the selected checkpoint to the working timeline path."""
@@ -293,11 +349,23 @@ def get_recovery_shell() -> RecoveryShell | None:
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_AGENT_PORTS: dict[str, int] = {
+    SCENARIO: 9001,
+    AUDIO: 9002,
+    VIDEO: 9003,
+    OTIO: 9004,
+    ASSEMBLY: 9005,
+    PROVISIONER: 9006,
+}
+
+
 def build_documentary_graph(
     hooks: list[HookProvider] | None = None,
     max_node_executions: int = 50,
     model: Any | None = None,
     run_id: str = "",
+    use_http: bool = False,
+    agent_urls: dict[str, str] | None = None,
 ) -> tuple[Graph, RecoveryShell]:
     """Construct the documentary pipeline Graph.
 
@@ -312,6 +380,10 @@ def build_documentary_graph(
         hooks: Safety hooks (ImmutabilityHook, BudgetHook, etc.)
         max_node_executions: Safety limit on node re-executions.
         model: Optional model configuration.
+        use_http: If True, agents are remote HTTP services. Graph nodes
+            become HTTP client proxies. Each agent runs independently.
+        agent_urls: Override base URLs for remote agents. Keys are node
+            IDs (scenario, audio, etc.). Defaults to localhost ports.
 
     Returns:
         A :class:`Graph` ready for ``invoke_async`` or ``stream_async``.
@@ -353,13 +425,37 @@ def build_documentary_graph(
     except Exception as exc:
         logger.warning("Failed to inject OTIOStateManager into stage modules: %s", exc)
 
-    # Build stage agents as Strands Agents with stateless OTIO tools
-    scenario_agent = _build_scenario_agent(model)
-    audio_agent = _build_audio_agent(model)
-    video_agent = _build_video_agent(model)
-    otio_gate_agent = _build_otio_gate_agent(model)
-    assembly_agent = _build_assembly_agent(model)
-    provisioner_agent = _build_provisioner_agent(model)
+    # Resolve agent executors — either local Agent objects or HTTP client proxies
+    if use_http:
+        from strands_agents.agent_http_client import AgentHTTPClient
+
+        urls = agent_urls or {}
+        scenario_agent = AgentHTTPClient(
+            urls.get(SCENARIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[SCENARIO]}"), SCENARIO
+        )
+        audio_agent = AgentHTTPClient(
+            urls.get(AUDIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[AUDIO]}"), AUDIO
+        )
+        video_agent = AgentHTTPClient(
+            urls.get(VIDEO, f"http://localhost:{_DEFAULT_AGENT_PORTS[VIDEO]}"), VIDEO
+        )
+        otio_gate_agent = AgentHTTPClient(
+            urls.get(OTIO, f"http://localhost:{_DEFAULT_AGENT_PORTS[OTIO]}"), OTIO
+        )
+        assembly_agent = AgentHTTPClient(
+            urls.get(ASSEMBLY, f"http://localhost:{_DEFAULT_AGENT_PORTS[ASSEMBLY]}"), ASSEMBLY
+        )
+        provisioner_agent = AgentHTTPClient(
+            urls.get(PROVISIONER, f"http://localhost:{_DEFAULT_AGENT_PORTS[PROVISIONER]}"), PROVISIONER
+        )
+    else:
+        # Build stage agents as Strands Agents with stateless OTIO tools
+        scenario_agent = _build_scenario_agent(model)
+        audio_agent = _build_audio_agent(model)
+        video_agent = _build_video_agent(model)
+        otio_gate_agent = _build_otio_gate_agent(model)
+        assembly_agent = _build_assembly_agent(model)
+        provisioner_agent = _build_provisioner_agent(model)
 
     # Build nodes
     nodes = {

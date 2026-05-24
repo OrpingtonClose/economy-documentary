@@ -196,6 +196,8 @@ async def run_documentary(
     max_node_executions: int = DEFAULTS["max_nodes"],
     max_retries: int = DEFAULTS["max_retries"],
     approval_mode: str = DEFAULTS["approval"],
+    use_http: bool = False,
+    agent_urls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     model = _get_model(model_id, api_key, base_url)
     os.environ["STRANDS_MODEL"] = model_id
@@ -229,7 +231,16 @@ async def run_documentary(
     budget_hook = BudgetHook(budget_usd=budget_usd)
     hooks.append(budget_hook)
 
-    graph, shell = build_documentary_graph(hooks=hooks, max_node_executions=max_node_executions, model=model)
+    # Agent intervention hook — enables GET/POST into running agents
+    # Disabled when DOCUMENTARY_NO_INTERVENTION is set (e.g. for CI)
+    if os.environ.get("DOCUMENTARY_NO_INTERVENTION", "").strip().lower() not in ("1", "true", "yes"):
+        from strands_agents.agent_intervention import InterventionHook
+        hooks.append(InterventionHook())
+
+    graph, shell = build_documentary_graph(
+        hooks=hooks, max_node_executions=max_node_executions, model=model,
+        use_http=use_http, agent_urls=agent_urls,
+    )
     shell.max_retries = max_retries
 
     logger.info("Brief: %s", brief[:80])
@@ -329,6 +340,8 @@ def main():
     parser.add_argument("--max-nodes", type=int, default=DEFAULTS["max_nodes"], help=f"Max node executions (default: {DEFAULTS['max_nodes']})")
     parser.add_argument("--max-retries", type=int, default=DEFAULTS["max_retries"], help=f"Max retries (default: {DEFAULTS['max_retries']})")
     parser.add_argument("--approval", "-a", choices=["auto_approve", "manual"], default=DEFAULTS["approval"], help=f"Approval mode (default: {DEFAULTS['approval']})")
+    parser.add_argument("--use-http", action="store_true", help="Use HTTP agents instead of in-process agents. Start agents with launcher.py first.")
+    parser.add_argument("--agent-url", action="append", default=[], metavar="NODE=URL", help="Override agent URL (e.g. --agent-url scenario=http://localhost:9001). Repeatable.")
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -353,6 +366,12 @@ def main():
 
     signal.signal(signal.SIGINT, _sigint_handler)
 
+    agent_urls = {}
+    for entry in args.agent_url:
+        if "=" in entry:
+            node, url = entry.split("=", 1)
+            agent_urls[node] = url
+
     result = asyncio.run(run_documentary(
         brief=" ".join(args.brief),
         model_id=args.model,
@@ -363,6 +382,8 @@ def main():
         max_node_executions=args.max_nodes,
         max_retries=args.max_retries,
         approval_mode=args.approval,
+        use_http=args.use_http,
+        agent_urls=agent_urls if agent_urls else None,
     ))
 
     print("\n=== Result ===")
