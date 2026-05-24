@@ -109,292 +109,26 @@ def _persist_artifact(
     return path
 
 
-def _resolve_audio_text(
-    scene_id: str,
-    text: str | None,
-) -> str:
-    """Pick the TTS narration string for ``scene_id``.
-
-    Slice 9c contract: the orchestrator passes the scene's narration
-    through ``text`` so the real-worker dispatcher renders the actual
-    script. When ``text`` is missing or whitespace, fall back to the
-    pre-9c placeholder line so a misconfigured caller does not silently
-    render an empty WAV.
-    """
-    if isinstance(text, str) and text.strip():
-        return text.strip()
-    return (
-        f"Documentary narration for scene {scene_id}. "
-        "Live dispatched via the real Qwen3-TTS worker."
-    )
 
 
-def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
-    """Return a ``@tool``-decorated callable that POSTs to the live TTS."""
-
-    @tool
-    def launch_audio_render(
-        scene_id: str,
-        voice_id: str,
-        text: str | None = None,
-    ) -> dict[str, Any]:
-        """Real Qwen3-TTS dispatch (slice 9d-wire / 9c).
-
-        Sends a POST / request to the live worker, receives raw
-        base64 WAV, persists it under ``run_dir/artifacts/``, and
-        returns a placeholder-shaped envelope so the orchestrator's
-        scripted brain stays compatible with slice 9a. The optional
-        ``text`` argument carries the scene's actual narration so the
-        TTS renders the script the scenario agent produced, not a
-        hard-coded placeholder line (slice 9c).
-        """
-        resolved_text = _resolve_audio_text(scene_id, text)
-        started_ms = _now_ms()
-        try:
-            with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                resp = client.post(
-                    f"{worker_url.rstrip('/')}/",
-                    content=resolved_text.encode("utf-8"),
-                    headers={"Content-Type": "text/plain"},
-                )
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "scene_id=<%s>, error=<%r> | tts dispatch failed", scene_id, exc
-            )
-            return _envelope(
-                "launch_audio_render",
-                scene_id=scene_id,
-                voice_id=voice_id,
-                error=repr(exc),
-            )
-
-        elapsed_ms = _now_ms() - started_ms
-        wav_path: Path | None = None
-        wav_len = 0
-        if resp.status_code == 200:
-            wav_bytes = resp.content
-            wav_len = len(wav_bytes)
-            wav_path = _persist_artifact(run_dir, scene_id, "wav", wav_bytes)
-            logger.info(
-                "scene_id=<%s>, bytes=<%d>, path=<%s> | wav persisted",
-                scene_id,
-                wav_len,
-                wav_path,
-            )
-
-        duration_sec = None
-        ds = resp.headers.get("X-Duration-S")
-        if ds is not None:
-            try:
-                duration_sec = float(ds)
-            except ValueError:
-                pass
-        alignment: dict[str, Any] | None = None
-        if duration_sec is not None and duration_sec > 0:
-            alignment = {
-                "scene_id": scene_id,
-                "duration_sec": duration_sec,
-                "source": "qwen3-tts-engine-duration",
-            }
-            logger.info(
-                "scene_id=<%s>, duration_sec=<%.3f> | tts alignment captured",
-                scene_id,
-                duration_sec,
-            )
-
-        return _envelope(
-            "launch_audio_render",
-            scene_id=scene_id,
-            voice_id=voice_id,
-            text=resolved_text,
-            status_code=resp.status_code,
-            wav_bytes_len=wav_len,
-            wav_path=str(wav_path) if wav_path else None,
-            duration_s=duration_sec,
-            elapsed_ms=elapsed_ms,
-            engine=None,
-            alignment=alignment,
-        )
-
-    return with_b2_upload(launch_audio_render)
 
 
-def _resolve_visual_prompt(
-    visual_concept: Any,
-    prompt: str | None,
-) -> str:
-    """Pick the LTX prompt string for a scene render.
-
-    Slice 9c contract: the orchestrator either supplies a fully-formed
-    ``prompt`` string (preferred) or — when only the structured
-    ``visual_concept`` is available — a richer string is synthesised
-    from the concept's known fields (phrases, shot_type, camera
-    movement, mood, palette). Falls back to the pre-9c placeholder
-    line only when both inputs are empty.
-    """
-    if isinstance(prompt, str) and prompt.strip():
-        return prompt.strip()
-
-    if isinstance(visual_concept, dict):
-        parts: list[str] = []
-        phrases = visual_concept.get("phrases")
-        if isinstance(phrases, list) and phrases:
-            parts.append(" ".join(str(p).strip() for p in phrases if str(p).strip()))
-        for key in ("shot_type", "camera_movement", "mood", "palette", "style"):
-            value = visual_concept.get(key)
-            if isinstance(value, str) and value.strip():
-                parts.append(f"{key.replace('_', ' ')}: {value.strip()}")
-            elif isinstance(value, list):
-                joined = ", ".join(str(v).strip() for v in value if str(v).strip())
-                if joined:
-                    parts.append(f"{key.replace('_', ' ')}: {joined}")
-        synthesised = ". ".join(p for p in parts if p)
-        if synthesised.strip():
-            return synthesised.strip()
-
-    return "Documentary establishing shot, slow zoom, cinematic lighting"
 
 
-def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
-    """Return a ``@tool``-decorated callable that POSTs to the live LTX worker."""
-
-    @tool
-    def launch_visual_production(
-        scene_id: str,
-        visual_concept: dict[str, Any],
-        prompt: str | None = None,
-        target_duration_s: float | None = None,
-    ) -> dict[str, Any]:
-        """Real LTX-2.3 BASIC dispatch (slice 9d-wire / 9c / 9k).
-
-        Sends a POST / request to the live worker, receives raw
-        base64 MP4, persists it under ``run_dir/artifacts/``, and
-        returns a placeholder-shaped envelope. The optional ``prompt``
-        argument (slice 9c) carries a fully-formed style-locked LTX
-        prompt so the orchestrator can drive video quality from real
-        scenario content; falls back to a string synthesised from the
-        ``visual_concept`` dict, then to a generic establishing-shot
-        line.
-
-        ``target_duration_s`` (slice 9k) is the per-scene narration
-        length the worker should match. LTX-2.3 emits ~89 frames at
-        24 fps (~3.7 s) by default; without this argument the muxer
-        freezes the last frame for the remainder of the audio
-        track. Passing the per-scene narration duration tells the
-        worker to render ``ceil(target_duration_s * fps)`` frames so
-        video and audio cover the same wall-clock window.
-        """
-        resolved_prompt = _resolve_visual_prompt(visual_concept, prompt)
-        requested_duration = (
-            float(target_duration_s)
-            if isinstance(target_duration_s, int | float)
-            and target_duration_s > 0
-            else _DEFAULT_VIDEO_DURATION_S
-        )
-        resolved_duration = min(requested_duration, _MAX_VIDEO_DURATION_S)
-        if resolved_duration < requested_duration:
-            logger.info(
-                "scene_id=<%s>, requested=<%.3f>, capped=<%.3f> | "
-                "ltx duration capped to avoid VAE OOM; muxer loops clip",
-                scene_id,
-                requested_duration,
-                resolved_duration,
-            )
-
-        started_ms = _now_ms()
-        try:
-            with _video_dispatch_lock:
-                logger.info("scene_id=<%s> | ltx dispatch acquired GPU lock", scene_id)
-                with httpx.Client(timeout=_DEFAULT_TIMEOUT_S) as client:
-                    resp = client.post(
-                        f"{worker_url.rstrip('/')}/",
-                        content=resolved_prompt.encode("utf-8"),
-                        headers={"Content-Type": "text/plain"},
-                    )
-        except httpx.HTTPError as exc:
-            logger.warning(
-                "scene_id=<%s>, error=<%r> | ltx dispatch failed",
-                scene_id,
-                exc,
-            )
-            return _envelope(
-                "launch_visual_production",
-                scene_id=scene_id,
-                visual_concept=visual_concept,
-                error=repr(exc),
-            )
-
-        elapsed_ms = _now_ms() - started_ms
-        mp4_path: Path | None = None
-        mp4_len = 0
-        if resp.status_code == 200:
-            mp4_bytes = resp.content
-            mp4_len = len(mp4_bytes)
-            mp4_path = _persist_artifact(run_dir, scene_id, "mp4", mp4_bytes)
-            logger.info(
-                "scene_id=<%s>, bytes=<%d>, path=<%s> | mp4 persisted",
-                scene_id,
-                mp4_len,
-                mp4_path,
-            )
-
-        return _envelope(
-            "launch_visual_production",
-            scene_id=scene_id,
-            visual_concept=visual_concept,
-            prompt=resolved_prompt,
-            target_duration_s=resolved_duration,
-            duration_s=resolved_duration,
-            status_code=resp.status_code,
-            mp4_bytes_len=mp4_len,
-            mp4_path=str(mp4_path) if mp4_path else None,
-            elapsed_ms=elapsed_ms,
-            engine=None,
-        )
-
-    return with_b2_upload(launch_visual_production)
 
 
 def build_real_worker_tools(
     run_dir: Path,
     *,
-    audio_worker_url: str | None = None,
-    video_worker_url: str | None = None,
     enable_real_assembly: bool | None = None,
     enable_real_b2: bool | None = None,
 ) -> dict[str, Any]:
-    """Return ``{tool_name: tool}`` overrides for direct HTTP dispatch.
+    """Return ``{tool_name: tool}`` overrides for real assembly and B2.
 
-    These are **debug/test-only tools** that POST directly to a pre-known
-    worker URL.  The ONLY way to activate them is by passing the worker
-    URL explicitly — there is NO env-var backdoor.  The normal pipeline
-    uses queue-based tools from :mod:`_base_worker_tools` instead.
-
-    Args:
-        run_dir: The orchestrator's run-dir; artifact files persist
-            under ``run_dir/artifacts/``.
-        audio_worker_url: Explicit ``http(s)://host:port`` base URL for
-            the Qwen3-TTS worker. ``None`` means no direct audio dispatch.
-        video_worker_url: Explicit base URL for the LTX-Video worker.
-            ``None`` means no direct video dispatch.
-        enable_real_assembly: Optional explicit toggle for real assembly.
-        enable_real_b2: Optional explicit toggle for real B2 sync.
-
-    Returns:
-        Possibly-empty dict.  Empty when no URLs are passed — the caller
-        keeps the queue-based base tools unchanged.
+    Direct audio/video worker dispatch has been removed.
+    Only assembly and B2 tools remain.
     """
     overrides: dict[str, Any] = {}
-    audio = (audio_worker_url or "").rstrip("/")
-    video = (video_worker_url or "").rstrip("/")
-    if audio:
-        overrides["launch_audio_render"] = _build_audio_tool(
-            run_dir=run_dir, worker_url=audio
-        )
-    if video:
-        overrides["launch_visual_production"] = _build_visual_tool(
-            run_dir=run_dir, worker_url=video
-        )
     overrides.update(
         build_real_assembly_tools(run_dir=run_dir, enabled=enable_real_assembly)
     )
@@ -402,9 +136,7 @@ def build_real_worker_tools(
     if not overrides:
         return overrides
     logger.info(
-        "audio=<%s>, video=<%s>, overrides=<%s> | direct-dispatch tools built (debug only)",
-        bool(audio),
-        bool(video),
+        "overrides=<%s> | real tools built",
         sorted(overrides.keys()),
     )
     return overrides
