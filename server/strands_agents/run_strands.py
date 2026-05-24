@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # DEFAULTS — edit these to change baseline behavior
 # =============================================================================
 DEFAULTS = {
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com/v1",
     "output_dir": "/tmp/documentary-pipeline",
     "budget": 100.0,

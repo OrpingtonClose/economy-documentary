@@ -1,0 +1,82 @@
+{
+    "OTIO_SCHEMA": "Timeline.1",
+    "metadata": {
+        "documentary": {
+            "_provenance": {
+                "gate_scenario": {
+                    "agent": "otio_gate"
+                }
+            },
+            "gate_scenario": {
+                "errors": [
+                    "ingest_scenario failed (attempt 25): litellm.BadRequestError - LLM provider not configured for deepseek-chat",
+                    "validate_scenario: scenes missing, visual_style missing, style_lock missing",
+                    "Pipeline blocked at scenario stage - 25 consecutive gate failures, same root cause",
+                    "NO progress possible until ingest_scenario source code is modified: change 'deepseek-chat' to 'deepseek/deepseek-chat' or equivalent provider-prefixed model string"
+                ],
+                "stage": "scenario",
+                "valid": false
+            },
+            "state": "draft",
+            "state_history": [
+                {
+                    "from": null,
+                    "reason": "timeline_created",
+                    "timestamp": 1779664303.843084,
+                    "to": "draft"
+                }
+            ],
+            "state_reason": "timeline_created"
+        }
+    },
+    "name": "documentary_draft",
+    "global_start_time": null,
+    "tracks": {
+        "OTIO_SCHEMA": "Stack.1",
+        "metadata": {},
+        "name": "tracks",
+        "source_range": null,
+        "effects": [],
+        "markers": [],
+        "enabled": true,
+        "color": null,
+        "children": [
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "V1_Video",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "video"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "A1_Narration",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "A2_Music",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "audio"
+            }
+        ]
+    }
+}

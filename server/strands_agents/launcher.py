@@ -141,7 +141,7 @@ def main() -> None:
     args = parser.parse_args()
 
     pipeline_dir = os.path.join(os.getcwd(), "pipeline_output")
-    model_id = "deepseek-chat"
+    model_id = "deepseek-v4-flash"
     base_url = "https://api.deepseek.com/v1"
     processes: list[multiprocessing.Process] = []
 

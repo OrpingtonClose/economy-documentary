@@ -16,6 +16,10 @@ from strands.multiagent.graph import (
     GraphState,
 )
 
+# Search tools for all agents
+from search_tools import search_brave, search_perplexity, search_exa
+_SEARCH_TOOLS = [search_brave, search_perplexity, search_exa]
+
 logger = logging.getLogger(__name__)
 
 
@@ -591,73 +595,33 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
 
     @tool
     def ingest_scenario(text: str) -> str:
-        """Parse raw scenario text and write structured data to OTIO.
-
-        The scenario agent sends its text directly via the graph.
-        This tool receives that text, parses it into scenes/visual_style/style_lock,
-        and persists to OTIO metadata.  If parsing fails, returns an error.
-        """
+        """Store scenario text in OTIO metadata. No parsing — raw text only."""
         if not text.strip():
             return json.dumps({"error": "Empty scenario text received."})
 
-        # Parse via LLM — the text format is well-structured
-        from strands_agents.scenario_llm import make_generator
-        mid = _model_id
-        if not mid:
-            return json.dumps({"error": "model_id not provided — cannot parse scenario text"})
-
-        try:
-            parse_prompt = (
-                "Parse the following documentary scenario text into strict JSON.\n"
-                "Return a JSON object with exactly these keys:\n"
-                "  scenes: array of scene objects\n"
-                "  visual_style: object\n"
-                "  style_lock: object\n\n"
-                "SCENARIO TEXT:\n" + text
-            )
-            import litellm
-            resp = litellm.completion(
-                model=mid,
-                messages=[
-                    {"role": "system", "content": "You parse documentary scenario text into strict JSON. Output JSON only, no markdown fences."},
-                    {"role": "user", "content": parse_prompt},
-                ],
-                response_format={"type": "json_object"},
-            )
-            content = resp.choices[0].message.content  # type: ignore[reportAttributeAccessIssue]
-            parsed = json.loads(content)  # type: ignore[reportArgumentType]
-        except Exception as exc:
-            return json.dumps({"error": f"Failed to parse scenario text: {exc}"})
-
-        # Write to OTIO
         from tools.otio_file_ops import resolve_timeline_path
         from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        write_pipeline_metadata(tp, MetadataSchema.SCENES, parsed.get("scenes", []), provenance={"agent": "otio_gate"})
-        write_pipeline_metadata(tp, MetadataSchema.VISUAL_STYLE, parsed.get("visual_style", {}), provenance={"agent": "otio_gate"})
-        write_pipeline_metadata(tp, MetadataSchema.STYLE_LOCK, parsed.get("style_lock", {}), provenance={"agent": "otio_gate"})
-        # Store raw text for retry — scenario agent reads this on backward edge
+        # Store raw text — downstream agents parse what they need
         write_pipeline_metadata(tp, "scenario_raw", text, provenance={"agent": "otio_gate"})
 
         return json.dumps({
             "ingested": True,
-            "scene_count": len(parsed.get("scenes", [])),
             "raw_length": len(text),
         })
 
     @tool
     def validate_scenario() -> str:
-        """Validate scenario output: scenes must exist and be well-formed."""
+        """Validate scenario output: raw text must exist and contain scenes."""
         from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import metadata_key_exists
+        from tools.otio_metadata import read_pipeline_metadata
         tp = resolve_timeline_path()
+        text = read_pipeline_metadata(tp, "scenario_raw")
         errors = []
-        if not metadata_key_exists(tp, MetadataSchema.SCENES):
-            errors.append("Missing 'scenes' in OTIO metadata")
-        if not metadata_key_exists(tp, MetadataSchema.VISUAL_STYLE):
-            errors.append("Missing 'visual_style' in OTIO metadata")
-        if not metadata_key_exists(tp, MetadataSchema.STYLE_LOCK):
-            errors.append("Missing 'style_lock' in OTIO metadata")
+        if not text or not text.strip():
+            errors.append("Missing scenario text in OTIO metadata")
+        elif "SCENES:" not in text:
+            errors.append("Scenario text missing 'SCENES:' section")
         if errors:
             return json.dumps({"valid": False, "errors": errors, "recovery_target": SCENARIO})
         return json.dumps({"valid": True, "next_stage": AUDIO})
@@ -907,7 +871,7 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             read_ladder_state,
             write_critique_record,
             trigger_preview,
-        ] + _make_memory_tools("otio_gate"),
+        ] + _SEARCH_TOOLS + _make_memory_tools("otio_gate"),
         model=model,
     )
 
@@ -1063,7 +1027,7 @@ def _build_scenario_agent(model) -> Agent:
             "RETRY: If your task contains validation errors, call read_scenario_raw to get\n"
             "your previous text, revise it, and output the new text.\n"
         ),
-        tools=[read_scenario_raw, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
+        tools=[read_scenario_raw, check_resume_status, save_scenario_checkpoint] + _SEARCH_TOOLS + _make_memory_tools(SCENARIO),
         model=model,
     )
 
@@ -1189,7 +1153,7 @@ def _build_audio_agent(model) -> Agent:
             qa_completed_job,
             check_queue_status,
             get_failed_job_details,
-        ] + _make_memory_tools(AUDIO),
+        ] + _SEARCH_TOOLS + _make_memory_tools(AUDIO),
         model=model,
     )
 
@@ -1420,7 +1384,7 @@ def _build_video_agent(model) -> Agent:
             qa_completed_job,
             check_queue_status,
             get_failed_job_details,
-        ] + _make_memory_tools(VIDEO),
+        ] + _SEARCH_TOOLS + _make_memory_tools(VIDEO),
         model=model,
     )
 
@@ -1502,7 +1466,7 @@ def _build_assembly_agent(model) -> Agent:
             write_assembly_output_path,
             check_resume_status,
             save_assembly_checkpoint,
-        ] + _make_memory_tools(ASSEMBLY),
+        ] + _SEARCH_TOOLS + _make_memory_tools(ASSEMBLY),
         model=model,
     )
 

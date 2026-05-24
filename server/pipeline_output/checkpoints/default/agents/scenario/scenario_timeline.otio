@@ -1,0 +1,67 @@
+{
+    "OTIO_SCHEMA": "Timeline.1",
+    "metadata": {
+        "documentary": {
+            "state": "draft",
+            "state_history": [
+                {
+                    "from": null,
+                    "reason": "timeline_created",
+                    "timestamp": 1779664303.843084,
+                    "to": "draft"
+                }
+            ],
+            "state_reason": "timeline_created"
+        }
+    },
+    "name": "documentary_draft",
+    "global_start_time": null,
+    "tracks": {
+        "OTIO_SCHEMA": "Stack.1",
+        "metadata": {},
+        "name": "tracks",
+        "source_range": null,
+        "effects": [],
+        "markers": [],
+        "enabled": true,
+        "color": null,
+        "children": [
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "V1_Video",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "video"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "A1_Narration",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "audio"
+            },
+            {
+                "OTIO_SCHEMA": "Track.1",
+                "metadata": {},
+                "name": "A2_Music",
+                "source_range": null,
+                "effects": [],
+                "markers": [],
+                "enabled": true,
+                "color": null,
+                "children": [],
+                "kind": "audio"
+            }
+        ]
+    }
+}

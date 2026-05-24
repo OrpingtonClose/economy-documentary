@@ -1,0 +1,14 @@
+{
+  "checkpoint_schema_version": "1.0",
+  "run_id": "default",
+  "stages": [
+    "scenario",
+    "audio",
+    "video",
+    "assembly"
+  ],
+  "created_by": "graph_pipeline",
+  "completed_stages": [
+    "scenario"
+  ]
+}
