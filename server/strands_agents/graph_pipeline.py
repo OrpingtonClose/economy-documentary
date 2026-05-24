@@ -782,6 +782,11 @@ def _read_directives() -> dict | None:
 def _build_scenario_agent(model) -> Agent:
     """Build the scenario agent — generates scenes and locks visual style."""
     from strands import tool
+    from strands_agents.stages.scenario_stage import (
+        generate_scenario,
+        evaluate_scenario,
+        refine_scenario,
+    )
 
     # Inject scope constraints from debug-gym directives
     constraint_text = ""
@@ -854,13 +859,16 @@ def _build_scenario_agent(model) -> Agent:
             "BEFORE doing any work, call check_resume_status. If it returns 'already_completed', "
             "call save_scenario_checkpoint and then STOP — do not regenerate scenes.\n"
             f"{constraint_text}"
-            "1. Create scenes based on the input brief.\n"
-            "2. Define visual_style and set style_lock.\n"
-            "3. Write scenes, visual_style, and style_lock to the OTIO file.\n"
-            "4. Call save_scenario_checkpoint to preserve the narrative planning in the checkpoint directory.\n"
-            "You are stateless — all output goes to the OTIO file."
+            "WORKFLOW:\n"
+            "1. Call generate_scenario(corpus_path='', topic=<from brief>, target_duration_sec=<from brief>, language='en')\n"
+            "   to generate scenes, visual_style, and style_lock. The tool writes directly to OTIO.\n"
+            "2. Call evaluate_scenario with the JSON result to check ADHD compliance.\n"
+            "3. If the evaluator returns FAIR or POOR, call refine_scenario with the feedback.\n"
+            "4. Call save_scenario_checkpoint to preserve the narrative planning.\n"
+            "You are stateless — all output goes to the OTIO file.\n"
+            "NEVER call write_scenes or write_visual_style directly — generate_scenario handles persistence."
         ),
-        tools=[write_scenes, write_visual_style, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
+        tools=[generate_scenario, evaluate_scenario, refine_scenario, check_resume_status, save_scenario_checkpoint] + _make_memory_tools(SCENARIO),
         model=model,
     )
 
