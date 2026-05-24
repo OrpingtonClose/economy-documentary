@@ -1647,9 +1647,7 @@ async def _dispatch_pipeline_run(
     are mocked at the HTTP boundary in CI, never substituted at the
     code level.
     """
-    from strands_agents.playground.pipeline_live_demo import (
-        build_demo_live_agent,
-    )
+    from strands_agents.pipeline import build_documentary_orchestrator
     from strands_agents.playground.pipeline_live_hitl import (
         maybe_build_pipeline_hitl_operator,
     )
@@ -1675,12 +1673,9 @@ async def _dispatch_pipeline_run(
     try:
         run_started = time.perf_counter()
         run_dir = Path(tempfile.mkdtemp(prefix="pipeline_run_"))
-        agent = build_demo_live_agent(
-            run_dir,
-            topic=topic,
-            target_duration_sec=target_duration_sec,
-            language=language,
-            num_scenes=num_scenes,
+        agent = build_documentary_orchestrator(
+            run_dir=run_dir,
+            model=os.environ.get("STRANDS_MODEL", ""),
         )
         # When ``ENABLE_PIPELINE_HITL`` is set, swap the default
         # ``auto_accept_interrupt`` for a queue-backed operator handler

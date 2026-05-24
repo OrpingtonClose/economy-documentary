@@ -41,7 +41,7 @@ def claim_job(stage: str) -> str:
     return (
         f"Claimed job {job.job_id}\n"
         f"  type: {job.job_type.value}\n"
-        f"  run_id: {job.run_id}\n"
+        f"  stage: {job.stage}\n"
         f"  scene: {job.scene_num}\n"
         f"  attempts: {job.attempts}/{job.max_attempts}\n"
         f"  qa_comments: {comments}\n"
@@ -130,14 +130,14 @@ def vast_destroy_instance(instance_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def registry_query(run_id: str, stage: str = "") -> str:
-    """Query the VM registry for VMs associated with a run.
+def registry_query(stage: str = "") -> str:
+    """Query the VM registry for VMs.
 
     Returns plain-text summary of VMs, their status, and worker readiness.
     """
     from vm_registry_tools import query_vm_registry
 
-    return query_vm_registry(run_id, stage)
+    return query_vm_registry(stage)
 
 
 @tool

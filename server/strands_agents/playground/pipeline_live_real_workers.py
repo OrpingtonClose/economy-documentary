@@ -43,9 +43,9 @@ from typing import Any
 import httpx
 from langchain_core.tools import tool  # type: ignore[import-not-found]
 
-from strands_agents import _placeholders
 from strands_agents._real_assembly_tools import build_real_assembly_tools
 from strands_agents._real_b2_tools import build_real_b2_tools
+from strands_agents.artifact_uploader import with_b2_upload
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ def _build_audio_tool(*, run_dir: Path, worker_url: str) -> Any:
             alignment=alignment,
         )
 
-    return launch_audio_render
+    return with_b2_upload(launch_audio_render)
 
 
 def _resolve_visual_prompt(
@@ -352,7 +352,7 @@ def _build_visual_tool(*, run_dir: Path, worker_url: str) -> Any:
             engine=None,
         )
 
-    return launch_visual_production
+    return with_b2_upload(launch_visual_production)
 
 
 def build_real_worker_tools(
@@ -363,31 +363,30 @@ def build_real_worker_tools(
     enable_real_assembly: bool | None = None,
     enable_real_b2: bool | None = None,
 ) -> dict[str, Any]:
-    """Return ``{tool_name: tool}`` overrides for the live demo.
+    """Return ``{tool_name: tool}`` overrides for direct HTTP dispatch.
+
+    These are **debug/test-only tools** that POST directly to a pre-known
+    worker URL.  The ONLY way to activate them is by passing the worker
+    URL explicitly — there is NO env-var backdoor.  The normal pipeline
+    uses queue-based tools from :mod:`_base_worker_tools` instead.
 
     Args:
         run_dir: The orchestrator's run-dir; artifact files persist
             under ``run_dir/artifacts/``.
-        audio_worker_url: ``http(s)://host:port`` base URL for the
-            Qwen3-TTS worker. ``None`` disables real audio dispatch
-            (placeholder used).
-        video_worker_url: Base URL for the LTX-Video worker. ``None``
-            disables real video dispatch.
-        enable_real_assembly: Optional explicit toggle for the slice
-            9g real assembly overlay. ``None`` falls through to the
-            ``ENABLE_REAL_ASSEMBLY`` env var.
-        enable_real_b2: Optional explicit toggle for the slice 9h
-            real B2 sync overlay. ``None`` falls through to the
-            ``ENABLE_REAL_B2`` env var.
+        audio_worker_url: Explicit ``http(s)://host:port`` base URL for
+            the Qwen3-TTS worker. ``None`` means no direct audio dispatch.
+        video_worker_url: Explicit base URL for the LTX-Video worker.
+            ``None`` means no direct video dispatch.
+        enable_real_assembly: Optional explicit toggle for real assembly.
+        enable_real_b2: Optional explicit toggle for real B2 sync.
 
     Returns:
-        A possibly-empty dict mapping tool names to ``@tool``-decorated
-        callables. Empty when no overlay is active — caller falls back
-        to the placeholder set.
+        Possibly-empty dict.  Empty when no URLs are passed — the caller
+        keeps the queue-based base tools unchanged.
     """
     overrides: dict[str, Any] = {}
-    audio = (audio_worker_url or os.environ.get("QWEN3_TTS_WORKER_URL", "")).rstrip("/")
-    video = (video_worker_url or os.environ.get("LTX_VIDEO_WORKER_URL", "")).rstrip("/")
+    audio = (audio_worker_url or "").rstrip("/")
+    video = (video_worker_url or "").rstrip("/")
     if audio:
         overrides["launch_audio_render"] = _build_audio_tool(
             run_dir=run_dir, worker_url=audio
@@ -403,7 +402,7 @@ def build_real_worker_tools(
     if not overrides:
         return overrides
     logger.info(
-        "audio=<%s>, video=<%s>, overrides=<%s> | real-worker tools built",
+        "audio=<%s>, video=<%s>, overrides=<%s> | direct-dispatch tools built (debug only)",
         bool(audio),
         bool(video),
         sorted(overrides.keys()),
@@ -442,4 +441,4 @@ __all__ = [
 
 # Module-level reference so static analyzers don't drop the
 # placeholder import (used downstream as a fallback target).
-_ = _placeholders
+

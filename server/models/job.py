@@ -41,7 +41,6 @@ class Job(BaseModel):
 
     job_id: str = Field(description="Unique job identifier (UUID)")
     job_type: JobType = Field(description="narration or video_render")
-    run_id: str = Field(description="Which pipeline run this job belongs to")
     stage: str = Field(description="'audio' or 'video'")
     scene_num: int = Field(description="1-based scene index")
     payload: dict = Field(

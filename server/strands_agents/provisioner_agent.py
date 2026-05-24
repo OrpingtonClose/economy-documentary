@@ -124,12 +124,12 @@ def set_job_failed(job_id: str, error_message: str) -> str:
 
 
 @tool
-def check_queue_status(run_id: str, stage: str) -> str:
-    """Return counts of jobs by status for a run/stage."""
+def check_queue_status(stage: str) -> str:
+    """Return counts of jobs by status for a stage."""
     from job_queue import get_queue_summary
 
-    summary = get_queue_summary(run_id, stage)
-    return json.dumps({"run_id": run_id, "stage": stage, "counts": summary})
+    summary = get_queue_summary(stage)
+    return json.dumps({"stage": stage, "counts": summary})
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +137,11 @@ def check_queue_status(run_id: str, stage: str) -> str:
 # ---------------------------------------------------------------------------
 
 @tool
-def query_vm_registry(run_id: str, stage: str = "") -> str:
-    """Query the VM registry for VMs associated with a run."""
+def query_vm_registry(stage: str = "") -> str:
+    """Query the VM registry for VMs."""
     from vm_registry_tools import query_vm_registry as _query
 
-    return _query(run_id, stage)
+    return _query(stage)
 
 
 @tool
@@ -153,11 +153,11 @@ def check_worker_health(instance_id: str, worker_url: str = "") -> str:
 
 
 @tool
-def get_provisioning_guidance(run_id: str, stage: str, agent_reasoning: str) -> str:
+def get_provisioning_guidance(stage: str, agent_reasoning: str) -> str:
     """Get system-corrected guidance for VM provisioning."""
     from vm_registry_tools import get_provisioning_guidance as _guide
 
-    return _guide(run_id, stage, agent_reasoning)
+    return _guide(stage, agent_reasoning)
 
 
 # ---------------------------------------------------------------------------
@@ -330,12 +330,12 @@ CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.
 2. ONLY if no memory exists: call research_model_requirements('<model_name>')
    to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.
 
-3. BEFORE provisioning: query_vm_registry(run_id=<the_run_id>, stage=<stage>)
+3. BEFORE provisioning: query_vm_registry(stage=<stage>)
    If a VM exists, call check_worker_health(instance_id=<id>, worker_url=<url>).
    If the VM is healthy, USE IT. Do not provision a second VM.
 
 4. If you must provision:
-   a. Call get_provisioning_guidance(run_id, stage, <your_reasoning>)
+   a. Call get_provisioning_guidance(stage, <your_reasoning>)
    b. Search Vast.ai: bash_command("vastai search offers --type on-demand --raw | head -20")
    c. Evaluate offers: evaluate_vastai_offers('<model_name>', <raw_search_text>)
    d. Pick the HIGHEST-RANKED 'ideal' or 'acceptable' offer.
@@ -363,7 +363,7 @@ WORKFLOW:
    d. Upload the result to B2 via upload_artifact.
    e. Call set_job_completed(job_id, b2_key).
 3. If dispatch fails, call set_job_failed(job_id, error_message).
-4. After all claimed jobs are processed, call check_queue_status(run_id, stage)
+4. After all claimed jobs are processed, call check_queue_status(stage)
    for both stages.
 5. If pending or needs_retry jobs remain, report status and STOP.
    The graph will re-invoke you.

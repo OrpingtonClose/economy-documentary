@@ -6,12 +6,12 @@ import os
 import subprocess
 from typing import Any
 
-from strands import Agent, ToolContext, tool
+from strands import ToolContext, tool
 from strands_agents.otio_manager import OTIOStateManager
 
 logger = logging.getLogger(__name__)
 
-# OTIO manager — set by build_production_agent
+# OTIO manager — set by graph_pipeline
 _otio_manager: OTIOStateManager | None = None
 
 
@@ -123,32 +123,6 @@ Respond with a JSON object containing:
   "needs_improvement": true/false,
   "focus_areas": ["area1", "area2"]
 }
-"""
-
-_PRODUCTION_STAGE_SYSTEM_PROMPT = """\
-You are the Production Supervisor for a documentary pipeline.
-
-Your job is to generate video clips for each scene. You have access to
-GPU workers that can render video.
-
-CRITICAL: You MUST call submit_gpu_production_job for EACH scene to
-generate video clips. This is not optional. Without calling this tool,
-the OTIO timeline will have no video clips and the pipeline will fail.
-
-Steps:
-1. Read the visual concepts from the pipeline state (they were passed
-   from the visual stage)
-2. For each scene, call submit_gpu_production_job with job_type="video_render",
-   the scene_num, and phrase_idx=0
-3. After all jobs are submitted, call finalize_production with the results
-4. The OTIO timeline will be updated automatically when jobs complete
-
-DO NOT ask for additional data. The visual concepts and scene data
-are already in the pipeline state. Use the tools you have.
-
-If the production stage was already completed in a B2 checkpoint,
-the OTIO contract enforcer will detect existing video clips and
-allow the stage to pass.
 """
 
 
@@ -498,167 +472,8 @@ def evaluate_production_plan(
 
 
 # ---------------------------------------------------------------------------/
-# Tools — Job submission & finalization
+# Tools — Finalization
 # ---------------------------------------------------------------------------/
-
-
-@tool(context=True)
-def submit_gpu_production_job(
-    scene_num: int,
-    phrase_idx: int = 0,
-    job_type: str = "video_render",
-    output_dir: str = "",
-    tool_context: ToolContext | None = None,
-) -> dict[str, Any]:
-    """Submit a GPU production job for a scene.
-
-    Jobs are ALWAYS enqueued in the SQLite job queue for lazy provisioning.
-    There is NO direct worker dispatch path — the provisioner agent picks up
-    the job and provisions a GPU VM on demand.
-
-    If the target clip already exists on disk, returns a reuse JSON instead
-    of submitting a new GPU job.
-
-    Args:
-        scene_num: Scene number to render.
-        phrase_idx: Phrase index within the scene.
-        job_type: GPU job type (default ``video_render``).
-        output_dir: Directory for rendered output.
-        tool_context: Framework-injected context.
-
-    Returns:
-        Dict with job_id and queue status. The agent must poll the queue
-        for completion.
-    """
-    clip_id = f"s{int(scene_num):03d}_p{int(phrase_idx):03d}"
-    state = tool_context.agent.state if tool_context else None
-
-    # Check for existing clip in state
-    existing_clips = _read_state_dict(state, "existing_clips")
-    existing_path: str | None = None
-
-    if clip_id in existing_clips:
-        entry = existing_clips[clip_id]
-        if isinstance(entry, str) and os.path.isfile(entry):
-            existing_path = entry
-        elif isinstance(entry, dict):
-            for key in ("path", "file_path", "output_path", "video_path"):
-                candidate = entry.get(key)
-                if isinstance(candidate, str) and os.path.isfile(candidate):
-                    existing_path = candidate
-                    break
-
-    # If found, construct and return the reuse JSON
-    if existing_path:
-        duration = _get_video_duration(existing_path)
-        logger.info("Reusing existing clip <%s> at <%s>", clip_id, existing_path)
-        return {
-            "status": "reused",
-            "clip_id": clip_id,
-            "scene_num": scene_num,
-            "phrase_idx": phrase_idx,
-            "video_path": existing_path,
-            "duration": duration,
-            "job_type": job_type,
-            "message": f"Reused existing clip {clip_id}",
-        }
-
-    # ── Look up prompt / duration for this scene ────────────────────────
-    prompt = ""
-    duration = 5.0
-    negative_prompt = ""
-    lora_id = "documentary-realism"
-    lora_weight = 0.75
-
-    concepts: list[dict[str, Any]] = []
-    if _otio_manager is not None:
-        concepts = _otio_manager.get_pipeline_metadata("visual_concepts", []) or []
-    else:
-        from tools.otio_metadata import read_pipeline_metadata
-        tp = _resolve_timeline_path()
-        concepts = read_pipeline_metadata(tp, "visual_concepts", []) or []
-
-    if not concepts:
-        scenes = _read_scenes()
-        for scene in scenes:
-            if not isinstance(scene, dict):
-                continue
-            s_num = scene.get("scene_num")
-            if s_num is None:
-                sid = scene.get("scene_id", "")
-                if isinstance(sid, str) and sid.startswith("S"):
-                    try:
-                        s_num = int(sid[1:])
-                    except ValueError:
-                        s_num = 0
-                else:
-                    s_num = 0
-            p = (
-                scene.get("visual_prompt", "")
-                or scene.get("prompt", "")
-                or scene.get("visual_notes", "")
-                or scene.get("description", "")
-            )
-            if p:
-                concepts.append({
-                    "scene_num": s_num,
-                    "phrase_idx": 0,
-                    "prompt": p,
-                    "negative_prompt": scene.get("negative_prompt", ""),
-                    "duration": min(float(scene.get("duration_sec", scene.get("duration", 5.0))), 10.0),
-                    "lora_id": scene.get("lora_id", "documentary-realism"),
-                    "lora_weight": float(scene.get("lora_weight", 0.75)),
-                })
-
-    for concept in concepts:
-        if concept.get("scene_num") == scene_num and concept.get("phrase_idx", 0) == phrase_idx:
-            prompt = concept.get("prompt", "")
-            duration = float(concept.get("duration", 5.0))
-            negative_prompt = concept.get("negative_prompt", "")
-            lora_id = concept.get("lora_id", "documentary-realism")
-            lora_weight = float(concept.get("lora_weight", 0.75))
-            break
-
-    if not prompt:
-        return {
-            "status": "failed",
-            "clip_id": clip_id,
-            "scene_num": scene_num,
-            "phrase_idx": phrase_idx,
-            "error": f"No visual concept or scene data found for scene {scene_num}",
-        }
-
-    # ── Queue the job ───────────────────────────────────────────────────
-    if not output_dir:
-        output_dir = "/tmp/documentary-pipeline"
-    output_path = os.path.join(output_dir, "renders", f"{clip_id}.mp4")
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-    from job_queue import create_job
-    from models.job import JobType
-    job = create_job(
-        job_type=JobType.VIDEO_RENDER,
-        run_id=f"scene_{scene_num}_p{phrase_idx}",
-        stage="video",
-        scene_num=scene_num,
-        payload={
-            "prompt": prompt,
-            "duration_sec": min(duration, 10.0),
-            "lora_id": lora_id,
-            "lora_weight": lora_weight,
-            "negative_prompt": negative_prompt,
-            "output_path": output_path,
-            "clip_id": clip_id,
-        },
-    )
-    return {
-        "status": "queued",
-        "job_id": job.job_id,
-        "clip_id": clip_id,
-        "scene_num": scene_num,
-        "phrase_idx": phrase_idx,
-        "prompt": prompt,
-    }
 
 
 @tool
@@ -668,8 +483,7 @@ def finalize_production(
     """Finalize the production stage with collected job results.
 
     Args:
-        results: List of result dicts returned by
-            ``submit_gpu_production_job``.
+        results: List of result dicts.
 
     Returns:
         Finalization summary.
@@ -691,31 +505,3 @@ def finalize_production(
         "submitted_clips": len(submitted),
         "results": results,
     }
-
-
-# ---------------------------------------------------------------------------/
-# Agent builder
-# ---------------------------------------------------------------------------/
-
-def build_production_agent(otio_manager: OTIOStateManager) -> Agent:
-    """Build and configure the production stage agent.
-
-    Args:
-        otio_manager: The OTIO state manager instance.
-
-    Returns:
-        Configured Strands Agent.
-    """
-    global _otio_manager
-    _otio_manager = otio_manager
-
-    return Agent(
-        name="production_supervisor",
-        system_prompt=_PRODUCTION_STAGE_SYSTEM_PROMPT,
-        tools=[
-            generate_production_plan,
-            evaluate_production_plan,
-            submit_gpu_production_job,
-            finalize_production,
-        ],
-    )

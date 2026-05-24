@@ -50,7 +50,7 @@ from strands_evals.experiment import Experiment  # type: ignore[import-not-found
 from strands_evals.types.evaluation import EvaluationData, EvaluationOutput  # type: ignore[import-not-found]
 
 from strands_agents.playground.events import RunStream
-from strands_agents.playground.pipeline_live_demo import build_demo_live_agent
+from strands_agents.pipeline import build_documentary_orchestrator
 from strands_agents.playground.pipeline_live_runner import LivePipelineRun
 
 
@@ -132,11 +132,9 @@ def infra_pipeline_live_orchestrator_task(
     async def _run() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         run_dir = Path(tempfile.mkdtemp(prefix="pipeline-live-eval-"))
         try:
-            agent = build_demo_live_agent(
-                run_dir,
-                topic=topic,
-                target_duration_sec=int(duration),
-                language=language,
+            agent = build_documentary_orchestrator(
+                run_dir=run_dir,
+                model=os.environ.get("STRANDS_MODEL", ""),
             )
             stream = RunStream(
                 run_id=f"eval-{case.name}",

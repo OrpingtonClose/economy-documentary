@@ -44,7 +44,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS jobs (
             job_id TEXT PRIMARY KEY,
             job_type TEXT NOT NULL,
-            run_id TEXT NOT NULL,
             stage TEXT NOT NULL,
             scene_num INTEGER NOT NULL,
             payload TEXT NOT NULL DEFAULT '{}',
@@ -58,7 +57,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             started_at REAL NOT NULL DEFAULT 0,
             completed_at REAL NOT NULL DEFAULT 0
         );
-        CREATE INDEX IF NOT EXISTS idx_run_status ON jobs(run_id, status);
         CREATE INDEX IF NOT EXISTS idx_stage_status ON jobs(stage, status);
         CREATE INDEX IF NOT EXISTS idx_worker ON jobs(worker_id);
         """
@@ -73,7 +71,6 @@ def _row_to_job(row: sqlite3.Row) -> Job:
     return Job(
         job_id=row["job_id"],
         job_type=JobType(row["job_type"]),
-        run_id=row["run_id"],
         stage=row["stage"],
         scene_num=row["scene_num"],
         payload=json.loads(row["payload"]),
@@ -95,7 +92,6 @@ def _row_to_job(row: sqlite3.Row) -> Job:
 
 def create_job(
     job_type: JobType,
-    run_id: str,
     stage: str,
     scene_num: int,
     payload: dict[str, Any],
@@ -105,7 +101,6 @@ def create_job(
     job = Job(
         job_id=f"job_{uuid.uuid4().hex[:12]}",
         job_type=job_type,
-        run_id=run_id,
         stage=stage,
         scene_num=scene_num,
         payload=payload,
@@ -118,15 +113,14 @@ def create_job(
         conn.execute(
             """
             INSERT INTO jobs
-            (job_id, job_type, run_id, stage, scene_num, payload, status,
+            (job_id, job_type, stage, scene_num, payload, status,
              attempts, max_attempts, qa_comments, worker_id, b2_artifact_key,
              created_at, started_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job.job_id,
                 job.job_type.value,
-                job.run_id,
                 job.stage,
                 job.scene_num,
                 json.dumps(job.payload),
@@ -144,36 +138,36 @@ def create_job(
         conn.commit()
 
     logger.info(
-        "Created %s job %s for run=%s scene=%d",
-        job.job_type.value, job.job_id, job.run_id, job.scene_num,
+        "Created %s job %s for stage=%s scene=%d",
+        job.job_type.value, job.job_id, job.stage, job.scene_num,
     )
     return job
 
 
-def get_completed_jobs(run_id: str, stage: str) -> list[Job]:
-    """Get all completed jobs for a run/stage — media agent polls this."""
+def get_completed_jobs(stage: str) -> list[Job]:
+    """Get all completed jobs for a stage — media agent polls this."""
     with _LOCK, _conn() as conn:
         rows = conn.execute(
             """
             SELECT * FROM jobs
-            WHERE run_id = ? AND stage = ? AND status = 'completed'
+            WHERE stage = ? AND status = 'completed'
             ORDER BY scene_num
             """,
-            (run_id, stage),
+            (stage,),
         ).fetchall()
     return [_row_to_job(r) for r in rows]
 
 
-def get_failed_jobs(run_id: str, stage: str) -> list[Job]:
+def get_failed_jobs(stage: str) -> list[Job]:
     """Get jobs that exceeded max attempts — permanent failures."""
     with _LOCK, _conn() as conn:
         rows = conn.execute(
             """
             SELECT * FROM jobs
-            WHERE run_id = ? AND stage = ? AND status = 'failed'
+            WHERE stage = ? AND status = 'failed'
             ORDER BY scene_num
             """,
-            (run_id, stage),
+            (stage,),
         ).fetchall()
     return [_row_to_job(r) for r in rows]
 
@@ -237,17 +231,17 @@ def get_job(job_id: str) -> Job:
     return _row_to_job(row)
 
 
-def get_queue_summary(run_id: str, stage: str) -> dict[str, int]:
-    """Return count of jobs by status for a run/stage."""
+def get_queue_summary(stage: str) -> dict[str, int]:
+    """Return count of jobs by status for a stage."""
     with _LOCK, _conn() as conn:
         rows = conn.execute(
             """
             SELECT status, COUNT(*) as cnt
             FROM jobs
-            WHERE run_id = ? AND stage = ?
+            WHERE stage = ?
             GROUP BY status
             """,
-            (run_id, stage),
+            (stage,),
         ).fetchall()
     summary: dict[str, int] = {s.value: 0 for s in JobStatus}
     for r in rows:
@@ -357,11 +351,11 @@ def mark_job_failed(job_id: str, error_message: str) -> None:
 # Cleanup
 # ---------------------------------------------------------------------------
 
-def clear_run_jobs(run_id: str) -> int:
-    """Delete all jobs for a run — call on successful completion."""
+def clear_all_jobs() -> int:
+    """Delete all jobs — call on successful pipeline completion."""
     with _LOCK, _conn() as conn:
-        cur = conn.execute("DELETE FROM jobs WHERE run_id = ?", (run_id,))
+        cur = conn.execute("DELETE FROM jobs")
         conn.commit()
     deleted = cur.rowcount
-    logger.info("Cleared %d jobs for run %s", deleted, run_id)
+    logger.info("Cleared %d jobs from queue", deleted)
     return deleted

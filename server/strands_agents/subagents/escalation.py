@@ -36,7 +36,8 @@ import copy
 import json
 import logging
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
+from typing_extensions import TypedDict
 
 from strands import tool
 

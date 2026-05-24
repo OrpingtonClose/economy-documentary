@@ -3,120 +3,18 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 from typing import Any
 
-from strands import Agent, tool
+from strands import tool
 from strands_agents.otio_manager import OTIOStateManager
 
 logger = logging.getLogger(__name__)
 
-# OTIO manager — set by build_audio_agent
+# OTIO manager — set by graph_pipeline
 _otio_manager: OTIOStateManager | None = None
 
-_AUDIO_INSTRUCTION = """\
-You are the Audio Agent for a documentary pipeline.
 
-Your job is to generate narration audio for every scene. First read the
-scenes from the OTIO timeline with read_scenes_from_otio. For each scene,
-for each voice (V1, V2, V3), call generate_scene_narration.
-
-IMPORTANT: generate_scene_narration may return {"status": "queued", "job_id": ...}
-instead of a WAV path. When this happens, call poll_narration_job(job_id)
-repeatedly until it returns {"status": "completed", "wav_path": ...} or
-{"status": "failed", "error": ...}. Do NOT proceed without the actual WAV.
-
-Then add each clip to the OTIO timeline with add_narration_to_timeline.
-
-After all narration is generated, run WhisperX alignment with
-align_narration_audio for each clip. Then evaluate timing with
-evaluate_audio_timing.
-
-CRITICAL: After all audio processing, call persist_audio_to_otio to
-write alignment data to the OTIO timeline. The visual stage reads
-from OTIO — not from agent state.
-
-IMPORTANT: Call tools for each scene individually. Do not skip any scene
-or voice. The pipeline cannot proceed without complete narration.
-"""
-
-
-# ── TTS Generation ──────────────────────────────────────────────────
-
-@tool
-def generate_scene_narration(
-    scene_num: int,
-    voice: str,
-    text: str,
-    output_dir: str = "",
-) -> str:
-    """Generate narration WAV for a single scene voice using Qwen3-TTS.
-
-    Jobs are ALWAYS enqueued in the SQLite job queue for lazy provisioning.
-    There is NO direct worker dispatch path — the provisioner agent picks up
-    the job and provisions a GPU VM on demand.
-
-    Args:
-        scene_num: Scene number (0-based).
-        voice: Voice role identifier (V1, V2, V3).
-        text: Narration text to synthesize.
-        output_dir: Optional output directory override.
-
-    Returns:
-        JSON with job_id and queue status. The agent must poll
-        poll_narration_job(job_id) until status is "completed".
-    """
-    from job_queue import create_job
-    from models.job import JobType
-
-    job = create_job(
-        job_type=JobType.NARRATION,
-        run_id=f"scene_{scene_num}_{voice}",
-        stage="audio",
-        scene_num=scene_num,
-        payload={"text": text, "voice": voice, "output_dir": output_dir},
-    )
-    return json.dumps({
-        "status": "queued",
-        "job_id": job.job_id,
-        "scene_num": scene_num,
-        "voice": voice,
-        "text": text,
-    })
-
-
-@tool
-def poll_narration_job(job_id: str) -> str:
-    """Poll a queued narration job for completion.
-
-    Call this when generate_scene_narration returns
-    {'status': 'queued', 'job_id': ...}. Poll repeatedly
-    until status is 'completed' or 'failed'.
-
-    Returns JSON with status, wav_path (if completed), or error.
-    """
-    from job_queue import get_job
-    job = get_job(job_id)
-    if job.status.value == "completed":
-        return json.dumps({
-            "status": "completed",
-            "wav_path": job.b2_artifact_key or "",
-            "job_id": job_id,
-        })
-    elif job.status.value == "failed":
-        return json.dumps({
-            "status": "failed",
-            "error": job.qa_comments or "unknown error",
-            "job_id": job_id,
-        })
-    else:
-        return json.dumps({
-            "status": "pending",
-            "job_id": job_id,
-            "attempts": job.attempts,
-            "max_attempts": job.max_attempts,
-        })
-
+# ── OTIO clip management ────────────────────────────────────────────
 
 @tool
 def add_narration_to_timeline(
@@ -320,66 +218,7 @@ def _capture_audio_environment() -> dict:
         "arch": platform.machine(),
     }
     for var in ["TTS_WORKER_URL", "STRANDS_MODEL"]:
-        # NO ENV VARS: all values passed explicitly
         val = ""
         if val:
             env[var.lower()] = val
     return env
-
-
-# ── Agent factory ──────────────────────────────────────────────────
-
-def build_audio_agent(
-    otio_manager: OTIOStateManager | None = None,
-    model: Any = None,
-) -> Agent:
-    """Build the Strands Agent for the audio stage.
-
-    Args:
-        otio_manager: Optional OTIOStateManager for timeline access.
-        model: Optional model configuration.
-
-    Returns:
-        A configured Strands Agent ready for the Graph.
-    """
-    global _otio_manager
-    _otio_manager = otio_manager
-
-    tools = [
-        generate_scene_narration,
-        poll_narration_job,
-        add_narration_to_timeline,
-        align_narration_audio,
-        evaluate_audio_timing,
-        read_scenes_from_otio,
-        persist_audio_to_otio,
-    ]
-
-    if otio_manager is not None:
-        @tool
-        def read_audio_state(stage: str = "audio") -> str:
-            """Read the audio stage's OTIO state."""
-            return otio_manager.read(stage)
-
-        @tool
-        def write_audio_mutation(operation: str, details: str = "") -> str:
-            """Request a mutation on the OTIO timeline (guarded)."""
-            otio_manager.guard_mutation(operation)
-            return f"[write_audio_mutation] '{operation}' allowed"
-
-        tools.extend([read_audio_state, write_audio_mutation])
-
-    agent = Agent(
-        name="audio",
-        system_prompt=_AUDIO_INSTRUCTION,
-        tools=tools,
-        model=model,
-    )
-
-    if otio_manager is not None:
-        try:
-            agent.state.set("_otio_manager", otio_manager)
-        except Exception:
-            pass
-
-    return agent

@@ -56,39 +56,10 @@ def generate_video_clip(
 ) -> str:
     """Generate a video clip using LTX-2.3.
 
-    The prompt text is sent raw to the worker.  Duration/resolution are
-    local defaults; the caller accepts what the worker returns.
+    DEPRECATED: This direct-worker path is dead. Use the job queue
+    (submit_render_job) and let the provisioner agent dispatch.
     """
-    gpu_worker_url = _get_next_worker_url("video")
-    if not gpu_worker_url:
-        raise WorkerUnavailableError(
-            "No video worker registered. Provision a worker first.",
-            stage="video",
-        )
-
-    worker_url = f"{gpu_worker_url.rstrip('/')}/"
-    req = Request(worker_url, data=prompt.encode("utf-8"), headers={"Content-Type": "text/plain"})
-
-    try:
-        with urlopen(req) as resp:
-            result = _parse_video_response(resp)
-    except URLError as e:
-        raise WorkerUnavailableError(
-            f"Video worker unreachable at {worker_url}: {e}",
-            stage="video",
-        ) from e
-
-    with open(output_path, "wb") as f:
-        f.write(result["mp4_bytes"])
-
-    return json.dumps({
-        "status": "generated",
-        "output_path": output_path,
-        "actual_duration": duration_sec,
-        "qa_quality": result["qa_quality"],
-        "qa_reason": result["qa_reason"],
-        "qa_attempts": result["qa_attempts"],
-        "qa_seed": result["qa_seed"],
-        "gen_time": result["gen_time"],
-        "size_bytes": len(result["mp4_bytes"]),
-    })
+    raise RuntimeError(
+        "generate_video_clip direct-worker path is dead. "
+        "Use submit_render_job(stage='video', job_type='video_render') instead."
+    )

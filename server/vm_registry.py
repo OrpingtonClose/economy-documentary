@@ -16,6 +16,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path
+
 from models.vm_state import VMRegistryDecision, VMState, WorkerStatus
 from structured_extract import extract
 
@@ -30,7 +31,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS vms (
             instance_id TEXT PRIMARY KEY,
-            run_id TEXT,
             stage TEXT,
             status TEXT,
             ssh_host TEXT,
@@ -45,7 +45,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             last_seen_at REAL,
             raw_cli_text TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_run_stage ON vms(run_id, stage);
+        CREATE INDEX IF NOT EXISTS idx_stage ON vms(stage);
         CREATE INDEX IF NOT EXISTS idx_status ON vms(status);
         """
     )
@@ -66,7 +66,6 @@ def _conn() -> sqlite3.Connection:
 
 def record_provisioning(
     raw_cli_output: str,
-    run_id: str,
     stage: str,
 ) -> VMState:
     """Parse raw `vastai create instance` output and record the VM.
@@ -91,14 +90,13 @@ def record_provisioning(
         conn.execute(
             """
             INSERT OR REPLACE INTO vms
-            (instance_id, run_id, stage, status, ssh_host, ssh_port,
+            (instance_id, stage, status, ssh_host, ssh_port,
              gpu_name, vram_gb, price_per_hour, worker_url, worker_ready,
              worker_type, created_at, last_seen_at, raw_cli_text)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 vm.instance_id,
-                run_id,
                 stage,
                 vm.status,
                 vm.ssh_host,
@@ -117,8 +115,8 @@ def record_provisioning(
         conn.commit()
 
     logger.info(
-        "Recorded VM %s for run=%s stage=%s status=%s",
-        vm.instance_id, run_id, stage, vm.status,
+        "Recorded VM %s for stage=%s status=%s",
+        vm.instance_id, stage, vm.status,
     )
     return vm
 
@@ -166,7 +164,6 @@ def record_health_check(
 
 def decide_provisioning_action(
     raw_agent_reasoning: str,
-    run_id: str,
     stage: str,
 ) -> VMRegistryDecision:
     """Given the agent's reasoning text, decide what to do about VMs.
@@ -179,8 +176,8 @@ def decide_provisioning_action(
     # First: ground the agent's reasoning with actual registry state
     with _LOCK, _conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM vms WHERE run_id = ? AND stage = ?",
-            (run_id, stage),
+            "SELECT * FROM vms WHERE stage = ?",
+            (stage,),
         ).fetchall()
 
     existing_vms = [VMState(**{k: r[k] for k in r.keys()}) for r in rows]
@@ -188,7 +185,7 @@ def decide_provisioning_action(
     grounding = "\n".join(
         f"- VM {v.instance_id}: status={v.status}, worker_ready={v.worker_status.ready if v.worker_status else 'unknown'}"
         for v in existing_vms
-    ) if existing_vms else "- No existing VMs for this run/stage."
+    ) if existing_vms else "- No existing VMs for this stage."
 
     context = f"""Agent reasoning:
 {raw_agent_reasoning}
@@ -213,12 +210,15 @@ instance_id."""
     )
 
 
-def list_vms_for_run(run_id: str) -> list[VMState]:
-    """Return all VMs recorded for a run."""
+def list_vms(stage: str = "") -> list[VMState]:
+    """Return all VMs, optionally filtered by stage."""
     with _LOCK, _conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM vms WHERE run_id = ?", (run_id,)
-        ).fetchall()
+        if stage:
+            rows = conn.execute(
+                "SELECT * FROM vms WHERE stage = ?", (stage,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM vms").fetchall()
     return [VMState(**{k: r[k] for k in r.keys()}) for r in rows]
 
 

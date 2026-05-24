@@ -18,27 +18,25 @@ from __future__ import annotations
 import logging
 
 from strands import tool
-from vm_registry import get_vm, list_vms_for_run, record_health_check
+from vm_registry import get_vm, list_vms, record_health_check
 
 logger = logging.getLogger(__name__)
 
 
 @tool
-def query_vm_registry(run_id: str, stage: str = "") -> str:
-    """Query the VM registry for VMs associated with a run.
+def query_vm_registry(stage: str = "") -> str:
+    """Query the VM registry for VMs.
 
     Returns a plain-text summary of all VMs, their status, worker readiness,
     and SSH connection details. Use this BEFORE provisioning a new VM to
     check if one already exists.
     """
-    vms = list_vms_for_run(run_id)
+    vms = list_vms(stage)
     if not vms:
-        return f"No VMs recorded for run '{run_id}'."
+        return "No VMs recorded." if not stage else f"No VMs recorded for stage '{stage}'."
 
-    lines = [f"VM Registry for run '{run_id}':"]
+    lines = ["VM Registry:"]
     for vm in vms:
-        if stage and vm.labeled_for_stage != stage:
-            continue
         ready = vm.worker_status.ready if vm.worker_status else "unknown"
         worker_type = vm.worker_status.worker_type if vm.worker_status else "unknown"
         lines.append(
@@ -103,7 +101,7 @@ def check_worker_health(instance_id: str, worker_url: str = "") -> str:
 
 
 @tool
-def get_provisioning_guidance(run_id: str, stage: str, agent_reasoning: str) -> str:
+def get_provisioning_guidance(stage: str, agent_reasoning: str) -> str:
     """Get system-corrected guidance for VM provisioning.
 
     Tell the system what you're thinking (e.g. "SSH failed, I should provision
@@ -113,7 +111,7 @@ def get_provisioning_guidance(run_id: str, stage: str, agent_reasoning: str) -> 
     """
     from vm_registry import decide_provisioning_action
 
-    decision = decide_provisioning_action(agent_reasoning, run_id, stage)
+    decision = decide_provisioning_action(agent_reasoning, stage)
 
     if decision.action == "use_existing":
         return (

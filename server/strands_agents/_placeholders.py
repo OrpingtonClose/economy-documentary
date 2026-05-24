@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from langchain_core.tools import tool  # type: ignore[import-not-found]
+from langchain_core.tools import tool
 
 
 def _envelope(name: str, **args: Any) -> dict[str, Any]:

@@ -36,7 +36,8 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
+from typing_extensions import TypedDict
 
 from langchain_core.tools import tool  # type: ignore[import-not-found]
 from langgraph.types import Command  # type: ignore[import-not-found]

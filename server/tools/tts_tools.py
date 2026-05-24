@@ -54,39 +54,13 @@ def generate_narration(
 ) -> str:
     """Generate narration WAV for a scene.
 
-    The narration text is sent raw to the worker.  Voice and language
-    are local defaults; the caller accepts what the worker returns.
+    DEPRECATED: This direct-worker path is dead. Use the job queue
+    (submit_render_job) and let the provisioner agent dispatch.
     """
-    gpu_worker_url = _get_next_worker_url("tts")
-    if not gpu_worker_url:
-        raise WorkerUnavailableError(
-            "No TTS worker registered. Provision a worker first.",
-            stage="audio",
-        )
-
-    worker_url = f"{gpu_worker_url.rstrip('/')}/"
-    req = Request(worker_url, data=text.encode("utf-8"), headers={"Content-Type": "text/plain"})
-
-    try:
-        with urlopen(req) as resp:
-            result = _parse_tts_response(resp)
-    except URLError as e:
-        raise WorkerUnavailableError(
-            f"TTS worker unreachable at {worker_url}: {e}",
-            stage="audio",
-        ) from e
-
-    if not output_dir:
-        output_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
-    os.makedirs(os.path.join(output_dir, "audio"), exist_ok=True)
-    wav_path = os.path.join(output_dir, "audio", f"scene_{scene_num:03d}_narration.wav")
-
-    with open(wav_path, "wb") as f:
-        f.write(result["wav_bytes"])
-
-    return json.dumps({
-        "status": "generated",
-        "scene_num": scene_num,
+    raise RuntimeError(
+        "generate_narration direct-worker path is dead. "
+        "Use submit_render_job(stage='audio', job_type='narration') instead."
+    )
         "wav_path": wav_path,
         "duration_sec": result["duration"],
         "sample_rate": result["sample_rate"],

@@ -29,10 +29,6 @@ logger = logging.getLogger(__name__)
 
 # Map tool name prefixes to their result model
 _RESULT_MODELS: dict[str, type] = {
-    "generate_scene_narration": NarrationResult,
-    "generate_narration": NarrationResult,
-    "submit_gpu_production_job": VideoRenderResult,
-    "generate_video_clip": VideoRenderResult,
     "add_narration_to_timeline": OTIOClipResult,
     "add_video_clip_to_timeline": OTIOClipResult,
     "add_narration_clip": OTIOClipResult,

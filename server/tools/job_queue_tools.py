@@ -31,7 +31,6 @@ from job_queue import (
 
 @tool
 def submit_render_job(
-    run_id: str,
     stage: str,
     scene_num: int,
     job_type: str,
@@ -62,7 +61,6 @@ def submit_render_job(
 
     job = create_job(
         job_type=jt,
-        run_id=run_id,
         stage=stage,
         scene_num=scene_num,
         payload=parsed_payload,
@@ -75,9 +73,9 @@ def submit_render_job(
 
 
 @tool
-def poll_completed_jobs(run_id: str, stage: str) -> str:
+def poll_completed_jobs(stage: str) -> str:
     """Poll for completed jobs in a stage. Returns JSON with artifact locations."""
-    jobs = get_completed_jobs(run_id, stage)
+    jobs = get_completed_jobs(stage)
     if not jobs:
         return "No completed jobs yet."
 
@@ -143,20 +141,20 @@ def qa_completed_job(
 
 
 @tool
-def check_queue_status(run_id: str, stage: str) -> str:
-    """Get a summary of job statuses for a run/stage."""
-    summary = get_queue_summary(run_id, stage)
+def check_queue_status(stage: str) -> str:
+    """Get a summary of job statuses for a stage."""
+    summary = get_queue_summary(stage)
     total = sum(summary.values())
-    lines = [f"Queue summary for {stage} (run={run_id}, total={total}):"]
+    lines = [f"Queue summary for {stage} (total={total}):"]
     for status, count in summary.items():
         lines.append(f"  {status}: {count}")
     return "\n".join(lines)
 
 
 @tool
-def get_failed_job_details(run_id: str, stage: str) -> str:
+def get_failed_job_details(stage: str) -> str:
     """Get details of permanently failed jobs so agent can decide what to do."""
-    jobs = get_failed_jobs(run_id, stage)
+    jobs = get_failed_jobs(stage)
     if not jobs:
         return "No permanently failed jobs."
 

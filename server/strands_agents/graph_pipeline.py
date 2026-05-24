@@ -354,7 +354,7 @@ def build_documentary_graph(
 
     # Build stage agents as Strands Agents with stateless OTIO tools
     scenario_agent = _build_scenario_agent(model)
-    audio_agent = _build_audio_agent(model, run_id=run_id)
+    audio_agent = _build_audio_agent(model)
     video_agent = _build_video_agent(model)
     otio_gate_agent = _build_otio_gate_agent(model)
     assembly_agent = _build_assembly_agent(model)
@@ -837,7 +837,7 @@ def _build_scenario_agent(model) -> Agent:
         shell = get_recovery_shell()
         run_id = shell.run_id if shell else ""
         if not run_id:
-            return json.dumps({"saved": False, "reason": "no run_id"})
+            run_id = "default"
         root = checkpoint_dir(run_id)
         dest_dir = os.path.join(root, "agents", SCENARIO)
         os.makedirs(dest_dir, exist_ok=True)
@@ -865,7 +865,7 @@ def _build_scenario_agent(model) -> Agent:
     )
 
 
-def _build_audio_agent(model, run_id: str = "") -> Agent:
+def _build_audio_agent(model) -> Agent:
     """Build the audio agent — owns narration end-to-end.
 
     Uses real production tools from strands_agents.stages.audio_stage.
@@ -888,21 +888,19 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         Returns 'in_progress' if jobs exist in the queue but are not done yet.
         """
         shell = get_recovery_shell()
-        run_id = shell.run_id if shell else ""
 
         if shell and AUDIO in shell.completed_stages:
             return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "checkpoint"})
 
         # Check job queue FIRST — if jobs exist, stage is in progress
-        if run_id:
-            from job_queue import get_queue_summary
-            summary = get_queue_summary(run_id, AUDIO)
-            total = sum(summary.values())
-            if total > 0:
-                completed = summary.get("completed", 0)
-                if completed == total:
-                    return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "queue_all_done", "jobs": summary})
-                return json.dumps({"status": "in_progress", "stage": AUDIO, "jobs": summary})
+        from job_queue import get_queue_summary
+        summary = get_queue_summary(AUDIO)
+        total = sum(summary.values())
+        if total > 0:
+            completed = summary.get("completed", 0)
+            if completed == total:
+                return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "queue_all_done", "jobs": summary})
+            return json.dumps({"status": "in_progress", "stage": AUDIO, "jobs": summary})
 
         # Check actual timeline for clips (works even after graph reset)
         from tools.otio_file_ops import resolve_timeline_path, otio_read
@@ -934,7 +932,7 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
         shell = get_recovery_shell()
         run_id = shell.run_id if shell else ""
         if not run_id:
-            return json.dumps({"saved": False, "reason": "no run_id"})
+            run_id = "default"
         root = checkpoint_dir(run_id)
         dest_dir = os.path.join(root, "agents", AUDIO)
         os.makedirs(dest_dir, exist_ok=True)
@@ -966,13 +964,12 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "\n"
             "Your only interaction with compute is via the job queue:\n"
             "  1. submit_render_job — create a job for the provisioner to pick up\n"
-            "  2. poll_completed_jobs — check which jobs are done (artifact in B2)\n"
+            "  2. poll_completed_jobs — check which jobs are done\n"
             "  3. check_queue_status — see how many jobs are pending/running/completed/failed\n"
             "  4. qa_completed_job — approve or reject with specific comments\n"
-            "  5. download_b2_artifact — fetch completed artifact from B2\n"
             "\n"
             "You NEVER know worker URLs. You NEVER SSH anywhere.\n"
-            "Artifacts arrive via B2 keys in the completed job records.\n"
+            "The provisioner executes jobs and puts results in the pipeline directory.\n"
             "\n"
             "NEVER TROUBLESHOOT. ONLY CERTAINTY.\n"
             "  - If a job fails after max attempts, report it and STOP.\n"
@@ -981,7 +978,7 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "CRITICAL: You make ONE pass per invocation.\n"
             "  - Submit any missing jobs.\n"
             "  - Poll once for completed jobs.\n"
-            "  - Download and QA any completed jobs.\n"
+            "  - QA any completed jobs.\n"
             "  - If pending or running jobs remain, report status and STOP.\n"
             "    The graph will re-invoke you when the pipeline cycles back.\n"
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
@@ -990,20 +987,19 @@ def _build_audio_agent(model, run_id: str = "") -> Agent:
             "1. Read scenes from OTIO with read_scenes_from_otio.\n"
             "2. Call check_resume_status.\n"
             "3. For EACH scene not yet in queue, call submit_render_job with:\n"
-            "     job_type='narration', stage='audio', scene_num=N,\n"
+            "     stage='audio', scene_num=N, job_type='narration',\n"
             "     payload='{\"text\":\"...\",\"voice_id\":\"...\"}'\n"
-            "4. Call poll_completed_jobs(run_id, stage='audio').\n"
-            "5. Call check_queue_status(run_id, stage='audio').\n"
-            "6. For each completed job: call download_b2_artifact(b2_key, local_path).\n"
-            "7. QA each downloaded file.\n"
-            "8. If QA passes: add narration clips with add_narration_to_timeline.\n"
-            "9. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "10. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "11. If failed > 0: call get_failed_job_details, report, STOP.\n"
-            "12. Run WhisperX alignment with align_narration_audio.\n"
-            "13. Evaluate timing with evaluate_audio_timing.\n"
-            "14. Persist state with persist_audio_to_otio.\n"
-            "15. Call save_audio_checkpoint.\n"
+            "4. Call poll_completed_jobs(stage='audio').\n"
+            "5. Call check_queue_status(stage='audio').\n"
+            "6. QA each completed job.\n"
+            "7. If QA passes: add narration clips with add_narration_to_timeline.\n"
+            "8. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "9. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "10. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
+            "11. Run WhisperX alignment with align_narration_audio.\n"
+            "12. Evaluate timing with evaluate_audio_timing.\n"
+            "13. Persist state with persist_audio_to_otio.\n"
+            "14. Call save_audio_checkpoint.\n"
         ),
         tools=[
             add_narration_to_timeline,
@@ -1111,21 +1107,19 @@ def _build_video_agent(model) -> Agent:
         Returns 'in_progress' if jobs exist in the queue but are not done yet.
         """
         shell = get_recovery_shell()
-        run_id = shell.run_id if shell else ""
 
         if shell and VIDEO in shell.completed_stages:
             return json.dumps({"status": "already_completed", "stage": VIDEO})
 
         # Check job queue FIRST — if jobs exist, stage is in progress
-        if run_id:
-            from job_queue import get_queue_summary
-            summary = get_queue_summary(run_id, VIDEO)
-            total = sum(summary.values())
-            if total > 0:
-                completed = summary.get("completed", 0)
-                if completed == total:
-                    return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "queue_all_done", "jobs": summary})
-                return json.dumps({"status": "in_progress", "stage": VIDEO, "jobs": summary})
+        from job_queue import get_queue_summary
+        summary = get_queue_summary(VIDEO)
+        total = sum(summary.values())
+        if total > 0:
+            completed = summary.get("completed", 0)
+            if completed == total:
+                return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "queue_all_done", "jobs": summary})
+            return json.dumps({"status": "in_progress", "stage": VIDEO, "jobs": summary})
 
         # Check actual timeline for clips
         from tools.otio_file_ops import resolve_timeline_path, otio_read
@@ -1149,7 +1143,7 @@ def _build_video_agent(model) -> Agent:
         shell = get_recovery_shell()
         run_id = shell.run_id if shell else ""
         if not run_id:
-            return json.dumps({"saved": False, "reason": "no run_id"})
+            run_id = "default"
         root = checkpoint_dir(run_id)
         dest_dir = os.path.join(root, "agents", VIDEO)
         os.makedirs(dest_dir, exist_ok=True)
@@ -1246,18 +1240,17 @@ def _build_video_agent(model) -> Agent:
             "4. Evaluate with evaluate_production_plan.\n"
             "5. Call check_resume_status.\n"
             "6. For EACH scene not yet in queue, call submit_render_job with:\n"
-            "     job_type='video_render', stage='video', scene_num=N,\n"
+            "     stage='video', scene_num=N, job_type='video_render',\n"
             "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
-            "7. Call poll_completed_jobs(run_id, stage='video').\n"
-            "8. Call check_queue_status(run_id, stage='video').\n"
-            "9. For each completed job: download_b2_artifact(b2_key, local_path)\n"
-            "10. QA each downloaded file.\n"
-            "11. If QA passes: call add_video_clip_to_timeline.\n"
-            "12. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "13. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "14. If failed > 0: call get_failed_job_details, report, STOP.\n"
-            "15. Finalize with finalize_production.\n"
-            "16. Call save_video_checkpoint.\n"
+            "7. Call poll_completed_jobs(stage='video').\n"
+            "8. Call check_queue_status(stage='video').\n"
+            "9. QA each completed job.\n"
+            "10. If QA passes: call add_video_clip_to_timeline.\n"
+            "11. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "12. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "13. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
+            "14. Finalize with finalize_production.\n"
+            "15. Call save_video_checkpoint.\n"
         ),
         tools=[
             generate_production_plan,
@@ -1321,7 +1314,7 @@ def _build_assembly_agent(model) -> Agent:
         shell = get_recovery_shell()
         run_id = shell.run_id if shell else ""
         if not run_id:
-            return json.dumps({"saved": False, "reason": "no run_id"})
+            run_id = "default"
         root = checkpoint_dir(run_id)
         dest_dir = os.path.join(root, "agents", ASSEMBLY)
         os.makedirs(dest_dir, exist_ok=True)
@@ -1414,13 +1407,9 @@ def _scenario_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
 
 def _has_pending_jobs(_prev_output: Any, *_args, **_kwargs) -> bool:
     """Route to Provisioner if there are pending or retryable jobs in the queue."""
-    shell = get_recovery_shell()
-    run_id = shell.run_id if shell else ""
-    if not run_id:
-        return False
     from job_queue import get_queue_summary
     for stage in ("audio", "video"):
-        summary = get_queue_summary(run_id, stage)
+        summary = get_queue_summary(stage)
         if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
             return True
     return False
@@ -1432,12 +1421,10 @@ def _audio_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     if shell and AUDIO in shell.completed_stages:
         return False
     # If there are pending audio jobs, let the Provisioner drain them first
-    run_id = shell.run_id if shell else ""
-    if run_id:
-        from job_queue import get_queue_summary
-        summary = get_queue_summary(run_id, "audio")
-        if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-            return False
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("audio")
+    if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
+        return False
     # FIX: Check OTIO for A1_Narration clips (works even after graph reset)
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
@@ -1457,12 +1444,10 @@ def _video_not_completed(_prev_output: Any, *_args, **_kwargs) -> bool:
     if shell and VIDEO in shell.completed_stages:
         return False
     # If there are pending video jobs, let the Provisioner drain them first
-    run_id = shell.run_id if shell else ""
-    if run_id:
-        from job_queue import get_queue_summary
-        summary = get_queue_summary(run_id, "video")
-        if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-            return False
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("video")
+    if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
+        return False
     # FIX: Check OTIO for V1_Video clips (works even after graph reset)
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:

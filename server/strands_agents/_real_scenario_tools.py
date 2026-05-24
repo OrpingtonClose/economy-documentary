@@ -287,7 +287,7 @@ def apply_real_scenario_overrides(
     When the override set includes ``create_timeline`` and the base
     list does not yet expose it (placeholder set has no
     ``create_timeline``), the override is appended at the end. This
-    keeps the override set complete without forcing ``_placeholders``
+    keeps the override set complete
     to grow a new tool just for the gate.
     """
     if not overrides:
