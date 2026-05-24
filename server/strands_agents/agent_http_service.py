@@ -27,6 +27,18 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
     Returns:
         FastAPI app ready to serve.
     """
+    from strands.agent.conversation_manager import SummarizingConversationManager
+
+    # Replace default SlidingWindowConversationManager with SummarizingConversationManager.
+    # SummarizingConversationManager keeps older conversation context as compressed summaries
+    # instead of dropping them entirely. This preserves critical state (e.g. checkpoint status,
+    # scene counts, tool call history) across cyclic graph invocations while preventing
+    # context window overflow.
+    agent.conversation_manager = SummarizingConversationManager(
+        summary_ratio=0.3,
+        preserve_recent_messages=10,
+    )
+
     app = FastAPI(title=f"agent-{name}")
 
     # Simple state tracking for GET /
@@ -51,12 +63,7 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
 
     @app.post("/")
     async def _invoke(request: Request) -> Response:
-        """Receive raw text, invoke agent, return raw text result.
-
-        Matches TypeScript Graph semantics: each invocation starts fresh.
-        Conversation history is cleared before each call to prevent
-        context window bloat on cyclic graphs.
-        """
+        """Receive raw text, invoke agent, return raw text result."""
         nonlocal _last_task, _last_result
         body = await request.body()
         text = body.decode("utf-8").strip()
@@ -69,12 +76,6 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
 
         _last_task = text
         logger.info("Agent '%s' received task: %s", name, text[:80])
-
-        # Clear conversation history before each invocation.
-        # This matches TypeScript Graph's stateless-by-default behavior
-        # and prevents unbounded context growth on cyclic graphs.
-        if hasattr(agent, "messages"):
-            agent.messages.clear()
 
         try:
             result = await agent.invoke_async(text)
