@@ -198,6 +198,7 @@ async def run_documentary(
     approval_mode: str = DEFAULTS["approval"],
 ) -> dict[str, Any]:
     model = _get_model(model_id, api_key, base_url)
+    os.environ["STRANDS_MODEL"] = model_id
 
     # Prevent concurrent runs
     lock_file = _acquire_pipeline_lock(output_dir)
