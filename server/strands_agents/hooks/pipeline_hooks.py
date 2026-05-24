@@ -157,29 +157,80 @@ class BudgetHook(HookProvider):
 class ApprovalGateHook(HookProvider):
     """Human-in-the-loop approval gates between stages.
 
-    When a node that requires approval completes, this hook interrupts
-    the Graph so the human can review and approve before the next
-    stage proceeds. Maps to the dashboard's "Approve" button workflow.
+    Bridges the AG-UI /agui/approve endpoint to the graph:
+    - After a gated stage completes, mark it "ready for review"
+    - Before the NEXT gated stage runs, check if the PREVIOUS stage was approved
+    - If not approved, cancel the node and wait for human
+
+    The gated stages are the media stages (not the OTIO gate):
+    scenario → audio → video → assembly
     """
 
+    STAGE_ORDER = ["scenario", "audio", "video", "assembly"]
+
     def __init__(self, gated_stages: set[str] | None = None) -> None:
-        self._gated_stages = gated_stages if gated_stages is not None else {"scenario", "audio", "visual", "production", "assembly"}
+        # Default to all media stages
+        self._gated_stages = gated_stages if gated_stages is not None else set(self.STAGE_ORDER)
 
     def register_hooks(self, registry: HookRegistry, **_: Any) -> None:
         registry.add_callback(BeforeNodeCallEvent, self.on_before_node_call)
+        registry.add_callback(AfterNodeCallEvent, self.on_after_node_call)
 
-    async def on_before_node_call(self, event: BeforeNodeCallEvent) -> None:
+    async def on_after_node_call(self, event: AfterNodeCallEvent) -> None:
+        """After a gated stage completes, mark it ready for human review."""
         node_id = event.node_id
         if node_id in self._gated_stages:
-            # Check if the stage has been approved
-            state = event.invocation_state or {}
-            approval_key = f"_approved_{node_id}"
-            if not state.get(approval_key):
-                event.cancel_node = (
-                    f"Approval gate for '{node_id}' — human review required. "
-                    f"Set state['{approval_key}'] = True to proceed."
-                )
-                logger.info("ApprovalGateHook: canceling node '%s' for human approval", node_id)
+            try:
+                from callbacks.approval_gate import mark_stage_ready
+                mark_stage_ready(node_id)
+                logger.info("ApprovalGateHook: stage '%s' marked ready for review", node_id)
+            except Exception as exc:
+                logger.warning("ApprovalGateHook: failed to mark stage ready: %s", exc)
+
+    async def on_before_node_call(self, event: BeforeNodeCallEvent) -> None:
+        """Before a gated stage runs, check if the previous stage was approved.
+
+        Entry point (scenario) requires no prior approval.
+        """
+        node_id = event.node_id
+        if node_id not in self._gated_stages:
+            return
+
+        # Entry point: scenario needs no prior approval
+        if node_id == "scenario":
+            return
+
+        # Find the previous gated stage
+        prev_stage = self._previous_stage(node_id)
+        if prev_stage is None:
+            return
+
+        try:
+            from callbacks.approval_gate import is_stage_approved
+            approved = is_stage_approved(prev_stage)
+        except Exception as exc:
+            logger.warning("ApprovalGateHook: failed to read approval state: %s", exc)
+            approved = False
+
+        if not approved:
+            event.cancel_node = (
+                f"Approval gate for '{node_id}' — waiting for human approval of '{prev_stage}'. "
+                f"POST /agui/approve with body={{'stage': '{prev_stage}'}} to proceed."
+            )
+            logger.info(
+                "ApprovalGateHook: canceling node '%s' — '%s' not yet approved",
+                node_id, prev_stage,
+            )
+
+    def _previous_stage(self, node_id: str) -> str | None:
+        """Return the stage that must be approved before node_id runs."""
+        try:
+            idx = self.STAGE_ORDER.index(node_id)
+            if idx > 0:
+                return self.STAGE_ORDER[idx - 1]
+        except ValueError:
+            pass
+        return None
 
 
 # ---------------------------------------------------------------------------
