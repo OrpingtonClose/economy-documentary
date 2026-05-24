@@ -617,10 +617,23 @@ def _detect_finished_film(output_dir: str) -> Optional[FinishedFilm]:
 
     def _probe_dur(path: str) -> float:
         try:
-            from tools.video_tools import probe_clip  # type: ignore[attr-defined]  # local import
-            return float(json.loads(probe_clip(mp4_path=path)).get("duration", 0.0))
+            import subprocess
+            result = subprocess.run(
+                [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                return float(result.stdout.strip())
         except Exception:  # noqa: BLE001
-            return 0.0
+            pass
+        return 0.0
 
     def _url_for(name: str) -> str:
         return f"/agui/final_film/{name}"

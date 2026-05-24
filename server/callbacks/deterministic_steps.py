@@ -684,7 +684,6 @@ def deterministic_audio_callback(
     state.get("_timeline_path", "")
 
     # Import tool functions directly (not via FunctionTool wrappers)
-    from tools.tts_tools import generate_narration
     from tools.whisperx_tools import align_narration
     from tools.otio_tools import add_narration_clip, add_narration_gap
     from gatekeeper import check_narration_clip, has_rejects, format_audit_report
@@ -1817,7 +1816,6 @@ def deterministic_production_callback(
         )
         concepts = consolidated
 
-    from tools.video_tools import generate_video_clip, probe_clip  # type: ignore[attr-defined]
     from tools.otio_tools import add_video_clip, get_video_slot_durations
     from gatekeeper import check_video_clip, check_stage_handoff, has_rejects, intervention_window, format_audit_report
 
@@ -2460,7 +2458,6 @@ def deterministic_assembly_callback(
     import opentimelineio as otio
     from tools.otio_tools import _otio_lock
     from tools.assembly_tools import mux_audio_video, concat_clips  # type: ignore[attr-defined]
-    from tools.video_tools import probe_clip  # type: ignore[attr-defined]
     from gatekeeper import check_stage_handoff, has_rejects, intervention_window
     from callbacks.strict_assembler import (
         ensure_clip_length_matches,

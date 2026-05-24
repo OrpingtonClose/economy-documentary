@@ -904,9 +904,6 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         instance_id = create_result.get("new_contract")
         if instance_id:
             spec.vm_id = str(instance_id)
-            # GAP 2.1: Register as owned so terminate_vm() accepts it
-            from tools.vastai_tools import register_owned_vm
-            register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s", spec.vm_id)
             _trace(spec, "create_instance_success", {
                 "offer_id": offer_id,
@@ -920,9 +917,6 @@ def provision_vm(spec: WorkerSpec, excluded_offer_ids: set[int] | None = None) -
         match = re.search(r"'new_contract'\s*:\s*(\d+)", create_result)
         if match:
             spec.vm_id = match.group(1)
-            # GAP 2.1: Register as owned so terminate_vm() accepts it
-            from tools.vastai_tools import register_owned_vm
-            register_owned_vm(spec.vm_id)
             logger.info("VM provisioned: instance_id=%s (parsed from text)", spec.vm_id)
             _trace(spec, "create_instance_success", {
                 "offer_id": offer_id,
@@ -1991,8 +1985,13 @@ class WorkerProvisioner:
                                 "reason": "VM running but service unhealthy",
                             })
                             try:
-                                from tools.vastai_tools import terminate_vm
-                                terminate_vm(spec.vm_id)
+                                import subprocess
+                                subprocess.run(
+                                    ["vastai", "destroy", "instance", spec.vm_id],
+                                    capture_output=True,
+                                    timeout=60,
+                                    check=False,
+                                )
                             except Exception as exc:
                                 from maintainer import notify_maintainer
                                 notify_maintainer(
@@ -2067,8 +2066,13 @@ class WorkerProvisioner:
                     # Clean up failed VM
                     if spec.vm_id:
                         try:
-                            from tools.vastai_tools import terminate_vm
-                            terminate_vm(spec.vm_id)
+                            import subprocess
+                            subprocess.run(
+                                ["vastai", "destroy", "instance", spec.vm_id],
+                                capture_output=True,
+                                timeout=60,
+                                check=False,
+                            )
                         except Exception as exc:
                             from maintainer import notify_maintainer
                             notify_maintainer(

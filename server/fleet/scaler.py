@@ -165,15 +165,7 @@ class FleetScaler:
         Uses the WorkerProvisioner pattern: each VM goes through
         Vast.ai provisioning → SSH tunnel → model download → health check.
         """
-        try:
-            import worker_provisioner as _wp  # noqa: F401 — availability check
-            del _wp
-        except ImportError:
-            logger.warning(
-                "FleetScaler: WorkerProvisioner not available — "
-                "falling back to env-var workers"
-            )
-            return
+        logger.warning("FleetScaler: WorkerProvisioner removed — no-op")
 
         with self._lock:
             self._provisioning_remaining = count
@@ -199,56 +191,9 @@ class FleetScaler:
     def _provision_one_vm(self, index: int) -> None:
         """Provision a single video VM (runs in a thread)."""
         vm_id = f"video-{index}-{int(time.time())}"
-        try:
-            from worker_provisioner import WorkerProvisioner, WorkerSpec
-
-            spec = WorkerSpec(
-                role="video",
-                env_var=f"VIDEO_WORKER_{index}_URL",
-                local_port=8100 + index,
-                remote_port=8000,
-                capability="ltx",
-                gpu_type=os.environ.get("VAST_GPU_MODEL", "RTX_4090"),
-                min_vram_gb=int(os.environ.get("VAST_MIN_VRAM", "24")),
-                disk_gb=int(os.environ.get("VAST_DISK_GB", "100")),
-                worker_mode="ltx",
-            )
-
-            provisioner = WorkerProvisioner()
-            url = getattr(provisioner, "provision_vm")(spec)
-
-            if url:
-                with self._lock:
-                    self._active_vms[vm_id] = {"url": url, "role": "video"}
-
-                # Register with cost tracker
-                price = float(os.environ.get(
-                    "VAST_PRICE_PER_HOUR",
-                    str(DEFAULT_PRICE_PER_HOUR),
-                ))
-                self._cost_tracker.register_vm(vm_id, price)
-
-                # Register with InfraAgent
-                try:
-                    from infra_agent import WorkerRole, get_infra_agent
-                    agent = get_infra_agent()
-                    if agent:
-                        agent.add_worker(url, WorkerRole.VIDEO)
-                except Exception as e:
-                    logger.warning(
-                        "FleetScaler: could not register VM %s with InfraAgent: %s",
-                        vm_id, e,
-                    )
-
-                logger.info("FleetScaler: VM %s provisioned at %s", vm_id, url)
-            else:
-                logger.error("FleetScaler: VM %s provisioning returned no URL", vm_id)
-
-        except Exception as e:
-            logger.error("FleetScaler: failed to provision VM %s: %s", vm_id, e)
-        finally:
-            with self._lock:
-                self._provisioning_remaining = max(0, self._provisioning_remaining - 1)
+        logger.warning("FleetScaler: WorkerProvisioner removed — no-op for %s", vm_id)
+        with self._lock:
+            self._provisioning_remaining = max(0, self._provisioning_remaining - 1)
 
     # ------------------------------------------------------------------
     # Scale-down
@@ -339,12 +284,7 @@ class FleetScaler:
             logger.warning("FleetScaler: could not unregister VM %s: %s", vm_id, e)
 
         # Destroy the Vast.ai VM
-        try:
-            from worker_provisioner import WorkerProvisioner
-            provisioner = WorkerProvisioner()
-            getattr(provisioner, "destroy_vm")(url)
-        except Exception as e:
-            logger.warning("FleetScaler: could not destroy VM %s: %s", vm_id, e)
+        logger.warning("FleetScaler: WorkerProvisioner removed — cannot destroy VM %s", vm_id)
 
         logger.info("FleetScaler: released VM %s (%s)", vm_id, url)
 

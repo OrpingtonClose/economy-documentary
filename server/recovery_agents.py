@@ -1527,22 +1527,7 @@ _ESCALATION_TOOLS = [
 
 def _get_provision_trace_fn(role: str) -> str:
     """Get provision trace from the provisioner."""
-    try:
-        from worker_provisioner import get_provisioner
-        prov = get_provisioner()
-        if role == "tts" and hasattr(prov, "tts_spec"):
-            spec = getattr(prov, "tts_spec")
-        elif role == "video" and hasattr(prov, "video_spec"):
-            spec = getattr(prov, "video_spec")
-        else:
-            return json.dumps({"role": role, "entries": 0, "trace": []})
-        return json.dumps({
-            "role": role,
-            "entries": len(spec.provision_trace),
-            "trace": spec.provision_trace,
-        })
-    except Exception as e:
-        return json.dumps({"error": str(e), "trace": []})
+    return json.dumps({"role": role, "entries": 0, "trace": [], "note": "old provisioner removed"})
 
 
 class TTSUnitAgent(RecoveryAgent):

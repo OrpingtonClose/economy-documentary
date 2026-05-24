@@ -227,44 +227,6 @@ def destroy_instance(instance_id: int) -> str:
 
 
 @tool
-def set_gpu_worker_url(worker_url: str) -> str:
-    """Register a VIDEO worker URL with the WorkerProvisioner singleton.
-
-    Performs a SINGLE health check and registers immediately.
-    The agent decides whether to call this again or provision a new worker.
-    """
-    from worker_provisioner import get_provisioner, check_worker_health
-    healthy = check_worker_health(worker_url, "video")
-    provisioner = get_provisioner()
-    provisioner.register_worker(worker_url, "video")
-    return json.dumps({
-        "status": "set" if healthy else "set_unhealthy",
-        "role": "video",
-        "worker_url": worker_url,
-        "healthy": healthy,
-    })
-
-
-@tool
-def set_tts_worker_url(worker_url: str) -> str:
-    """Register a TTS worker URL with the WorkerProvisioner singleton.
-
-    Performs a SINGLE health check and registers immediately.
-    The agent decides whether to call this again or provision a new worker.
-    """
-    from worker_provisioner import get_provisioner, check_worker_health
-    healthy = check_worker_health(worker_url, "tts")
-    provisioner = get_provisioner()
-    provisioner.register_worker(worker_url, "tts")
-    return json.dumps({
-        "status": "set" if healthy else "set_unhealthy",
-        "role": "tts",
-        "worker_url": worker_url,
-        "healthy": healthy,
-    })
-
-
-@tool
 def ssh_run_command(instance_id: int, command: str) -> str:
     """Run a shell command on a Vast.ai instance via SSH.
 
@@ -272,25 +234,6 @@ def ssh_run_command(instance_id: int, command: str) -> str:
     install packages, or restart services.
     """
     return _ssh_cmd(instance_id, command)
-
-
-@tool
-def get_registered_workers() -> str:
-    """Return all currently registered worker URLs.
-
-    ALWAYS call this BEFORE provisioning a new worker.
-    If a URL is returned for your role, use it directly —
-    do NOT provision a duplicate.
-    """
-    try:
-        from worker_provisioner import get_provisioner
-        wp = get_provisioner()
-        return json.dumps({
-            "video_urls": wp.get_worker_urls("video"),
-            "tts_urls": wp.get_worker_urls("tts"),
-        })
-    except Exception as exc:
-        return json.dumps({"error": str(exc)})
 
 
 @tool
