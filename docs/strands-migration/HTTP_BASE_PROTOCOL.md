@@ -10,9 +10,9 @@ The migration to Strands Graph replaced independent HTTP-addressable agents with
 
 ## Proposal
 
-**HTTP becomes the underlying reality of ALL cross-agent communication.**
+**HTTP is the ONLY execution route. No in-process fallback. No mocks.**
 
-The current Strands Graph pipeline is retained as an orchestration abstraction, but every `GraphNode.executor` is an HTTP client proxy. Each agent runs as an independent HTTP service. The Graph routes between them exactly as it routes between in-process agents today — only the transport changes.
+Every `GraphNode.executor` is an `AgentHTTPClient` proxy. Each agent runs as an independent HTTP service on its own port. The Graph orchestrates by POSTing plain text between agents. There is no alternative transport.
 
 ## Protocol
 
@@ -116,25 +116,19 @@ class AgentHTTPClient:
         ...
 ```
 
-### Graph Builder Change
+### Graph Builder
 
-`build_documentary_graph` gains a `use_http: bool` flag. When `True`, it builds `AgentHTTPClient` instances instead of real `Agent` instances:
+`build_documentary_graph` always builds `AgentHTTPClient` instances:
 
 ```python
-if use_http:
-    nodes = {
-        SCENARIO: GraphNode(node_id=SCENARIO, executor=AgentHTTPClient("http://localhost:9001", SCENARIO)),
-        AUDIO:    GraphNode(node_id=AUDIO,    executor=AgentHTTPClient("http://localhost:9002", AUDIO)),
-        ...
-    }
-else:
-    nodes = {
-        SCENARIO: GraphNode(node_id=SCENARIO, executor=_build_scenario_agent(model)),
-        ...
-    }
+nodes = {
+    SCENARIO: GraphNode(node_id=SCENARIO, executor=AgentHTTPClient("http://localhost:9001", SCENARIO)),
+    AUDIO:    GraphNode(node_id=AUDIO,    executor=AgentHTTPClient("http://localhost:9002", AUDIO)),
+    ...
+}
 ```
 
-The Graph itself needs no other changes. Edges, conditions, hooks, interrupts — all work identically.
+The Graph itself needs no changes. Edges, conditions, hooks, interrupts — all work identically over HTTP.
 
 ### Launcher
 
@@ -160,15 +154,15 @@ Each service runs in its own process (`multiprocessing`). The main process block
 4. **`instructor` for parsing.** Agents receive raw text and use `instructor` to extract structured meaning. No transport-level schema.
 5. **The current pipeline is preserved.** `graph_pipeline.py`, `run_strands.py`, routing conditions, hooks — none of it changes except the executor type.
 
-## Migration Path
+## Execution
 
-| Phase | Action |
-|-------|--------|
-| 1 | Create `agent_http_service.py` + `agent_http_client.py` |
-| 2 | Add `use_http` flag to `build_documentary_graph` |
-| 3 | Create `launcher.py` to start agent services |
-| 4 | Test locally with `--use-http` |
-| 5 | Default to HTTP in production; keep in-process as `--use-http=false` for tests |
+```bash
+# Start all agent services
+python -m strands_agents.launcher --api-key $API_KEY
+
+# Run the pipeline (agents must be running)
+python -m strands_agents.run_strands "documentary about ants" -k $API_KEY
+```
 
 ## Rejected Alternatives
 
