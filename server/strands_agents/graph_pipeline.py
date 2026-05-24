@@ -20,6 +20,41 @@ from strands.multiagent.graph import (
 from search_tools import search_brave, search_perplexity, search_exa
 _SEARCH_TOOLS = [search_brave, search_perplexity, search_exa]
 
+# ---------------------------------------------------------------------------
+# Instructor-based parsing for downstream agents
+# ---------------------------------------------------------------------------
+
+try:
+    from pydantic import BaseModel, Field
+    from typing import List
+
+    class AudioScene(BaseModel):
+        title: str = Field(description="Scene title")
+        duration_sec: int = Field(description="Scene duration in seconds")
+        narration_v1_hook: str = Field(description="V1 Hook narration script")
+        narration_v2_expert: str = Field(description="V2 Expert narration script")
+        narration_v3_storyteller: str = Field(description="V3 Storyteller narration script")
+        pronunciation_hints: str = Field(default="", description="Pronunciation hints if any")
+
+    class AudioScenes(BaseModel):
+        scenes: List[AudioScene] = Field(description="List of audio scenes with narration scripts")
+
+    class VideoScene(BaseModel):
+        title: str = Field(description="Scene title")
+        duration_sec: int = Field(description="Scene duration in seconds")
+        visual_notes: str = Field(description="Visual description for this scene")
+        dopamine_hook: str = Field(default="", description="Dopamine hook phrase")
+
+    class VideoScenes(BaseModel):
+        scenes: List[VideoScene] = Field(description="List of video scenes with visual data")
+        visual_style: dict = Field(default_factory=dict, description="Overall visual style")
+        style_lock: dict = Field(default_factory=dict, description="Style lock constraints")
+
+    _INSTRUCTOR_AVAILABLE = True
+except Exception:
+    _INSTRUCTOR_AVAILABLE = False
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -853,7 +888,9 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             "- You are stateless. All state lives in the OTIO file on disk.\n"
             "- Never assume memory of previous runs. Always read the OTIO file first.\n"
             "- If validation fails, be specific about what is missing so the recovery agent knows what to fix.\n"
-            "- If validation passes, provide a concise summary of what the next stage should expect.\n"
+            "- If validation passes, INCLUDE THE FULL SCENARIO TEXT in your response.\n"
+            "  Downstream agents (audio, video) receive your entire response as their input.\n"
+            "  They parse the scenario text directly from your output.\n"
         ),
         tools=[
             read_pipeline_data,
@@ -1122,7 +1159,7 @@ def _build_audio_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Read scenes from OTIO with read_scenes_from_otio.\n"
+            "1. The scenario text is in your prompt (from the OTIO Gate). Parse it directly.\n"
             "2. Call check_resume_status.\n"
             "3. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='audio', scene_num=N, job_type='narration',\n"
@@ -1144,7 +1181,6 @@ def _build_audio_agent(model) -> Agent:
             add_narration_to_timeline,
             align_narration_audio,
             evaluate_audio_timing,
-            read_scenes_from_otio,
             persist_audio_to_otio,
             check_resume_status,
             save_audio_checkpoint,
@@ -1351,24 +1387,25 @@ def _build_video_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Call generate_visual_concepts with style from OTIO visual_style.\n"
-            "2. Call persist_visual_concepts to save to OTIO metadata.\n"
-            "3. Read scenes and plan visuals with generate_production_plan.\n"
-            "4. Evaluate with evaluate_production_plan.\n"
-            "5. Call check_resume_status.\n"
-            "6. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "1. The scenario text is in your prompt (from the OTIO Gate). Parse it directly.\n"
+            "2. Call generate_visual_concepts with style extracted from the scenario text.\n"
+            "3. Call persist_visual_concepts to save to OTIO metadata.\n"
+            "4. Read scenes and plan visuals with generate_production_plan.\n"
+            "5. Evaluate with evaluate_production_plan.\n"
+            "6. Call check_resume_status.\n"
+            "7. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='video', scene_num=N, job_type='video_render',\n"
             "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
-            "7. Call poll_completed_jobs(stage='video').\n"
-            "8. Call check_queue_status(stage='video').\n"
-            "9. For each completed job, read the local file from artifact_path.\n"
-            "10. QA each file.\n"
-            "11. If QA passes: call add_video_clip_to_timeline, passing the completed job's artifact_path as mp4_path.\n"
-            "12. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "13. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "14. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
-            "15. Finalize with finalize_production.\n"
-            "16. Call save_video_checkpoint.\n"
+            "8. Call poll_completed_jobs(stage='video').\n"
+            "9. Call check_queue_status(stage='video').\n"
+            "10. For each completed job, read the local file from artifact_path.\n"
+            "11. QA each file.\n"
+            "12. If QA passes: call add_video_clip_to_timeline, passing the completed job's artifact_path as mp4_path.\n"
+            "13. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "14. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "15. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
+            "16. Finalize with finalize_production.\n"
+            "17. Call save_video_checkpoint.\n"
         ),
         tools=[
             generate_production_plan,
