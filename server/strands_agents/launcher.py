@@ -69,7 +69,13 @@ def _build_agent(node_id: str, model: Any | None) -> Any:
     return builder(model)
 
 
-def _run_service(node_id: str, port: int, model: Any | None, pipeline_dir: str) -> None:
+def _run_service(
+    node_id: str,
+    port: int,
+    model: Any | None,
+    pipeline_dir: str,
+    agent_registry: dict[str, str],
+) -> None:
     """Worker process: build agent, inject shared state, wrap in FastAPI, serve."""
     # Inject shared OTIO manager into stage modules so tools can read/write pipeline metadata
     try:
@@ -92,7 +98,7 @@ def _run_service(node_id: str, port: int, model: Any | None, pipeline_dir: str) 
         logging.getLogger(__name__).warning("Failed to inject OTIOStateManager in agent service: %s", exc)
 
     agent = _build_agent(node_id, model)
-    app = build_agent_app(agent, name=node_id)
+    app = build_agent_app(agent, name=node_id, agent_registry=agent_registry)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
@@ -132,11 +138,17 @@ def main() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
+    # Build agent registry so every agent knows every other agent's URL
+    agent_registry = {
+        nid: f"http://localhost:{getattr(args, f'{nid}_port')}"
+        for nid in _DEFAULT_PORTS
+    }
+
     for node_id in _DEFAULT_PORTS:
         port = getattr(args, f"{node_id}_port")
         p = multiprocessing.Process(
             target=_run_service,
-            args=(node_id, port, model, pipeline_dir),
+            args=(node_id, port, model, pipeline_dir, agent_registry),
             name=f"agent-{node_id}",
         )
         p.start()

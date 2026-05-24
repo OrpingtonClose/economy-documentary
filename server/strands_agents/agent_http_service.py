@@ -17,12 +17,18 @@ from strands import Agent
 logger = logging.getLogger(__name__)
 
 
-def build_agent_app(agent: Agent, name: str) -> FastAPI:
+def build_agent_app(
+    agent: Agent,
+    name: str,
+    agent_registry: dict[str, str] | None = None,
+) -> FastAPI:
     """Construct an HTTP service wrapping a strands.Agent.
 
     Args:
         agent: The strands.Agent instance to expose.
         name: Human-readable agent name (scenario, audio, etc.).
+        agent_registry: Mapping of agent names to their HTTP base URLs.
+            Injected into agent.state so tools can discover and call other agents.
 
     Returns:
         FastAPI app ready to serve.
@@ -36,6 +42,13 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
         window_size=50,
         proactive_compression={"compression_threshold": 0.7},
     )
+
+    # Endow agent with knowledge of all sibling agents' HTTP endpoints.
+    # Tools can read this via tool_context.agent.state.get("agent_registry")
+    # to discover and POST to other agents directly.
+    if agent_registry:
+        agent.state.set("agent_registry", agent_registry)
+        agent.state.set("self_url", agent_registry.get(name, ""))
 
     app = FastAPI(title=f"agent-{name}")
 
