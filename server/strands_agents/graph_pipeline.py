@@ -659,23 +659,17 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             errors.append("Scenario text missing 'SCENES:' section")
         if errors:
             return json.dumps({"valid": False, "errors": errors, "recovery_target": SCENARIO})
-        return json.dumps({"valid": True, "next_stage": AUDIO})
+        # Include the full scenario text so downstream agents receive it in their prompt
+        return json.dumps({"valid": True, "next_stage": AUDIO, "scenario_text": text})
 
     @tool
     def validate_audio() -> str:
-        """Validate audio output: narration clips must exist, timing within tolerance.
-
-        CRITICAL FIX: whisperx_alignment is OPTIONAL. The gate passes if A1_Narration
-        track has clips. This prevents infinite audio loops when the agent doesn't
-        write alignment metadata.
-        """
+        """Validate audio output: narration clips must exist."""
         from tools.otio_file_ops import resolve_timeline_path, otio_read
-        from tools.otio_metadata import metadata_key_exists
+        from tools.otio_metadata import metadata_key_exists, read_pipeline_metadata
         tp = resolve_timeline_path()
         errors = []
-        warnings = []
 
-        # Check A1_Narration track for clips FIRST — this is the real gate
         try:
             timeline = otio_read(tp)
             a1_track = None
@@ -690,17 +684,16 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
         except Exception as e:
             errors.append(f"Error reading timeline: {e}")
 
-        # whisperx_alignment is nice-to-have, not required for gate passage
-        if not metadata_key_exists(tp, MetadataSchema.WHISPERX_ALIGNMENT):
-            warnings.append("Missing 'whisperx_alignment' in OTIO metadata (optional)")
-
         if errors:
-            return json.dumps({"valid": False, "errors": errors, "warnings": warnings, "recovery_target": AUDIO})
-        return json.dumps({"valid": True, "next_stage": VIDEO, "warnings": warnings})
+            return json.dumps({"valid": False, "errors": errors, "recovery_target": AUDIO})
+
+        # Include scenario text so video agent receives it in its prompt
+        text = read_pipeline_metadata(tp, "scenario_raw")
+        return json.dumps({"valid": True, "next_stage": VIDEO, "scenario_text": text or ""})
 
     @tool
     def validate_video() -> str:
-        """Validate video output: clips must exist, no gaps."""
+        """Validate video output: clips must exist."""
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         tp = resolve_timeline_path()
         errors = []
@@ -1159,23 +1152,24 @@ def _build_audio_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. The scenario text is in your prompt (from the OTIO Gate). Parse it directly.\n"
-            "2. Call check_resume_status.\n"
-            "3. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "1. Your prompt is a JSON object from the OTIO Gate. Extract the 'scenario_text' field.\n"
+            "2. Parse the scenario text to get scene titles, durations, and narration scripts.\n"
+            "3. Call check_resume_status.\n"
+            "4. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='audio', scene_num=N, job_type='narration',\n"
             "     payload='{\"text\":\"...\",\"voice_id\":\"...\"}'\n"
-            "4. Call poll_completed_jobs(stage='audio').\n"
-            "5. Call check_queue_status(stage='audio').\n"
-            "6. For each completed job, read the local file from artifact_path.\n"
-            "7. QA each file.\n"
-            "8. If QA passes: add narration clips with add_narration_to_timeline, passing the completed job's artifact_path as wav_path.\n"
-            "9. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "10. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "11. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
-            "12. Run WhisperX alignment with align_narration_audio.\n"
-            "13. Evaluate timing with evaluate_audio_timing.\n"
-            "14. Persist state with persist_audio_to_otio.\n"
-            "15. Call save_audio_checkpoint.\n"
+            "5. Call poll_completed_jobs(stage='audio').\n"
+            "6. Call check_queue_status(stage='audio').\n"
+            "7. For each completed job, read the local file from artifact_path.\n"
+            "8. QA each file.\n"
+            "9. If QA passes: add narration clips with add_narration_to_timeline, passing the completed job's artifact_path as wav_path.\n"
+            "10. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "11. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "12. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
+            "13. Run WhisperX alignment with align_narration_audio.\n"
+            "14. Evaluate timing with evaluate_audio_timing.\n"
+            "15. Persist state with persist_audio_to_otio.\n"
+            "16. Call save_audio_checkpoint.\n"
         ),
         tools=[
             add_narration_to_timeline,
@@ -1387,25 +1381,26 @@ def _build_video_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. The scenario text is in your prompt (from the OTIO Gate). Parse it directly.\n"
-            "2. Call generate_visual_concepts with style extracted from the scenario text.\n"
-            "3. Call persist_visual_concepts to save to OTIO metadata.\n"
-            "4. Read scenes and plan visuals with generate_production_plan.\n"
-            "5. Evaluate with evaluate_production_plan.\n"
-            "6. Call check_resume_status.\n"
-            "7. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "1. Your prompt is a JSON object from the OTIO Gate. Extract the 'scenario_text' field.\n"
+            "2. Parse the scenario text to get scene titles, durations, and visual notes.\n"
+            "3. Call generate_visual_concepts with style extracted from the scenario text.\n"
+            "4. Call persist_visual_concepts to save to OTIO metadata.\n"
+            "5. Read scenes and plan visuals with generate_production_plan.\n"
+            "6. Evaluate with evaluate_production_plan.\n"
+            "7. Call check_resume_status.\n"
+            "8. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='video', scene_num=N, job_type='video_render',\n"
             "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
-            "8. Call poll_completed_jobs(stage='video').\n"
-            "9. Call check_queue_status(stage='video').\n"
-            "10. For each completed job, read the local file from artifact_path.\n"
-            "11. QA each file.\n"
-            "12. If QA passes: call add_video_clip_to_timeline, passing the completed job's artifact_path as mp4_path.\n"
-            "13. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "14. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "15. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
-            "16. Finalize with finalize_production.\n"
-            "17. Call save_video_checkpoint.\n"
+            "9. Call poll_completed_jobs(stage='video').\n"
+            "10. Call check_queue_status(stage='video').\n"
+            "11. For each completed job, read the local file from artifact_path.\n"
+            "12. QA each file.\n"
+            "13. If QA passes: call add_video_clip_to_timeline, passing the completed job's artifact_path as mp4_path.\n"
+            "14. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "15. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "16. If failed > 0: call get_failed_job_details('video'), report, STOP.\n"
+            "17. Finalize with finalize_production.\n"
+            "18. Call save_video_checkpoint.\n"
         ),
         tools=[
             generate_production_plan,

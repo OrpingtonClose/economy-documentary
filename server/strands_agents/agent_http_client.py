@@ -19,10 +19,6 @@ from strands.types.event_loop import Metrics, Usage
 
 logger = logging.getLogger(__name__)
 
-# Cache for passing results between agents via the graph.
-# Key: node_id (e.g. "otio"), Value: last result text from that node.
-_node_results_cache: dict[str, str] = {}
-
 
 def _content_blocks_to_text(prompt: Any) -> str:
     """Flatten a prompt (str, ContentBlock list, etc.) into plain text."""
@@ -82,25 +78,12 @@ class AgentHTTPClient:
         import asyncio
         await asyncio.sleep(2.0)  # throttle: prevent tight loops between agents
         text = _content_blocks_to_text(prompt)
-
-        # Downstream agents (audio, video, assembly) receive the otio gate's
-        # last result prepended to their prompt. The otio gate is the sole
-        # reader/writer of OTIO — it returns the authoritative state text.
-        if self.name in ("audio", "video", "assembly"):
-            otio_text = _node_results_cache.get("otio", "")
-            if otio_text:
-                text = f"[OTIO GATE OUTPUT]\n{otio_text}\n\n[YOUR TASK]\n{text}"
-
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(f"{self.base_url}/", content=text)
         if resp.status_code >= 400:
             raise RuntimeError(
                 f"Agent '{self.name}' at {self.base_url} returned {resp.status_code}: {resp.text}"
             )
-
-        # Cache this node's result for downstream agents
-        _node_results_cache[self.name] = resp.text
-
         return _text_to_agent_result(resp.text)
 
     async def stream_async(
