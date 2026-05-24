@@ -52,7 +52,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             max_attempts INTEGER NOT NULL DEFAULT 3,
             qa_comments TEXT NOT NULL DEFAULT '[]',
             worker_id TEXT NOT NULL DEFAULT '',
-            b2_artifact_key TEXT NOT NULL DEFAULT '',
+            artifact_path TEXT NOT NULL DEFAULT '',
             created_at REAL NOT NULL DEFAULT 0,
             started_at REAL NOT NULL DEFAULT 0,
             completed_at REAL NOT NULL DEFAULT 0
@@ -79,7 +79,7 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         max_attempts=row["max_attempts"],
         qa_comments=json.loads(row["qa_comments"]),
         worker_id=row["worker_id"],
-        b2_artifact_key=row["b2_artifact_key"],
+        artifact_path=row["artifact_path"],
         created_at=row["created_at"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
@@ -114,7 +114,7 @@ def create_job(
             """
             INSERT INTO jobs
             (job_id, job_type, stage, scene_num, payload, status,
-             attempts, max_attempts, qa_comments, worker_id, b2_artifact_key,
+             attempts, max_attempts, qa_comments, worker_id, artifact_path,
              created_at, started_at, completed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -129,7 +129,7 @@ def create_job(
                 job.max_attempts,
                 json.dumps(job.qa_comments),
                 job.worker_id,
-                job.b2_artifact_key,
+                job.artifact_path,
                 job.created_at,
                 job.started_at,
                 job.completed_at,
@@ -204,7 +204,7 @@ def requeue_job_with_qa_comments(job_id: str, qa_result: QAResult) -> Job:
             SET status = 'needs_retry',
                 qa_comments = ?,
                 worker_id = '',
-                b2_artifact_key = '',
+                artifact_path = '',
                 started_at = 0,
                 completed_at = 0
             WHERE job_id = ?
@@ -301,19 +301,19 @@ def mark_job_running(job_id: str, worker_id: str) -> None:
     logger.info("Job %s now running on worker %s", job_id, worker_id)
 
 
-def mark_job_completed(job_id: str, b2_artifact_key: str) -> None:
+def mark_job_completed(job_id: str, artifact_path: str) -> None:
     """Worker/Provisioner calls this when job is done and artifact is in B2."""
     with _LOCK, _conn() as conn:
         conn.execute(
             """
             UPDATE jobs
-            SET status = 'completed', b2_artifact_key = ?, completed_at = ?
+            SET status = 'completed', artifact_path = ?, completed_at = ?
             WHERE job_id = ?
             """,
-            (b2_artifact_key, time.time(), job_id),
+            (artifact_path, time.time(), job_id),
         )
         conn.commit()
-    logger.info("Job %s completed, artifact at B2 key: %s", job_id, b2_artifact_key)
+    logger.info("Job %s completed, artifact at: %s", job_id, artifact_path)
 
 
 def mark_job_failed(job_id: str, error_message: str) -> None:

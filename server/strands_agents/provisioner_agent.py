@@ -250,27 +250,6 @@ def dispatch_video_job(worker_url: str, prompt: str, output_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# B2 upload — artifact ground truth
-# ---------------------------------------------------------------------------
-
-@tool
-def upload_artifact(local_path: str, b2_key: str) -> str:
-    """Upload a local file to B2 as the artifact ground truth.
-
-    Args:
-        local_path: Path to the local file.
-        b2_key: B2 object key (e.g. "renders/scene_001.mp4").
-    """
-    from tools.b2_checkpoint import upload_file
-
-    try:
-        upload_file(local_path, b2_key)
-        return json.dumps({"status": "uploaded", "local_path": local_path, "b2_key": b2_key})
-    except Exception as exc:
-        return json.dumps({"status": "failed", "error": str(exc)})
-
-
-# ---------------------------------------------------------------------------
 # Memory — learn from mistakes
 # ---------------------------------------------------------------------------
 

@@ -55,7 +55,7 @@ class Job(BaseModel):
         description="QA feedback that caused retry — worker sees this on requeue",
     )
     worker_id: str = Field(default="", description="Which worker/instance is handling this job")
-    b2_artifact_key: str = Field(
+    artifact_path: str = Field(
         default="",
         description="B2 key where the result artifact is stored after completion",
     )
@@ -69,7 +69,7 @@ class JobResult(BaseModel):
 
     job_id: str
     status: str = Field(description="'success', 'error', 'timeout'")
-    b2_artifact_key: str = Field(default="", description="B2 key of the output artifact")
+    artifact_path: str = Field(default="", description="Local file path of the output artifact")
     output_path: str = Field(default="", description="Local path if worker reported one")
     duration_sec: float = Field(default=0.0)
     error_message: str = Field(default="")

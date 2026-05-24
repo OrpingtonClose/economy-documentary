@@ -83,7 +83,7 @@ def poll_completed_jobs(stage: str) -> str:
     for j in jobs:
         lines.append(
             f"  scene {j.scene_num}: job={j.job_id} "
-            f"b2_key={j.b2_artifact_key} attempts={j.attempts}"
+            f"artifact_path={j.artifact_path} attempts={j.attempts}"
         )
     return "Completed jobs:\n" + "\n".join(lines)
 
@@ -165,21 +165,5 @@ def get_failed_job_details(stage: str) -> str:
             f"attempts={j.attempts} comments={json.dumps(j.qa_comments)}"
         )
     return "Failed jobs:\n" + "\n".join(lines)
-
-
-@tool
-def download_b2_artifact(b2_key: str, local_path: str) -> str:
-    """Download a completed artifact from B2 to local disk.
-
-    Call this after poll_completed_jobs returns a b2_key.
-    The local_path should be in the pipeline working directory.
-    """
-    from tools.b2_checkpoint import download_file
-
-    ok = download_file(b2_key, local_path)
-    if ok:
-        return f"Downloaded {b2_key} -> {local_path}"
-    return f"FAILED to download {b2_key} -> {local_path}"
-
 
 
