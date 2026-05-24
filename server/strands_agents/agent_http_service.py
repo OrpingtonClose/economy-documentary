@@ -51,7 +51,12 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
 
     @app.post("/")
     async def _invoke(request: Request) -> Response:
-        """Receive raw text, invoke agent, return raw text result."""
+        """Receive raw text, invoke agent, return raw text result.
+
+        Matches TypeScript Graph semantics: each invocation starts fresh.
+        Conversation history is cleared before each call to prevent
+        context window bloat on cyclic graphs.
+        """
         nonlocal _last_task, _last_result
         body = await request.body()
         text = body.decode("utf-8").strip()
@@ -64,6 +69,12 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
 
         _last_task = text
         logger.info("Agent '%s' received task: %s", name, text[:80])
+
+        # Clear conversation history before each invocation.
+        # This matches TypeScript Graph's stateless-by-default behavior
+        # and prevents unbounded context growth on cyclic graphs.
+        if hasattr(agent, "messages"):
+            agent.messages.clear()
 
         try:
             result = await agent.invoke_async(text)

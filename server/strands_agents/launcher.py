@@ -69,8 +69,28 @@ def _build_agent(node_id: str, model: Any | None) -> Any:
     return builder(model)
 
 
-def _run_service(node_id: str, port: int, model: Any | None) -> None:
-    """Worker process: build agent, wrap in FastAPI, serve."""
+def _run_service(node_id: str, port: int, model: Any | None, pipeline_dir: str) -> None:
+    """Worker process: build agent, inject shared state, wrap in FastAPI, serve."""
+    # Inject shared OTIO manager into stage modules so tools can read/write pipeline metadata
+    try:
+        from strands_agents.otio_manager import OTIOStateManager
+        _shared_otio_manager = OTIOStateManager(output_dir=pipeline_dir)
+        timeline_dir = os.path.join(pipeline_dir, "timelines")
+        draft_path = os.path.join(timeline_dir, "documentary_draft.otio")
+        if os.path.exists(draft_path):
+            _shared_otio_manager._timeline_path = draft_path
+            _shared_otio_manager.refresh_from_disk()
+
+        import strands_agents.stages.audio_stage as _audio_stage_mod
+        import strands_agents.stages.production_stage as _production_stage_mod
+        import strands_agents.stages.scenario_stage as _scenario_stage_mod
+        _audio_stage_mod._otio_manager = _shared_otio_manager
+        _production_stage_mod._otio_manager = _shared_otio_manager
+        _scenario_stage_mod._otio_manager = _shared_otio_manager
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("Failed to inject OTIOStateManager in agent service: %s", exc)
+
     agent = _build_agent(node_id, model)
     app = build_agent_app(agent, name=node_id)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
@@ -96,6 +116,7 @@ def main() -> None:
         from strands_agents.run_strands import _get_model
         model = _get_model(args.model_id or "deepseek-chat", args.api_key, args.base_url or None)
 
+    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
     processes: list[multiprocessing.Process] = []
 
     def _signal_handler(signum: int, frame: Any) -> None:
@@ -115,7 +136,7 @@ def main() -> None:
         port = getattr(args, f"{node_id}_port")
         p = multiprocessing.Process(
             target=_run_service,
-            args=(node_id, port, model),
+            args=(node_id, port, model, pipeline_dir),
             name=f"agent-{node_id}",
         )
         p.start()
