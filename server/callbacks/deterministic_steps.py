@@ -3037,7 +3037,6 @@ def deterministic_assembly_callback(
             ArtifactType,
             emit_agui_event,
         )
-        from agents.chat_narrator import get_narrator
 
         def _emit_final(path: str, language: str, filename: str) -> float:
             if not os.path.exists(path):

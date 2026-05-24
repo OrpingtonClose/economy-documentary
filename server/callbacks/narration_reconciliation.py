@@ -608,7 +608,6 @@ def run_narration_reconciliation(
         # UI-01 (#186): narrator chat turn for the "converged" milestone.
         # Best-effort, never block reconciliation if import / emit fails.
         try:
-            from agents.chat_narrator import emit_narrator_event  # type: ignore
             total_measured = sum(
                 float(r.measured_sec)
                 for r in results

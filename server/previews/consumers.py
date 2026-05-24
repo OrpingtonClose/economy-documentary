@@ -523,7 +523,6 @@ def emit_preview_ready(manifest: PreviewManifest) -> None:
     # CopilotKit stream carries a plain-English one-liner.  Best-effort;
     # a missing narrator module never stalls preview delivery.
     try:
-        from agents.chat_narrator import emit_narrator_event  # type: ignore
         emit_narrator_event(
             "preview_ready",
             fields={

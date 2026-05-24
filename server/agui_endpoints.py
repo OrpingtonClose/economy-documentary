@@ -418,8 +418,6 @@ async def get_restated_brief():
     "awaiting brief" state without having to special-case 404s.
     """
     try:
-        from agents.intent_extractor import read_intent_backup
-
         intent = read_intent_backup()
     except Exception as exc:  # pragma: no cover -- defensive
         logger.warning("/agui/restated_brief: read failure: %s", exc)

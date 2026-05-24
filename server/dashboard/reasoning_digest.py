@@ -489,9 +489,6 @@ def _emit_sse(digest: ReasoningDigest) -> None:
     # user-salient pipeline event.  Best-effort; a missing or broken
     # narrator must never stall the digest writer.
     try:
-        from agents.chat_narrator import (  # noqa: WPS433
-            bridge_from_reasoning_digest,
-        )
         bridge_from_reasoning_digest(payload)
     except Exception as exc:  # pragma: no cover -- defensive
         logger.debug(

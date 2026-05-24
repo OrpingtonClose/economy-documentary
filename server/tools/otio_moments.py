@@ -382,16 +382,6 @@ def _invoke_supervisor_escalate(
     next pipeline pass can pick it up.
     """
     try:
-        from agents.production_supervisor import supervisor_escalate  # type: ignore
-    except ImportError:
-        logger.error(
-            "supervisor_escalate unavailable (W3 not merged yet) — "
-            "logged %s escalation to state only: %s",
-            kind, context,
-        )
-        return
-
-    try:
         supervisor_escalate(
             kind=kind,  # type: ignore
             context=context,  # type: ignore

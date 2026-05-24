@@ -1969,9 +1969,6 @@ def _consult_supervisor(
           which we map to the caller's ``abort``.
     """
     try:
-        from agents.production_supervisor import (
-            supervisor_escalate,
-        )
         from orchestrator.escalation_menu import EscalationContext
     except Exception as exc:  # pragma: no cover — import-time safety net
         logger.warning(

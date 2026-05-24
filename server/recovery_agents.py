@@ -50,8 +50,7 @@ _OTIO_UNIT_AGENT_CLASS = None
 def _get_otio_unit_agent_class():
     global _OTIO_UNIT_AGENT_CLASS
     if _OTIO_UNIT_AGENT_CLASS is None:
-        from agents.otio_agent import OTIOUnitAgent
-        _OTIO_UNIT_AGENT_CLASS = OTIOUnitAgent
+        raise ImportError("agents.otio_agent has been removed")
     return _OTIO_UNIT_AGENT_CLASS
 
 
@@ -1717,7 +1716,6 @@ def _supervisor_fallback_decision(
     IS the escalation target; passing the buck would reintroduce #61.
     """
     try:
-        from agents.production_supervisor import supervisor_escalate
         from orchestrator.escalation_menu import EscalationContext
     except Exception as exc:  # pragma: no cover — import safety net
         logger.warning(

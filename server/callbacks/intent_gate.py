@@ -237,8 +237,6 @@ def _emit_halt(verdict: GateVerdict, *, max_attempts: int) -> None:
     already load-bearing, and the narrator is best-effort UI sugar.
     """
     try:
-        from agents.chat_narrator import emit_narrator_event
-
         emit_narrator_event(
             "halt_fired",
             fields={
