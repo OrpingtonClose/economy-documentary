@@ -27,16 +27,14 @@ def build_agent_app(agent: Agent, name: str) -> FastAPI:
     Returns:
         FastAPI app ready to serve.
     """
-    from strands.agent.conversation_manager import SummarizingConversationManager
+    from strands.agent.conversation_manager import SlidingWindowConversationManager
 
-    # Replace default SlidingWindowConversationManager with SummarizingConversationManager.
-    # SummarizingConversationManager keeps older conversation context as compressed summaries
-    # instead of dropping them entirely. This preserves critical state (e.g. checkpoint status,
-    # scene counts, tool call history) across cyclic graph invocations while preventing
-    # context window overflow.
-    agent.conversation_manager = SummarizingConversationManager(
-        summary_ratio=0.3,
-        preserve_recent_messages=10,
+    # Replace default SlidingWindowConversationManager with proactive compression.
+    # Proactive mode triggers at 70% of the model's context window, preventing
+    # wasted round-trips and output-token starvation from ContextWindowOverflowException.
+    agent.conversation_manager = SlidingWindowConversationManager(
+        window_size=50,
+        proactive_compression={"compression_threshold": 0.7},
     )
 
     app = FastAPI(title=f"agent-{name}")
