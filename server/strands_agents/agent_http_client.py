@@ -75,6 +75,8 @@ class AgentHTTPClient:
         **kwargs: Any,
     ) -> AgentResult:
         """Invoke the remote agent via HTTP POST and return an AgentResult."""
+        import asyncio
+        await asyncio.sleep(2.0)  # throttle: prevent tight loops between agents
         text = _content_blocks_to_text(prompt)
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(f"{self.base_url}/", content=text)

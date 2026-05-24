@@ -44,7 +44,7 @@ _DEFAULT_PORTS: dict[str, int] = {
 }
 
 
-def _build_agent(node_id: str, model: Any | None) -> Any:
+def _build_agent(node_id: str, model: Any | None, model_id: str = "") -> Any:
     """Build a strands.Agent for the given node.
 
     Each child process builds its own model instance to avoid
@@ -59,11 +59,13 @@ def _build_agent(node_id: str, model: Any | None) -> Any:
         _build_provisioner_agent,
     )
 
+    if node_id == "otio":
+        return _build_otio_gate_agent(model, model_id=model_id)
+
     builders = {
         "scenario": _build_scenario_agent,
         "audio": _build_audio_agent,
         "video": _build_video_agent,
-        "otio": _build_otio_gate_agent,
         "assembly": _build_assembly_agent,
         "provisioner": _build_provisioner_agent,
     }
@@ -109,11 +111,19 @@ def _run_service(
         _audio_stage_mod._otio_manager = _shared_otio_manager
         _production_stage_mod._otio_manager = _shared_otio_manager
         _scenario_stage_mod._otio_manager = _shared_otio_manager
+
+        # Inject config into modules so they work without env vars
+        import tools.otio_file_ops as _otio_file_ops_mod
+        _otio_file_ops_mod._pipeline_dir = pipeline_dir
+        import strands_agents.provisioner_agent as _provisioner_mod
+        _provisioner_mod._pipeline_dir = pipeline_dir
+        import strands_agents.stages.scenario_stage as _scenario_stage_mod
+        _scenario_stage_mod._model_id = model_id
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).warning("Failed to inject OTIOStateManager in agent service: %s", exc)
+        logging.getLogger(__name__).warning("Failed to inject shared state in agent service: %s", exc)
 
-    agent = _build_agent(node_id, model)
+    agent = _build_agent(node_id, model, model_id=model_id)
     app = build_agent_app(agent, name=node_id, agent_registry=agent_registry)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
@@ -127,12 +137,12 @@ def main() -> None:
             default=default_port,
             help=f"Port for {node_id} agent (default: {default_port})",
         )
-    parser.add_argument("--model-id", default="", help="Model ID for agents")
     parser.add_argument("--api-key", default="", help="API key for model")
-    parser.add_argument("--base-url", default="", help="Base URL for model")
     args = parser.parse_args()
 
-    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    pipeline_dir = os.path.join(os.getcwd(), "pipeline_output")
+    model_id = "deepseek-chat"
+    base_url = "https://api.deepseek.com/v1"
     processes: list[multiprocessing.Process] = []
 
     def _signal_handler(signum: int, frame: Any) -> None:
@@ -158,7 +168,7 @@ def main() -> None:
         port = getattr(args, f"{node_id}_port")
         p = multiprocessing.Process(
             target=_run_service,
-            args=(node_id, port, args.model_id, args.api_key, args.base_url, pipeline_dir, agent_registry),
+            args=(node_id, port, model_id, args.api_key, base_url, pipeline_dir, agent_registry),
             name=f"agent-{node_id}",
         )
         p.start()

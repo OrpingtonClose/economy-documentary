@@ -108,7 +108,7 @@ def checkpoint_dir(run_id: str) -> str:
 
     Layout::
 
-        {PIPELINE_DIR}/checkpoints/{run_id}/
+        {pipeline_dir}/checkpoints/{run_id}/
         ├── otio/              → OTIO timeline drafts and authoritative files
         ├── agents/            → Per-agent working state and outputs
         ├── renders/           → Final and intermediate video renders
@@ -116,7 +116,9 @@ def checkpoint_dir(run_id: str) -> str:
         ├── logs/              → Execution logs and critique records
         └── metadata.json      → Run-level metadata schema envelope
     """
-    base = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    from tools.otio_file_ops import resolve_timeline_path
+    tp = resolve_timeline_path()
+    base = os.path.dirname(os.path.dirname(tp))  # timelines/file.otio -> parent
     return os.path.join(base, "checkpoints", run_id)
 
 
@@ -365,6 +367,7 @@ def build_documentary_graph(
     model: Any | None = None,
     run_id: str = "",
     agent_urls: dict[str, str] | None = None,
+    pipeline_dir: str = "",
 ) -> tuple[Graph, RecoveryShell]:
     """Construct the documentary pipeline Graph.
 
@@ -404,7 +407,10 @@ def build_documentary_graph(
 
     # Create a shared OTIOStateManager and inject it into stage modules
     # so their tools can read/write pipeline metadata.
-    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    if not pipeline_dir:
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        pipeline_dir = os.path.dirname(os.path.dirname(tp))
     try:
         from strands_agents.otio_manager import OTIOStateManager
         _shared_otio_manager = OTIOStateManager(output_dir=pipeline_dir)
@@ -539,7 +545,7 @@ def build_documentary_graph(
 # ---------------------------------------------------------------------------
 
 
-def _build_otio_gate_agent(model) -> Agent:
+def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
     """Build the OTIO gate agent — the structural authority.
 
     The gate sits between every stage transition. It:
@@ -581,6 +587,8 @@ def _build_otio_gate_agent(model) -> Agent:
             summary[track.name] = {"clip_count": len(clips), "clips": clips}
         return json.dumps(summary)
 
+    _model_id = model_id
+
     @tool
     def ingest_scenario(text: str) -> str:
         """Parse raw scenario text and write structured data to OTIO.
@@ -594,9 +602,9 @@ def _build_otio_gate_agent(model) -> Agent:
 
         # Parse via LLM — the text format is well-structured
         from strands_agents.scenario_llm import make_generator
-        model_id = os.environ.get("STRANDS_MODEL", "")
-        if not model_id:
-            return json.dumps({"error": "STRANDS_MODEL not set — cannot parse scenario text"})
+        mid = _model_id
+        if not mid:
+            return json.dumps({"error": "model_id not provided — cannot parse scenario text"})
 
         try:
             parse_prompt = (
@@ -609,7 +617,7 @@ def _build_otio_gate_agent(model) -> Agent:
             )
             import litellm
             resp = litellm.completion(
-                model=model_id,
+                model=mid,
                 messages=[
                     {"role": "system", "content": "You parse documentary scenario text into strict JSON. Output JSON only, no markdown fences."},
                     {"role": "user", "content": parse_prompt},
@@ -829,7 +837,7 @@ def _build_otio_gate_agent(model) -> Agent:
         try:
             from tools.otio_file_ops import resolve_timeline_path
             tp = resolve_timeline_path()
-            pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+            pipeline_dir = os.path.dirname(os.path.dirname(tp))
             # Build a minimal state dict for the legacy builder API
             state = {"_timeline_path": tp}
             manifest = build_preview(
@@ -912,17 +920,14 @@ def _build_otio_gate_agent(model) -> Agent:
 def _read_directives() -> dict | None:
     """Read debug-gym directives from the pipeline directory.
 
-    Tries PIPELINE_DIR env var first (set before pipeline starts),
-    then falls back to resolve_timeline_path().
+    Derives pipeline directory from the OTIO timeline path.
     """
-    pipeline_dir = os.environ.get("PIPELINE_DIR", "")
-    if not pipeline_dir:
-        try:
-            from tools.otio_file_ops import resolve_timeline_path
-            tp = resolve_timeline_path()
-            pipeline_dir = os.path.dirname(tp)
-        except Exception:
-            return None
+    try:
+        from tools.otio_file_ops import resolve_timeline_path
+        tp = resolve_timeline_path()
+        pipeline_dir = os.path.dirname(os.path.dirname(tp))
+    except Exception:
+        return None
     try:
         path = os.path.join(pipeline_dir, ".directives.json")
         with open(path) as f:
@@ -954,11 +959,17 @@ def _build_scenario_agent(model) -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed in a previous run.
-        If completed, call save_scenario_checkpoint and then STOP."""
-        shell = get_recovery_shell()
-        if shell and SCENARIO in shell.completed_stages:
-            return json.dumps({"status": "already_completed", "stage": SCENARIO})
+        """Check if this stage was already completed.
+        OTIO is the only source of truth — checks scenes in timeline metadata."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        try:
+            tp = resolve_timeline_path()
+            scenes = read_pipeline_metadata(tp, MetadataSchema.SCENES)
+            if scenes and len(scenes) > 0:
+                return json.dumps({"status": "already_completed", "stage": SCENARIO, "reason": "otio_scenes_exist", "scene_count": len(scenes)})
+        except Exception:
+            pass
         return json.dumps({"status": "not_completed", "stage": SCENARIO})
 
     @tool
@@ -1074,46 +1085,17 @@ def _build_audio_agent(model) -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed or is in progress.
-
-        Checks: checkpoint → job queue → OTIO clips → local WAV files.
-        Returns 'in_progress' if jobs exist in the queue but are not done yet.
-        """
-        shell = get_recovery_shell()
-
-        if shell and AUDIO in shell.completed_stages:
-            return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "checkpoint"})
-
-        # Check job queue FIRST — if jobs exist, stage is in progress
-        from job_queue import get_queue_summary
-        summary = get_queue_summary(AUDIO)
-        total = sum(summary.values())
-        if total > 0:
-            completed = summary.get("completed", 0)
-            if completed == total:
-                return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "queue_all_done", "jobs": summary})
-            return json.dumps({"status": "in_progress", "stage": AUDIO, "jobs": summary})
-
-        # Check actual timeline for clips (works even after graph reset)
+        """Check if this stage was already completed.
+        OTIO is the only source of truth — checks A1_Narration track for clips."""
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         try:
             tp = resolve_timeline_path()
             timeline = otio_read(tp)
             for track in timeline.tracks:
-                if track.name == "A1_Narration":
-                    if len(list(track)) > 0:
-                        return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "otio_clips_exist"})
+                if track.name == "A1_Narration" and len(list(track)) > 0:
+                    return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "otio_clips_exist", "clip_count": len(list(track))})
         except Exception as exc:
-            logger.warning("audio completion check (otio) failed: %s", exc)
-
-        # Check audio output directory for existing WAV files
-        import glob
-        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
-        audio_dir = os.path.join(pipeline_dir, "audio")
-        wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-        if len(wav_files) > 0:
-            return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "wav_files_exist", "count": len(wav_files)})
-
+            logger.warning("audio completion check failed: %s", exc)
         return json.dumps({"status": "not_completed", "stage": AUDIO})
 
     @tool
@@ -1293,38 +1275,17 @@ def _build_video_agent(model) -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed or is in progress.
-
-        Checks: checkpoint → job queue → OTIO clips.
-        Returns 'in_progress' if jobs exist in the queue but are not done yet.
-        """
-        shell = get_recovery_shell()
-
-        if shell and VIDEO in shell.completed_stages:
-            return json.dumps({"status": "already_completed", "stage": VIDEO})
-
-        # Check job queue FIRST — if jobs exist, stage is in progress
-        from job_queue import get_queue_summary
-        summary = get_queue_summary(VIDEO)
-        total = sum(summary.values())
-        if total > 0:
-            completed = summary.get("completed", 0)
-            if completed == total:
-                return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "queue_all_done", "jobs": summary})
-            return json.dumps({"status": "in_progress", "stage": VIDEO, "jobs": summary})
-
-        # Check actual timeline for clips
+        """Check if this stage was already completed.
+        OTIO is the only source of truth — checks V1_Video track for clips."""
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         try:
             tp = resolve_timeline_path()
             timeline = otio_read(tp)
             for track in timeline.tracks:
-                if track.name == "V1_Video":
-                    if len(list(track)) > 0:
-                        return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "otio_clips_exist"})
+                if track.name == "V1_Video" and len(list(track)) > 0:
+                    return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "otio_clips_exist", "clip_count": len(list(track))})
         except Exception as exc:
-            logger.warning("video completion check (otio) failed: %s", exc)
-
+            logger.warning("video completion check failed: %s", exc)
         return json.dumps({"status": "not_completed", "stage": VIDEO})
 
     @tool
@@ -1492,10 +1453,17 @@ def _build_assembly_agent(model) -> Agent:
 
     @tool
     def check_resume_status() -> str:
-        """Check if this stage was already completed in a previous run."""
-        shell = get_recovery_shell()
-        if shell and ASSEMBLY in shell.completed_stages:
-            return json.dumps({"status": "already_completed", "stage": ASSEMBLY})
+        """Check if this stage was already completed.
+        OTIO is the only source of truth — checks assembly_output_path metadata."""
+        from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
+        try:
+            tp = resolve_timeline_path()
+            output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
+            if output_path and os.path.exists(output_path):
+                return json.dumps({"status": "already_completed", "stage": ASSEMBLY, "reason": "output_exists", "path": output_path})
+        except Exception:
+            pass
         return json.dumps({"status": "not_completed", "stage": ASSEMBLY})
 
     @tool
@@ -1605,11 +1573,8 @@ def _needs_assembly_retry(state: GraphState) -> bool:
 # ---------------------------------------------------------------------------
 
 def _scenario_not_completed(state: GraphState) -> bool:
-    """Run Scenario only if not already completed (gate passed or entry point)."""
+    """Run Scenario only if scenes don't exist in OTIO."""
     if _gate_recovery_target(state):
-        return False  # Gate requested recovery — don't start new stage
-    shell = get_recovery_shell()
-    if shell and SCENARIO in shell.completed_stages:
         return False
     from tools.otio_file_ops import resolve_timeline_path
     from tools.otio_metadata import metadata_key_exists
@@ -1618,7 +1583,7 @@ def _scenario_not_completed(state: GraphState) -> bool:
         if metadata_key_exists(tp, MetadataSchema.SCENES):
             return False
     except Exception as exc:
-        logger.warning("scenario completion check failed: %s", exc)
+        logger.warning("scenario routing check failed: %s", exc)
     return True
 
 
@@ -1635,16 +1600,9 @@ def _has_pending_jobs(state: GraphState) -> bool:
 
 
 def _audio_not_completed(state: GraphState) -> bool:
-    """Run Audio only if gate passed, audio not done, no pending jobs."""
+    """Run Audio only if gate passed and A1_Narration track is empty."""
     if _gate_recovery_target(state):
         return False
-    shell = get_recovery_shell()
-    if shell and AUDIO in shell.completed_stages:
-        return False
-    from job_queue import get_queue_summary
-    summary = get_queue_summary("audio")
-    if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-        return False  # Let provisioner drain first
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
@@ -1653,54 +1611,38 @@ def _audio_not_completed(state: GraphState) -> bool:
             if track.name == "A1_Narration" and len(list(track)) > 0:
                 return False
     except Exception as exc:
-        logger.warning("audio completion check failed: %s", exc)
+        logger.warning("audio routing check failed: %s", exc)
     return True
 
 
 def _video_not_completed(state: GraphState) -> bool:
-    """Run Video only if audio is done, gate passed, no pending jobs."""
+    """Run Video only if audio is done (A1 has clips) and V1 is empty."""
     if _gate_recovery_target(state):
         return False
-    shell = get_recovery_shell()
-    if shell and VIDEO in shell.completed_stages:
-        return False
-    # SEQUENTIAL: audio must be complete before video runs
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
         timeline = otio_read(tp)
         has_audio = False
+        has_video = False
         for track in timeline.tracks:
             if track.name == "A1_Narration" and len(list(track)) > 0:
                 has_audio = True
-                break
-        if not has_audio:
-            return False  # Audio not done — don't run video yet
-    except Exception:
-        pass
-    from job_queue import get_queue_summary
-    summary = get_queue_summary("video")
-    if summary.get("pending", 0) > 0 or summary.get("needs_retry", 0) > 0:
-        return False  # Let provisioner drain first
-    try:
-        tp = resolve_timeline_path()
-        timeline = otio_read(tp)
-        for track in timeline.tracks:
             if track.name == "V1_Video" and len(list(track)) > 0:
-                return False
+                has_video = True
+        if not has_audio:
+            return False
+        if has_video:
+            return False
     except Exception as exc:
-        logger.warning("video completion check failed: %s", exc)
+        logger.warning("video routing check failed: %s", exc)
     return True
 
 
 def _assembly_not_completed(state: GraphState) -> bool:
-    """Run Assembly only if video is done, gate passed."""
+    """Run Assembly only if video is done (V1 has clips) and output doesn't exist."""
     if _gate_recovery_target(state):
         return False
-    shell = get_recovery_shell()
-    if shell and ASSEMBLY in shell.completed_stages:
-        return False
-    # SEQUENTIAL: video must be complete before assembly runs
     from tools.otio_file_ops import resolve_timeline_path, otio_read
     from tools.otio_metadata import read_pipeline_metadata
     try:
@@ -1712,11 +1654,10 @@ def _assembly_not_completed(state: GraphState) -> bool:
                 has_video = True
                 break
         if not has_video:
-            return False  # Video not done — can't assemble
+            return False
         output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
         if output_path and os.path.exists(output_path):
             return False
-    except Exception:
-        if shell and VIDEO not in shell.completed_stages:
-            return False
+    except Exception as exc:
+        logger.warning("assembly routing check failed: %s", exc)
     return True

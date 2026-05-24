@@ -42,6 +42,7 @@ from dashboard.sse import router as dashboard_router  # noqa: E402
 from dashboard_directives import router as dashboard_directives_router  # noqa: E402
 from fleet.router import router as fleet_router  # noqa: E402
 from playground import router as playground_router  # noqa: E402
+from strands_agents.agent_intervention import router as agent_intervention_router  # noqa: E402
 # plugins removed — ADK pipeline deleted
 from run_registry import get_run_registry  # noqa: E402
 
@@ -245,6 +246,9 @@ app.include_router(fleet_router)
 # frontend-playground workbench (docs/strands-migration/plans/
 # component-playground.md). Additive; does not touch /agui.
 app.include_router(playground_router)
+
+# Agent intervention — GET/POST into running pipeline agents
+app.include_router(agent_intervention_router)
 
 
 # ADK AG-UI endpoint removed — CopilotKit frontend no longer served.

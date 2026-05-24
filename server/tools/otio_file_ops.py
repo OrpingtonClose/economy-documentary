@@ -216,6 +216,10 @@ class OTIOFileLock:
 # Path resolution — discover the timeline from the pipeline manifest
 # ---------------------------------------------------------------------------
 
+# Injected by launcher — explicit configuration, no env vars.
+_pipeline_dir: str | None = None
+
+
 def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
     """Discover the OTIO timeline path from the pipeline manifest.
 
@@ -227,7 +231,7 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
     Resolution order:
 
     1. *pipeline_dir* argument (if provided).
-    2. ``PIPELINE_DIR`` environment variable.
+    2. Injected ``_pipeline_dir`` module variable (set by launcher).
     3. Raises :class:`FileNotFoundError` if neither is available.
 
     The manifest file must contain a ``"timeline_path"`` key whose value
@@ -236,7 +240,7 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
 
     Args:
         pipeline_dir: Optional override for the pipeline directory.
-            Falls back to ``os.environ["PIPELINE_DIR"]``.
+            Falls back to the injected ``_pipeline_dir``.
 
     Returns:
         Absolute path to the OTIO timeline file.
@@ -247,12 +251,12 @@ def resolve_timeline_path(pipeline_dir: str | None = None) -> str:
             doesn’t exist.
     """
     if pipeline_dir is None:
-        pipeline_dir = os.environ.get("PIPELINE_DIR")
+        pipeline_dir = _pipeline_dir
 
     if not pipeline_dir:
         raise FileNotFoundError(
             "Cannot resolve timeline path: pipeline_dir not provided "
-            "and PIPELINE_DIR env var is not set"
+            "and no _pipeline_dir was injected"
         )
 
     manifest_path = os.path.join(pipeline_dir, "pipeline_manifest.json")

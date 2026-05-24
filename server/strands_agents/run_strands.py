@@ -199,7 +199,7 @@ async def run_documentary(
     agent_urls: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     model = _get_model(model_id, api_key, base_url)
-    os.environ["STRANDS_MODEL"] = model_id
+    # model_id is passed explicitly to agents — no env vars needed
 
     # Prevent concurrent runs
     lock_file = _acquire_pipeline_lock(output_dir)
@@ -222,7 +222,9 @@ async def run_documentary(
 
     _create_timeline_file(timeline_path)
     _write_pipeline_manifest(output_dir, timeline_path)
-    os.environ["PIPELINE_DIR"] = output_dir
+    # Inject pipeline_dir into tools for explicit config (no env vars in agent processes)
+    import tools.otio_file_ops as _otio_file_ops_mod
+    _otio_file_ops_mod._pipeline_dir = output_dir
 
     approval_stages = set() if approval_mode == "auto_approve" else {"scenario", "audio", "video", "assembly"}
     hooks = [ImmutabilityHook(), ApprovalGateHook(gated_stages=approval_stages), ShellGuardHook()]
@@ -230,15 +232,9 @@ async def run_documentary(
     budget_hook = BudgetHook(budget_usd=budget_usd)
     hooks.append(budget_hook)
 
-    # Agent intervention hook — enables GET/POST into running agents
-    # Disabled when DOCUMENTARY_NO_INTERVENTION is set (e.g. for CI)
-    if os.environ.get("DOCUMENTARY_NO_INTERVENTION", "").strip().lower() not in ("1", "true", "yes"):
-        from strands_agents.agent_intervention import InterventionHook
-        hooks.append(InterventionHook())
-
     graph, shell = build_documentary_graph(
         hooks=hooks, max_node_executions=max_node_executions, model=model,
-        agent_urls=agent_urls,
+        agent_urls=agent_urls, pipeline_dir=output_dir,
     )
     shell.max_retries = max_retries
 
@@ -331,10 +327,7 @@ async def run_documentary(
 def main():
     parser = argparse.ArgumentParser(description="Run documentary pipeline")
     parser.add_argument("brief", nargs="+", help="Documentary brief")
-    parser.add_argument("--model", "-m", default=DEFAULTS["model"], help=f"Model ID (default: {DEFAULTS['model']})")
     parser.add_argument("--api-key", "-k", required=True, help="API key")
-    parser.add_argument("--base-url", default=DEFAULTS.get("base_url"), help=f"Base URL (default: {DEFAULTS.get('base_url')})")
-    parser.add_argument("--output-dir", "-o", default=DEFAULTS["output_dir"], help=f"Output dir (default: {DEFAULTS['output_dir']})")
     parser.add_argument("--budget", "-b", type=float, default=DEFAULTS["budget"], help=f"Budget USD (default: {DEFAULTS['budget']})")
     parser.add_argument("--max-nodes", type=int, default=DEFAULTS["max_nodes"], help=f"Max node executions (default: {DEFAULTS['max_nodes']})")
     parser.add_argument("--max-retries", type=int, default=DEFAULTS["max_retries"], help=f"Max retries (default: {DEFAULTS['max_retries']})")
@@ -342,6 +335,9 @@ def main():
     parser.add_argument("--agent-url", action="append", default=[], metavar="NODE=URL", help="Override agent URL (e.g. --agent-url scenario=http://localhost:9001). Repeatable.")
 
     args = parser.parse_args()
+    model_id = "deepseek-chat"
+    base_url = DEFAULTS.get("base_url")
+    output_dir = os.path.join(os.getcwd(), "pipeline_output")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
     # Handle Ctrl+C gracefully — destroy VMs before exiting
@@ -355,7 +351,7 @@ def main():
             print(f"[INTERRUPT] VM cleanup error: {exc}")
         # Release lock if held
         try:
-            lock = os.path.join(args.output_dir, ".pipeline.lock")
+            lock = os.path.join(output_dir, ".pipeline.lock")
             if os.path.exists(lock):
                 os.remove(lock)
         except Exception:
@@ -372,10 +368,10 @@ def main():
 
     result = asyncio.run(run_documentary(
         brief=" ".join(args.brief),
-        model_id=args.model,
+        model_id=model_id,
         api_key=args.api_key,
-        base_url=args.base_url,
-        output_dir=args.output_dir,
+        base_url=base_url,
+        output_dir=output_dir,
         budget_usd=args.budget,
         max_node_executions=args.max_nodes,
         max_retries=args.max_retries,

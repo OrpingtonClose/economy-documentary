@@ -19,6 +19,9 @@ import logging
 import os
 from typing import Any
 
+# Injected by launcher — explicit config, no env vars.
+_model_id: str = ""
+
 from strands import Agent
 from strands.tools import tool
 
@@ -112,10 +115,10 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
 
     # Call the real LLM-backed generator
     from strands_agents.scenario_llm import make_generator
-    model_id = os.environ.get("STRANDS_MODEL", "")
-    if not model_id:
-        raise RuntimeError("STRANDS_MODEL not set — cannot generate scenarios without an LLM")
-    generator = make_generator(model_id=model_id)  # type: ignore
+    mid = _model_id or os.environ.get("STRANDS_MODEL", "")
+    if not mid:
+        raise RuntimeError("model_id not injected — cannot generate scenarios without an LLM")
+    generator = make_generator(model_id=mid)  # type: ignore
     result = generator(
         topic=topic,
         num_scenes=max(1, target_duration_sec // 35),
@@ -194,10 +197,10 @@ def refine_scenario(scenario_json: str, feedback: str) -> str:
         feedback: The evaluator's feedback to address.
     """
     from strands_agents.scenario_llm import make_refiner
-    model_id = os.environ.get("STRANDS_MODEL", "")
-    if not model_id:
-        raise RuntimeError("STRANDS_MODEL not set — cannot refine scenarios without an LLM")
-    refiner = make_refiner(model_id=model_id)
+    mid = _model_id or os.environ.get("STRANDS_MODEL", "")
+    if not mid:
+        raise RuntimeError("model_id not injected — cannot refine scenarios without an LLM")
+    refiner = make_refiner(model_id=mid)
     scenes = json.loads(scenario_json) if isinstance(scenario_json, str) else scenario_json
     if isinstance(scenes, dict):
         scenes = scenes.get("scenes", [])

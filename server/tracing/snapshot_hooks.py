@@ -83,7 +83,12 @@ class SnapshotHook(HookProvider):
         if state:
             state["_last_node"] = node_id
         # Opportunistic file-state capture after every node
-        pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+        try:
+            from tools.otio_file_ops import resolve_timeline_path
+            tp = resolve_timeline_path()
+            pipeline_dir = os.path.dirname(os.path.dirname(tp))
+        except Exception:
+            pipeline_dir = "/tmp/documentary-pipeline"
         files = _scan_artifacts(pipeline_dir)
         if files:
             self.store.record_file_state(

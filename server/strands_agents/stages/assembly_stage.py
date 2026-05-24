@@ -67,7 +67,7 @@ def assemble_final_cut(
     from tools.assembly_tools import assemble_documentary
     from tools.otio_file_ops import resolve_timeline_path
     tp = timeline_path or resolve_timeline_path()
-    pipeline_dir = output_dir or os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    pipeline_dir = output_dir or resolve_timeline_path().rsplit("/timelines/", 1)[0]
     return assemble_documentary(
         timeline_path=tp,
         output_dir=os.path.join(pipeline_dir, "output"),

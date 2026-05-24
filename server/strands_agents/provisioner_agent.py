@@ -153,16 +153,20 @@ def check_worker_health(instance_id: str, worker_url: str = "") -> str:
     return _health(instance_id, worker_url)
 
 
+# Injected by launcher — explicit configuration, no env vars.
+_pipeline_dir: str | None = None
+
+
 @tool
 def get_artifact_path(stage: str, scene_num: int) -> str:
     """Return the local file path where an artifact should be saved.
 
     Use this BEFORE dispatching a job so the output_path is deterministic.
-    Audio artifacts: {PIPELINE_DIR}/artifacts/scene_{scene_num:03d}.wav
-    Video artifacts: {PIPELINE_DIR}/artifacts/scene_{scene_num:03d}.mp4
+    Audio artifacts: {pipeline_dir}/artifacts/scene_{scene_num:03d}.wav
+    Video artifacts: {pipeline_dir}/artifacts/scene_{scene_num:03d}.mp4
     """
     import os
-    pipeline_dir = os.environ.get("PIPELINE_DIR", "/tmp/documentary-pipeline")
+    pipeline_dir = _pipeline_dir or "/tmp/documentary-pipeline"
     artifact_dir = os.path.join(pipeline_dir, "artifacts")
     os.makedirs(artifact_dir, exist_ok=True)
     suffix = "wav" if stage == "audio" else "mp4"
