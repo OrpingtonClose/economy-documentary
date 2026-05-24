@@ -344,25 +344,24 @@ class ContractVerifier:
             print("  ⚠️ master.mp4: check exists but may not return failed status")
 
     def _verify_provisioner_dedup(self) -> None:
-        path = self._path("server", "worker_provisioner.py")
+        # Old monolithic worker_provisioner.py was deleted.
+        # New architecture: agentic provisioner in provisioner_agent.py + vm_registry.py
+        path = self._path("server", "strands_agents", "provisioner_agent.py")
         if not os.path.exists(path):
-            self._warn("Resource Lifecycle", "worker_provisioner.py not found")
+            self._warn("Resource Lifecycle", "provisioner_agent.py not found")
             return
         content = _read_file(path)
 
-        if "RLock" not in content:
-            self._fail("Resource Lifecycle", "No RLock in provisioner",
-                      "Use threading.RLock()")
+        if "bash_command" not in content:
+            self._fail("Resource Lifecycle", "No bash_command tool in provisioner",
+                      "Provisioner must use bash for VM operations")
             return
-        if "MAX_TOTAL_VMS" not in content:
-            self._warn("Resource Lifecycle", "MAX_TOTAL_VMS not found")
-        else:
-            match = re.search(r"MAX_TOTAL_VMS\s*=\s*(\d+)", content)
-            if match and int(match.group(1)) > 3:
-                self._fail("Resource Lifecycle", f"MAX_TOTAL_VMS={match.group(1)}, need <= 3")
-                return
+        if "claim_job" not in content:
+            self._fail("Resource Lifecycle", "No claim_job tool in provisioner",
+                      "Provisioner must read from job queue")
+            return
 
-        print("  ✅ Provisioner: RLock + max VMs")
+        print("  ✅ Provisioner: agentic provisioner with queue integration")
 
 
 def main():

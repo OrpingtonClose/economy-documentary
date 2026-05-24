@@ -66,7 +66,7 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
 
     if model_lower.startswith("claude-") or model_lower.startswith("anthropic/"):
         from strands.models.anthropic import AnthropicModel
-        return AnthropicModel(model_id=model_id, params={"max_tokens": 8192})
+        return AnthropicModel(model_id=model_id, max_tokens=8192)
 
     # OpenAI-compatible: Kimi, Moonshot, DeepSeek, Qwen, local, etc.
     # OpenRouter requires the full prefix (e.g. moonshotai/kimi-k2.6)
@@ -87,10 +87,11 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
     # Kimi K2.6: disable thinking mode (reasoning_content not preserved by
     # Strands in multi-turn tool calls → 400 from Moonshot API).
     # Direct API requires temperature=0.6.
-    params = {"max_tokens": 8192}
+    params: dict[str, Any] = {"max_tokens": 8192}
     if "kimi" in model_lower or "moonshot" in model_lower:
         params["temperature"] = 0.6
         params["extra_body"] = {"thinking": {"type": "disabled"}}
+
 
     return OpenAIModel(client=client, model_id=model_name, params=params)
 

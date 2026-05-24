@@ -283,7 +283,7 @@ class ContractDriftDetector:
                 "severity": "CRITICAL",
                 "clause": "VM Provisioning: max 3 VMs",
                 "finding": f"Detected {obs.vm_count} active VMs (max={self.contract['max_vms']})",
-                "fix": "patch provisioner timeout + reload_module('worker_provisioner')",
+                "fix": "patch provisioner timeout + reload_module('strands_agents.provisioner_agent')",
                 "auto_action": "report",
             })
 
@@ -393,11 +393,11 @@ When drift is detected, you MUST act immediately without waiting for human
 prompt. Use these tools:
 
 - install_dependency(package) — pip install missing packages
-- patch_code(path, old, new) — fix bugs in source files. Use RELATIVE paths from repo root, e.g. 'server/tools/video_tools.py' or 'scripts/run_pipeline_with_audit.py'
+- patch_code(path, old, new) — fix bugs in source files. Use RELATIVE paths from repo root, e.g. 'server/strands_agents/provisioner_agent.py' or 'server/strands_agents/run_strands.py'
 - adjust_config(path, key, value) — change config values
 - report_drift(clause, finding, fix) — log the violation
 - constrain_scope(max_scenes, max_duration_seconds) — limit pipeline scope
-- reload_module(module_path) — reload a Python module after patching code so changes take effect WITHOUT restarting the pipeline. Use dot-paths like 'strands_agents.stages.audio_stage' or 'tools.video_tools'
+- reload_module(module_path) — reload a Python module after patching code so changes take effect WITHOUT restarting the pipeline. Use dot-paths like 'strands_agents.stages.audio_stage' or 'tools.job_queue_tools'
 
 DECISION RULES:
 - CRITICAL drift → act immediately (kill, patch, or install)

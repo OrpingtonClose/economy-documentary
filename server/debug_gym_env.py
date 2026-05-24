@@ -82,7 +82,7 @@ class DocumentaryAuditEnv(RepoEnv):
             "12. WorkerProvisioner uses RLock, max 3 VMs\n\n"
             "WORKFLOW:\n"
             "1. Read ARCHITECTURE_CONTRACT.md\n"
-            "2. Inspect relevant source files (graph_pipeline.py, tts_tools.py, run_strands.py, worker_provisioner.py)\n"
+            "2. Inspect relevant source files (graph_pipeline.py, run_strands.py, provisioner_agent.py, vm_registry.py)\n"
             "3. For each clause: verify the code satisfies it\n"
             "4. If a clause is violated, fix it with bash/sed\n"
             "5. When all clauses pass, call submit\n\n"
