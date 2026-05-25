@@ -2,8 +2,6 @@
 
 All agents are independent HTTP services. The orchestrator calls them via HTTP POST.
 No shared state, no in-process calls.
-
-The orchestrator reads OTIO as a projection (rebuilt from events) to decide routing.
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ from dataclasses import dataclass, field
 
 import httpx
 import opentimelineio as otio
-from pydantic_graph import End, GraphBuilder, StepContext
 
 from effect_parser import parse_agent_text
 from event_store import EventStore
@@ -22,7 +19,7 @@ from event_store import EventStore
 
 @dataclass
 class PipelineState:
-    """Mutable state carried through the graph."""
+    """Mutable state carried through the pipeline."""
 
     current_task: str = ""
     last_agent_output: str = ""
@@ -106,32 +103,14 @@ def _build_status(timeline: otio.schema.Timeline, last_output: str) -> str:
     )
 
 
-# ============================================================================
-# Graph Builder
-# ============================================================================
-
-g = GraphBuilder(
-    state_type=PipelineState,
-    deps_type=AgentURLs,
-    input_type=str,
-    output_type=str,
-)
-
-
-@g.step
-async def orchestrator_step(
-    ctx: StepContext[PipelineState, AgentURLs, str],
-) -> End[str]:
-    """Pipeline orchestrator.
+async def run_pipeline(state: PipelineState, deps: AgentURLs, brief: str) -> str:
+    """Run the documentary pipeline.
 
     Calls agents in sequence via HTTP. Reads OTIO state to decide routing.
     All agent communication is via HTTP — no in-process calls.
     """
-    state = ctx.state
-    deps = ctx.deps
-
     # 1. Run scenario agent
-    result = await _call_agent(deps.scenario, ctx.inputs)
+    result = await _call_agent(deps.scenario, brief)
     state.last_agent_output = result
     _record_effect(state, "scenario", result)
 
@@ -180,18 +159,34 @@ async def orchestrator_step(
             continue
 
         # All complete
-        return End(
+        return (
             f"Pipeline complete. Output: {state.timeline_path}\n"
             f"Iterations: {iteration + 1}\n"
             f"Final status:\n{status}"
         )
 
-    return End(f"Pipeline reached max iterations ({max_iterations}). Last status:\n{status}")
+    return f"Pipeline reached max iterations ({max_iterations}). Last status:\n{status}"
 
 
-# ============================================================================
-# Wire the graph
-# ============================================================================
+# Backwards compatibility: pydantic-graph wrapper
+from pydantic_graph import GraphBuilder, StepContext
+
+
+g = GraphBuilder(
+    state_type=PipelineState,
+    deps_type=AgentURLs,
+    input_type=str,
+    output_type=str,
+)
+
+
+@g.step
+async def orchestrator_step(
+    ctx: StepContext[PipelineState, AgentURLs, str],
+) -> str:
+    """Pipeline orchestrator (delegates to run_pipeline)."""
+    return await run_pipeline(ctx.state, ctx.deps, ctx.inputs)
+
 
 g.add(
     g.edge_from(g.start_node).to(orchestrator_step),

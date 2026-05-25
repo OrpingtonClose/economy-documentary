@@ -1,8 +1,7 @@
-"""Provisioner Agent — HTTP service wrapping a pydantic-deep agent.
+"""Provisioner Agent — HTTP service.
 
-Receives plain text via HTTP POST.
-Returns plain text (job status, provisioning decisions).
-Uses deepseek/deepseek-v4-flash.
+The agent thinks aloud about VM provisioning and job execution.
+It does not know about effects, state machines, or other agents.
 """
 
 from __future__ import annotations
@@ -13,6 +12,8 @@ from pydantic_deep import create_deep_agent
 
 app = FastAPI()
 
+_agent = None
+
 
 @app.on_event("startup")
 async def _startup():
@@ -20,30 +21,24 @@ async def _startup():
     _agent = create_deep_agent(
         model="deepseek/deepseek-v4-flash",
         instructions="""
-You are the Provisioner Agent. You are the ONLY entity that provisions GPU VMs and executes jobs.
+You are a DevOps engineer who provisions GPU VMs and runs jobs.
 
-YOU USE BASH FOR EVERYTHING. You do not call Python functions that hide complexity.
+You think aloud about what VMs are needed and what jobs to run.
+You check queues, provision machines, and dispatch work.
 
-WORKFLOW:
-1. Read the job queue status.
-2. If pending jobs exist, check if a healthy VM exists via BASH:
-   curl -s --max-time 5 http://{worker_url}/ || echo 'WORKER DOWN'
-3. If no VM or VM dead, search Vast.ai via BASH:
-   vastai search offers --type on-demand --raw
-4. Provision a VM via BASH:
-   vastai create instance {offer_id} --image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime --disk 64 --ssh --direct --env '-p 8880:8880'
-5. Start the worker via SSH + BASH.
-6. Dispatch jobs via BASH curl:
-   curl -X POST -d @text.txt http://{worker_url}/ > output.wav
-7. Mark jobs complete/failed via queue tools.
+YOU USE BASH FOR EVERYTHING. You do not call Python functions.
+Example: bash_command("vastai search offers --type on-demand --raw")
+Example: bash_command("curl -s --max-time 5 http://worker-url/")
 
-STAGE-TO-MODEL MAPPING:
-- 'audio' jobs always use Qwen3-TTS
-- 'video' jobs always use LTX-2.3
+You receive FEEDBACK after each turn telling you what happened.
+Use the feedback to adjust your next thinking.
 
-NEVER TROUBLESHOOT. ONLY CERTAINTY.
-If a VM fails, destroy it and provision a new one.
-If a job fails, mark it failed and move on.
+Describe your work in natural language:
+"I see 2 pending audio jobs. I need to provision a VM."
+"VM is ready. Dispatching TTS job via curl."
+"Job completed. Marking done."
+
+You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
         web_search=False,

@@ -1,8 +1,7 @@
-"""Assembly Agent — HTTP service wrapping a pydantic-deep agent.
+"""Assembly Agent — HTTP service.
 
-Receives plain text via HTTP POST.
-Returns plain text (assembly instructions, ffmpeg commands).
-Uses deepseek/deepseek-v4-flash.
+The agent thinks aloud about final assembly.
+It does not know about effects, state machines, or other agents.
 """
 
 from __future__ import annotations
@@ -13,6 +12,8 @@ from pydantic_deep import create_deep_agent
 
 app = FastAPI()
 
+_agent = None
+
 
 @app.on_event("startup")
 async def _startup():
@@ -20,25 +21,23 @@ async def _startup():
     _agent = create_deep_agent(
         model="deepseek/deepseek-v4-flash",
         instructions="""
-You are the Assembly Agent for a documentary pipeline.
+You are a film editor for documentaries.
 
-Your job: Merge audio and video clips into the final documentary.
+You think aloud about assembling the final cut.
+You read audio and video clips and plan the timeline.
 
-YOU COMMUNICATE IN NATURAL LANGUAGE ONLY.
-Never emit JSON, XML, or structured formats.
+YOU USE BASH to check files, run ffmpeg, verify outputs.
+Example: bash_command("ffmpeg -i audio.wav -i video.mp4 -c copy output.mp4")
 
-When you receive clip information, respond with:
-  Merge into OTIO: scene {N} audio={path} video={path}
+You receive FEEDBACK after each turn telling you what happened.
+Use the feedback to adjust your next thinking.
 
-You can also request bash commands for ffmpeg:
-  Execute bash: ffmpeg -i {audio} -i {video} -c copy {output}
+Describe assembly work in natural language:
+"Merge Scene 1 audio and video into the timeline."
+"Run ffmpeg to produce the final MP4."
+"Final output is ready."
 
-The system will parse your text into typed effects and execute them.
-
-RULES:
-- Specify exact file paths.
-- Specify timing and ordering.
-- Final output must be a single MP4 file.
+You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
         web_search=False,

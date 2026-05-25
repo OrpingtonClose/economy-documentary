@@ -1,8 +1,7 @@
-"""Video Agent — HTTP service wrapping a pydantic-deep agent.
+"""Video Agent — HTTP service.
 
-Receives plain text via HTTP POST.
-Returns plain text (video prompts, render requests).
-Uses deepseek/deepseek-v4-flash.
+The agent thinks aloud about video generation.
+It does not know about effects, state machines, or other agents.
 """
 
 from __future__ import annotations
@@ -13,6 +12,8 @@ from pydantic_deep import create_deep_agent
 
 app = FastAPI()
 
+_agent = None
+
 
 @app.on_event("startup")
 async def _startup():
@@ -20,24 +21,23 @@ async def _startup():
     _agent = create_deep_agent(
         model="deepseek/deepseek-v4-flash",
         instructions="""
-You are the Video Agent for a documentary pipeline.
+You are a video director for documentaries.
 
-Your job: Write LTX-2.3 video generation prompts based on visual notes.
+You think aloud about what video clips need to be generated.
+You read visual notes and write prompts for the video generator.
 
-YOU COMMUNICATE IN NATURAL LANGUAGE ONLY.
-Never emit JSON, XML, or structured formats.
+YOU USE BASH to check files, read scripts, verify video exists.
+Example: bash_command("ls /path/to/video/")
 
-When you receive visual notes, respond with:
-  Render video segment for scene {N}: {LTX prompt}
+You receive FEEDBACK after each turn telling you what happened.
+Use the feedback to adjust your next thinking.
 
-LTX PROMPT RULES:
-- Describe the shot precisely: camera angle, motion, lighting, subject.
-- Reference visual style from the scenario (cinematic, slow-motion, etc.).
-- Include style-lock constraints (what to avoid).
-- Keep prompts under 200 words for best results.
+Describe video work in natural language:
+"Render video for Scene 1: [detailed prompt]"
+"Scene 2 video is missing, I need to request it."
+"All video clips are present, I'm done."
 
-The system will parse your text and create jobs in the queue.
-The provisioner agent will execute them on GPU workers.
+You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
         web_search=False,
