@@ -1108,16 +1108,14 @@ def _build_audio_agent(model) -> Agent:
     @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
-        Checks artifacts dir for existing WAV files — does NOT read OTIO."""
-        import glob
-        from tools.otio_file_ops import resolve_timeline_path
+        Reads A1_Narration track from OTIO — agents never WRITE to OTIO."""
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
         try:
             tp = resolve_timeline_path()
-            pipeline_dir = os.path.dirname(os.path.dirname(tp))
-            artifact_dir = os.path.join(pipeline_dir, "artifacts")
-            wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
-            if len(wav_files) > 0:
-                return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "wav_files_exist", "count": len(wav_files)})
+            timeline = otio_read(tp)
+            for track in timeline.tracks:
+                if track.name == "A1_Narration" and len(list(track)) > 0:
+                    return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "a1_track_has_clips"})
         except Exception as exc:
             logger.warning("audio completion check failed: %s", exc)
         return json.dumps({"status": "not_completed", "stage": AUDIO})
@@ -1226,16 +1224,14 @@ def _build_video_agent(model) -> Agent:
     @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
-        Checks artifacts dir for MP4 files — does NOT read OTIO."""
-        import glob
-        from tools.otio_file_ops import resolve_timeline_path
+        Reads V1_Video track from OTIO — agents never WRITE to OTIO."""
+        from tools.otio_file_ops import resolve_timeline_path, otio_read
         try:
             tp = resolve_timeline_path()
-            pipeline_dir = os.path.dirname(os.path.dirname(tp))
-            artifact_dir = os.path.join(pipeline_dir, "artifacts")
-            mp4_files = glob.glob(os.path.join(artifact_dir, "*.mp4"))
-            if len(mp4_files) > 0:
-                return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "mp4_files_exist", "count": len(mp4_files)})
+            timeline = otio_read(tp)
+            for track in timeline.tracks:
+                if track.name == "V1_Video" and len(list(track)) > 0:
+                    return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "v1_track_has_clips"})
         except Exception as exc:
             logger.warning("video completion check failed: %s", exc)
         return json.dumps({"status": "not_completed", "stage": VIDEO})
@@ -1346,16 +1342,14 @@ def _build_assembly_agent(model) -> Agent:
     @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
-        Checks local output dir for final MP4 — does NOT read OTIO."""
-        import glob
+        Reads assembly_output_path from OTIO metadata — agents never WRITE to OTIO."""
         from tools.otio_file_ops import resolve_timeline_path
+        from tools.otio_metadata import read_pipeline_metadata
         try:
             tp = resolve_timeline_path()
-            pipeline_dir = os.path.dirname(os.path.dirname(tp))
-            output_dir = os.path.join(pipeline_dir, "output")
-            mp4_files = glob.glob(os.path.join(output_dir, "*.mp4"))
-            if len(mp4_files) > 0:
-                return json.dumps({"status": "already_completed", "stage": ASSEMBLY, "reason": "output_exists", "path": mp4_files[0]})
+            output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
+            if output_path:
+                return json.dumps({"status": "already_completed", "stage": ASSEMBLY, "reason": "output_path_in_otio", "path": output_path})
         except Exception as exc:
             logger.warning("assembly completion check failed: %s", exc)
         return json.dumps({"status": "not_completed", "stage": ASSEMBLY})
@@ -1510,38 +1504,47 @@ def _has_pending_jobs(state: GraphState) -> bool:
 
 
 def _audio_not_completed(state: GraphState) -> bool:
-    """Run Audio only if gate passed and no WAV files exist in artifacts."""
+    """Run Audio only if gate passed and A1_Narration track is empty.
+
+    The orchestrator reads OTIO to decide routing — this is NOT an
+    agent write. Agents remain OTIO-free.
+    """
     if _gate_recovery_target(state):
         return False
-    import glob
-    from tools.otio_file_ops import resolve_timeline_path
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
-        pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        artifact_dir = os.path.join(pipeline_dir, "artifacts")
-        wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
-        if len(wav_files) > 0:
-            return False
+        timeline = otio_read(tp)
+        for track in timeline.tracks:
+            if track.name == "A1_Narration" and len(list(track)) > 0:
+                return False
     except Exception as exc:
         logger.warning("audio routing check failed: %s", exc)
     return True
 
 
 def _video_not_completed(state: GraphState) -> bool:
-    """Run Video only if audio WAVs exist and no MP4 renders exist in artifacts."""
+    """Run Video only if A1 has clips and V1_Video track is empty.
+
+    The orchestrator reads OTIO to decide routing — this is NOT an
+    agent write. Agents remain OTIO-free.
+    """
     if _gate_recovery_target(state):
         return False
-    import glob
-    from tools.otio_file_ops import resolve_timeline_path
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
-        pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        artifact_dir = os.path.join(pipeline_dir, "artifacts")
-        wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
-        mp4_files = glob.glob(os.path.join(artifact_dir, "*.mp4"))
-        if len(wav_files) == 0:
+        timeline = otio_read(tp)
+        has_audio = False
+        has_video = False
+        for track in timeline.tracks:
+            if track.name == "A1_Narration" and len(list(track)) > 0:
+                has_audio = True
+            if track.name == "V1_Video" and len(list(track)) > 0:
+                has_video = True
+        if not has_audio:
             return False
-        if len(mp4_files) > 0:
+        if has_video:
             return False
     except Exception as exc:
         logger.warning("video routing check failed: %s", exc)
@@ -1549,19 +1552,26 @@ def _video_not_completed(state: GraphState) -> bool:
 
 
 def _assembly_not_completed(state: GraphState) -> bool:
-    """Run Assembly only if video MP4s exist in artifacts and final output doesn't exist."""
+    """Run Assembly only if V1 has clips and final output doesn't exist.
+
+    The orchestrator reads OTIO to decide routing — this is NOT an
+    agent write. Agents remain OTIO-free.
+    """
     if _gate_recovery_target(state):
         return False
     import glob
-    from tools.otio_file_ops import resolve_timeline_path
+    from tools.otio_file_ops import resolve_timeline_path, otio_read
     try:
         tp = resolve_timeline_path()
-        pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        artifact_dir = os.path.join(pipeline_dir, "artifacts")
-        output_dir = os.path.join(pipeline_dir, "output")
-        mp4_renders = glob.glob(os.path.join(artifact_dir, "*.mp4"))
-        if len(mp4_renders) == 0:
+        timeline = otio_read(tp)
+        has_video = False
+        for track in timeline.tracks:
+            if track.name == "V1_Video" and len(list(track)) > 0:
+                has_video = True
+                break
+        if not has_video:
             return False
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(tp)), "output")
         output_mp4s = glob.glob(os.path.join(output_dir, "*.mp4"))
         if len(output_mp4s) > 0:
             return False
