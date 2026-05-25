@@ -84,33 +84,24 @@ async def run_unit(
 
 
 def _check_has_audio(timeline_path: str) -> bool:
-    """Check if A1_Narration track has clips."""
-    import opentimelineio as otio
-    if not os.path.exists(timeline_path):
-        return False
-    try:
-        timeline = otio.schema.Timeline.deserialize_from_file(timeline_path)
-        for track in timeline.tracks:
-            if track.name == "A1_Narration" and len(list(track)) > 0:
-                return True
-    except Exception:
-        pass
-    return False
+    """Check if all audio jobs are completed and passed QA."""
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("audio")
+    # Audio is "done" when there are completed jobs and no pending/assigned/running/needs_retry
+    total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
+    if total == 0:
+        return False  # No jobs created yet
+    return summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0) + summary.get("needs_retry", 0) == 0
 
 
 def _check_has_video(timeline_path: str) -> bool:
-    """Check if V1_Video track has clips."""
-    import opentimelineio as otio
-    if not os.path.exists(timeline_path):
-        return False
-    try:
-        timeline = otio.schema.Timeline.deserialize_from_file(timeline_path)
-        for track in timeline.tracks:
-            if track.name == "V1_Video" and len(list(track)) > 0:
-                return True
-    except Exception:
-        pass
-    return False
+    """Check if all video jobs are completed and passed QA."""
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("video")
+    total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
+    if total == 0:
+        return False  # No jobs created yet
+    return summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0) + summary.get("needs_retry", 0) == 0
 
 
 def _check_has_output(timeline_path: str) -> bool:

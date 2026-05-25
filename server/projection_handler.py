@@ -71,8 +71,10 @@ def _handle_update_script(timeline: otio.schema.Timeline, effect: UpdateScript) 
 def _handle_generate_audio(timeline: otio.schema.Timeline, effect: GenerateNarrationAudio) -> otio.schema.Timeline:
     """Create a job in the audio queue."""
     from job_queue import create_job
+    from models.job import JobType
 
     create_job(
+        job_type=JobType.NARRATION,
         stage="audio",
         scene_num=effect.scene_num,
         payload={"voice": effect.voice, "text": effect.text},
@@ -83,8 +85,10 @@ def _handle_generate_audio(timeline: otio.schema.Timeline, effect: GenerateNarra
 def _handle_render_video(timeline: otio.schema.Timeline, effect: RenderVideoSegment) -> otio.schema.Timeline:
     """Create a job in the video queue."""
     from job_queue import create_job
+    from models.job import JobType
 
     create_job(
+        job_type=JobType.VIDEO_RENDER,
         stage="video",
         scene_num=effect.scene_num,
         payload={"prompt": effect.prompt, "lora_id": effect.lora_id},
