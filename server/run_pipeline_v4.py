@@ -349,21 +349,39 @@ async def dispatch_pending_jobs(
         # POST free-text instruction to VM agent
         try:
             async with httpx.AsyncClient() as client:
+                # Build context from script for the VM agent
+                script_context = ""
+                if state.has_script:
+                    script_context = (
+                        f"SCRIPT CONTEXT:\n"
+                        f"Scene: {state.scene_num}\n"
+                        f"Duration: {state.duration_sec}s\n"
+                        f"Dopamine hook: {state.dopamine_hook[:100]}...\n"
+                        f"Visual notes: {state.visual_notes[:100]}...\n"
+                        f"Pronunciation: {state.pronunciation_hints[:100]}...\n\n"
+                    )
+
                 if job.stage == "audio":
                     instruction = (
+                        f"CONTEXT:\n"
+                        f"{script_context}"
+                        f"INSTRUCTION:\n"
                         f"Generate narration audio using Qwen3-TTS.\n"
                         f"Text: {job.payload.get('text', '')}\n"
                         f"Voice: {job.payload.get('voice', 'V1')}\n"
                         f"Output: /workspace/output/{job.job_id}.wav\n"
-                        f"Run the command and report the exact output file path."
+                        f"Run the command, verify the file exists, and report the exact path."
                     )
                 else:
                     instruction = (
+                        f"CONTEXT:\n"
+                        f"{script_context}"
+                        f"INSTRUCTION:\n"
                         f"Generate video using LTX-2.3.\n"
                         f"Prompt: {job.payload.get('prompt', '')}\n"
                         f"Duration: {job.payload.get('duration_sec', 5)} seconds\n"
                         f"Output: /workspace/output/{job.job_id}.mp4\n"
-                        f"Run the command and report the exact output file path."
+                        f"Run the command, verify the file exists, and report the exact path."
                     )
 
                 resp = await client.post(
