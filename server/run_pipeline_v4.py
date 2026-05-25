@@ -639,11 +639,8 @@ async def run_pipeline(
                     onstart = (
                         "cd /workspace && "
                         "apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
-                        "pip install -q --break-system-packages fastapi uvicorn soundfile openai numpy torch && "
                         "git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git repo && "
-                        f"echo '{_DEEPSEEK_API_KEY}' > /workspace/.deepseek_key && "
-                        "nohup python repo/scripts/vm_agent.py --port 8880 > /workspace/agent.log 2>&1 & "
-                        "echo started"
+                        f"bash repo/scripts/vm_onstart_{mode}.sh '{_DEEPSEEK_API_KEY}'"
                     )
                     cmd = (
                         f"vastai create instance {effect.offer_id} "

@@ -28,9 +28,11 @@ snapshot_download(
 )
 "
 
-# Clone the documentary repo for runner scripts
-git clone --depth 1 --branch strands-migration \
-    https://github.com/OrpingtonClose/economy-documentary.git repo
+# Clone the documentary repo for runner scripts (idempotent)
+if [ ! -d /workspace/repo/.git ]; then
+    git clone --depth 1 --branch strands-migration \
+        https://github.com/OrpingtonClose/economy-documentary.git repo
+fi
 
 # Write DeepSeek API key for the VM agent
 echo "$1" > /workspace/.deepseek_key
