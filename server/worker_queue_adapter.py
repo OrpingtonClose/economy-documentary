@@ -25,8 +25,8 @@ from models.job import JobType
 logger = logging.getLogger(__name__)
 
 
-def _resolve_engine(engine_type: str):
-    """Resolve engine by type string."""
+def _resolve_tts_engine(engine_type: str):
+    """Resolve TTS engine by type string."""
     if engine_type == "qwen3":
         try:
             from strands_agents.qwen3_tts_worker.engine import Qwen3TTSEngine  # noqa: PLC0415
@@ -39,7 +39,24 @@ def _resolve_engine(engine_type: str):
         from strands_agents.qwen3_tts_worker.engine import StubTTSEngine  # noqa: PLC0415
         return StubTTSEngine()
     else:
-        raise ValueError(f"Unknown engine type: {engine_type}")
+        raise ValueError(f"Unknown TTS engine type: {engine_type}")
+
+
+def _resolve_video_engine(engine_type: str):
+    """Resolve video engine by type string."""
+    if engine_type == "ltx":
+        try:
+            from strands_agents.ltx_video_worker.engine import LTXVideoEngine  # noqa: PLC0415
+            return LTXVideoEngine()
+        except ImportError:
+            logger.warning("LTX backend not installed, falling back to stub")
+            from strands_agents.ltx_video_worker.engine import StubVideoEngine  # noqa: PLC0415
+            return StubVideoEngine()
+    elif engine_type == "stub":
+        from strands_agents.ltx_video_worker.engine import StubVideoEngine  # noqa: PLC0415
+        return StubVideoEngine()
+    else:
+        raise ValueError(f"Unknown video engine type: {engine_type}")
 
 
 def _synthesize_tts(
@@ -90,7 +107,7 @@ def run_tts_worker(
     )
 
     logger.info("Starting TTS worker (engine=%s)", engine_type)
-    engine = _resolve_engine(engine_type)
+    engine = _resolve_tts_engine(engine_type)
     logger.info("Engine ready: %s", engine.engine_id)
 
     processed = 0
@@ -146,17 +163,109 @@ def run_tts_worker(
     return processed
 
 
+def run_video_worker(
+    engine_type: str = "stub",
+    output_dir: str = "./pipeline_output/video",
+    poll_interval: float = 2.0,
+    max_jobs: int | None = None,
+) -> int:
+    """Run video worker that pulls from job queue."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    logger.info("Starting video worker (engine=%s)", engine_type)
+    engine = _resolve_video_engine(engine_type)
+    logger.info("Engine ready: %s", engine.engine_id)
+
+    from strands_agents.ltx_video_worker.engine import RenderRequest
+
+    processed = 0
+    while True:
+        job = claim_next_pending_job("video")
+        if job is None:
+            from job_queue import get_queue_summary
+            summary = get_queue_summary("video")
+            pending = summary.get("pending", 0) + summary.get("needs_retry", 0)
+            running = summary.get("running", 0)
+
+            if pending == 0 and running == 0:
+                logger.info("No pending or running jobs. Exiting.")
+                break
+
+            logger.info("No jobs available. Waiting %.1fs...", poll_interval)
+            time.sleep(poll_interval)
+            continue
+
+        logger.info(
+            "Processing %s (scene=%d, type=%s)",
+            job.job_id, job.scene_num, job.job_type.value,
+        )
+
+        mark_job_running(job.job_id, worker_id=f"video-{engine.engine_id}")
+
+        payload = job.payload
+        prompt = payload.get("prompt", "")
+        duration = payload.get("duration_sec", 5.0)
+
+        if not prompt:
+            mark_job_failed(job.job_id, "Empty video prompt")
+            continue
+
+        output_path = os.path.join(
+            output_dir,
+            f"scene{job.scene_num}.mp4",
+        )
+
+        try:
+            result = engine.render(
+                RenderRequest(
+                    prompt=prompt,
+                    duration_s=duration,
+                )
+            )
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(result.mp4_bytes)
+            mark_job_completed(job.job_id, output_path)
+            processed += 1
+            logger.info(
+                "Rendered: duration=%.2fs, bytes=%d, path=%s",
+                result.duration_s, len(result.mp4_bytes), output_path,
+            )
+        except Exception as exc:
+            logger.error("Render failed: %s", exc)
+            mark_job_failed(job.job_id, str(exc))
+
+        if max_jobs is not None and processed >= max_jobs:
+            logger.info("Reached max_jobs (%d), stopping", max_jobs)
+            break
+
+    logger.info("Processed %d jobs. Done.", processed)
+    return processed
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="TTS Worker Queue Adapter")
-    parser.add_argument("--engine", default="stub", choices=["qwen3", "stub"])
-    parser.add_argument("--output-dir", default="./pipeline_output/audio")
+    parser = argparse.ArgumentParser(description="Worker Queue Adapter")
+    parser.add_argument("--mode", default="tts", choices=["tts", "video"])
+    parser.add_argument("--engine", default="stub")
+    parser.add_argument("--output-dir", default="./pipeline_output")
     parser.add_argument("--poll-interval", type=float, default=2.0)
     parser.add_argument("--max-jobs", type=int, default=None)
     args = parser.parse_args()
 
-    run_tts_worker(
-        engine_type=args.engine,
-        output_dir=args.output_dir,
-        poll_interval=args.poll_interval,
-        max_jobs=args.max_jobs,
-    )
+    if args.mode == "tts":
+        run_tts_worker(
+            engine_type=args.engine,
+            output_dir=os.path.join(args.output_dir, "audio"),
+            poll_interval=args.poll_interval,
+            max_jobs=args.max_jobs,
+        )
+    else:
+        run_video_worker(
+            engine_type=args.engine,
+            output_dir=os.path.join(args.output_dir, "video"),
+            poll_interval=args.poll_interval,
+            max_jobs=args.max_jobs,
+        )
