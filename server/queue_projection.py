@@ -39,6 +39,8 @@ class Job:
     local_artifact_path: str = ""
     qa_comments: list[str] = field(default_factory=list)
     suggested_fix: str = ""
+    pending_question: str = ""
+    question_answer: str = ""
 
 
 def _audio_job_id(scene_num: int, voice: str) -> str:
@@ -123,10 +125,19 @@ def project_queue(effects: list[Effect]) -> dict[str, Job]:
         elif isinstance(effect, JobRequeued):
             if effect.job_id in jobs:
                 job = jobs[effect.job_id]
-                job.status = "needs_retry"
-                job.qa_comments.extend(effect.comments)
-                if effect.suggested_fix:
-                    job.suggested_fix = effect.suggested_fix
+                # Count total attempts (starts + requeues) to enforce retry limit
+                total_attempts = sum(
+                    1 for e in effects
+                    if isinstance(e, (JobStarted, JobRequeued)) and e.job_id == effect.job_id
+                )
+                if total_attempts < 5:
+                    job.status = "needs_retry"
+                    job.qa_comments.extend(effect.comments)
+                    if effect.suggested_fix:
+                        job.suggested_fix = effect.suggested_fix
+                else:
+                    job.status = "failed"
+                    job.qa_comments.append("Max retries exceeded")
 
     return jobs
 
