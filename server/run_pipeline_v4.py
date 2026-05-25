@@ -809,17 +809,26 @@ async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, br
 def run_qa_gates(queue_jobs: dict, event_store: EventStore) -> bool:
     """Run deterministic QA gates on completed artifacts.
 
-    For each completed job without a corresponding QAPassed/QAFailed event,
-    run the appropriate gate and append the result.
+    For each completed job without a corresponding QAPassed/QAFailed event
+    that happened AFTER the most recent JobCompleted, run the appropriate gate.
     Returns True if any QA was run.
     """
     acted = False
+    records = list(event_store.read_all())
 
-    # Find which jobs already have QA events
+    # Find the latest JobCompleted index for each job
+    latest_completion_idx: dict[str, int] = {}
+    for i, r in enumerate(records):
+        if r.effect.effect_type == "JobCompleted" and r.effect.job_id:
+            latest_completion_idx[r.effect.job_id] = i
+
+    # Find QA events that happened after the latest completion
     qa_done: set[str] = set()
-    for r in event_store.read_all():
+    for i, r in enumerate(records):
         if r.effect.effect_type in ("QAPassed", "QAFailed"):
-            qa_done.add(r.effect.job_id)
+            job_id = r.effect.job_id
+            if job_id in latest_completion_idx and i > latest_completion_idx[job_id]:
+                qa_done.add(job_id)
 
     for job in queue_jobs.values():
         if job.status != "completed":
