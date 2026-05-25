@@ -19,7 +19,7 @@ if _SCRIPT_DIR not in sys.path:
 
 import httpx
 
-from instructor import Instructor
+from pipeline_instructor import Instructor
 from pydantic_deep_agents.launcher import launch_all, terminate_all, wait_for_agents
 
 

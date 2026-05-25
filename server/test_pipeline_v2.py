@@ -12,7 +12,7 @@ import tempfile
 from unittest.mock import patch
 
 from run_pipeline_v2 import run_pipeline, run_unit
-from instructor import Instructor, Feedback
+from pipeline_instructor import Instructor, Feedback
 from effects import NoOp, UpdateScript, GenerateNarrationAudio
 
 
