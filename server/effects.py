@@ -128,6 +128,14 @@ class VMDeallocated(Effect):
     reason: str = Field(default="", description="Why the VM was destroyed")
 
 
+class VMProvisionFailed(Effect):
+    """A VM provisioning attempt failed."""
+
+    effect_type: Literal["VMProvisionFailed"] = "VMProvisionFailed"
+    offer_id: str = Field(default="", description="Vast.ai offer ID that was attempted")
+    error_message: str = Field(default="", description="Why provisioning failed")
+
+
 # ---------------------------------------------------------------------------
 # QA EFFECTS — emitted by QA jury
 # ---------------------------------------------------------------------------
@@ -164,14 +172,6 @@ class JobRequeued(Effect):
 # ---------------------------------------------------------------------------
 # SYSTEM EFFECTS
 # ---------------------------------------------------------------------------
-
-class ExecuteRawBash(Effect):
-    """Any agent requests a bash command be executed."""
-
-    effect_type: Literal["ExecuteRawBash"] = "ExecuteRawBash"
-    command: str = Field(default="", description="Bash command to execute")
-    reason: str = Field(default="", description="Why bash is needed for this operation")
-
 
 class NoOp(Effect):
     """No actionable effect detected."""

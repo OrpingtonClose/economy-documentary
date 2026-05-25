@@ -2,17 +2,16 @@
 
 This is the ONLY file that writes to OTIO. Agents never touch OTIO directly.
 Each effect type has exactly one handler function.
+
+Pure function — no side effects, no database calls, no subprocess.
 """
 
 from __future__ import annotations
-
-import subprocess
 
 import opentimelineio as otio
 
 from effects import (
     Effect,
-    ExecuteRawBash,
     GenerateNarrationAudio,
     MergeIntoOTIO,
     NoOp,
@@ -24,7 +23,7 @@ from effects import (
 def apply_event(timeline: otio.schema.Timeline, effect: Effect) -> otio.schema.Timeline:
     """Apply a single effect to the timeline. Returns a new timeline.
 
-    This is a pure function (except ExecuteRawBash which runs subprocess).
+    Pure function — no side effects.
     The timeline is rebuilt from events, not modified in place.
     """
     handlers: dict[str, callable] = {
@@ -32,7 +31,6 @@ def apply_event(timeline: otio.schema.Timeline, effect: Effect) -> otio.schema.T
         "GenerateNarrationAudio": _handle_generate_audio,
         "RenderVideoSegment": _handle_render_video,
         "MergeIntoOTIO": _handle_merge_into_otio,
-        "ExecuteRawBash": _handle_execute_bash,
         "NoOp": _handle_noop,
     }
     handler = handlers.get(effect.effect_type)
@@ -71,30 +69,35 @@ def _handle_update_script(timeline: otio.schema.Timeline, effect: UpdateScript) 
 
 
 def _handle_generate_audio(timeline: otio.schema.Timeline, effect: GenerateNarrationAudio) -> otio.schema.Timeline:
-    """Create a job in the audio queue."""
-    from job_queue import create_job
-    from models.job import JobType
-
-    create_job(
-        job_type=JobType.NARRATION,
-        stage="audio",
-        scene_num=effect.scene_num,
-        payload={"voice": effect.voice, "text": effect.text},
-    )
+    """Record audio job request in OTIO metadata."""
+    meta = timeline.metadata.setdefault("documentary", {})
+    pending = meta.setdefault("pending_audio_jobs", [])
+    entry = {
+        "voice": effect.voice,
+        "text": effect.text,
+        "scene_num": effect.scene_num,
+        "agent": effect.agent_id,
+    }
+    # Deduplicate by voice+scene
+    if not any(e["voice"] == entry["voice"] and e["scene_num"] == entry["scene_num"] for e in pending):
+        pending.append(entry)
     return timeline
 
 
 def _handle_render_video(timeline: otio.schema.Timeline, effect: RenderVideoSegment) -> otio.schema.Timeline:
-    """Create a job in the video queue."""
-    from job_queue import create_job
-    from models.job import JobType
-
-    create_job(
-        job_type=JobType.VIDEO_RENDER,
-        stage="video",
-        scene_num=effect.scene_num,
-        payload={"prompt": effect.prompt, "lora_id": effect.lora_id},
-    )
+    """Record video job request in OTIO metadata."""
+    meta = timeline.metadata.setdefault("documentary", {})
+    pending = meta.setdefault("pending_video_jobs", [])
+    entry = {
+        "prompt": effect.prompt,
+        "lora_id": effect.lora_id,
+        "duration_sec": effect.duration_sec,
+        "scene_num": effect.scene_num,
+        "agent": effect.agent_id,
+    }
+    # Deduplicate by scene
+    if not any(e["scene_num"] == entry["scene_num"] for e in pending):
+        pending.append(entry)
     return timeline
 
 
@@ -117,16 +120,6 @@ def _handle_merge_into_otio(timeline: otio.schema.Timeline, effect: MergeIntoOTI
             duration=clip.get("duration_sec", 5.0),
             lora_id=clip.get("lora_id", ""),
         )
-    return timeline
-
-
-def _handle_execute_bash(timeline: otio.schema.Timeline, effect: ExecuteRawBash) -> otio.schema.Timeline:
-    """Execute a bash command. This is the only impure handler."""
-    subprocess.run(
-        effect.command,
-        shell=True,
-        capture_output=True,
-    )
     return timeline
 
 

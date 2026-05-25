@@ -11,20 +11,51 @@ import json
 import os
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializeAsAny, model_validator
 
 from effects import Effect
+
+
+_EFFECT_CLASSES: dict[str, type[Effect]] = {
+    "UpdateScript": __import__("effects", fromlist=["UpdateScript"]).UpdateScript,
+    "GenerateNarrationAudio": __import__("effects", fromlist=["GenerateNarrationAudio"]).GenerateNarrationAudio,
+    "RenderVideoSegment": __import__("effects", fromlist=["RenderVideoSegment"]).RenderVideoSegment,
+    "MergeIntoOTIO": __import__("effects", fromlist=["MergeIntoOTIO"]).MergeIntoOTIO,
+    "JobQueued": __import__("effects", fromlist=["JobQueued"]).JobQueued,
+    "JobStarted": __import__("effects", fromlist=["JobStarted"]).JobStarted,
+    "JobCompleted": __import__("effects", fromlist=["JobCompleted"]).JobCompleted,
+    "JobFailed": __import__("effects", fromlist=["JobFailed"]).JobFailed,
+    "VMAllocated": __import__("effects", fromlist=["VMAllocated"]).VMAllocated,
+    "VMDeallocated": __import__("effects", fromlist=["VMDeallocated"]).VMDeallocated,
+    "VMProvisionFailed": __import__("effects", fromlist=["VMProvisionFailed"]).VMProvisionFailed,
+    "QAPassed": __import__("effects", fromlist=["QAPassed"]).QAPassed,
+    "QAFailed": __import__("effects", fromlist=["QAFailed"]).QAFailed,
+    "JobRequeued": __import__("effects", fromlist=["JobRequeued"]).JobRequeued,
+    "NoOp": __import__("effects", fromlist=["NoOp"]).NoOp,
+}
 
 
 class EventRecord(BaseModel):
     """A single immutable event in the log."""
 
     seq: int = Field(description="Monotonically increasing sequence number")
-    effect: Effect = Field(description="The typed effect that caused this event")
+    effect: SerializeAsAny[Effect] = Field(description="The typed effect that caused this event")
     otio_hash_before: str = Field(description="OTIO hash before applying this effect")
     otio_hash_after: str = Field(default="", description="OTIO hash after applying this effect")
     validated: bool = Field(default=True, description="Whether this effect passed validation")
     rejected_reason: str = Field(default="", description="If rejected, why")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_effect_subclass(cls, v: Any) -> Any:
+        """Deserialize effect into its proper subclass based on effect_type."""
+        if isinstance(v, dict) and "effect" in v:
+            effect_data = v["effect"]
+            if isinstance(effect_data, dict):
+                effect_type = effect_data.get("effect_type", "NoOp")
+                effect_cls = _EFFECT_CLASSES.get(effect_type, _EFFECT_CLASSES["NoOp"])
+                v["effect"] = effect_cls(**effect_data)
+        return v
 
 
 class EventStore:
