@@ -106,5 +106,5 @@ def build_assembly_agent(
         name="assembler_agent",
         model=model,
         system_prompt=_SYSTEM_PROMPT,
-        tools=[assemble_final_cut, read_timeline, validate_assembly],
+        tools=[assemble_final_cut],
     )

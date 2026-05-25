@@ -40,7 +40,6 @@ def build_agent_app(
     # wasted round-trips and output-token starvation from ContextWindowOverflowException.
     agent.conversation_manager = SlidingWindowConversationManager(
         window_size=50,
-        proactive_compression={"compression_threshold": 0.7},
     )
 
     # Endow agent with knowledge of all sibling agents' HTTP endpoints.
