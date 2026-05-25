@@ -19,7 +19,7 @@ _agent = None
 async def _startup():
     global _agent
     _agent = create_deep_agent(
-        model="deepseek/deepseek-v4-flash",
+        model="deepseek:deepseek-v4-flash",
         instructions="""
 You are a film editor for documentaries.
 
@@ -40,12 +40,14 @@ Describe assembly work in natural language:
 You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
+        include_subagents=False,
         web_search=False,
+        web_fetch=False,
         thinking=False,
     )
 
 
 @app.post("/")
 async def invoke(text: str = Body(..., media_type="text/plain")):
-    result = await _agent.run(text)
+    result = await _agent.run(text, deps=_agent.deps_type())
     return PlainTextResponse(result.output)

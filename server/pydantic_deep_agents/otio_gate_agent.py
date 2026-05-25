@@ -2,7 +2,7 @@
 
 Receives plain text via HTTP POST.
 Returns plain text (validation results, routing decisions).
-Uses deepseek/deepseek-v4-flash.
+Uses deepseek:deepseek-v4-flash.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ app = FastAPI()
 async def _startup():
     global _agent
     _agent = create_deep_agent(
-        model="deepseek/deepseek-v4-flash",
+        model="deepseek:deepseek-v4-flash",
         instructions="""
 You are the OTIO Gate Agent for a documentary pipeline.
 
@@ -39,12 +39,14 @@ The system parses your text into typed effects.
 The graph uses your routing decision to invoke the next agent.
 """,
         include_memory=True,
+        include_subagents=False,
         web_search=False,
+        web_fetch=False,
         thinking=False,
     )
 
 
 @app.post("/")
 async def invoke(text: str = Body(..., media_type="text/plain")):
-    result = await _agent.run(text)
+    result = await _agent.run(text, deps=_agent.deps_type())
     return PlainTextResponse(result.output)

@@ -154,6 +154,17 @@ async def run_pipeline(
     timeline_path = os.path.join(timeline_dir, "documentary_draft.otio")
     event_log_path = os.path.join(output_dir, "events.jsonl")
 
+    # 3b. Initialize OTIO timeline if it doesn't exist
+    if not os.path.exists(timeline_path):
+        import opentimelineio as otio
+        timeline = otio.schema.Timeline(name="documentary")
+        stack = otio.schema.Stack(name="tracks")
+        timeline.tracks = stack
+        stack.append(otio.schema.Sequence(name="A1_Narration"))
+        stack.append(otio.schema.Sequence(name="V1_Video"))
+        timeline.serialize_to_file(timeline_path)
+        print(f"[INIT] Created fresh OTIO timeline: {timeline_path}")
+
     # 4. Create instructors for each unit
     instructors = {
         uid: Instructor(uid, event_log_path, timeline_path)
