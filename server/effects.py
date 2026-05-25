@@ -1,8 +1,13 @@
-"""Algebraic effect types — the only things that can mutate the pipeline.
+"""Algebraic effect types — the only things that can mutate pipeline state.
 
-Every agent message is parsed into one of these effects.
-Only validated effects are appended to the event store.
-Only the projection handler applies effects to OTIO.
+Every state change is an effect. Only validated effects are appended to the event store.
+Only the projection handler applies effects.
+
+Effects fall into three categories:
+1. AGENT effects — proposed by agents (UpdateScript, GenerateNarrationAudio, RenderVideoSegment)
+2. WORKER effects — emitted by workers and provisioner (JobQueued, JobStarted, JobCompleted, JobFailed, VMAllocated)
+3. QA effects — emitted by QA jury (QAPassed, QAFailed, JobRequeued)
+4. SYSTEM effects — internal (NoOp, ExecuteRawBash)
 """
 
 from __future__ import annotations
@@ -22,6 +27,10 @@ class Effect(BaseModel):
     justification: str = Field(default="", description="The raw text that caused this effect")
     scene_num: int = Field(default=0, description="Scene number this effect applies to")
 
+
+# ---------------------------------------------------------------------------
+# AGENT EFFECTS — proposed by agents, parsed by instructor
+# ---------------------------------------------------------------------------
 
 class UpdateScript(Effect):
     """Scenario agent proposes script/narration/visual changes."""
@@ -61,12 +70,103 @@ class MergeIntoOTIO(Effect):
     video_clips: list[dict] = Field(default_factory=list, description="Video clips to add to V1_Video")
 
 
-class ExecuteRawBash(Effect):
-    """Any agent requests a bash command be executed.
+# ---------------------------------------------------------------------------
+# WORKER EFFECTS — emitted by workers and provisioner
+# ---------------------------------------------------------------------------
 
-    This is the escape hatch for operations not covered by other effect types.
-    The agent must provide a clear reason for why bash is needed.
-    """
+class JobQueued(Effect):
+    """A job was created in the queue. Emitted by projection handler."""
+
+    effect_type: Literal["JobQueued"] = "JobQueued"
+    job_type: str = Field(default="NARRATION", description="NARRATION or VIDEO_RENDER")
+    stage: str = Field(default="audio", description="audio or video")
+    job_id: str = Field(default="", description="Unique job ID")
+    payload: dict = Field(default_factory=dict, description="Job payload")
+
+
+class JobStarted(Effect):
+    """A worker claimed a job and started processing."""
+
+    effect_type: Literal["JobStarted"] = "JobStarted"
+    job_id: str = Field(default="", description="Job ID")
+    worker_id: str = Field(default="", description="Worker that claimed the job")
+    stage: str = Field(default="", description="audio or video")
+
+
+class JobCompleted(Effect):
+    """A worker finished processing a job. Artifact is ready."""
+
+    effect_type: Literal["JobCompleted"] = "JobCompleted"
+    job_id: str = Field(default="", description="Job ID")
+    artifact_path: str = Field(default="", description="Path to generated file")
+    stage: str = Field(default="", description="audio or video")
+
+
+class JobFailed(Effect):
+    """A worker failed to process a job."""
+
+    effect_type: Literal["JobFailed"] = "JobFailed"
+    job_id: str = Field(default="", description="Job ID")
+    error_message: str = Field(default="", description="Why the job failed")
+    stage: str = Field(default="", description="audio or video")
+
+
+class VMAllocated(Effect):
+    """A VM was provisioned for worker jobs."""
+
+    effect_type: Literal["VMAllocated"] = "VMAllocated"
+    instance_id: str = Field(default="", description="VM instance ID")
+    offer_id: str = Field(default="", description="Vast.ai offer ID")
+    gpu_type: str = Field(default="", description="GPU type")
+
+
+class VMDeallocated(Effect):
+    """A VM was destroyed."""
+
+    effect_type: Literal["VMDeallocated"] = "VMDeallocated"
+    instance_id: str = Field(default="", description="VM instance ID")
+    reason: str = Field(default="", description="Why the VM was destroyed")
+
+
+# ---------------------------------------------------------------------------
+# QA EFFECTS — emitted by QA jury
+# ---------------------------------------------------------------------------
+
+class QAPassed(Effect):
+    """QA jury approved an artifact."""
+
+    effect_type: Literal["QAPassed"] = "QAPassed"
+    job_id: str = Field(default="", description="Job ID")
+    artifact_path: str = Field(default="", description="Path to artifact")
+    verdict: str = Field(default="", description="QA verdict text")
+
+
+class QAFailed(Effect):
+    """QA jury rejected an artifact."""
+
+    effect_type: Literal["QAFailed"] = "QAFailed"
+    job_id: str = Field(default="", description="Job ID")
+    artifact_path: str = Field(default="", description="Path to artifact")
+    verdict: str = Field(default="", description="QA verdict text")
+    comments: list[str] = Field(default_factory=list, description="Specific issues found")
+    suggested_fix: str = Field(default="", description="How to fix the issues")
+
+
+class JobRequeued(Effect):
+    """A failed job was requeued with QA comments for retry."""
+
+    effect_type: Literal["JobRequeued"] = "JobRequeued"
+    job_id: str = Field(default="", description="Job ID")
+    comments: list[str] = Field(default_factory=list, description="QA comments")
+    suggested_fix: str = Field(default="", description="Suggested fix")
+
+
+# ---------------------------------------------------------------------------
+# SYSTEM EFFECTS
+# ---------------------------------------------------------------------------
+
+class ExecuteRawBash(Effect):
+    """Any agent requests a bash command be executed."""
 
     effect_type: Literal["ExecuteRawBash"] = "ExecuteRawBash"
     command: str = Field(default="", description="Bash command to execute")
@@ -74,7 +174,7 @@ class ExecuteRawBash(Effect):
 
 
 class NoOp(Effect):
-    """No actionable effect detected. Either parsing failed or the message was informational."""
+    """No actionable effect detected."""
 
     effect_type: Literal["NoOp"] = "NoOp"
     reason: str = Field(default="", description="Why no effect was extracted")
