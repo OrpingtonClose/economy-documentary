@@ -83,6 +83,56 @@ async def run_unit(
     return f"{unit_id} reached max turns ({max_turns}).\nLast feedback:\n{feedback.to_text()}"
 
 
+def _check_has_audio(timeline_path: str) -> bool:
+    """Check if A1_Narration track has clips."""
+    import opentimelineio as otio
+    if not os.path.exists(timeline_path):
+        return False
+    try:
+        timeline = otio.schema.Timeline.deserialize_from_file(timeline_path)
+        for track in timeline.tracks:
+            if track.name == "A1_Narration" and len(list(track)) > 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _check_has_video(timeline_path: str) -> bool:
+    """Check if V1_Video track has clips."""
+    import opentimelineio as otio
+    if not os.path.exists(timeline_path):
+        return False
+    try:
+        timeline = otio.schema.Timeline.deserialize_from_file(timeline_path)
+        for track in timeline.tracks:
+            if track.name == "V1_Video" and len(list(track)) > 0:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _check_has_output(timeline_path: str) -> bool:
+    """Check if output MP4s exist."""
+    import glob
+    output_dir = os.path.join(os.path.dirname(timeline_path), "output")
+    return len(glob.glob(os.path.join(output_dir, "*.mp4"))) > 0
+
+
+def _get_pending_jobs() -> int:
+    """Get count of pending/assigned jobs from queue."""
+    from job_queue import get_queue_summary
+    audio_summary = get_queue_summary("audio")
+    video_summary = get_queue_summary("video")
+    return (
+        audio_summary.get("pending", 0)
+        + audio_summary.get("assigned", 0)
+        + video_summary.get("pending", 0)
+        + video_summary.get("assigned", 0)
+    )
+
+
 async def run_pipeline(
     brief: str,
     output_dir: str,
@@ -127,37 +177,10 @@ async def run_pipeline(
             print(f"\n[CYCLE {cycle + 1}]")
 
             # Check world state
-            import glob
-
-            import opentimelineio as otio
-
-            has_audio = False
-            has_video = False
-            has_output = False
-
-            if os.path.exists(timeline_path):
-                try:
-                    timeline = otio.schema.Timeline.deserialize_from_file(timeline_path)
-                    for track in timeline.tracks:
-                        if track.name == "A1_Narration" and len(list(track)) > 0:
-                            has_audio = True
-                        if track.name == "V1_Video" and len(list(track)) > 0:
-                            has_video = True
-                except Exception:
-                    pass
-
-            output_dir_path = os.path.join(os.path.dirname(timeline_path), "output")
-            has_output = len(glob.glob(os.path.join(output_dir_path, "*.mp4"))) > 0
-
-            from job_queue import get_queue_summary
-            audio_summary = get_queue_summary("audio")
-            video_summary = get_queue_summary("video")
-            pending = (
-                audio_summary.get("pending", 0)
-                + audio_summary.get("assigned", 0)
-                + video_summary.get("pending", 0)
-                + video_summary.get("assigned", 0)
-            )
+            has_audio = _check_has_audio(timeline_path)
+            has_video = _check_has_video(timeline_path)
+            has_output = _check_has_output(timeline_path)
+            pending = _get_pending_jobs()
 
             # Decide which unit to run
             if cycle == 0:
@@ -171,6 +194,9 @@ async def run_pipeline(
                 task = "Generate video clips for all scenes."
             elif pending > 0:
                 unit = "provisioner"
+                from job_queue import get_queue_summary
+                audio_summary = get_queue_summary("audio")
+                video_summary = get_queue_summary("video")
                 task = f"Execute pending jobs. Audio: {audio_summary}, Video: {video_summary}"
             elif not has_output:
                 unit = "assembly"

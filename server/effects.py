@@ -17,9 +17,9 @@ class Effect(BaseModel):
     """Base class for all algebraic effects."""
 
     effect_type: str
-    agent_id: str
-    timestamp: datetime
-    justification: str = Field(description="The raw text that caused this effect")
+    agent_id: str = ""
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    justification: str = Field(default="", description="The raw text that caused this effect")
     scene_num: int = Field(default=0, description="Scene number this effect applies to")
 
 
