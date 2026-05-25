@@ -1,10 +1,11 @@
-"""Pipeline v2: Per-unit state machines + Instructor as bridge.
+"""Pipeline v2: Agents self-orchestrate. Instructor parses effects.
 
-Each unit (agent) has its own state machine.
-The instructor parses agent text into effects, validates, stores, projects.
-Feedback is sent back to the agent on next invocation.
-
-All agent communication is via HTTP.
+Architecture:
+  Agent → free text → Instructor → Effect → Event Store
+                                        ↓
+                                 Projection Handler → OTIO
+                                        ↓
+                                     Job Queue
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import httpx
 
 from pipeline_instructor import Instructor
 from pydantic_deep_agents.launcher import launch_all, terminate_all, wait_for_agents
+from job_queue import clear_all_jobs
 
 
 AGENT_URLS = {
@@ -32,13 +34,9 @@ AGENT_URLS = {
 }
 
 
-async def _call_agent(url: str, text: str, timeout: float = 300.0) -> str:
-    """Call an agent via HTTP POST with plain text.
-
-    /cheat: timeout is REQUIRED — agents run LLM inference which can take
-    30-300s. Without a timeout, a crashed agent hangs the pipeline forever.
-    """
-    async with httpx.AsyncClient(timeout=timeout) as client:
+async def _call_agent(url: str, text: str) -> str:
+    """Call an agent via HTTP POST with plain text."""
+    async with httpx.AsyncClient() as client:
         resp = await client.post(
             url.rstrip("/") + "/",
             content=text,
@@ -48,131 +46,22 @@ async def _call_agent(url: str, text: str, timeout: float = 300.0) -> str:
         return resp.text
 
 
-async def run_unit(
-    unit_id: str,
-    task: str,
-    instructor: Instructor,
-    max_turns: int = 10,
-) -> str:
-    """Run a single unit for up to max_turns.
-
-    Each turn:
-    1. Send task + feedback to agent
-    2. Agent thinks and outputs text
-    3. Instructor parses, validates, stores, projects
-    4. Feedback is generated
-    5. If effect is NoOp, stop
-    """
-    url = AGENT_URLS[unit_id]
-    context = task
-
-    for turn in range(max_turns):
-        # Call agent
-        agent_output = await _call_agent(url, context)
-
-        # Instructor processes
-        effect, feedback = instructor.process(agent_output)
-
-        # Check if done
-        if effect.effect_type == "NoOp":
-            return f"{unit_id} done after {turn + 1} turns.\n{feedback.to_text()}"
-
-        # Build context for next turn
-        context = (
-            f"Your previous output:\n{agent_output}\n\n"
-            f"{feedback.to_text()}\n\n"
-            f"Continue working."
-        )
-
-    return f"{unit_id} reached max turns ({max_turns}).\nLast feedback:\n{feedback.to_text()}"
-
-
-def _check_has_audio(timeline_path: str) -> bool:
-    """Check if all audio jobs are completed and passed QA."""
-    from job_queue import get_queue_summary
-    summary = get_queue_summary("audio")
-    total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
-    if total == 0:
-        return False  # No jobs created yet
-    # Done only when all jobs are completed (no pending/assigned/running/needs_retry/failed)
-    incomplete = (
-        summary.get("pending", 0)
-        + summary.get("assigned", 0)
-        + summary.get("running", 0)
-        + summary.get("needs_retry", 0)
-        + summary.get("failed", 0)
-    )
-    return incomplete == 0 and summary.get("completed", 0) > 0
-
-
-def _check_has_video(timeline_path: str) -> bool:
-    """Check if all video jobs are completed and passed QA."""
-    from job_queue import get_queue_summary
-    summary = get_queue_summary("video")
-    total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
-    if total == 0:
-        return False  # No jobs created yet
-    incomplete = (
-        summary.get("pending", 0)
-        + summary.get("assigned", 0)
-        + summary.get("running", 0)
-        + summary.get("needs_retry", 0)
-        + summary.get("failed", 0)
-    )
-    return incomplete == 0 and summary.get("completed", 0) > 0
-
-
-def _check_has_output(timeline_path: str) -> bool:
-    """Check if output MP4s exist."""
-    import glob
-    output_dir = os.path.join(os.path.dirname(timeline_path), "output")
-    return len(glob.glob(os.path.join(output_dir, "*.mp4"))) > 0
-
-
-def _get_pending_jobs() -> int:
-    """Get count of pending/assigned jobs from queue."""
-    from job_queue import get_queue_summary
-    audio_summary = get_queue_summary("audio")
-    video_summary = get_queue_summary("video")
-    return (
-        audio_summary.get("pending", 0)
-        + audio_summary.get("assigned", 0)
-        + video_summary.get("pending", 0)
-        + video_summary.get("assigned", 0)
-    )
-
-
 async def run_pipeline(
     brief: str,
     output_dir: str,
     max_cycles: int = 50,
 ) -> str:
-    """Run the full pipeline.
-
-    Cycles through units based on world state.
-    Each unit runs until it produces a NoOp.
-    """
-    # 1. Destroy orphan VMs
-    print("[CLEANUP] Destroying orphan VMs...")
+    """Run the full pipeline."""
+    print("[CLEANUP] Destroying orphan VMs, clearing queue...")
     from strands_agents.run_strands import _destroy_all_vms
     _destroy_all_vms()
+    clear_all_jobs()
 
-    # 2. Launch agents
-    print("[LAUNCH] Starting agents...")
-    processes = launch_all()
-    if not await wait_for_agents(processes, timeout=30):
-        print("[ERROR] Agents failed to start")
-        terminate_all(processes)
-        return "Failed: agents did not start"
-    print(f"[LAUNCH] {len(processes)} agents running")
-
-    # 3. Setup paths
     timeline_dir = os.path.join(output_dir, "timelines")
     os.makedirs(timeline_dir, exist_ok=True)
     timeline_path = os.path.join(timeline_dir, "documentary_draft.otio")
     event_log_path = os.path.join(output_dir, "events.jsonl")
 
-    # 3b. Initialize OTIO timeline if it doesn't exist
     if not os.path.exists(timeline_path):
         import opentimelineio as otio
         timeline = otio.schema.Timeline(name="documentary")
@@ -183,61 +72,110 @@ async def run_pipeline(
         timeline.to_json_file(timeline_path)
         print(f"[INIT] Created fresh OTIO timeline: {timeline_path}")
 
-    # 4. Create instructors for each unit
+    print("[LAUNCH] Starting agents...")
+    processes = launch_all()
+    if not await wait_for_agents(processes):
+        print("[ERROR] Agents failed to start")
+        terminate_all(processes)
+        return "Failed: agents did not start"
+    print(f"[LAUNCH] {len(processes)} agents running")
+
+    print("[RESET] Clearing agent memories...")
+    async with httpx.AsyncClient() as client:
+        for url in AGENT_URLS.values():
+            try:
+                await client.post(url.rstrip("/") + "/reset")
+            except Exception:
+                pass
+    print("[RESET] Done")
+
     instructors = {
         uid: Instructor(uid, event_log_path, timeline_path)
         for uid in AGENT_URLS.keys()
     }
 
-    # 5. Pipeline cycles
     print(f"[PIPELINE] Starting: {brief[:60]}")
 
     try:
         for cycle in range(max_cycles):
             print(f"\n[CYCLE {cycle + 1}]")
 
-            # Check world state
-            has_audio = _check_has_audio(timeline_path)
-            has_video = _check_has_video(timeline_path)
-            has_output = _check_has_output(timeline_path)
-            pending = _get_pending_jobs()
+            from job_queue import get_queue_summary
+            audio_summary = get_queue_summary("audio")
+            video_summary = get_queue_summary("video")
+            pending = (
+                audio_summary.get("pending", 0)
+                + audio_summary.get("assigned", 0)
+                + video_summary.get("pending", 0)
+                + video_summary.get("assigned", 0)
+            )
+            has_audio = (
+                audio_summary.get("completed", 0) > 0
+                and audio_summary.get("pending", 0) == 0
+                and audio_summary.get("assigned", 0) == 0
+                and audio_summary.get("running", 0) == 0
+                and audio_summary.get("needs_retry", 0) == 0
+            )
+            has_video = (
+                video_summary.get("completed", 0) > 0
+                and video_summary.get("pending", 0) == 0
+                and video_summary.get("assigned", 0) == 0
+                and video_summary.get("running", 0) == 0
+                and video_summary.get("needs_retry", 0) == 0
+            )
+            total_audio = sum(audio_summary.values())
+            total_video = sum(video_summary.values())
+            # Audio/video are "done" when all jobs are completed (or no jobs were ever created)
+            audio_done = total_audio > 0 and has_audio
+            video_done = total_video > 0 and has_video
 
-            # Decide which unit to run
-            if cycle == 0:
-                unit = "scenario"
-                task = brief
-            elif not has_audio:
-                unit = "audio"
-                task = "Generate narration audio for all scenes."
-            elif not has_video:
-                unit = "video"
-                task = "Generate video clips for all scenes."
-            elif pending > 0:
-                unit = "provisioner"
-                from job_queue import get_queue_summary
-                audio_summary = get_queue_summary("audio")
-                video_summary = get_queue_summary("video")
-                task = f"Execute pending jobs. Audio: {audio_summary}, Video: {video_summary}"
-            elif not has_output:
-                unit = "assembly"
-                task = "Assemble final documentary from audio and video clips."
-            else:
+            import glob
+            output_mp4s = glob.glob(os.path.join(output_dir, "output", "*.mp4"))
+            has_output = len(output_mp4s) > 0
+
+            if audio_done and video_done and has_output:
                 print("[PIPELINE] Complete!")
                 return f"Pipeline complete in {cycle + 1} cycles."
 
-            print(f"  Running: {unit}")
-            result = await run_unit(unit, task, instructors[unit])
-            print(f"  Result: {result[:200]}...")
+            units_to_poll = []
+            if cycle == 0:
+                units_to_poll.append("scenario")
+            if not audio_done:
+                units_to_poll.append("audio")
+            if not video_done:
+                units_to_poll.append("video")
+            if pending > 0:
+                units_to_poll.append("provisioner")
+            if audio_done and video_done:
+                units_to_poll.append("assembly")
+
+            acted = False
+            for unit in units_to_poll:
+                print(f"  Polling: {unit}")
+                context = f"Audio queue: {audio_summary}\nVideo queue: {video_summary}\n"
+                if unit == "scenario" and cycle == 0:
+                    context = f"{context}\nBrief: {brief}"
+
+                try:
+                    agent_output = await _call_agent(AGENT_URLS[unit], context)
+                    print(f"  Raw: {agent_output[:200]}...")
+
+                    effects, feedback = instructors[unit].process_multi(agent_output)
+                    print(f"  Effects: {[e.effect_type for e in effects]}")
+
+                    if effects and not all(e.effect_type == "NoOp" for e in effects):
+                        acted = True
+
+                except Exception as exc:
+                    print(f"  Error: {exc}")
+
+            if not acted and cycle > 3:
+                print("[PIPELINE] No progress. Stopping.")
+                return f"Pipeline stopped after {cycle + 1} cycles."
 
         return f"Pipeline reached max cycles ({max_cycles})."
 
     except Exception as exc:
-        from maintainer import notify_maintainer
-        notify_maintainer(
-            operation="pipeline",
-            error=str(exc),
-            context={"brief": brief, "output_dir": output_dir},
-        )
         print(f"[PIPELINE] Failed: {exc}")
         return f"Failed: {exc}"
 

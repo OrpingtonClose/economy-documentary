@@ -61,11 +61,15 @@ def extract(
     raw_text: str,
     system_prompt: str = "Extract structured data from the raw text.",
     temperature: float = 0.0,
+    max_retries: int = 3,
 ) -> _ModelT:
     """Parse *raw_text* into a strongly-typed *response_model*.
 
     This is the single point of contact for turning free-form LLM output
     (markdown fences, preamble, rambling) into validated Pydantic objects.
+
+    Uses instructor reask validation: if the model produces malformed output,
+    it is re-prompted with validation errors up to max_retries times.
     """
     client = _ds_client()
     return client.chat.completions.create(
@@ -76,4 +80,5 @@ def extract(
             {"role": "user", "content": f"Raw text:\n\n{raw_text}"},
         ],
         temperature=temperature,
+        max_retries=max_retries,
     )

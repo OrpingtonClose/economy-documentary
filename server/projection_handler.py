@@ -126,7 +126,6 @@ def _handle_execute_bash(timeline: otio.schema.Timeline, effect: ExecuteRawBash)
         effect.command,
         shell=True,
         capture_output=True,
-        timeout=300,
     )
     return timeline
 

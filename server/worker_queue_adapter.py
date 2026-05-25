@@ -1,10 +1,8 @@
-"""Queue adapter for existing workers (Qwen3-TTS, LTX-Video).
+"""Queue adapter for real workers (Qwen3-TTS, LTX-Video).
 
 Wraps the real worker engines and makes them pull from the SQLite job queue
 instead of receiving HTTP requests. This bridges the v2 job queue architecture
 with the existing worker implementations.
-
-NO MOCKS — uses the real engine (Qwen3-TTS on GPU, stub for local dev).
 """
 
 from __future__ import annotations
@@ -28,16 +26,8 @@ logger = logging.getLogger(__name__)
 def _resolve_tts_engine(engine_type: str):
     """Resolve TTS engine by type string."""
     if engine_type == "qwen3":
-        try:
-            from strands_agents.qwen3_tts_worker.engine import Qwen3TTSEngine  # noqa: PLC0415
-            return Qwen3TTSEngine()
-        except ImportError:
-            logger.warning("Qwen3 backend not installed, falling back to stub")
-            from strands_agents.qwen3_tts_worker.engine import StubTTSEngine  # noqa: PLC0415
-            return StubTTSEngine()
-    elif engine_type == "stub":
-        from strands_agents.qwen3_tts_worker.engine import StubTTSEngine  # noqa: PLC0415
-        return StubTTSEngine()
+        from strands_agents.qwen3_tts_worker.engine import Qwen3TTSEngine  # noqa: PLC0415
+        return Qwen3TTSEngine()
     else:
         raise ValueError(f"Unknown TTS engine type: {engine_type}")
 
@@ -45,16 +35,8 @@ def _resolve_tts_engine(engine_type: str):
 def _resolve_video_engine(engine_type: str):
     """Resolve video engine by type string."""
     if engine_type == "ltx":
-        try:
-            from strands_agents.ltx_video_worker.engine import LTXVideoEngine  # noqa: PLC0415
-            return LTXVideoEngine()
-        except ImportError:
-            logger.warning("LTX backend not installed, falling back to stub")
-            from strands_agents.ltx_video_worker.engine import StubVideoEngine  # noqa: PLC0415
-            return StubVideoEngine()
-    elif engine_type == "stub":
-        from strands_agents.ltx_video_worker.engine import StubVideoEngine  # noqa: PLC0415
-        return StubVideoEngine()
+        from strands_agents.ltx_video_worker.engine import LTXVideoEngine  # noqa: PLC0415
+        return LTXVideoEngine()
     else:
         raise ValueError(f"Unknown video engine type: {engine_type}")
 
@@ -92,7 +74,7 @@ def _synthesize_tts(
 
 
 def run_tts_worker(
-    engine_type: str = "stub",
+    engine_type: str = "qwen3",
     output_dir: str = "./pipeline_output/audio",
     poll_interval: float = 2.0,
     max_jobs: int | None = None,
@@ -114,7 +96,6 @@ def run_tts_worker(
     while True:
         job = claim_next_pending_job("audio")
         if job is None:
-            # No jobs — check if we should exit
             from job_queue import get_queue_summary
             summary = get_queue_summary("audio")
             pending = summary.get("pending", 0) + summary.get("needs_retry", 0)
@@ -164,7 +145,7 @@ def run_tts_worker(
 
 
 def run_video_worker(
-    engine_type: str = "stub",
+    engine_type: str = "ltx",
     output_dir: str = "./pipeline_output/video",
     poll_interval: float = 2.0,
     max_jobs: int | None = None,
@@ -249,7 +230,7 @@ def run_video_worker(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Worker Queue Adapter")
     parser.add_argument("--mode", default="tts", choices=["tts", "video"])
-    parser.add_argument("--engine", default="stub")
+    parser.add_argument("--engine", default="qwen3", choices=["qwen3", "ltx"])
     parser.add_argument("--output-dir", default="./pipeline_output")
     parser.add_argument("--poll-interval", type=float, default=2.0)
     parser.add_argument("--max-jobs", type=int, default=None)

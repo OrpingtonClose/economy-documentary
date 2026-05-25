@@ -4,8 +4,8 @@ The instructor:
 1. Reads the agent's text output
 2. Reads the current world state (OTIO)
 3. Checks the agent's state machine
-4. Parses text into an Effect (model shifts by state)
-5. Validates the effect
+4. Parses text into Effects (model shifts by state)
+5. Validates each effect
 6. Appends to event store
 7. Triggers projection handler
 8. Sends feedback to the agent
@@ -23,7 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from effects import Effect, NoOp
-from effect_parser import parse_agent_text
+from effect_parser import parse_agent_text, parse_agent_text_multi
 from event_store import EventStore
 from unit_state_machines import get_machine
 
@@ -58,7 +58,7 @@ class Feedback(BaseModel):
 
 
 class Instructor:
-    """The instructor bridge. One instance per agent invocation."""
+    """The instructor bridge. One instance per agent."""
 
     def __init__(
         self,
@@ -75,7 +75,6 @@ class Instructor:
     def _read_world_state(self) -> str:
         """Read OTIO and summarize for feedback."""
         import glob
-        import os
 
         import opentimelineio as otio
 
@@ -92,7 +91,6 @@ class Instructor:
         else:
             summary.append("OTIO: not found")
 
-        # Check output
         output_dir = os.path.join(os.path.dirname(self.timeline_path), "output")
         mp4s = glob.glob(os.path.join(output_dir, "*.mp4"))
         summary.append(f"Output MP4s: {len(mp4s)}")
@@ -102,49 +100,72 @@ class Instructor:
     def process(self, agent_text: str) -> tuple[Effect, Feedback]:
         """Process agent text: parse, validate, store, project, feedback.
 
-        Returns:
-            (effect, feedback) — feedback is sent back to agent
+        Legacy single-effect path. Use process_multi for new code.
         """
-        # 1. Parse text into effect
-        effect = parse_agent_text(self.unit_id, agent_text)
+        effects, feedback = self.process_multi(agent_text)
+        return (effects[0] if effects else NoOp(
+            agent_id=self.unit_id,
+            timestamp=datetime.now(),
+            justification=agent_text,
+            reason="No effects extracted",
+        )), feedback
 
-        # 2. Check state machine
-        valid_effects = self.machine.get_valid_effects(self.current_state)
+    def process_multi(self, agent_text: str) -> tuple[list[Effect], Feedback]:
+        """Process agent text: parse ALL effects, validate, store, project, feedback.
 
-        if effect.effect_type not in valid_effects and effect.effect_type != "NoOp":
-            # Invalid effect for current state
-            feedback = Feedback(
-                parsed_as=effect.effect_type,
-                status="REJECTED",
-                reason=f"Effect '{effect.effect_type}' is not valid in state '{self.current_state}'. "
-                       f"Valid actions: {', '.join(valid_effects)}",
-                world_state=self._read_world_state(),
-                suggestion="Check the world state and choose a valid action.",
-                valid_actions=list(valid_effects),
-            )
-            return effect, feedback
+        Returns:
+            (list of effects, feedback) — feedback is sent back to agent
+        """
+        # 1. Parse text into multiple effects
+        effects = parse_agent_text_multi(self.unit_id, agent_text)
 
-        # 3. Append to event store
-        record = self.event_store.append(effect, otio_hash_before="")
+        accepted: list[Effect] = []
+        rejected: list[str] = []
 
-        # 4. Trigger projection handler (rebuild OTIO)
-        self._project(effect)
+        for effect in effects:
+            # 2. Check state machine
+            valid_effects = self.machine.get_valid_effects(self.current_state)
 
-        # 5. Transition state machine
-        next_state = self.machine.transition(self.current_state, effect.effect_type)
-        self.current_state = next_state
+            if effect.effect_type not in valid_effects and effect.effect_type != "NoOp":
+                rejected.append(effect.effect_type)
+                continue
+
+            # 3. Append to event store
+            record = self.event_store.append(effect, otio_hash_before="")
+
+            # 4. Trigger projection handler (rebuild OTIO)
+            self._project(effect)
+
+            # 5. Transition state machine
+            next_state = self.machine.transition(self.current_state, effect.effect_type)
+            self.current_state = next_state
+
+            accepted.append(effect)
 
         # 6. Build feedback
+        if accepted:
+            parsed_str = ", ".join(e.effect_type for e in accepted)
+            status = "ACCEPTED"
+            reason = f"Effects accepted: {parsed_str}. State: {self.current_state}."
+        elif rejected:
+            parsed_str = ", ".join(rejected)
+            status = "REJECTED"
+            reason = f"Effects rejected: {parsed_str}. Valid in state '{self.current_state}': {', '.join(valid_effects)}"
+        else:
+            parsed_str = "NoOp"
+            status = "ACCEPTED"
+            reason = "No actionable effects found."
+
         feedback = Feedback(
-            parsed_as=effect.effect_type,
-            status="ACCEPTED",
-            reason=f"Effect accepted. Transitioned from {self.current_state} to {next_state}.",
+            parsed_as=parsed_str,
+            status=status,
+            reason=reason,
             world_state=self._read_world_state(),
             suggestion=self._suggest_next(),
-            valid_actions=list(self.machine.get_valid_effects(next_state)),
+            valid_actions=list(self.machine.get_valid_effects(self.current_state)),
         )
 
-        return effect, feedback
+        return accepted, feedback
 
     def _project(self, effect: Effect) -> None:
         """Apply effect to OTIO via projection handler."""
@@ -162,7 +183,6 @@ class Instructor:
 
         new_timeline = apply_event(timeline, effect)
 
-        # Write updated timeline
         os.makedirs(os.path.dirname(self.timeline_path), exist_ok=True)
         new_timeline.to_json_file(self.timeline_path)
 
@@ -172,17 +192,17 @@ class Instructor:
             ("scenario", "IDLE"): "Write the documentary script with narration and visual notes.",
             ("scenario", "HAS_SCENARIO"): "Script accepted. Wait for other agents or refine if needed.",
             ("audio", "IDLE"): "Generate narration audio for all voices (V1, V2, V3).",
-            ("audio", "PENDING_AUDIO"): "Jobs submitted. Wait for provisioner or submit more clips.",
+            ("audio", "PENDING_AUDIO"): "Jobs submitted. Wait for workers or submit more clips.",
             ("audio", "HAS_AUDIO"): "Audio complete. Wait for video agent.",
             ("video", "IDLE"): "Generate video clips based on visual notes.",
-            ("video", "PENDING_VIDEO"): "Jobs submitted. Wait for provisioner or submit more clips.",
+            ("video", "PENDING_VIDEO"): "Jobs submitted. Wait for workers or submit more clips.",
             ("video", "HAS_VIDEO"): "Video complete. Wait for assembly agent.",
             ("assembly", "IDLE"): "Merge audio and video clips into the timeline.",
             ("assembly", "MERGING"): "Continue merging or run ffmpeg to produce final output.",
             ("assembly", "COMPLETE"): "Pipeline complete. Well done.",
             ("provisioner", "IDLE"): "Check job queue and provision VMs as needed.",
-            ("provisioner", "PROVISIONING"): "VM provisioning in progress. Check status via bash.",
-            ("provisioner", "EXECUTING"): "Jobs running. Check completion via bash.",
+            ("provisioner", "PROVISIONING"): "VM provisioning in progress. Check status.",
+            ("provisioner", "EXECUTING"): "Jobs running. Check completion.",
         }
         return suggestions.get(
             (self.unit_id, self.current_state),

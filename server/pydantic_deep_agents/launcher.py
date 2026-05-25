@@ -20,11 +20,16 @@ AGENTS: dict[str, tuple[str, int]] = {
 }
 
 
-def _run_agent(module_name: str, port: int) -> None:
+def _run_agent(module_name: str, port: int, env_vars: dict[str, str] | None = None) -> None:
     """Import agent module and run uvicorn."""
     import importlib
     import os
     import sys
+
+    # Set env vars before any imports that depend on them
+    if env_vars:
+        for key, value in env_vars.items():
+            os.environ[key] = value
 
     # Ensure server/ is on Python path so agents can import job_queue, models, etc.
     server_dir = os.path.join(os.path.dirname(__file__), "..")
@@ -37,8 +42,11 @@ def _run_agent(module_name: str, port: int) -> None:
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 
-def launch_all() -> list[multiprocessing.Process]:
+def launch_all(env_vars: dict[str, str] | None = None) -> list[multiprocessing.Process]:
     """Launch all agents as independent processes.
+
+    Args:
+        env_vars: Environment variables to set in each agent process.
 
     Returns:
         List of running processes. Caller is responsible for cleanup.
@@ -47,7 +55,7 @@ def launch_all() -> list[multiprocessing.Process]:
     for name, (module, port) in AGENTS.items():
         p = multiprocessing.Process(
             target=_run_agent,
-            args=(module, port),
+            args=(module, port, env_vars),
             name=f"agent-{name}",
         )
         p.start()
@@ -55,11 +63,11 @@ def launch_all() -> list[multiprocessing.Process]:
     return processes
 
 
-async def wait_for_agents(processes: list[multiprocessing.Process], timeout: float = 60.0) -> bool:
+async def wait_for_agents(processes: list[multiprocessing.Process]) -> bool:
     """Wait for all agent HTTP servers to be ready.
 
-    Checks TCP ports concurrently using asyncio.
-    Returns True if all agents are ready within timeout.
+    Checks TCP ports concurrently using asyncio. Hangs until all are ready.
+    Caller is responsible for detecting hangs and intervening.
     """
     import asyncio
 
@@ -69,26 +77,17 @@ async def wait_for_agents(processes: list[multiprocessing.Process], timeout: flo
         """Wait for a single port to accept connections."""
         while True:
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection("127.0.0.1", port),
-                    timeout=1.0,
-                )
+                reader, writer = await asyncio.open_connection("127.0.0.1", port)
                 writer.close()
                 await writer.wait_closed()
                 return True
             except Exception:
                 await asyncio.sleep(0.5)
 
-    async def _with_deadline(port: int) -> bool:
-        try:
-            return await asyncio.wait_for(_port_ready(port), timeout=timeout)
-        except asyncio.TimeoutError:
-            return False
-
     if not all(p.is_alive() for p in processes):
         return False
 
-    results = await asyncio.gather(*(_with_deadline(p) for p in ports))
+    results = await asyncio.gather(*(_port_ready(p) for p in ports))
     return all(results)
 
 

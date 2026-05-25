@@ -102,15 +102,16 @@ def create_job(
     Idempotent: if a non-failed job for the same stage+scene already exists,
     returns the existing job instead of creating a duplicate.
     """
+    payload_json = json.dumps(payload, sort_keys=True)
     with _LOCK, _conn() as conn:
-        # Check for existing non-failed job
+        # Check for existing non-failed job with same payload
         row = conn.execute(
             """
             SELECT * FROM jobs
-            WHERE stage = ? AND scene_num = ? AND status != 'failed'
+            WHERE stage = ? AND scene_num = ? AND payload = ? AND status != 'failed'
             ORDER BY created_at DESC LIMIT 1
             """,
-            (stage, scene_num),
+            (stage, scene_num, payload_json),
         ).fetchone()
         if row:
             existing = _row_to_job(row)
