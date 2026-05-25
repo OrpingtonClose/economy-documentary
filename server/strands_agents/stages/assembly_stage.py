@@ -51,6 +51,20 @@ RULES:
 
 
 @tool
+def get_parsed_clip_artifacts(tool_context=None) -> str:
+    """Retrieve auto-parsed clip artifacts from agent.state.
+
+    The HTTP service automatically parses clip artifacts from the gate's
+    output before the agent sees it. This tool returns the structured data.
+    """
+    state = tool_context.agent.state if tool_context else {}
+    artifacts = state.get("parsed_clip_artifacts", {})
+    if not artifacts:
+        return json.dumps({"error": "No parsed clip artifacts found in state."})
+    return json.dumps(artifacts)
+
+
+@tool
 def assemble_final_cut(
     scenes: str = "",
     clip_artifacts: str = "",
@@ -106,5 +120,5 @@ def build_assembly_agent(
         name="assembler_agent",
         model=model,
         system_prompt=_SYSTEM_PROMPT,
-        tools=[assemble_final_cut],
+        tools=[get_parsed_clip_artifacts, assemble_final_cut],
     )

@@ -579,6 +579,51 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
     from tools.otio_tools import add_video_clip_simple
 
     @tool
+    def ingest_parsed_audio_clips(tool_context=None) -> str:
+        """Add all parsed audio clips from agent.state to the A1_Narration track.
+
+        This reads the auto-parsed audio clips (set by agent_http_service)
+        and calls add_narration_to_timeline for each one.
+        """
+        state = tool_context.agent.state if tool_context else {}
+        clips = state.get("parsed_audio_clips", [])
+        if not clips:
+            return json.dumps({"ingested": False, "reason": "No parsed_audio_clips in state. The audio agent may not have reported any files yet."})
+        results = []
+        for clip in clips:
+            result = add_narration_to_timeline(
+                scene_num=clip.get("scene_num", 0),
+                voice=clip.get("voice", "V1"),
+                wav_path=clip.get("wav_path", ""),
+                duration=clip.get("duration_sec", 5.0),
+            )
+            results.append(json.loads(result))
+        return json.dumps({"ingested": True, "clip_count": len(clips), "results": results})
+
+    @tool
+    def ingest_parsed_video_clips(tool_context=None) -> str:
+        """Add all parsed video clips from agent.state to the V1_Video track.
+
+        This reads the auto-parsed video clips (set by agent_http_service)
+        and calls add_video_clip_simple for each one.
+        """
+        state = tool_context.agent.state if tool_context else {}
+        clips = state.get("parsed_video_clips", [])
+        if not clips:
+            return json.dumps({"ingested": False, "reason": "No parsed_video_clips in state. The video agent may not have reported any files yet."})
+        results = []
+        for clip in clips:
+            result = add_video_clip_simple(
+                scene_num=clip.get("scene_num", 0),
+                phrase_idx=0,
+                mp4_path=clip.get("mp4_path", ""),
+                duration=clip.get("duration_sec", 5.0),
+                lora_id=clip.get("lora_id", ""),
+            )
+            results.append(json.loads(result))
+        return json.dumps({"ingested": True, "clip_count": len(clips), "results": results})
+
+    @tool
     def read_pipeline_data(key: str) -> str:
         """Read pipeline metadata from the OTIO file."""
         from tools.otio_file_ops import resolve_timeline_path
@@ -920,10 +965,10 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             "- The assembly gate checks: output/*.mp4 exists on disk.\n\n"
             "WORKFLOW PER STAGE:\n"
             "1. SCENARIO: call ingest_scenario(text=<text from scenario agent>) → validate_scenario → transition_to_authoritative\n"
-            "2. AUDIO: Parse the audio agent's output text for WAV file paths.\n"
-            "   Call add_narration_to_timeline for each file, THEN validate_audio.\n"
-            "3. VIDEO: Parse the video agent's output text for MP4 file paths.\n"
-            "   Call add_video_clip_simple for each file, THEN validate_video.\n"
+            "2. AUDIO: Call ingest_parsed_audio_clips to add all WAV files the audio agent\n"
+            "   reported to the A1_Narration track. Then validate_audio.\n"
+            "3. VIDEO: Call ingest_parsed_video_clips to add all MP4 files the video agent\n"
+            "   reported to the V1_Video track. Then validate_video.\n"
             "4. ASSEMBLY: validate_assembly\n\n"
             "Rules:\n"
             "- You are stateless. All state lives in the OTIO file on disk.\n"
@@ -954,8 +999,8 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             read_ladder_state,
             write_critique_record,
             trigger_preview,
-            add_narration_to_timeline,
-            add_video_clip_simple,
+            ingest_parsed_audio_clips,
+            ingest_parsed_video_clips,
         ] + _SEARCH_TOOLS + _make_memory_tools("otio_gate"),
         model=model,
     )
@@ -1106,6 +1151,24 @@ def _build_audio_agent(model) -> Agent:
     from strands import tool
 
     @tool
+    def get_parsed_scenes(tool_context=None) -> str:
+        """Retrieve the auto-parsed scenario scenes from agent.state.
+
+        The HTTP service automatically parses scenario text with instructor
+        before the agent sees it. This tool returns the structured data.
+        """
+        state = tool_context.agent.state if tool_context else {}
+        parsed = state.get("parsed_scenario", {})
+        scenes = parsed.get("scenes", [])
+        if not scenes:
+            return json.dumps({"error": "No parsed scenario found in state."})
+        return json.dumps({
+            "scenes": scenes,
+            "visual_style": parsed.get("visual_style", {}),
+            "style_lock": parsed.get("style_lock", {}),
+        })
+
+    @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
         Reads A1_Narration track from OTIO — agents never WRITE to OTIO."""
@@ -1181,28 +1244,29 @@ def _build_audio_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Your prompt is plain text from the OTIO Gate. Extract the scenario text from between the '--- SCENARIO TEXT ---' and '--- END SCENARIO ---' markers.\n"
-            "2. Parse the scenario text to get scene titles, durations, and narration scripts.\n"
-            "3. Call check_resume_status.\n"
-            "4. For EACH scene not yet in queue, call submit_render_job with:\n"
+            "1. Call get_parsed_scenes to retrieve the auto-parsed scenario from your state.\n"
+            "   This gives you structured scene data — no manual parsing needed.\n"
+            "2. Call check_resume_status.\n"
+            "3. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='audio', scene_num=N, job_type='narration',\n"
             "     payload='{\"text\":\"...\",\"voice_id\":\"...\"}'\n"
-            "5. Call poll_completed_jobs(stage='audio').\n"
-            "6. Call check_queue_status(stage='audio').\n"
-            "7. For each completed job, read the local file from artifact_path.\n"
-            "8. QA each file.\n"
-            "9. If QA passes: report the artifact_path in your response.\n"
-            "10. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
-            "11. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
-            "12. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
-            "13. Run WhisperX alignment with align_narration_audio.\n"
-            "14. Evaluate timing with evaluate_audio_timing.\n"
-            "15. Return a summary of all produced WAV files. The OTIO Gate will add them to the timeline.\n"
-            "16. Call save_audio_checkpoint.\n"
+            "4. Call poll_completed_jobs(stage='audio').\n"
+            "5. Call check_queue_status(stage='audio').\n"
+            "6. For each completed job, read the local file from artifact_path.\n"
+            "7. QA each file.\n"
+            "8. If QA passes: report the artifact_path in your response.\n"
+            "9. If QA fails: qa_completed_job(passed=False, verdict='fail', comments_json='[\"...\"]')\n"
+            "10. If pending+running > 0: report status and STOP (graph will re-invoke).\n"
+            "11. If failed > 0: call get_failed_job_details('audio'), report, STOP.\n"
+            "12. Run WhisperX alignment with align_narration_audio.\n"
+            "13. Evaluate timing with evaluate_audio_timing.\n"
+            "14. Return a summary of all produced WAV files. The OTIO Gate will add them to the timeline.\n"
+            "15. Call save_audio_checkpoint.\n"
         ),
         tools=[
             align_narration_audio,
             evaluate_audio_timing,
+            get_parsed_scenes,
             check_resume_status,
             save_audio_checkpoint,
             submit_render_job,
@@ -1220,6 +1284,24 @@ def _build_video_agent(model) -> Agent:
 
     Checkpoint/resume tools added alongside."""
     from strands import tool
+
+    @tool
+    def get_parsed_scenes(tool_context=None) -> str:
+        """Retrieve the auto-parsed scenario scenes from agent.state.
+
+        The HTTP service automatically parses scenario text with instructor
+        before the agent sees it. This tool returns the structured data.
+        """
+        state = tool_context.agent.state if tool_context else {}
+        parsed = state.get("parsed_scenario", {})
+        scenes = parsed.get("scenes", [])
+        if not scenes:
+            return json.dumps({"error": "No parsed scenario found in state."})
+        return json.dumps({
+            "scenes": scenes,
+            "visual_style": parsed.get("visual_style", {}),
+            "style_lock": parsed.get("style_lock", {}),
+        })
 
     @tool
     def check_resume_status() -> str:
@@ -1295,9 +1377,9 @@ def _build_video_agent(model) -> Agent:
             "  - If all jobs are completed (or permanently failed), proceed to assembly.\n"
             "\n"
             "WORKFLOW:\n"
-            "1. Your prompt is plain text from the OTIO Gate. Extract the scenario text from between the '--- SCENARIO TEXT ---' and '--- END SCENARIO ---' markers.\n"
-            "2. Parse the scenario text to get scene titles, durations, and visual notes.\n"
-            "3. Call check_resume_status.\n"
+            "1. Call get_parsed_scenes to retrieve the auto-parsed scenario from your state.\n"
+            "   This gives you structured scene data — no manual parsing needed.\n"
+            "2. Call check_resume_status.\n"
             "4. For EACH scene not yet in queue, call submit_render_job with:\n"
             "     stage='video', scene_num=N, job_type='video_render',\n"
             "     payload='{\"model_name\":\"LTX Video\",\"prompt\":\"...\",\"width\":...}'\n"
@@ -1313,6 +1395,7 @@ def _build_video_agent(model) -> Agent:
             "14. Call save_video_checkpoint.\n"
         ),
         tools=[
+            get_parsed_scenes,
             check_resume_status,
             save_video_checkpoint,
             submit_render_job,
