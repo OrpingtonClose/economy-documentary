@@ -118,12 +118,12 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
     mid = _model_id or os.environ.get("STRANDS_MODEL", "")
     if not mid:
         raise RuntimeError("model_id not injected — cannot generate scenarios without an LLM")
-    generator = make_generator(model_id=mid)  # type: ignore
+    generator = make_generator(model_id=mid)
     result = generator(
-        topic=topic,
-        num_scenes=max(1, target_duration_sec // 35),
-        style="documentary",
-        language=language,
+        topic,  # type: ignore[call-arg]
+        max(1, target_duration_sec // 35),
+        "documentary",
+        language,
     )
 
     return json.dumps(result)
