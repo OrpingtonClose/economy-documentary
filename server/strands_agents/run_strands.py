@@ -341,7 +341,7 @@ def main():
     parser.add_argument("--agent-url", action="append", default=[], metavar="NODE=URL", help="Override agent URL (e.g. --agent-url scenario=http://localhost:9001). Repeatable.")
 
     args = parser.parse_args()
-    model_id = "deepseek-chat"
+    model_id = DEFAULTS["model"]
     base_url = DEFAULTS.get("base_url")
     output_dir = os.path.join(os.getcwd(), "pipeline_output")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
