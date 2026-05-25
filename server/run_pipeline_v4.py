@@ -32,8 +32,13 @@ from effects import (
     GenerateNarrationAudio,
     JobCompleted,
     JobFailed,
+    JobQuestionAnswered,
+    JobQuestionReceived,
+    JobRequeued,
     JobStarted,
     NoOp,
+    QAFailed,
+    QAPassed,
     RenderVideoSegment,
     UpdateScript,
     VMAllocated,
@@ -48,6 +53,12 @@ from queue_projection import (
     get_pending_jobs,
     get_queue_summary,
     project_queue,
+)
+from qa_gates_v4 import (
+    qa_audio_completeness,
+    qa_duration_align,
+    qa_stills_judge,
+    qa_video_artifact_probe,
 )
 
 
@@ -795,6 +806,129 @@ async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, br
     return acted
 
 
+def run_qa_gates(queue_jobs: dict, event_store: EventStore) -> bool:
+    """Run deterministic QA gates on completed artifacts.
+
+    For each completed job without a corresponding QAPassed/QAFailed event,
+    run the appropriate gate and append the result.
+    Returns True if any QA was run.
+    """
+    acted = False
+
+    # Find which jobs already have QA events
+    qa_done: set[str] = set()
+    for r in event_store.read_all():
+        if r.effect.effect_type in ("QAPassed", "QAFailed"):
+            qa_done.add(r.effect.job_id)
+
+    for job in queue_jobs.values():
+        if job.status != "completed":
+            continue
+        if job.job_id in qa_done:
+            continue
+
+        local_path = getattr(job, "local_artifact_path", "") or job.artifact_path
+        if not local_path or not os.path.exists(local_path):
+            print(f"  [QA] {job.job_id} skipped — no local artifact")
+            continue
+
+        print(f"  [QA] Running gates for {job.job_id}")
+
+        if job.stage == "audio":
+            result = qa_audio_completeness(
+                scene_id=job.job_id,
+                audio_path=local_path,
+            )
+            if result["verdict"] == "pass":
+                event_store.append(
+                    QAPassed(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        artifact_path=local_path,
+                        verdict=result["reason"] if "reason" in result else "audio complete",
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [QA] {job.job_id} passed audio completeness")
+            else:
+                event_store.append(
+                    QAFailed(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        artifact_path=local_path,
+                        verdict=result.get("reason", "audio QA failed"),
+                        comments=[result.get("reason", "")],
+                        suggested_fix="Retry audio generation with same or adjusted text",
+                    ),
+                    otio_hash_before="",
+                )
+                event_store.append(
+                    JobRequeued(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        comments=[result.get("reason", "")],
+                        suggested_fix="Retry audio generation",
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [QA] {job.job_id} FAILED audio: {result.get('reason', '')}")
+            acted = True
+
+        elif job.stage == "video":
+            # Run video probe + stills judge
+            probe = qa_video_artifact_probe(
+                scene_id=job.job_id,
+                video_path=local_path,
+            )
+            stills = qa_stills_judge(
+                scene_id=job.job_id,
+                video_path=local_path,
+            )
+
+            issues: list[str] = []
+            if probe["verdict"] == "fail":
+                issues.append(probe.get("error", "probe failed"))
+            if stills["verdict"] == "fail":
+                issues.append(stills.get("reason", "stills judge failed"))
+
+            if not issues:
+                event_store.append(
+                    QAPassed(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        artifact_path=local_path,
+                        verdict="video probe and motion check passed",
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [QA] {job.job_id} passed video gates")
+            else:
+                event_store.append(
+                    QAFailed(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        artifact_path=local_path,
+                        verdict="; ".join(issues),
+                        comments=issues,
+                        suggested_fix="Retry video generation with adjusted prompt or duration",
+                    ),
+                    otio_hash_before="",
+                )
+                event_store.append(
+                    JobRequeued(
+                        agent_id="qa",
+                        job_id=job.job_id,
+                        comments=issues,
+                        suggested_fix="Retry video generation",
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [QA] {job.job_id} FAILED video: {'; '.join(issues)}")
+            acted = True
+
+    return acted
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -980,6 +1114,9 @@ async def run_pipeline(
 
         # Dispatch pending jobs to workers
         await dispatch_pending_jobs(queue_jobs, event_store, output_dir, script_meta)
+
+        # Run QA gates on completed artifacts
+        run_qa_gates(queue_jobs, event_store)
 
         # Try assembly
         if audio_complete and video_complete and not has_output:
