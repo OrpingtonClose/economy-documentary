@@ -17,13 +17,10 @@ import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
-
-load_dotenv()
 
 # AG-UI / CopilotKit imports removed — ADK pipeline deleted.
 # The playground router (Strands) is the active pipeline path.
@@ -51,12 +48,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 
 
 def _validate_env() -> None:
-    """Validate required environment variables at startup."""
-    model = os.environ.get("STRANDS_MODEL", "")
-    if not model:
-        logger.warning(
-            "STRANDS_MODEL not set — pipeline will use default model"
-        )
+    """Validate required configuration at startup."""
+    pass
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -170,11 +163,11 @@ async def lifespan(app: FastAPI):
 
     # Start fleet coordinator if FLEET_MODE is enabled
     _fleet_coordinator = None
-    fleet_mode = os.environ.get("FLEET_MODE", "").strip().lower() in ("1", "true")
+    fleet_mode = False
     if fleet_mode:
         try:
             from fleet.coordinator import create_fleet_coordinator
-            budget = float(os.environ.get("PRODUCTION_BUDGET", "0"))
+            budget = 0.0
             _fleet_coordinator = create_fleet_coordinator(budget_ceiling=budget)
             _fleet_coordinator.start()
             logger.info(
@@ -291,7 +284,7 @@ async def run_exists(run_id: str):
 async def health():
     """Health check endpoint."""
     return Response(
-        content=f"ok model={os.environ.get('STRANDS_MODEL', 'unknown')} version=0.1.0",
+        content="ok model=deepseek-v4-flash version=0.1.0",
         media_type="text/plain",
     )
 

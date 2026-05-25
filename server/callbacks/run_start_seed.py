@@ -161,11 +161,11 @@ def _default_llm_call(model: str, system: str, prompt: str) -> str:
 # same shape (small structured JSON) and running it through the same
 # model keeps interpreted drift against R0 records consistent.
 _R0_MODEL_ENV = "ARCH_A_INTERPRETER_MODEL"
-_R0_DEFAULT_MODEL = "gemini-2.5-flash"
+_R0_DEFAULT_MODEL = "deepseek-v4-flash"
 
 
 def _resolve_model() -> str:
-    return os.environ.get(_R0_MODEL_ENV, _R0_DEFAULT_MODEL)
+    return _R0_DEFAULT_MODEL
 
 
 _R0_SYSTEM_INSTRUCTION = """\

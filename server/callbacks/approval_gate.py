@@ -25,7 +25,7 @@ from google.genai import types as genai_types
 
 logger = logging.getLogger(__name__)
 
-_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
+_OUTPUT_DIR = "/tmp/documentary-pipeline"
 _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 
 # Auto-approve all stages (no human needed) when DOCUMENTARY_AUTO_APPROVE is
@@ -33,9 +33,7 @@ _APPROVAL_FILE = os.path.join(_OUTPUT_DIR, ".approval_state.json")
 # human reviewer is online to click the approval card. Honoured in lockstep
 # with gatekeeper.py and recovery.py, which read the same env var to bypass
 # their own intervention windows / L4 escalation paths.
-_AUTO_APPROVE_ENV = os.environ.get(
-    "DOCUMENTARY_AUTO_APPROVE", ""
-).strip().lower() in ("1", "true", "yes")
+_AUTO_APPROVE_ENV = False
 
 # How often to poll for approval (seconds)
 _POLL_INTERVAL = 5.0

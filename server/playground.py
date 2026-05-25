@@ -657,8 +657,7 @@ def _user_cases_base_dir() -> Path | None:
     and :func:`load_user_cases` falls through to
     :data:`DEFAULT_USER_CASES_DIR` (the in-repo sidecar folder).
     """
-    override = os.environ.get("PLAYGROUND_USER_CASES_DIR")
-    return Path(override) if override else None
+    return None
 
 
 def _lookup_case_by_name(component: Component, name: str) -> Case[Any, Any] | None:
@@ -1675,7 +1674,7 @@ async def _dispatch_pipeline_run(
         run_dir = Path(tempfile.mkdtemp(prefix="pipeline_run_"))
         agent = build_documentary_orchestrator(
             run_dir=run_dir,
-            model=os.environ.get("STRANDS_MODEL", ""),
+            model="deepseek-v4-flash",
         )
         # When ``ENABLE_PIPELINE_HITL`` is set, swap the default
         # ``auto_accept_interrupt`` for a queue-backed operator handler
@@ -1783,7 +1782,7 @@ async def _dispatch_pipeline_run(
                 logger.debug("pipeline run span close failed", exc_info=True)
         await stream.close(terminal=terminal)
         if run_dir is not None:
-            if os.environ.get("KEEP_RUN_DIR", "").strip().lower() in ("1", "true", "yes", "on"):
+            if False:
                 logger.info("run_dir=<%s> | KEEP_RUN_DIR set, preserving", run_dir)
             else:
                 shutil.rmtree(run_dir, ignore_errors=True)

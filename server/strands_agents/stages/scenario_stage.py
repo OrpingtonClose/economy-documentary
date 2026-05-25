@@ -115,7 +115,7 @@ def generate_scenario(corpus_path: str, topic: str, target_duration_sec: int = 4
 
     # Call the real LLM-backed generator
     from strands_agents.scenario_llm import make_generator
-    mid = _model_id or os.environ.get("STRANDS_MODEL", "")
+    mid = _model_id or "deepseek-v4-flash"
     if not mid:
         raise RuntimeError("model_id not injected — cannot generate scenarios without an LLM")
     generator = make_generator(model_id=mid)
@@ -139,10 +139,7 @@ def _capture_environment() -> dict:
         "arch": platform.machine(),
     }
     # Model info
-    for var in ["STRANDS_MODEL", "ANTHROPIC_API_KEY", "AWS_PROFILE", "AWS_REGION"]:
-        val = os.environ.get(var, "")
-        if val:
-            env[var.lower()] = val[:4] + "..." if "key" in var.lower() else val
+    env["model"] = "deepseek-v4-flash"
     # Dependency versions
     for mod in ["opentimelineio", "strands"]:
         try:
@@ -197,7 +194,7 @@ def refine_scenario(scenario_json: str, feedback: str) -> str:
         feedback: The evaluator's feedback to address.
     """
     from strands_agents.scenario_llm import make_refiner
-    mid = _model_id or os.environ.get("STRANDS_MODEL", "")
+    mid = _model_id or "deepseek-v4-flash"
     if not mid:
         raise RuntimeError("model_id not injected — cannot refine scenarios without an LLM")
     refiner = make_refiner(model_id=mid)

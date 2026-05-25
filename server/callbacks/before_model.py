@@ -21,7 +21,7 @@ from dashboard import get_active_collector
 logger = logging.getLogger(__name__)
 
 # -- LLM concurrency gate ------------------------------------------------------
-_MAX_CONCURRENT_LLM = int(os.environ.get("MAX_CONCURRENT_LLM", "2"))
+_MAX_CONCURRENT_LLM = 4
 _llm_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_LLM)
 
 
@@ -33,9 +33,9 @@ def release_llm_semaphore_if_held(state: dict) -> None:
 
 
 _CHARS_PER_TOKEN = 2.8
-_OVERHEAD_TOKENS = int(os.environ.get("CONTEXT_OVERHEAD_TOKENS", "15000"))
-MAX_CONTEXT_TOKENS = int(os.environ.get("MAX_CONTEXT_TOKENS", "128000"))
-HARD_CONTEXT_LIMIT = int(os.environ.get("HARD_CONTEXT_LIMIT", "160000"))
+_OVERHEAD_TOKENS = 15000
+MAX_CONTEXT_TOKENS = 128000
+HARD_CONTEXT_LIMIT = 160000
 
 
 def _estimate_tokens(contents: List[genai_types.Content]) -> int:

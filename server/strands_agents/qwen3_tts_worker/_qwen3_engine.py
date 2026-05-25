@@ -221,15 +221,11 @@ class Qwen3TTSEngine:
                 f"pinned={QWEN3_TTS_PIN.model_id!r} (see strands_agents._model_pin)"
             )
         self._model_id = QWEN3_TTS_PIN.model_id
-        self._device_map = device_map or os.environ.get(
-            "QWEN3_TTS_DEVICE_MAP", "cuda:0"
-        )
+        self._device_map = device_map or "cuda:0"
         self._dtype_name = (
-            dtype_name or os.environ.get("QWEN3_TTS_DTYPE", "bfloat16")
+            dtype_name or "bfloat16"
         ).lower()
-        self._attn_implementation = attn_implementation or os.environ.get(
-            "QWEN3_TTS_ATTN_IMPL", "flash_attention_2"
-        )
+        self._attn_implementation = attn_implementation or "flash_attention_2"
         self._model: Any | None = None
         self._sample_rate: int = DEFAULT_SAMPLE_RATE_HZ
 

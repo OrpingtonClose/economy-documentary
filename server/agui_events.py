@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Shared constants
 # ---------------------------------------------------------------------------
 
-_OUTPUT_DIR = os.environ.get("PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline")
+_OUTPUT_DIR = "/tmp/documentary-pipeline"
 
 
 # ---------------------------------------------------------------------------

@@ -5,17 +5,17 @@ import os
 import urllib.parse
 import urllib.request
 
-_BRAVE_KEY = os.environ.get("BRAVE_API_KEY", "")
+_BRAVE_KEY = ""
 if not _BRAVE_KEY and os.path.exists(os.path.expanduser("~/api_keys/brave_key.txt")):
     with open(os.path.expanduser("~/api_keys/brave_key.txt")) as f:
         _BRAVE_KEY = f.read().strip()
 
-_PERPLEXITY_KEY = os.environ.get("PERPLEXITY_API_KEY", "")
+_PERPLEXITY_KEY = ""
 if not _PERPLEXITY_KEY and os.path.exists(os.path.expanduser("~/api_keys/LLMS/perplexity_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/LLMS/perplexity_api_key.txt")) as f:
         _PERPLEXITY_KEY = f.read().strip()
 
-_EXA_KEY = os.environ.get("EXA_API_KEY", "")
+_EXA_KEY = ""
 if not _EXA_KEY and os.path.exists(os.path.expanduser("~/api_keys/exa_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/exa_api_key.txt")) as f:
         _EXA_KEY = f.read().strip()

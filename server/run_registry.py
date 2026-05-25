@@ -42,7 +42,7 @@ from typing import Optional
 
 # Default bound chosen to match UI-07 parent spec (~10k events). Can be
 # overridden via env for tests that want to exercise eviction quickly.
-_DEFAULT_MAXLEN = int(os.environ.get("RUN_REGISTRY_MAXLEN", "10000"))
+_DEFAULT_MAXLEN = 10000
 
 
 @dataclass

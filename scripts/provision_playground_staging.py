@@ -43,30 +43,6 @@ from typing import Any
 # Env vars forwarded from the caller's shell into the Vast.ai instance
 # so the bootstrap script can pick them up. Anything not set in the
 # caller stays unset on the VM.
-FORWARDED_ENV_VARS: tuple[str, ...] = (
-    # Generative model keys (the playground's declared-model set).
-    "GOOGLE_API_KEY",
-    "OPENAI_API_KEY",
-    "ANTHROPIC_API_KEY",
-    "KIMI_API_KEY",
-    "MOONSHOT_API_KEY",
-    "DASHSCOPE_API_KEY",
-    "ALIBABA_API_KEY",
-    "GROQ_API_KEY",
-    "FIREWORKS_API_KEY",
-    "TOGETHER_API_KEY",
-    "OPENROUTER_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "GLM_API_KEY",
-    "MISTRAL_API_KEY",
-    # Artifact storage (optional — only needed if a component reads B2).
-    "B2_KEY_ID",
-    "B2_APPLICATION_KEY",
-    # Tuning knobs.
-    "OPENAI_API_BASE",
-    "MAX_CONCURRENT_LLM",
-    "MAX_CONTEXT_TOKENS",
-)
 
 PORTS_EXPOSED = "-p 80:80 -p 3100:3100 -p 8000:8000"
 BOOTSTRAP_PATH = "/workspace/economy-documentary/scripts/playground_staging_bootstrap.sh"
@@ -79,12 +55,16 @@ def _vast_cmd(args: list[str]) -> Any:
     depending on the subcommand. Same helper shape as
     ``scripts/provision_central.py``.
     """
-    api_key = os.environ.get("VAST_API_KEY") or os.environ.get("VAST_AI_API_KEY", "")
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    api_key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            api_key = _f.read().strip()
     if not api_key:
-        print("ERROR: VAST_API_KEY (or VAST_AI_API_KEY) not set", file=sys.stderr)
+        print("ERROR: Vast.ai API key not found", file=sys.stderr)
         sys.exit(1)
     cmd = ["vastai", "--api-key", api_key, *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR: vastai command failed: {result.stderr[:500]}", file=sys.stderr)
         sys.exit(1)
@@ -146,29 +126,13 @@ def find_cheap_cpu_offer(max_price: float, min_disk: int) -> dict:
     return best
 
 
-def _forwarded_env_pairs() -> list[str]:
-    """Return ``--env VAR=value`` pairs for whichever forwarded vars are set."""
-    pairs: list[str] = []
-    for var in FORWARDED_ENV_VARS:
-        val = os.environ.get(var)
-        if not val:
-            continue
-        # env_flag is space-delimited and fed into a shell via vastai's
-        # --env, so any value containing spaces or metacharacters would
-        # get mis-split. OPENAI_API_BASE (URL) and ADK_MODEL (freeform)
-        # are the realistic offenders; quote unconditionally.
-        pairs.append(f"-e {var}={shlex.quote(val)}")
-    return pairs
-
-
 def provision_vm(offer_id: str, disk_gb: int, branch: str) -> str:
     """Create a Vast.ai instance that bootstraps itself on first boot."""
     print(f"\nProvisioning VM from offer {offer_id} (branch {branch}) …")
-    env_pairs = _forwarded_env_pairs()
     # Forward the selected branch into the VM so the bootstrap's
     # `git fetch && git reset --hard` picks it up. Without this the
     # bootstrap defaults to `main` and silently undoes the onstart clone.
-    env_pairs.append(f"-e PLAYGROUND_GIT_BRANCH={shlex.quote(branch)}")
+    env_pairs = [f"-e PLAYGROUND_GIT_BRANCH={shlex.quote(branch)}"]
     env_flag = f"{PORTS_EXPOSED} " + " ".join(env_pairs)
 
     # The onstart command runs as root once the container is up. Clone

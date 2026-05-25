@@ -146,14 +146,6 @@ class PreflightReport:
 # Individual checks
 # ---------------------------------------------------------------------------
 
-def _check_env_var(name: str, description: str) -> CheckResult:
-    value = os.environ.get(name, "")
-    if value:
-        masked = value[:4] + "..." if len(value) > 8 else "***"
-        return CheckResult(name=name, passed=True, message=f"{description}: {masked}")
-    return CheckResult(name=name, passed=False, message=f"Missing: {description}")
-
-
 def _check_writable_dir(path: str, description: str) -> CheckResult:
     name = f"dir:{path}"
     try:
@@ -226,10 +218,14 @@ def _check_llm_access() -> CheckResult:
     import urllib.request
     import urllib.error
 
-    model_id = os.environ.get("STRANDS_MODEL", "deepseek-chat")
+    model_id = "deepseek-v4-flash"
 
     # Try DeepSeek (cheapest, fastest)
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    _deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+    deepseek_key = ""
+    if os.path.exists(_deepseek_key_path):
+        with open(_deepseek_key_path) as _f:
+            deepseek_key = _f.read().strip()
     if deepseek_key:
         try:
             payload = json.dumps({
@@ -263,71 +259,45 @@ def _check_llm_access() -> CheckResult:
                 remedy="Check network access and DEEPSEEK_API_KEY",
             )
 
-    # Try Anthropic
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if anthropic_key:
-        try:
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/models",
-                headers={"x-api-key": anthropic_key, "anthropic-version": "2023-06-01"},
-                method="GET",
-            )
-            with urllib.request.urlopen(req, timeout=10):
-                return CheckResult(
-                    name="llm_access", passed=True, category="credentials",
-                    message=f"Anthropic: valid, model {model_id}",
-                )
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429:
-                return CheckResult(
-                    name="llm_access", passed=True, category="credentials",
-                    message=f"Anthropic: valid (rate limited), model {model_id}",
-                )
-            return CheckResult(
-                name="llm_access", passed=False, category="credentials",
-                message=f"Anthropic: API key rejected — HTTP {exc.code}",
-                remedy=f"Check ANTHROPIC_API_KEY. Error: HTTP {exc.code}",
-            )
-        except Exception as exc:
-            return CheckResult(
-                name="llm_access", passed=False, category="credentials",
-                message=f"Anthropic: unreachable — {exc}",
-                remedy="Check network access and ANTHROPIC_API_KEY",
-            )
-
     return CheckResult(
         name="llm_access", passed=False, category="credentials",
         message="No LLM credentials found",
-        remedy="Set DEEPSEEK_API_KEY (recommended) or ANTHROPIC_API_KEY",
+        remedy="Set DEEPSEEK_API_KEY",
     )
 
 
 def _check_vast_api_key() -> CheckResult:
     """Hard check — Vast.ai is the ONLY path to GPU workers."""
-    raw = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
-    key = raw.split()[0].strip() if raw else ""
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            key = _f.read().strip()
     if not key:
         return CheckResult(
             name="vast_api_key", passed=False, soft=False, category="workers",
-            message="VAST_AI_KEY (or VAST_API_KEY) not set",
-            remedy="Set VAST_AI_KEY to provision GPU workers. BYO workers are forbidden.",
+            message="Vast.ai API key not found",
+            remedy="Place Vast.ai API key at /Users/orpington/api_keys/LLMS/vast_api_key.txt",
         )
     return CheckResult(
         name="vast_api_key", passed=True, category="workers",
-        message="VAST_AI_KEY configured",
+        message="Vast.ai API key configured",
     )
 
 
 def _check_vast_funds() -> CheckResult:
     """Check that the Vast.ai account has credits to provision VMs."""
     import subprocess
-    raw = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
-    key = raw.split()[0].strip() if raw else ""
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            key = _f.read().strip()
     if not key:
         return CheckResult(
             name="vast_funds", passed=False, soft=False, category="workers",
-            message="Cannot check funds — VAST_AI_KEY not set",
-            remedy="Set VAST_AI_KEY",
+            message="Cannot check funds — Vast.ai API key not found",
+            remedy="Place Vast.ai API key at /Users/orpington/api_keys/LLMS/vast_api_key.txt",
         )
     try:
         result = subprocess.run(

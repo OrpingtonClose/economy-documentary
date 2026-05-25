@@ -119,14 +119,7 @@ _DEFAULT_REFINE_CAP: int = 3
 
 
 def _default_refine_cap() -> int:
-    raw = os.environ.get(_DEFAULT_REFINE_CAP_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_REFINE_CAP
-    try:
-        parsed = int(raw)
-    except ValueError:
-        return _DEFAULT_REFINE_CAP
-    return max(0, parsed)
+    return _DEFAULT_REFINE_CAP
 
 
 _REFINE_CAP: contextvars.ContextVar[int] = contextvars.ContextVar(

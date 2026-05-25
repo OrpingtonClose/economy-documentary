@@ -321,7 +321,7 @@ def build_orchestrator(
     """
 
     resolved_model: str | BaseChatModel = (
-        model if model is not None else os.environ.get("STRANDS_MODEL", "openai/gpt-4o")
+        model if model is not None else "deepseek-v4-flash"
     )
     resolved_tools: list[_Tool] = list(tools) if tools is not None else []
     resolved_subagents: list[SubAgent] = (

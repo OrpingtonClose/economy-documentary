@@ -23,10 +23,8 @@ TRACK_V1 = "V1_Video"
 TRACK_A1 = "A1_Narration"
 TRACK_A2 = "A2_Music"
 
-_TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
-_SCENE_ASSEMBLY_DIR = os.environ.get(
-    "SCENE_ASSEMBLY_DIR", "/tmp/documentary-pipeline/scene_assemblies"
-)
+_TIMELINE_DIR = "/tmp/documentary-pipeline/timelines"
+_SCENE_ASSEMBLY_DIR = "/tmp/documentary-pipeline/scene_assemblies"
 
 # Module-level lock to protect OTIO file read-modify-write cycles against
 # concurrent tool calls (parallel_tool_calls=True is the default).

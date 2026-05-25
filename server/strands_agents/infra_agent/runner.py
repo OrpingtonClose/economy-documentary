@@ -70,33 +70,17 @@ class RunnerConfig:
     disk_path: str
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning("name=<%s>, raw=<%s> | env var not int, falling back", name, raw)
-        return default
-
-
 def _resolve_config(args: argparse.Namespace) -> RunnerConfig:
-    """Build runner config from parsed args + env fallback."""
-    worker_id = args.worker_id or os.environ.get("WORKER_ID") or ""
+    """Build runner config from parsed args."""
+    worker_id = args.worker_id or ""
     if not worker_id:
-        raise SystemExit("WORKER_ID must be set (env or --worker-id)")
+        raise SystemExit("WORKER_ID must be set via --worker-id")
 
-    vm_instance_id = args.vm_instance_id or os.environ.get("VAST_INSTANCE_ID")
-    playground_base_url = (
-        args.playground_base_url or os.environ.get("PLAYGROUND_BACKEND_URL")
-    )
-
-    idle = args.idle_seconds or _env_int("GUARDIAN_IDLE_SECONDS", DEFAULT_IDLE_SECONDS)
-    lifetime = args.max_lifetime_seconds or _env_int(
-        "GUARDIAN_MAX_LIFETIME_SECONDS", DEFAULT_MAX_LIFETIME_SECONDS
-    )
-    disk_path = args.disk_path or os.environ.get("GUARDIAN_DISK_PATH", "/")
+    vm_instance_id = args.vm_instance_id or ""
+    playground_base_url = args.playground_base_url or ""
+    idle = args.idle_seconds or DEFAULT_IDLE_SECONDS
+    lifetime = args.max_lifetime_seconds or DEFAULT_MAX_LIFETIME_SECONDS
+    disk_path = args.disk_path or "/"
 
     return RunnerConfig(
         worker_id=worker_id,
@@ -222,7 +206,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     """Production entry-point. Returns a shell-friendly exit code."""
     logging.basicConfig(
-        level=os.environ.get("INFRA_AGENT_LOG_LEVEL", "INFO"),
+        level="INFO",
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 

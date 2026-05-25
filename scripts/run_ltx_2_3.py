@@ -33,7 +33,7 @@ def main() -> int:
     parser.add_argument("--output", required=True, help="Output MP4 path")
     args = parser.parse_args()
 
-    models_dir = os.environ.get("MODELS_DIR", "/workspace/models")
+    models_dir = "/workspace/models"
 
     # Find model path
     candidate_ltx23 = os.path.join(models_dir, "ltx23")

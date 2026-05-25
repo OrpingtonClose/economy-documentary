@@ -14,11 +14,8 @@ from __future__ import annotations
 
 import os
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
-
-load_dotenv()
 
 # Wire OpenTelemetry + the Langfuse exporter (slice 2 of the Wave 2/3
 # pipeline). Guarded import so a deps drift (missing opentelemetry SDK,
@@ -124,6 +121,6 @@ if __name__ == "__main__":  # pragma: no cover
     uvicorn.run(
         "playground_server:app",
         host="0.0.0.0",
-        port=int(os.environ.get("PLAYGROUND_PORT", "8000")),
+        port=8000,
         reload=False,
     )

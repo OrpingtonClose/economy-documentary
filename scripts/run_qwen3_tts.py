@@ -57,7 +57,7 @@ def main() -> int:
     import torch
     from qwen_tts import Qwen3TTSModel
 
-    models_dir = os.environ.get("MODELS_DIR", "/workspace/models")
+    models_dir = "/workspace/models"
     model_path = os.path.join(models_dir, "qwen3-tts-voicedesign")
 
     model = Qwen3TTSModel.from_pretrained(

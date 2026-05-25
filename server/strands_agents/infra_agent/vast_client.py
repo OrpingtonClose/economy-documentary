@@ -56,10 +56,14 @@ class VastAiClient:
             VastAiDestroyError: On any non-2xx response other than 404,
                 or on missing API key, or on network error.
         """
-        key = self.api_key or os.environ.get(VAST_API_KEY_ENV)
+        _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+        key = self.api_key
+        if not key and os.path.exists(_vast_key_path):
+            with open(_vast_key_path) as _f:
+                key = _f.read().strip()
         if not key:
             raise VastAiDestroyError(
-                f"vast.ai api key not set; export {VAST_API_KEY_ENV}"
+                "vast.ai api key not found; place at /Users/orpington/api_keys/LLMS/vast_api_key.txt"
             )
 
         url = f"{self.base_url.rstrip('/')}/instances/{instance_id}/"

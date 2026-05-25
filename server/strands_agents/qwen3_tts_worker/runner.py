@@ -75,48 +75,20 @@ class WorkerConfig:
     disk_path: str
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or not raw.strip():
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        logger.warning(
-            "name=<%s>, raw=<%s> | env var not int, falling back",
-            name,
-            raw,
-        )
-        return default
-
-
 def _resolve_config(args: argparse.Namespace) -> WorkerConfig:
-    worker_id = args.worker_id or os.environ.get("WORKER_ID") or ""
+    worker_id = args.worker_id or ""
     if not worker_id:
-        raise SystemExit("WORKER_ID must be set (env or --worker-id)")
+        raise SystemExit("WORKER_ID must be set via --worker-id")
 
-    voice_id = args.voice_id or os.environ.get("WORKER_VOICE_ID") or ""
+    voice_id = args.voice_id or ""
     if not voice_id:
-        raise SystemExit("WORKER_VOICE_ID must be set (env or --voice-id)")
+        raise SystemExit("WORKER_VOICE_ID must be set via --voice-id")
 
-    endpoint_url = args.endpoint_url or os.environ.get("WORKER_ENDPOINT_URL")
-    if not endpoint_url:
-        public_ip = os.environ.get("PUBLIC_IPADDR") or "127.0.0.1"
-        endpoint_url = f"http://{public_ip}:{WORKER_PORT}"
-
-    playground_base_url = (
-        args.playground_base_url or os.environ.get("PLAYGROUND_BACKEND_URL")
-    )
-
-    vram_gb = (
-        args.vram_gb
-        if args.vram_gb is not None
-        else _env_int("WORKER_VRAM_GB", DEFAULT_LOCAL_VRAM_GB)
-    )
-    bump_url = args.bump_url or os.environ.get(
-        "INFRA_AGENT_BUMP_URL", "http://127.0.0.1:29230/"
-    )
-    disk_path = args.disk_path or os.environ.get("WORKER_DISK_PATH", "/")
+    endpoint_url = args.endpoint_url or f"http://127.0.0.1:{WORKER_PORT}"
+    playground_base_url = args.playground_base_url or ""
+    vram_gb = args.vram_gb if args.vram_gb is not None else DEFAULT_LOCAL_VRAM_GB
+    bump_url = args.bump_url or "http://127.0.0.1:29230/"
+    disk_path = args.disk_path or "/"
 
     return WorkerConfig(
         worker_id=worker_id,
@@ -231,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         0 on clean shutdown, 1 on setup error.
     """
     logging.basicConfig(
-        level=os.environ.get("LOG_LEVEL", "INFO"),
+        level="INFO",
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = _parse_args(argv)

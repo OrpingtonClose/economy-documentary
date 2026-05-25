@@ -73,12 +73,20 @@ def _get_bucket():
         if _b2_bucket is not None:
             return _b2_bucket
 
-        key_id = os.environ.get("B2_KEY_ID", "")
-        app_key = os.environ.get("B2_APPLICATION_KEY", "")
-        bucket_name = os.environ.get("B2_BUCKET_NAME", "bearnaise-pipeline-artifacts")
+        _b2_key_id_path = "/Users/orpington/api_keys/LLMS/b2_key_id.txt"
+        _b2_app_key_path = "/Users/orpington/api_keys/LLMS/b2_application_key.txt"
+        key_id = ""
+        app_key = ""
+        if os.path.exists(_b2_key_id_path):
+            with open(_b2_key_id_path) as _f:
+                key_id = _f.read().strip()
+        if os.path.exists(_b2_app_key_path):
+            with open(_b2_app_key_path) as _f:
+                app_key = _f.read().strip()
+        bucket_name = "bearnaise-pipeline-artifacts"
 
         if not key_id or not app_key:
-            logger.warning("B2_KEY_ID / B2_APPLICATION_KEY not set -- B2 checkpoint disabled")
+            logger.warning("B2 credentials not found -- B2 checkpoint disabled")
             return None
 
         try:
@@ -146,21 +154,17 @@ def set_run_id(run_id: str) -> None:
     """Set the global run ID for all subsequent B2 operations."""
     global _run_id
     _run_id = run_id
-    os.environ["B2_RUN_ID"] = run_id
 
 
 def get_run_id() -> str:
     """Return the current run ID, creating one if needed."""
     global _run_id
     if not _run_id:
-        _run_id = os.environ.get("B2_RUN_ID", "")
-        if not _run_id:
-            # Generate from topic + timestamp
-            topic = os.environ.get("DOCUMENTARY_TOPIC", "unknown")
+        # Generate from topic + timestamp
+            topic = "unknown"
             ts = int(time.time())
             safe_topic = "".join(c if c.isalnum() else "_" for c in topic.lower())[:30]
             _run_id = f"{safe_topic}_{ts}"
-            os.environ["B2_RUN_ID"] = _run_id
     return _run_id
 
 

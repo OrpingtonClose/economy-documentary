@@ -192,20 +192,9 @@ class InfraAgent:
         """Read worker URLs from environment and register them."""
         workers: list[WorkerSnapshot] = []
 
-        # TTS worker
-        tts_url = os.environ.get("TTS_WORKER_URL", "")
-        if tts_url:
-            workers.append(WorkerSnapshot(url=tts_url.strip(), role=WorkerRole.TTS))
-
-        # Video workers (comma-separated)
-        video_urls_str = os.environ.get("VIDEO_WORKER_URLS", "")
-        video_urls = [u.strip() for u in video_urls_str.split(",") if u.strip()] if video_urls_str else []
-        gpu_url = os.environ.get("GPU_WORKER_URL", "")
-        if gpu_url and gpu_url.strip() not in video_urls:
-            video_urls.append(gpu_url.strip())
-
-        for vurl in video_urls:
-            workers.append(WorkerSnapshot(url=vurl, role=WorkerRole.VIDEO))
+        # Workers are discovered from VMAllocated effects, not env vars.
+        # No env var fallback — workers must be provisioned dynamically.
+        pass
 
         with self._lock:
             self._workers = workers

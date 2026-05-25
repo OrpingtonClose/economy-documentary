@@ -86,9 +86,7 @@ def validate_stage_output(
                 )
 
     # Check produced_artifacts
-    base_dir = os.environ.get(
-        "PIPELINE_OUTPUT_DIR", "/tmp/documentary-pipeline"
-    )
+    base_dir = "/tmp/documentary-pipeline"
     for glob_pattern in contract.produced_artifacts:
         import glob
         matches = glob.glob(os.path.join(base_dir, glob_pattern))
@@ -138,7 +136,7 @@ def validate_otio_compliance(
 
     if not timeline_path:
         timeline_path = os.path.join(
-            os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines"),
+            "/tmp/documentary-pipeline/timelines",
             "documentary.otio",
         )
 

@@ -395,10 +395,14 @@ class _OpenAICompatVideoVoter:
     def _client(self):
         from openai import OpenAI  # type: ignore
 
-        api_key = os.environ.get(self._api_key_env)
+        _key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+        api_key = ""
+        if os.path.exists(_key_path):
+            with open(_key_path) as _f:
+                api_key = _f.read().strip()
         if not api_key:
             raise RuntimeError(
-                f"{self._api_key_env} is not set; {type(self).__name__} cannot run."
+                f"API key not found; {type(self).__name__} cannot run."
             )
         return OpenAI(api_key=api_key, base_url=self._base_url)
 

@@ -339,7 +339,7 @@ def clean_scenes_after_scenario(
     (state was restored from B2 on startup).
     """
     state = callback_context.state
-    timeline_dir = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+    timeline_dir = "/tmp/documentary-pipeline/timelines"
     scenes_file = os.path.join(timeline_dir, "_scenes_backup.json")
     visual_style_file = os.path.join(timeline_dir, "_visual_style_backup.json")
 
@@ -1337,9 +1337,7 @@ def deterministic_audio_callback(
                                 break
                 state["scenes"] = json.dumps(scenes)
                 # Invalidate cached audio so TTS regenerates with new text
-                _audio_dir = os.environ.get(
-                    "TTS_OUTPUT_DIR", "/tmp/documentary-pipeline/audio"
-                )
+                _audio_dir = "/tmp/documentary-pipeline/audio"
                 for amend in amendments:
                     sn = amend.get("scene_num", 0)
                     voice = amend.get("voice", "")
@@ -1856,7 +1854,7 @@ def deterministic_production_callback(
     from agui import get_feedback_store, ArtifactType, ArtifactStatus, ArtifactEvent
     _feedback_store = get_feedback_store()
 
-    video_dir = os.environ.get("VIDEO_OUTPUT_DIR", "/tmp/documentary-pipeline/video")
+    video_dir = "/tmp/documentary-pipeline/video"
     total_clips = 0
     skipped_clips = 0
     errors = []
@@ -1868,8 +1866,8 @@ def deterministic_production_callback(
     default_negative = ", ".join(visual_style_avoid) if visual_style_avoid else ""
 
     # Check how many GPU workers are available for parallelism
-    worker_urls = os.environ.get("VIDEO_WORKER_URLS", "")
-    num_workers = max(1, len([u for u in worker_urls.split(",") if u.strip()])) if worker_urls else 1
+    worker_urls = ""
+    num_workers = 1
     logger.info("Video generation: %d GPU worker(s), %d concepts to generate", num_workers, len(concepts))
 
     def _generate_one_clip(concept: dict) -> dict | list[dict]:

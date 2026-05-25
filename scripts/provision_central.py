@@ -38,13 +38,17 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
 
     We try JSON first, then fall back to ``ast.literal_eval``.
     """
-    api_key = os.environ.get("VAST_API_KEY", "")
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    api_key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            api_key = _f.read().strip()
     if not api_key:
-        print("ERROR: VAST_API_KEY not set", file=sys.stderr)
+        print("ERROR: Vast.ai API key not found", file=sys.stderr)
         sys.exit(1)
 
     cmd = ["vastai", "--api-key", api_key] + args
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"ERROR: vastai command failed: {result.stderr[:500]}", file=sys.stderr)
         sys.exit(1)

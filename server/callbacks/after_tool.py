@@ -17,7 +17,7 @@ from dashboard import get_active_collector
 
 logger = logging.getLogger(__name__)
 
-TOOL_RESULT_MAX_CHARS = int(os.environ.get("TOOL_RESULT_MAX_CHARS", "25000"))
+TOOL_RESULT_MAX_CHARS = 25000
 
 # Tools whose results can be very large
 _TRUNCATABLE_TOOLS = {

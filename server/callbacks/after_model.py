@@ -17,7 +17,7 @@ from models.scene import Scene, VisualStyle
 
 logger = logging.getLogger(__name__)
 
-_TIMELINE_DIR = os.environ.get("TIMELINE_DIR", "/tmp/documentary-pipeline/timelines")
+_TIMELINE_DIR = "/tmp/documentary-pipeline/timelines"
 _SCENES_BACKUP = os.path.join(_TIMELINE_DIR, "_scenes_backup.json")
 _VISUAL_STYLE_BACKUP = os.path.join(_TIMELINE_DIR, "_visual_style_backup.json")
 

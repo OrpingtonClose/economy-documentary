@@ -103,7 +103,7 @@ def align_narration(
         ) from e
 
     try:
-        device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
+        device = "cuda"
         compute_type = "float16" if device == "cuda" else "int8"
 
         audio = whisperx.load_audio(wav_path)

@@ -407,21 +407,8 @@ class ContractViolation(RuntimeError):
 
 def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
     """Check a single service's health.  Returns error string or None."""
-    url = os.environ.get(svc.env_var, "")
-
-    # Handle comma-separated URLs (e.g. VIDEO_WORKER_URLS)
-    urls = [u.strip() for u in url.split(",") if u.strip()] if url else []
-    if not urls:
-        # Also check singular fallback env vars
-        fallback_var = svc.env_var.replace("_URLS", "_URL")
-        fallback = os.environ.get(fallback_var, "")
-        if fallback:
-            urls = [fallback.strip()]
-        # Also check GPU_WORKER_URL as last resort for video
-        if not urls and svc.capability == "ltx":
-            gpu_url = os.environ.get("GPU_WORKER_URL", "")
-            if gpu_url:
-                urls = [gpu_url.strip()]
+    # Workers are provisioned dynamically; no env var fallbacks
+    urls = []
 
     if not urls:
         # Check if a fallback is active for this service.
@@ -431,11 +418,6 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
         # local GPU gives real video) so the architectural invariant
         # (real durations for downstream timing) is preserved.
         fallback_env = ""
-        if svc.env_var == "TTS_WORKER_URL":
-            fallback_env = os.environ.get("TTS_FALLBACK", "")
-        elif svc.env_var in ("VIDEO_WORKER_URLS", "VIDEO_WORKER_URL", "GPU_WORKER_URL"):
-            fallback_env = os.environ.get("VIDEO_FALLBACK", "")
-
         if fallback_env:
             logger.warning(
                 "%s: %s not set but %s fallback active ('%s') — "
@@ -477,10 +459,6 @@ def _check_service_health(svc: ServiceRequirement) -> Optional[str]:
     if healthy == 0:
         # Check for fallback even when URLs exist but are unhealthy
         fallback_env = ""
-        if svc.env_var == "TTS_WORKER_URL":
-            fallback_env = os.environ.get("TTS_FALLBACK", "")
-        elif svc.env_var in ("VIDEO_WORKER_URLS", "VIDEO_WORKER_URL", "GPU_WORKER_URL"):
-            fallback_env = os.environ.get("VIDEO_FALLBACK", "")
         if fallback_env:
             logger.warning(
                 "%s: no healthy workers but %s fallback active ('%s') — "

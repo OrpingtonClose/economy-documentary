@@ -24,13 +24,13 @@ from pydantic_ai import Agent
 # Config
 # ---------------------------------------------------------------------------
 
-_DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-if not _DEEPSEEK_API_KEY and os.path.exists("/workspace/.deepseek_key"):
+_DEEPSEEK_API_KEY = ""
+if os.path.exists("/workspace/.deepseek_key"):
     with open("/workspace/.deepseek_key") as f:
         _DEEPSEEK_API_KEY = f.read().strip()
 
-_WORKER_MODE = os.environ.get("WORKER_MODE", "both")  # tts, ltx, or both
-_CONTEXT = os.environ.get("VM_AGENT_CONTEXT", "")  # Injected by media/provisioner agent
+_WORKER_MODE = "both"
+_CONTEXT = ""
 
 
 # ---------------------------------------------------------------------------

@@ -16,10 +16,13 @@ logger = __import__("logging").getLogger(__name__)
 
 def _vast_cmd(args: list[str]) -> dict | list | str:
     """Run a vastai CLI command and return parsed JSON output."""
-    raw_key = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
-    api_key = raw_key.split()[0].strip() if raw_key else ""
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    api_key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            api_key = _f.read().strip()
     if not api_key:
-        raise RuntimeError("VAST_AI_KEY not set")
+        raise RuntimeError("Vast.ai API key not found")
     cmd = ["vastai", "--api-key", api_key] + args
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -239,14 +242,13 @@ def ssh_run_command(instance_id: int, command: str) -> str:
 @tool
 def run_vast_cli(command: str) -> str:
     """Run an arbitrary vastai CLI command and return the output."""
-    raw_key = os.environ.get("VAST_AI_KEY", "") or os.environ.get("VAST_API_KEY", "")
-    api_key = raw_key.split()[0].strip() if raw_key else ""
+    _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+    api_key = ""
+    if os.path.exists(_vast_key_path):
+        with open(_vast_key_path) as _f:
+            api_key = _f.read().strip()
     if not api_key:
-        env = _critical_env()
-        raw_key = env.get("VAST_AI_KEY", "") or env.get("VAST_API_KEY", "")
-        api_key = raw_key.split()[0].strip() if raw_key else ""
-    if not api_key:
-        return json.dumps({"status": "error", "error": "VAST_API_KEY not set"})
+        return json.dumps({"status": "error", "error": "Vast.ai API key not found"})
     cmd = ["vastai", "--api-key", api_key] + command.split()
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, env=_critical_env())
@@ -280,16 +282,4 @@ def run_bash_command(command: str) -> str:
         return f"Bash error: {exc}"
 
 
-def _critical_env() -> dict[str, str]:
-    env = dict(os.environ)
-    env_path = os.path.expanduser("~/.env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, val = line.split("=", 1)
-                    key = key.strip()
-                    if key not in env or not env[key]:
-                        env[key] = val.strip().strip('"').strip("'")
-    return env
+

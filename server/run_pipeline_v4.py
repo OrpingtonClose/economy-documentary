@@ -55,9 +55,10 @@ from queue_projection import (
 # DeepSeek client
 # ---------------------------------------------------------------------------
 
-_DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-if not _DEEPSEEK_API_KEY and os.path.exists(os.path.expanduser("~/api_keys/LLMS/deepseek_api.txt")):
-    with open(os.path.expanduser("~/api_keys/LLMS/deepseek_api.txt")) as _f:
+_DEEPSEEK_API_KEY = ""
+_deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+if os.path.exists(_deepseek_key_path):
+    with open(_deepseek_key_path) as _f:
         _DEEPSEEK_API_KEY = _f.read().strip()
 
 _DS_CLIENT = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
@@ -314,15 +315,7 @@ async def dispatch_pending_jobs(
                 else:
                     worker_urls["video"] = eff.worker_url
 
-    # Fallback to env vars
-    if "audio" not in worker_urls:
-        env_url = os.environ.get("QWEN3_TTS_WORKER_URL", "")
-        if env_url:
-            worker_urls["audio"] = env_url
-    if "video" not in worker_urls:
-        env_url = os.environ.get("LTX_VIDEO_WORKER_URL", "")
-        if env_url:
-            worker_urls["video"] = env_url
+    # No env var fallback — workers must be discovered from VMAllocated effects
 
     for job in queue_jobs.values():
         if job.status not in ("pending", "needs_retry"):

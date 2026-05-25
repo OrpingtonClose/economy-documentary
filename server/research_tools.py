@@ -24,17 +24,17 @@ from structured_extract import extract
 
 logger = logging.getLogger(__name__)
 
-_BRAVE_KEY = os.environ.get("BRAVE_API_KEY", "")
+_BRAVE_KEY = ""
 if not _BRAVE_KEY and os.path.exists(os.path.expanduser("~/api_keys/brave_key.txt")):
     with open(os.path.expanduser("~/api_keys/brave_key.txt")) as f:
         _BRAVE_KEY = f.read().strip()
 
-_EXA_KEY = os.environ.get("EXA_API_KEY", "")
+_EXA_KEY = ""
 if not _EXA_KEY and os.path.exists(os.path.expanduser("~/api_keys/exa_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/exa_api_key.txt")) as f:
         _EXA_KEY = f.read().strip()
 
-_FIRECRAWL_KEY = os.environ.get("FIRECRAWL_API_KEY", "")
+_FIRECRAWL_KEY = ""
 if not _FIRECRAWL_KEY and os.path.exists(os.path.expanduser("~/api_keys/firecrawl_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/firecrawl_api_key.txt")) as f:
         _FIRECRAWL_KEY = f.read().strip()

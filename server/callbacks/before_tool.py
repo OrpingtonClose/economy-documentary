@@ -19,9 +19,9 @@ from dashboard import get_active_collector
 logger = logging.getLogger(__name__)
 
 # -- Per-provider rate limiting -------------------------------------------------
-_GPU_CONCURRENCY = int(os.environ.get("GPU_CONCURRENCY", "1"))
-_TTS_CONCURRENCY = int(os.environ.get("TTS_CONCURRENCY", "2"))
-_VASTAI_CONCURRENCY = int(os.environ.get("VASTAI_CONCURRENCY", "3"))
+_GPU_CONCURRENCY = 2
+_TTS_CONCURRENCY = 3
+_VASTAI_CONCURRENCY = 2
 
 _provider_semaphores: Dict[str, threading.Semaphore] = {
     "gpu": threading.Semaphore(_GPU_CONCURRENCY),

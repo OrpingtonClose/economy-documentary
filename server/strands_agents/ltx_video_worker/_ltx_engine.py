@@ -101,9 +101,7 @@ def _ltx2_render_timeout_s() -> int:
     Returns a strictly positive integer. Falls back to the default on
     any parse error or non-positive value.
     """
-    raw = os.environ.get("LTX_VIDEO_LTX2_RENDER_TIMEOUT_S")
-    if not raw:
-        return _DEFAULT_LTX2_RENDER_TIMEOUT_S
+    return _DEFAULT_LTX2_RENDER_TIMEOUT_S
     try:
         parsed = int(raw)
     except ValueError:
@@ -214,9 +212,9 @@ class LTXVideoEngine:
                 f"pinned={LTX_VIDEO_PIN.model_id!r} (see strands_agents._model_pin)"
             )
         self._model_id = LTX_VIDEO_PIN.model_id
-        self._device = device or os.environ.get("LTX_VIDEO_DEVICE", "cuda:0")
+        self._device = device or "cuda:0"
         self._offload_mode = (
-            offload_mode or os.environ.get("LTX_VIDEO_OFFLOAD_MODE", "none")
+            offload_mode or "none"
         ).lower()
         self._num_inference_steps_override = num_inference_steps
         # Pin verification is cached after the first successful pass so
@@ -266,7 +264,7 @@ class LTXVideoEngine:
         negative_prompt: str | None = None,
     ) -> list[str]:
         """Assemble the ``python -m ltx_pipelines.ti2vid_one_stage`` argv."""
-        python_bin = os.environ.get("LTX_VIDEO_LTX2_PYTHON", sys.executable)
+        python_bin = sys.executable
         argv: list[str] = [
             python_bin,
             "-m",
@@ -299,12 +297,7 @@ class LTXVideoEngine:
                 "--num-inference-steps",
                 str(self._num_inference_steps_override),
             ]
-        elif "LTX_VIDEO_NUM_INFERENCE_STEPS" in os.environ:
-            argv += [
-                "--num-inference-steps",
-                os.environ["LTX_VIDEO_NUM_INFERENCE_STEPS"],
-            ]
-        quant = os.environ.get("LTX_VIDEO_QUANTIZATION")
+        quant = ""
         if quant:
             argv += ["--quantization", quant]
         return argv
@@ -335,10 +328,7 @@ class LTXVideoEngine:
         num_frames = _round_frames(target_frames)
         actual_duration = num_frames / float(fps)
 
-        cwd = os.environ.get(
-            "LTX_VIDEO_LTX2_CWD",
-            os.environ.get("LTX_VIDEO_LTX2_ROOT", "/opt/ltx-2-repo"),
-        )
+        cwd = "/opt/ltx-2-repo"
         if not Path(cwd).is_dir():
             raise VideoEngineError(
                 f"LTX-2 monorepo root not found at {cwd!r}; ensure "

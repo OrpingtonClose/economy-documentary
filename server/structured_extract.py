@@ -26,14 +26,10 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 # Shared DeepSeek v4-flash client (instructor-wrapped)
 # ---------------------------------------------------------------------------
 
-_DEEPSEEK_API_KEY = os.environ.get(
-    "DEEPSEEK_API_KEY",
-    "",
-)
-if not _DEEPSEEK_API_KEY and os.path.exists(
-    os.path.expanduser("~/api_keys/LLMS/deepseek_api.txt")
-):
-    with open(os.path.expanduser("~/api_keys/LLMS/deepseek_api.txt")) as _f:
+_DEEPSEEK_API_KEY = ""
+_deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+if os.path.exists(_deepseek_key_path):
+    with open(_deepseek_key_path) as _f:
         _DEEPSEEK_API_KEY = _f.read().strip()
 
 _DS_CLIENT: instructor.Instructor | None = None

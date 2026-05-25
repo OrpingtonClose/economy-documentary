@@ -39,7 +39,7 @@ def _load_tts():
     try:
         from qwen_tts import Qwen3TTSModel
 
-        model_path = os.environ.get("TTS_MODEL_PATH", "/workspace/models/qwen3-tts-voicedesign")
+        model_path = "/workspace/models/qwen3-tts-voicedesign"
         logger.info("Loading Qwen3-TTS from %s ...", model_path)
         _tts_model = Qwen3TTSModel.from_pretrained(model_path)
         logger.info("Qwen3-TTS loaded.")
