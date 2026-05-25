@@ -1108,14 +1108,14 @@ def _build_audio_agent(model) -> Agent:
     @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
-        Checks local checkpoint for existing WAV files — does NOT read OTIO."""
+        Checks artifacts dir for existing WAV files — does NOT read OTIO."""
         import glob
         from tools.otio_file_ops import resolve_timeline_path
         try:
             tp = resolve_timeline_path()
             pipeline_dir = os.path.dirname(os.path.dirname(tp))
-            audio_dir = os.path.join(pipeline_dir, "audio")
-            wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
+            artifact_dir = os.path.join(pipeline_dir, "artifacts")
+            wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
             if len(wav_files) > 0:
                 return json.dumps({"status": "already_completed", "stage": AUDIO, "reason": "wav_files_exist", "count": len(wav_files)})
         except Exception as exc:
@@ -1226,14 +1226,14 @@ def _build_video_agent(model) -> Agent:
     @tool
     def check_resume_status() -> str:
         """Check if this stage was already completed.
-        Checks local renders dir for MP4 files — does NOT read OTIO."""
+        Checks artifacts dir for MP4 files — does NOT read OTIO."""
         import glob
         from tools.otio_file_ops import resolve_timeline_path
         try:
             tp = resolve_timeline_path()
             pipeline_dir = os.path.dirname(os.path.dirname(tp))
-            renders_dir = os.path.join(pipeline_dir, "renders")
-            mp4_files = glob.glob(os.path.join(renders_dir, "*.mp4"))
+            artifact_dir = os.path.join(pipeline_dir, "artifacts")
+            mp4_files = glob.glob(os.path.join(artifact_dir, "*.mp4"))
             if len(mp4_files) > 0:
                 return json.dumps({"status": "already_completed", "stage": VIDEO, "reason": "mp4_files_exist", "count": len(mp4_files)})
         except Exception as exc:
@@ -1510,7 +1510,7 @@ def _has_pending_jobs(state: GraphState) -> bool:
 
 
 def _audio_not_completed(state: GraphState) -> bool:
-    """Run Audio only if gate passed and no WAV files exist locally."""
+    """Run Audio only if gate passed and no WAV files exist in artifacts."""
     if _gate_recovery_target(state):
         return False
     import glob
@@ -1518,8 +1518,8 @@ def _audio_not_completed(state: GraphState) -> bool:
     try:
         tp = resolve_timeline_path()
         pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        audio_dir = os.path.join(pipeline_dir, "audio")
-        wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
+        artifact_dir = os.path.join(pipeline_dir, "artifacts")
+        wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
         if len(wav_files) > 0:
             return False
     except Exception as exc:
@@ -1528,7 +1528,7 @@ def _audio_not_completed(state: GraphState) -> bool:
 
 
 def _video_not_completed(state: GraphState) -> bool:
-    """Run Video only if audio WAVs exist and no MP4 renders exist locally."""
+    """Run Video only if audio WAVs exist and no MP4 renders exist in artifacts."""
     if _gate_recovery_target(state):
         return False
     import glob
@@ -1536,10 +1536,9 @@ def _video_not_completed(state: GraphState) -> bool:
     try:
         tp = resolve_timeline_path()
         pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        audio_dir = os.path.join(pipeline_dir, "audio")
-        renders_dir = os.path.join(pipeline_dir, "renders")
-        wav_files = glob.glob(os.path.join(audio_dir, "*.wav"))
-        mp4_files = glob.glob(os.path.join(renders_dir, "*.mp4"))
+        artifact_dir = os.path.join(pipeline_dir, "artifacts")
+        wav_files = glob.glob(os.path.join(artifact_dir, "*.wav"))
+        mp4_files = glob.glob(os.path.join(artifact_dir, "*.mp4"))
         if len(wav_files) == 0:
             return False
         if len(mp4_files) > 0:
@@ -1550,7 +1549,7 @@ def _video_not_completed(state: GraphState) -> bool:
 
 
 def _assembly_not_completed(state: GraphState) -> bool:
-    """Run Assembly only if video MP4s exist and final output doesn't exist locally."""
+    """Run Assembly only if video MP4s exist in artifacts and final output doesn't exist."""
     if _gate_recovery_target(state):
         return False
     import glob
@@ -1558,9 +1557,9 @@ def _assembly_not_completed(state: GraphState) -> bool:
     try:
         tp = resolve_timeline_path()
         pipeline_dir = os.path.dirname(os.path.dirname(tp))
-        renders_dir = os.path.join(pipeline_dir, "renders")
+        artifact_dir = os.path.join(pipeline_dir, "artifacts")
         output_dir = os.path.join(pipeline_dir, "output")
-        mp4_renders = glob.glob(os.path.join(renders_dir, "*.mp4"))
+        mp4_renders = glob.glob(os.path.join(artifact_dir, "*.mp4"))
         if len(mp4_renders) == 0:
             return False
         output_mp4s = glob.glob(os.path.join(output_dir, "*.mp4"))
