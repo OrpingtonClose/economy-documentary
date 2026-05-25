@@ -69,6 +69,18 @@ requeue_job_with_qa_comments('job_id_here', QAResult(
 ))
 "
 
+REPORTING FORMAT (required):
+After creating jobs, include this in your response so the system tracks them:
+
+Scene 1:
+Render video segment for scene 1: [detailed visual description from script]
+
+Scene 2:
+Render video segment for scene 2: [detailed visual description from script]
+...
+
+When all jobs are created and QA passes, say: "All video complete."
+
 QA CHECKLIST:
 - Video matches the visual description
 - Duration matches expected scene length
@@ -78,8 +90,6 @@ QA CHECKLIST:
 
 You receive FEEDBACK after each turn telling you what happened.
 Use the feedback to adjust your next thinking.
-
-You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
         include_subagents=False,

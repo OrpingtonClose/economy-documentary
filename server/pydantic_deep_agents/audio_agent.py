@@ -68,6 +68,20 @@ requeue_job_with_qa_comments('job_id_here', QAResult(
 # Clear all jobs (only when pipeline is fully done)
 python3 -c "from job_queue import clear_all_jobs; print('Cleared', clear_all_jobs(), 'jobs')"
 
+REPORTING FORMAT (required):
+After creating jobs, include this in your response so the system tracks them:
+
+Scene 1:
+Generate narration audio for V1: [exact narration text from script]
+Generate narration audio for V2: [exact narration text from script]
+Generate narration audio for V3: [exact narration text from script]
+
+Scene 2:
+Generate narration audio for V1: [exact narration text from script]
+...
+
+When all jobs are created and QA passes, say: "All audio complete."
+
 QA CHECKLIST:
 - Duration matches expected scene length
 - Audio is clear and loud enough
@@ -76,8 +90,6 @@ QA CHECKLIST:
 
 You receive FEEDBACK after each turn telling you what happened.
 Use the feedback to adjust your next thinking.
-
-You are free to think, write, and do bash as you see fit.
 """,
         include_memory=True,
         include_subagents=False,
