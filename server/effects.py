@@ -118,6 +118,7 @@ class VMAllocated(Effect):
     instance_id: str = Field(default="", description="VM instance ID")
     offer_id: str = Field(default="", description="Vast.ai offer ID")
     gpu_type: str = Field(default="", description="GPU type")
+    worker_url: str = Field(default="", description="Worker HTTP URL if available")
 
 
 class VMDeallocated(Effect):

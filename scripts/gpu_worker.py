@@ -144,7 +144,7 @@ class VMAgent:
         self._tasks_failed: int = 0
         self._total_gen_time: float = 0.0
         self._last_activity: float = time.time()
-        self._max_idle_seconds: float = 15.0 * 60.0
+        self._job_in_progress: bool = False
 
     def run_bootstrap(self) -> bool:
         self.bootstrap.started_at = time.time()

@@ -346,31 +346,42 @@ async def dispatch_pending_jobs(
             otio_hash_before="",
         )
 
-        # POST to worker
+        # POST free-text instruction to VM agent
         try:
             async with httpx.AsyncClient() as client:
                 if job.stage == "audio":
-                    payload = {
-                        "text": job.payload.get("text", ""),
-                        "voice_id": job.payload.get("voice", "V1"),
-                    }
-                    resp = await client.post(
-                        f"{worker_url.rstrip('/')}/tts/render",
-                        json=payload,
+                    instruction = (
+                        f"Generate narration audio using Qwen3-TTS.\n"
+                        f"Text: {job.payload.get('text', '')}\n"
+                        f"Voice: {job.payload.get('voice', 'V1')}\n"
+                        f"Output: /workspace/output/{job.job_id}.wav\n"
+                        f"Run the command and report the exact output file path."
                     )
                 else:
-                    payload = {
-                        "prompt": job.payload.get("prompt", ""),
-                        "duration_sec": job.payload.get("duration_sec", 5),
-                    }
-                    resp = await client.post(
-                        f"{worker_url.rstrip('/')}/render",
-                        json=payload,
+                    instruction = (
+                        f"Generate video using LTX-2.3.\n"
+                        f"Prompt: {job.payload.get('prompt', '')}\n"
+                        f"Duration: {job.payload.get('duration_sec', 5)} seconds\n"
+                        f"Output: /workspace/output/{job.job_id}.mp4\n"
+                        f"Run the command and report the exact output file path."
                     )
 
+                resp = await client.post(
+                    f"{worker_url.rstrip('/')}/",
+                    content=instruction.encode("utf-8"),
+                    headers={"Content-Type": "text/plain"},
+                )
                 resp.raise_for_status()
-                result = resp.json()
-                artifact_path = result.get("artifact_path", f"{output_dir}/artifacts/{job.job_id}.{'wav' if job.stage == 'audio' else 'mp4'}")
+                agent_response = resp.text
+                print(f"  [WORKER] {job.job_id} response: {agent_response[:200]}...")
+
+                # Parse artifact path from agent response
+                import re
+                m = re.search(r"/workspace/output/[^\s\n]+\.(wav|mp4)", agent_response)
+                if m:
+                    artifact_path = m.group(0)
+                else:
+                    artifact_path = f"/workspace/output/{job.job_id}.{'wav' if job.stage == 'audio' else 'mp4'}"
 
                 event_store.append(
                     JobCompleted(
@@ -613,18 +624,44 @@ async def run_pipeline(
             for effect in valid_effects:
                 # For VM effects, execute bash first, then record outcome
                 if effect.effect_type == "VMAllocated":
+                    mode = "tts" if "tts" in (effect.gpu_type or "").lower() else "ltx"
+                    onstart = (
+                        "cd /workspace && "
+                        "apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
+                        "pip install -q --break-system-packages fastapi uvicorn soundfile openai numpy torch && "
+                        "git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git repo && "
+                        f"echo '{_DEEPSEEK_API_KEY}' > /workspace/.deepseek_key && "
+                        "nohup python repo/scripts/vm_agent.py --port 8880 > /workspace/agent.log 2>&1 & "
+                        "echo started"
+                    )
                     cmd = (
                         f"vastai create instance {effect.offer_id} "
                         f"--image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime "
-                        f"--disk 150 --ssh --direct --label documentary"
+                        f"--disk 150 --ssh --direct --label documentary-{mode} "
+                        f"--onstart-cmd '{onstart}'"
                     )
                     bash_result = run_bash(cmd)
                     if bash_result["returncode"] == 0:
-                        # Extract instance_id from output
                         import re
                         m = re.search(r"new_contract['\"]?\s*:\s*(\d+)", bash_result["stdout"])
                         if m:
                             effect.instance_id = m.group(1)
+                        # Get worker URL from instance status
+                        if effect.instance_id:
+                            status_result = run_bash(f"vastai show instance {effect.instance_id} --raw")
+                            if status_result["returncode"] == 0:
+                                try:
+                                    import json
+                                    inst_info = json.loads(status_result["stdout"])
+                                    public_ip = inst_info.get("public_ipaddr", "")
+                                    ports = inst_info.get("ports", {})
+                                    port_8880 = ports.get("8880/tcp", [])
+                                    if public_ip and port_8880:
+                                        host_port = port_8880[0].get("HostPort", "")
+                                        if host_port:
+                                            effect.worker_url = f"http://{public_ip}:{host_port}/"
+                                except Exception:
+                                    pass
                         event_store.append(effect, otio_hash_before="")
                     else:
                         event_store.append(
