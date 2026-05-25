@@ -3,30 +3,85 @@
     "metadata": {
         "documentary": {
             "_provenance": {
+                "gate_audio": {
+                    "agent": "otio_gate"
+                },
                 "gate_scenario": {
+                    "agent": "otio_gate"
+                },
+                "scenario_raw": {
+                    "agent": "otio_gate"
+                },
+                "scenes": {
+                    "agent": "otio_gate"
+                },
+                "style_lock": {
+                    "agent": "otio_gate"
+                },
+                "visual_style": {
                     "agent": "otio_gate"
                 }
             },
-            "gate_scenario": {
-                "errors": [
-                    "ingest_scenario failed (attempt 25): litellm.BadRequestError - LLM provider not configured for deepseek-chat",
-                    "validate_scenario: scenes missing, visual_style missing, style_lock missing",
-                    "Pipeline blocked at scenario stage - 25 consecutive gate failures, same root cause",
-                    "NO progress possible until ingest_scenario source code is modified: change 'deepseek-chat' to 'deepseek/deepseek-chat' or equivalent provider-prefixed model string"
-                ],
-                "stage": "scenario",
-                "valid": false
+            "gate_audio": {
+                "errors": [],
+                "stage": "audio",
+                "valid": true
             },
+            "gate_scenario": {
+                "errors": [],
+                "stage": "scenario",
+                "valid": true
+            },
+            "scenario_raw": "VISUAL STYLE:\n  Style: Cinematic slow-motion with prismatic light play\n  Realism anchors: water droplets, sunlight, blue sky\n  Avoid: cartoon rainbows, leprechauns, pots of gold\n  Palette: full visible spectrum — ROYGBIV, against dark storm clouds transitioning to clear blue\n  Camera language: macro water-droplet shots pulling back to wide sky arc\n  Reference genre: BBC Earth / Planet Earth style nature close-ups\n\nSTYLE LOCK:\n  Dominant style: Cinematic nature documentary\n  Forbidden styles: animated, fantasy, children's illustration, surreal\n  Positive fragment: real water, real light, real science made beautiful\n  Negative fragment: no fantasy elements, no artificial CGI rainbows\n\nSCENES:\n  Scene 1 — The Anatomy of a Rainbow (30s)\n    Narration (V1 Hook): Every rainbow is sunlight disguised. Billions of raindrops each act as tiny prisms, bending white light into color. You're watching physics paint the sky.\n    Narration (V2 Expert): When sunlight enters a raindrop, it refracts, reflects internally, and exits split into wavelengths. Red bends least at 42 degrees. Violet bends most.\n    Narration (V3 Storyteller): Ancient cultures called rainbows bridges between worlds. Now we know: each one is unique. Your angle, your moment — no one else sees the exact same arc.\n    Visual notes: Open on extreme macro — single water droplet on a leaf, light hitting it, prismatic flash. Cut to slow-motion rain shower in golden hour light. Wide shot of full double rainbow arc against dark receding storm clouds. Final close-up on child's face looking up, rainbow reflected in eyes.\n    Dopamine hook: Physics paint the sky\n    Pronunciation hints: RAIN-bow = /ˈreɪn.boʊ/, RE-fracts = /rɪˈfrækts/, PRISM = /ˈprɪz.əm/\n    Hook spec: topic_specific_motif=light-splitting-through-water, motion_description=slow-motion droplet fall pulling back to reveal sky-wide arc, narrative_pull=the hidden mechanism behind something familiar\n    Outro spec: closing_shot=child's eyes reflecting rainbow, recap_sentence=Light and water — nature's perfect partnership., cta=Next time rain clears, look up and find your own., brand_card=logo on dark gradient",
+            "scenes": [
+                {
+                    "dopamine_hook": "Physics paint the sky",
+                    "duration_sec": 30,
+                    "narration_v1_hook": "Every rainbow is sunlight disguised. Billions of raindrops each act as tiny prisms, bending white light into color. You're watching physics paint the sky.",
+                    "narration_v2_expert": "When sunlight enters a raindrop, it refracts, reflects internally, and exits split into wavelengths. Red bends least at 42 degrees. Violet bends most.",
+                    "narration_v3_storyteller": "Ancient cultures called rainbows bridges between worlds. Now we know: each one is unique. Your angle, your moment — no one else sees the exact same arc.",
+                    "pronunciation_hints": "RAIN-bow = /ˈreɪn.boʊ/, RE-fracts = /rɪˈfrækts/, PRISM = /ˈprɪz.əm/",
+                    "title": "The Anatomy of a Rainbow",
+                    "visual_notes": "Open on extreme macro — single water droplet on a leaf, light hitting it, prismatic flash. Cut to slow-motion rain shower in golden hour light. Wide shot of full double rainbow arc against dark receding storm clouds. Final close-up on child's face looking up, rainbow reflected in eyes."
+                }
+            ],
             "state": "draft",
             "state_history": [
                 {
                     "from": null,
                     "reason": "timeline_created",
-                    "timestamp": 1779664303.843084,
+                    "timestamp": 1779689274.3337102,
                     "to": "draft"
                 }
             ],
-            "state_reason": "timeline_created"
+            "state_reason": "timeline_created",
+            "style_lock": {
+                "dominant_style": "Cinematic nature documentary",
+                "forbidden_styles": [
+                    "animated",
+                    "fantasy",
+                    "children's illustration",
+                    "surreal"
+                ],
+                "negative_fragment": "no fantasy elements, no artificial CGI rainbows",
+                "positive_fragment": "real water, real light, real science made beautiful"
+            },
+            "visual_style": {
+                "avoid": [
+                    "cartoon rainbows",
+                    "leprechauns",
+                    "pots of gold"
+                ],
+                "camera_language": "macro water-droplet shots pulling back to wide sky arc",
+                "palette": "full visible spectrum — ROYGBIV, against dark storm clouds transitioning to clear blue",
+                "realism_anchors": [
+                    "water droplets",
+                    "sunlight",
+                    "blue sky"
+                ],
+                "reference_genre": "BBC Earth / Planet Earth style nature close-ups",
+                "style": "Cinematic slow-motion with prismatic light play"
+            }
         }
     },
     "name": "documentary_draft",

@@ -1,9 +1,9 @@
 {
   "pipeline_id": "",
   "passed": true,
-  "started_at": 1779664302.210193,
-  "finished_at": 1779664303.839034,
-  "duration_ms": 1629,
+  "started_at": 1779689272.828438,
+  "finished_at": 1779689274.329634,
+  "duration_ms": 1501,
   "summary": {
     "total": 8,
     "passed": 8,
@@ -22,7 +22,7 @@
       "name": "vast_funds",
       "category": "workers",
       "status": "PASS",
-      "message": "Vast.ai balance: $14.40 usable ($14.40 credit + $0.00 balance)",
+      "message": "Vast.ai balance: $5.45 usable ($5.45 credit + $0.00 balance)",
       "remedy": ""
     },
     {
@@ -64,7 +64,7 @@
       "name": "disk:/Users/orpington/Documents/economy-documentary-work/server/pipeline_output",
       "category": "filesystem",
       "status": "PASS",
-      "message": "Disk space for video output: 3.8 GB free",
+      "message": "Disk space for video output: 16.2 GB free",
       "remedy": ""
     }
   ],
