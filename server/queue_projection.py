@@ -32,7 +32,9 @@ class Job:
     payload: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"  # pending, running, completed, failed, needs_retry
     worker_id: str = ""
+    instance_id: str = ""
     artifact_path: str = ""
+    local_artifact_path: str = ""
     qa_comments: list[str] = field(default_factory=list)
     suggested_fix: str = ""
 
@@ -81,11 +83,13 @@ def project_queue(effects: list[Effect]) -> dict[str, Job]:
             if effect.job_id in jobs:
                 jobs[effect.job_id].status = "running"
                 jobs[effect.job_id].worker_id = effect.worker_id
+                jobs[effect.job_id].instance_id = effect.instance_id
 
         elif isinstance(effect, JobCompleted):
             if effect.job_id in jobs:
                 jobs[effect.job_id].status = "completed"
                 jobs[effect.job_id].artifact_path = effect.artifact_path
+                jobs[effect.job_id].local_artifact_path = effect.local_artifact_path
 
         elif isinstance(effect, JobFailed):
             if effect.job_id in jobs:

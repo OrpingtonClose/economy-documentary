@@ -90,6 +90,7 @@ class JobStarted(Effect):
     effect_type: Literal["JobStarted"] = "JobStarted"
     job_id: str = Field(default="", description="Job ID")
     worker_id: str = Field(default="", description="Worker that claimed the job")
+    instance_id: str = Field(default="", description="Vast.ai instance ID of the VM")
     stage: str = Field(default="", description="audio or video")
 
 
@@ -98,7 +99,8 @@ class JobCompleted(Effect):
 
     effect_type: Literal["JobCompleted"] = "JobCompleted"
     job_id: str = Field(default="", description="Job ID")
-    artifact_path: str = Field(default="", description="Path to generated file")
+    artifact_path: str = Field(default="", description="Path to generated file on the VM")
+    local_artifact_path: str = Field(default="", description="Path to downloaded file on the pipeline host")
     stage: str = Field(default="", description="audio or video")
 
 

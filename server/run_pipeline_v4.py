@@ -303,13 +303,15 @@ async def dispatch_pending_jobs(
 
     acted = False
 
-    # Discover worker URLs from VM effects
+    # Discover worker URLs and instance IDs from VM effects
     records = event_store.read_all()
     worker_urls: dict[str, str] = {}  # stage -> worker_url
+    worker_instances: dict[str, str] = {}  # worker_url -> instance_id
     for r in records:
         if r.effect.effect_type == "VMAllocated":
             eff = r.effect
             if hasattr(eff, "worker_url") and eff.worker_url:
+                worker_instances[eff.worker_url] = getattr(eff, "instance_id", "")
                 if "tts" in (eff.gpu_type or "").lower() or "audio" in str(getattr(eff, "label", "")).lower():
                     worker_urls["audio"] = eff.worker_url
                 else:
@@ -328,12 +330,15 @@ async def dispatch_pending_jobs(
 
         print(f"  [WORKER] Dispatching {job.job_id} to {worker_url}")
 
+        instance_id = worker_instances.get(worker_url, "")
+
         # Mark started
         event_store.append(
             JobStarted(
                 agent_id="pipeline",
                 job_id=job.job_id,
                 worker_id=worker_url,
+                instance_id=instance_id,
                 stage=job.stage,
             ),
             otio_hash_before="",
@@ -394,11 +399,27 @@ async def dispatch_pending_jobs(
                 else:
                     artifact_path = f"/workspace/output/{job.job_id}.{'wav' if job.stage == 'audio' else 'mp4'}"
 
+                # Download artifact from VM to pipeline host
+                local_artifact_path = ""
+                if instance_id:
+                    artifact_name = os.path.basename(artifact_path)
+                    local_dir = os.path.join(output_dir, "artifacts")
+                    os.makedirs(local_dir, exist_ok=True)
+                    local_artifact_path = os.path.join(local_dir, artifact_name)
+                    download_cmd = f"vastai copy {instance_id}:{artifact_path} {local_artifact_path}"
+                    download_result = run_bash(download_cmd)
+                    if download_result["returncode"] == 0 and os.path.exists(local_artifact_path):
+                        print(f"  [WORKER] {job.job_id} downloaded → {local_artifact_path}")
+                    else:
+                        print(f"  [WORKER] {job.job_id} download failed: {download_result['stderr'][:200]}")
+                        local_artifact_path = ""
+
                 event_store.append(
                     JobCompleted(
                         agent_id="pipeline",
                         job_id=job.job_id,
                         artifact_path=artifact_path,
+                        local_artifact_path=local_artifact_path,
                         stage=job.stage,
                     ),
                     otio_hash_before="",
@@ -425,6 +446,38 @@ async def dispatch_pending_jobs(
 # Assembly — REAL ffmpeg
 # ---------------------------------------------------------------------------
 
+def _ensure_local_artifact(job, output_dir: str) -> str | None:
+    """Return a local path for a job's artifact, downloading from VM if needed."""
+    # Prefer already-downloaded local path
+    local = getattr(job, "local_artifact_path", "")
+    if local and os.path.exists(local):
+        return local
+
+    # Try to download from VM
+    instance_id = getattr(job, "instance_id", "")
+    remote = job.artifact_path
+    if not instance_id or not remote:
+        print(f"  [ASSEMBLY] No VM info for {job.job_id}")
+        return None
+
+    artifact_name = os.path.basename(remote)
+    local_dir = os.path.join(output_dir, "artifacts")
+    os.makedirs(local_dir, exist_ok=True)
+    local = os.path.join(local_dir, artifact_name)
+
+    if os.path.exists(local):
+        return local
+
+    download_cmd = f"vastai copy {instance_id}:{remote} {local}"
+    result = run_bash(download_cmd)
+    if result["returncode"] == 0 and os.path.exists(local):
+        print(f"  [ASSEMBLY] Downloaded {job.job_id} → {local}")
+        return local
+    else:
+        print(f"  [ASSEMBLY] Download failed for {job.job_id}: {result['stderr'][:200]}")
+        return None
+
+
 def run_assembly(output_dir: str, queue_jobs: dict) -> bool:
     """Assemble final video from completed audio/video clips using ffmpeg.
 
@@ -442,15 +495,14 @@ def run_assembly(output_dir: str, queue_jobs: dict) -> bool:
 
     os.makedirs(os.path.join(output_dir, "output"), exist_ok=True)
 
-    audio_path = completed_audio[0].artifact_path
-    video_path = completed_video[0].artifact_path
+    audio_path = _ensure_local_artifact(completed_audio[0], output_dir)
+    video_path = _ensure_local_artifact(completed_video[0], output_dir)
 
-    # Verify inputs exist
-    if not os.path.exists(audio_path):
-        print(f"  [ASSEMBLY] Audio not found: {audio_path}")
+    if not audio_path:
+        print(f"  [ASSEMBLY] Audio not available locally: {completed_audio[0].job_id}")
         return False
-    if not os.path.exists(video_path):
-        print(f"  [ASSEMBLY] Video not found: {video_path}")
+    if not video_path:
+        print(f"  [ASSEMBLY] Video not available locally: {completed_video[0].job_id}")
         return False
 
     cmd = (
