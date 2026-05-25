@@ -291,13 +291,76 @@ def destroy_orphan_vms(event_store: EventStore) -> None:
 # Worker dispatch — REAL workers only
 # ---------------------------------------------------------------------------
 
+async def _post_to_vm(client, worker_url: str, text: str) -> str:
+    """POST text to a VM agent and return the response text."""
+    resp = await client.post(
+        f"{worker_url.rstrip('/')}/",
+        content=text.encode("utf-8"),
+        headers={"Content-Type": "text/plain"},
+    )
+    resp.raise_for_status()
+    return resp.text
+
+
+def _parse_vm_response(response: str) -> tuple[str, str]:
+    """Parse a VM agent response for markers.
+
+    Returns (response_type, content) where response_type is one of:
+    "result", "question", "error", or "unknown".
+    """
+    stripped = response.strip()
+    if stripped.upper().startswith("RESULT:"):
+        return "result", stripped[7:].strip()
+    if stripped.upper().startswith("QUESTION:"):
+        return "question", stripped[9:].strip()
+    if stripped.upper().startswith("ERROR:"):
+        return "error", stripped[6:].strip()
+    # Fallback: if response contains a workspace path, treat as result
+    if "/workspace/output/" in stripped:
+        return "result", stripped
+    return "unknown", stripped
+
+
+def _extract_artifact_path(response_text: str, job_id: str, stage: str) -> str:
+    """Try to find an artifact path in the VM response."""
+    import re
+    m = re.search(r"/workspace/output/[^\s\n]+\.(wav|mp4)", response_text)
+    if m:
+        return m.group(0)
+    return f"/workspace/output/{job_id}.{'wav' if stage == 'audio' else 'mp4'}"
+
+
+def _download_artifact(instance_id: str, remote_path: str, output_dir: str) -> str:
+    """Download an artifact from a VM. Returns local path or empty string on failure."""
+    if not instance_id or not remote_path:
+        return ""
+    artifact_name = os.path.basename(remote_path)
+    local_dir = os.path.join(output_dir, "artifacts")
+    os.makedirs(local_dir, exist_ok=True)
+    local_path = os.path.join(local_dir, artifact_name)
+    if os.path.exists(local_path):
+        return local_path
+    download_cmd = f"vastai copy {instance_id}:{remote_path} {local_path}"
+    result = run_bash(download_cmd)
+    if result["returncode"] == 0 and os.path.exists(local_path):
+        return local_path
+    print(f"  [DOWNLOAD] Failed: {result['stderr'][:200]}")
+    return ""
+
+
 async def dispatch_pending_jobs(
-    queue_jobs: dict, event_store: EventStore, output_dir: str
+    queue_jobs: dict,
+    event_store: EventStore,
+    output_dir: str,
+    script_meta: dict,
 ) -> bool:
-    """Dispatch pending jobs to real workers via HTTP.
+    """Dispatch jobs to real workers via HTTP, handling collaboration turns.
+
+    Processes three kinds of jobs:
+    - pending / needs_retry: send initial instruction
+    - running with question_answer: send the answer to a VM's question
 
     Returns True if any work was dispatched.
-    If no workers are available, returns False (provisioner must create them).
     """
     import httpx
 
@@ -317,127 +380,240 @@ async def dispatch_pending_jobs(
                 else:
                     worker_urls["video"] = eff.worker_url
 
-    # No env var fallback — workers must be discovered from VMAllocated effects
-
-    for job in queue_jobs.values():
-        if job.status not in ("pending", "needs_retry"):
-            continue
-
-        worker_url = worker_urls.get(job.stage)
-        if not worker_url:
-            print(f"  [WORKER] No worker available for {job.stage} — provisioner needed")
-            continue
-
-        print(f"  [WORKER] Dispatching {job.job_id} to {worker_url}")
-
-        instance_id = worker_instances.get(worker_url, "")
-
-        # Mark started
-        event_store.append(
-            JobStarted(
-                agent_id="pipeline",
-                job_id=job.job_id,
-                worker_id=worker_url,
-                instance_id=instance_id,
-                stage=job.stage,
-            ),
-            otio_hash_before="",
+    # Build script context once
+    script_context = ""
+    if script_meta.get("has_script"):
+        script_context = (
+            f"SCRIPT CONTEXT:\n"
+            f"Scene: {script_meta.get('scene_num', 1)}\n"
+            f"Duration: {script_meta.get('duration_sec', 30)}s\n"
+            f"Dopamine hook: {script_meta.get('dopamine_hook', '')[:100]}...\n"
+            f"Visual notes: {script_meta.get('visual_notes', '')[:100]}...\n"
+            f"Pronunciation: {script_meta.get('pronunciation_hints', '')[:100]}...\n\n"
         )
 
-        # POST free-text instruction to VM agent
-        try:
-            async with httpx.AsyncClient() as client:
-                # Build context from script for the VM agent
-                script_context = ""
-                if state.has_script:
-                    script_context = (
-                        f"SCRIPT CONTEXT:\n"
-                        f"Scene: {state.scene_num}\n"
-                        f"Duration: {state.duration_sec}s\n"
-                        f"Dopamine hook: {state.dopamine_hook[:100]}...\n"
-                        f"Visual notes: {state.visual_notes[:100]}...\n"
-                        f"Pronunciation: {state.pronunciation_hints[:100]}...\n\n"
-                    )
+    async with httpx.AsyncClient() as client:
+        for job in queue_jobs.values():
+            worker_url = worker_urls.get(job.stage)
+            if not worker_url:
+                continue
 
-                if job.stage == "audio":
-                    instruction = (
-                        f"CONTEXT:\n"
-                        f"{script_context}"
-                        f"INSTRUCTION:\n"
-                        f"Generate narration audio using Qwen3-TTS.\n"
-                        f"Text: {job.payload.get('text', '')}\n"
-                        f"Voice: {job.payload.get('voice', 'V1')}\n"
-                        f"Output: /workspace/output/{job.job_id}.wav\n"
-                        f"Run the command, verify the file exists, and report the exact path."
-                    )
-                else:
-                    instruction = (
-                        f"CONTEXT:\n"
-                        f"{script_context}"
-                        f"INSTRUCTION:\n"
-                        f"Generate video using LTX-2.3.\n"
-                        f"Prompt: {job.payload.get('prompt', '')}\n"
-                        f"Duration: {job.payload.get('duration_sec', 5)} seconds\n"
-                        f"Output: /workspace/output/{job.job_id}.mp4\n"
-                        f"Run the command, verify the file exists, and report the exact path."
-                    )
+            instance_id = worker_instances.get(worker_url, "")
 
-                resp = await client.post(
-                    f"{worker_url.rstrip('/')}/",
-                    content=instruction.encode("utf-8"),
-                    headers={"Content-Type": "text/plain"},
-                )
-                resp.raise_for_status()
-                agent_response = resp.text
-                print(f"  [WORKER] {job.job_id} response: {agent_response[:200]}...")
+            # -----------------------------------------------------------------
+            # Case 1: job has a pending answer — send it to the VM
+            # -----------------------------------------------------------------
+            if job.status == "running" and getattr(job, "question_answer", ""):
+                answer_text = getattr(job, "question_answer", "")
+                print(f"  [WORKER] Sending answer to {job.job_id} at {worker_url}")
+                try:
+                    agent_response = await _post_to_vm(client, worker_url, answer_text)
+                    print(f"  [WORKER] {job.job_id} response: {agent_response[:200]}...")
+                    resp_type, resp_content = _parse_vm_response(agent_response)
 
-                # Parse artifact path from agent response
-                import re
-                m = re.search(r"/workspace/output/[^\s\n]+\.(wav|mp4)", agent_response)
-                if m:
-                    artifact_path = m.group(0)
-                else:
-                    artifact_path = f"/workspace/output/{job.job_id}.{'wav' if job.stage == 'audio' else 'mp4'}"
-
-                # Download artifact from VM to pipeline host
-                local_artifact_path = ""
-                if instance_id:
-                    artifact_name = os.path.basename(artifact_path)
-                    local_dir = os.path.join(output_dir, "artifacts")
-                    os.makedirs(local_dir, exist_ok=True)
-                    local_artifact_path = os.path.join(local_dir, artifact_name)
-                    download_cmd = f"vastai copy {instance_id}:{artifact_path} {local_artifact_path}"
-                    download_result = run_bash(download_cmd)
-                    if download_result["returncode"] == 0 and os.path.exists(local_artifact_path):
-                        print(f"  [WORKER] {job.job_id} downloaded → {local_artifact_path}")
+                    if resp_type == "result":
+                        artifact_path = _extract_artifact_path(agent_response, job.job_id, job.stage)
+                        local_path = _download_artifact(instance_id, artifact_path, output_dir)
+                        event_store.append(
+                            JobCompleted(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                artifact_path=artifact_path,
+                                local_artifact_path=local_path,
+                                stage=job.stage,
+                            ),
+                            otio_hash_before="",
+                        )
+                        print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
+                        acted = True
+                    elif resp_type == "question":
+                        event_store.append(
+                            JobQuestionReceived(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                question=resp_content,
+                                worker_url=worker_url,
+                            ),
+                            otio_hash_before="",
+                        )
+                        print(f"  [WORKER] {job.job_id} asked another question")
+                        acted = True
+                    elif resp_type == "error":
+                        event_store.append(
+                            JobFailed(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                error_message=resp_content,
+                                stage=job.stage,
+                            ),
+                            otio_hash_before="",
+                        )
+                        print(f"  [WORKER] {job.job_id} failed: {resp_content[:200]}")
+                        acted = True
                     else:
-                        print(f"  [WORKER] {job.job_id} download failed: {download_result['stderr'][:200]}")
-                        local_artifact_path = ""
+                        # Unknown response — treat as error but allow retry
+                        event_store.append(
+                            JobFailed(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                error_message=f"Unparseable VM response: {agent_response[:300]}",
+                                stage=job.stage,
+                            ),
+                            otio_hash_before="",
+                        )
+                        acted = True
+                except Exception as exc:
+                    print(f"  [WORKER] {job.job_id} failed: {exc}")
+                    event_store.append(
+                        JobFailed(
+                            agent_id="pipeline",
+                            job_id=job.job_id,
+                            error_message=str(exc)[:500],
+                            stage=job.stage,
+                        ),
+                        otio_hash_before="",
+                    )
+                    acted = True
+                continue
 
-                event_store.append(
-                    JobCompleted(
-                        agent_id="pipeline",
-                        job_id=job.job_id,
-                        artifact_path=artifact_path,
-                        local_artifact_path=local_artifact_path,
-                        stage=job.stage,
-                    ),
-                    otio_hash_before="",
-                )
-                print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
-                acted = True
+            # -----------------------------------------------------------------
+            # Case 2: job is waiting for an answer — skip until answered
+            # -----------------------------------------------------------------
+            if job.status == "running" and getattr(job, "pending_question", ""):
+                print(f"  [WORKER] {job.job_id} awaiting answer — skipping")
+                continue
 
-        except Exception as exc:
-            print(f"  [WORKER] {job.job_id} failed: {exc}")
+            # -----------------------------------------------------------------
+            # Case 3: pending / needs_retry — send initial instruction
+            # -----------------------------------------------------------------
+            if job.status not in ("pending", "needs_retry"):
+                continue
+
+            print(f"  [WORKER] Dispatching {job.job_id} to {worker_url}")
+
+            # Mark started
             event_store.append(
-                JobFailed(
+                JobStarted(
                     agent_id="pipeline",
                     job_id=job.job_id,
-                    error_message=str(exc)[:500],
+                    worker_id=worker_url,
+                    instance_id=instance_id,
                     stage=job.stage,
                 ),
                 otio_hash_before="",
             )
+
+            try:
+                if job.stage == "audio":
+                    instruction = (
+                        f"We are producing a documentary scene.\n\n"
+                        f"{script_context}"
+                        f"Please generate narration audio for this scene.\n"
+                        f"The narration text is:\n"
+                        f"\"{job.payload.get('text', '')}\"\n\n"
+                        f"Use the Qwen3-TTS model (runner at repo/scripts/run_qwen3_tts.py). "
+                        f"Save the output to /workspace/output/{job.job_id}.wav.\n\n"
+                        f"If anything is unclear, ask. If generation fails, troubleshoot. "
+                        f"Report RESULT: with the file path when done."
+                    )
+                else:
+                    instruction = (
+                        f"We are producing a documentary scene.\n\n"
+                        f"{script_context}"
+                        f"Please generate a video clip for this scene.\n"
+                        f"The visual description is:\n"
+                        f"\"{job.payload.get('prompt', '')}\"\n\n"
+                        f"Target duration: {job.payload.get('duration_sec', 5)} seconds.\n"
+                        f"Use the LTX-2.3 model (runner at repo/scripts/run_ltx_2_3.py). "
+                        f"Save the output to /workspace/output/{job.job_id}.mp4.\n\n"
+                        f"If anything is unclear, ask. If generation fails, troubleshoot. "
+                        f"Report RESULT: with the file path when done."
+                    )
+
+                agent_response = await _post_to_vm(client, worker_url, instruction)
+                print(f"  [WORKER] {job.job_id} response: {agent_response[:200]}...")
+                resp_type, resp_content = _parse_vm_response(agent_response)
+
+                if resp_type == "result":
+                    artifact_path = _extract_artifact_path(agent_response, job.job_id, job.stage)
+                    local_path = _download_artifact(instance_id, artifact_path, output_dir)
+                    event_store.append(
+                        JobCompleted(
+                            agent_id="pipeline",
+                            job_id=job.job_id,
+                            artifact_path=artifact_path,
+                            local_artifact_path=local_path,
+                            stage=job.stage,
+                        ),
+                        otio_hash_before="",
+                    )
+                    print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
+                    acted = True
+                elif resp_type == "question":
+                    event_store.append(
+                        JobQuestionReceived(
+                            agent_id="pipeline",
+                            job_id=job.job_id,
+                            question=resp_content,
+                            worker_url=worker_url,
+                        ),
+                        otio_hash_before="",
+                    )
+                    print(f"  [WORKER] {job.job_id} asked: {resp_content[:200]}")
+                    acted = True
+                elif resp_type == "error":
+                    event_store.append(
+                        JobFailed(
+                            agent_id="pipeline",
+                            job_id=job.job_id,
+                            error_message=resp_content,
+                            stage=job.stage,
+                        ),
+                        otio_hash_before="",
+                    )
+                    print(f"  [WORKER] {job.job_id} failed: {resp_content[:200]}")
+                    acted = True
+                else:
+                    # Unknown response — try to extract artifact path anyway
+                    artifact_path = _extract_artifact_path(agent_response, job.job_id, job.stage)
+                    local_path = _download_artifact(instance_id, artifact_path, output_dir)
+                    if local_path:
+                        event_store.append(
+                            JobCompleted(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                artifact_path=artifact_path,
+                                local_artifact_path=local_path,
+                                stage=job.stage,
+                            ),
+                            otio_hash_before="",
+                        )
+                        print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
+                        acted = True
+                    else:
+                        event_store.append(
+                            JobFailed(
+                                agent_id="pipeline",
+                                job_id=job.job_id,
+                                error_message=f"Unparseable VM response: {agent_response[:300]}",
+                                stage=job.stage,
+                            ),
+                            otio_hash_before="",
+                        )
+                        acted = True
+
+            except Exception as exc:
+                print(f"  [WORKER] {job.job_id} failed: {exc}")
+                event_store.append(
+                    JobFailed(
+                        agent_id="pipeline",
+                        job_id=job.job_id,
+                        error_message=str(exc)[:500],
+                        stage=job.stage,
+                    ),
+                    otio_hash_before="",
+                )
+                acted = True
 
     return acted
 
@@ -571,6 +747,52 @@ What should the pipeline do next?"""
         "reason": reason,
         "prompt_hint": prompt_hint,
     }
+
+
+async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, brief: str) -> bool:
+    """Find jobs where the worker asked a question and generate answers.
+
+    Uses the orchestrator to decide how to answer each question.
+    Appends JobQuestionAnswered events.
+    Returns True if any answers were produced.
+    """
+    acted = False
+    for job in queue_jobs.values():
+        question = getattr(job, "pending_question", "")
+        if not question or job.status != "running":
+            continue
+
+        print(f"  [COLLAB] {job.job_id} question: {question[:200]}...")
+
+        # Build a collaboration prompt for the orchestrator
+        collab_prompt = (
+            f"A worker agent asked a question about a job it is processing.\n\n"
+            f"Job: {job.job_id} (stage={job.stage})\n"
+            f"Question from worker: {question}\n\n"
+            f"Documentary brief: {brief}\n\n"
+            f"Please provide a concise, actionable answer for the worker. "
+            f"The worker is a smart agent that can troubleshoot — give it the "
+            f"information it needs, not a script to run."
+        )
+
+        try:
+            response = await call_agent("orchestrator", collab_prompt)
+            answer = response.strip()
+            if answer:
+                event_store.append(
+                    JobQuestionAnswered(
+                        agent_id="orchestrator",
+                        job_id=job.job_id,
+                        answer=answer,
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [COLLAB] {job.job_id} answer: {answer[:200]}...")
+                acted = True
+        except Exception as exc:
+            print(f"  [COLLAB] {job.job_id} failed to get answer: {exc}")
+
+    return acted
 
 
 # ---------------------------------------------------------------------------
@@ -749,8 +971,15 @@ async def run_pipeline(
         # Save OTIO
         timeline.to_json_file(timeline_path)
 
+        # Build script metadata for VM context
+        script_meta = timeline.metadata.get("documentary", {})
+        script_meta["has_script"] = bool(script_meta.get("narration_v1"))
+
+        # Answer any questions workers asked before dispatching more work
+        await answer_pending_questions(queue_jobs, event_store, brief)
+
         # Dispatch pending jobs to workers
-        await dispatch_pending_jobs(queue_jobs, event_store, output_dir)
+        await dispatch_pending_jobs(queue_jobs, event_store, output_dir, script_meta)
 
         # Try assembly
         if audio_complete and video_complete and not has_output:

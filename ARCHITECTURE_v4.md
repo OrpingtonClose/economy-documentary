@@ -30,14 +30,20 @@ Effects are the ONLY things that can exist in the event log.
 
 ### Worker Effects (from worker execution)
 - `JobQueued` — job_type, stage, scene_num, payload (implicit from GenerateNarrationAudio/RenderVideoSegment)
-- `JobStarted` — job_id, worker_id, stage
-- `JobCompleted` — job_id, artifact_path, stage
+- `JobStarted` — job_id, worker_id, instance_id, stage
+- `JobCompleted` — job_id, artifact_path, local_artifact_path, stage
 - `JobFailed` — job_id, error_message, stage
+- `JobQuestionReceived` — job_id, question, worker_url
+- `JobQuestionAnswered` — job_id, answer
 
 ### QA Effects (from QA jury)
 - `QAPassed` — job_id, artifact_path, verdict
 - `QAFailed` — job_id, artifact_path, verdict, comments, suggested_fix
 - `JobRequeued` — job_id, comments, suggested_fix
+
+### Collaboration Effects
+- `JobQuestionReceived` — worker asked a clarifying question before proceeding
+- `JobQuestionAnswered` — pipeline (orchestrator or agent) provided an answer
 
 ### System Effects
 - `NoOp` — reason
@@ -57,8 +63,10 @@ Effects are the ONLY things that can exist in the event log.
 - `GenerateNarrationAudio` → pending audio job
 - `RenderVideoSegment` → pending video job
 - `JobStarted` → job running
-- `JobCompleted` → job completed with artifact
+- `JobCompleted` → job completed with artifact (local_artifact_path set after download)
 - `JobFailed` → job failed (retry or permanent)
+- `JobQuestionReceived` → job running but awaiting answer
+- `JobQuestionAnswered` → answer ready, will be sent to VM on next dispatch
 - `QAFailed` + `JobRequeued` → job back to pending with comments
 
 ## Pipeline Flow
@@ -79,10 +87,11 @@ Effects are the ONLY things that can exist in the event log.
    g. Parse agent text into effects via instructor
    h. **For VM effects**: execute corresponding bash command, then append effect to log
    i. **For creative effects**: append directly to log; queue state updates on next projection
-   j. Dispatch pending jobs to workers
-   k. Workers append `JobStarted`/`JobCompleted`/`JobFailed` effects to log
-   l. Try assembly if all media ready
-   m. Stop when complete or no progress
+   j. Answer any questions workers asked (`JobQuestionReceived` → orchestrator → `JobQuestionAnswered`)
+   k. Dispatch pending jobs to workers (including sending answers to running jobs)
+   l. Workers append `JobStarted`/`JobCompleted`/`JobFailed`/`JobQuestionReceived` effects to log
+   m. Try assembly if all media ready
+   n. Stop when complete or no progress
 
 ## Orchestrator Agent
 
@@ -99,6 +108,12 @@ The orchestrator is a special agent that maintains global state awareness.
 - VMs run a self-monitoring agent that destroys the VM if idle for too long
 - VM self-destruction is recorded as `VMDeallocated` effect (sent via HTTP callback or checked on next pipeline run)
 - The pipeline destroys orphan VMs at startup as a safety net
+- **VM agents are collaborators, not script runners.** They receive goal-oriented instructions, ask clarifying questions when needed, troubleshoot failures, and report outcomes using markers:
+  - `RESULT:` — task complete, artifact ready
+  - `QUESTION:` — need clarification before proceeding
+  - `ERROR:` — unrecoverable failure after troubleshooting
+- The pipeline parses these markers and routes questions back to the orchestrator for answers
+- VM agents have persistent memory across HTTP POSTs (same agent instance handles all messages)
 
 ## Bash Usage
 
@@ -148,6 +163,9 @@ server/
   queue_projection.py      # Job queue projection from events
   otio_orchestrator.py     # Compute next needed effects from OTIO state
   unit_state_machines.py   # Per-agent state machines
+  scripts/vm_agent.py      # GPU worker agent (pydantic-ai + DeepSeek)
+  scripts/vm_onstart_tts.sh # TTS VM bootstrap
+  scripts/vm_onstart_ltx.sh # Video VM bootstrap
 ```
 
 ## Guardrails

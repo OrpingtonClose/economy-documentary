@@ -14,6 +14,8 @@ from effects import (
     GenerateNarrationAudio,
     JobCompleted,
     JobFailed,
+    JobQuestionAnswered,
+    JobQuestionReceived,
     JobRequeued,
     JobStarted,
     QAFailed,
@@ -100,6 +102,16 @@ def project_queue(effects: list[Effect]) -> dict[str, Job]:
                 if attempts < 3:
                     job.status = "needs_retry"
                     job.qa_comments.append(f"Failed: {effect.error_message}")
+
+        elif isinstance(effect, JobQuestionReceived):
+            if effect.job_id in jobs:
+                jobs[effect.job_id].pending_question = effect.question
+                jobs[effect.job_id].worker_id = effect.worker_url
+
+        elif isinstance(effect, JobQuestionAnswered):
+            if effect.job_id in jobs:
+                jobs[effect.job_id].question_answer = effect.answer
+                jobs[effect.job_id].pending_question = ""
 
         elif isinstance(effect, QAFailed):
             if effect.job_id in jobs:

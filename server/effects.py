@@ -172,6 +172,23 @@ class JobRequeued(Effect):
     suggested_fix: str = Field(default="", description="Suggested fix")
 
 
+class JobQuestionReceived(Effect):
+    """A worker asked a clarifying question about a job."""
+
+    effect_type: Literal["JobQuestionReceived"] = "JobQuestionReceived"
+    job_id: str = Field(default="", description="Job ID")
+    question: str = Field(default="", description="Question from the worker")
+    worker_url: str = Field(default="", description="Worker that asked the question")
+
+
+class JobQuestionAnswered(Effect):
+    """The pipeline sent an answer to a worker's clarifying question."""
+
+    effect_type: Literal["JobQuestionAnswered"] = "JobQuestionAnswered"
+    job_id: str = Field(default="", description="Job ID")
+    answer: str = Field(default="", description="Answer sent to the worker")
+
+
 # ---------------------------------------------------------------------------
 # SYSTEM EFFECTS
 # ---------------------------------------------------------------------------
