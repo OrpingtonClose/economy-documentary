@@ -57,13 +57,17 @@ def main() -> int:
         logger.error("Checkpoint not found: %s", ckpt_path)
         return 1
     if not os.path.isdir(gemma_root):
-        logger.error(
-            "Text encoder not found: %s. "
-            "Download it with: python3 -c \"from huggingface_hub import snapshot_download; "
-            "snapshot_download(repo_id='Lightricks/gemma-3-12b-it-qat-q4_0-unquantized', "
-            "revision='d62fe4f1995ade703b49a0f3c0d0f161237ef437', "
-            "local_dir='%s')\"", gemma_root, gemma_root
-        )
+        logger.error("Text encoder weights not found: %s", gemma_root)
+        return 1
+
+    # Verify model pins before loading
+    from pathlib import Path
+    from model_pin import LTX_VIDEO_PIN, LTX_VIDEO_GEMMA_PIN, verify_pin
+    try:
+        verify_pin(LTX_VIDEO_PIN, Path(model_path))
+        verify_pin(LTX_VIDEO_GEMMA_PIN, Path(gemma_root))
+    except Exception as exc:
+        logger.error("Model pin verification failed: %s", exc)
         return 1
 
     logger.info("Loading LTX-2.3 from %s ...", model_path)

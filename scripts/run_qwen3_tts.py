@@ -42,6 +42,16 @@ def main() -> int:
     parser.add_argument("--language", default="en", help="Language code")
     args = parser.parse_args()
 
+    # Verify model pins before loading
+    from pathlib import Path
+    from model_pin import QWEN3_TTS_PIN, verify_pin
+    models_dir = Path("/workspace/models/qwen3-tts-voicedesign")
+    try:
+        verify_pin(QWEN3_TTS_PIN, models_dir)
+    except Exception as exc:
+        logger.error("Model pin verification failed: %s", exc)
+        return 1
+
     # Voice → Qwen speaker mapping
     voice_map = {
         "V1": "Ryan",
