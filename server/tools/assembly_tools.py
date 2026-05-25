@@ -251,14 +251,18 @@ def concat_clips(
 
 
 def assemble_documentary(
-    timeline_path: str,
-    output_dir: str,
+    timeline_path: str = "",
+    output_dir: str = "",
     master_filename: str = "master.mp4",
+    clip_artifacts: dict | None = None,
 ) -> str:
-    """Assemble the final documentary from OTIO timeline clips.
+    """Assemble the final documentary from OTIO timeline clips or a provided clip list.
 
-    Reads V1_Video and A1_Narration tracks, muxes audio+video per scene,
-    concatenates all scenes into the master output.
+    If ``clip_artifacts`` is provided, it MUST contain ``video_clips`` and/or
+    ``audio_clips`` lists (each item is a dict with ``path``, ``duration``,
+    ``name``). OTIO is NOT read in that case.
+
+    Otherwise reads V1_Video and A1_Narration tracks from the OTIO file.
 
     Returns:
         JSON string with output_path and metadata.
@@ -268,27 +272,29 @@ def assemble_documentary(
     os.makedirs(output_dir, exist_ok=True)
     master_path = os.path.join(output_dir, master_filename)
 
-    timeline = otio.adapters.read_from_file(timeline_path)
-
-    # Collect clips by track
     video_clips: list[dict] = []
     audio_clips: list[dict] = []
 
-    for track in timeline.tracks:
-        if track.name == "V1_Video":
-            for item in track:
-                if isinstance(item, otio.schema.Clip):
-                    ref = item.media_reference
-                    path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
-                    duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
-                    video_clips.append({"path": path, "duration": duration, "name": item.name})
-        elif track.name == "A1_Narration":
-            for item in track:
-                if isinstance(item, otio.schema.Clip):
-                    ref = item.media_reference
-                    path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
-                    duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
-                    audio_clips.append({"path": path, "duration": duration, "name": item.name})
+    if clip_artifacts is not None:
+        video_clips = list(clip_artifacts.get("video_clips", []))
+        audio_clips = list(clip_artifacts.get("audio_clips", []))
+    elif timeline_path:
+        timeline = otio.adapters.read_from_file(timeline_path)
+        for track in timeline.tracks:
+            if track.name == "V1_Video":
+                for item in track:
+                    if isinstance(item, otio.schema.Clip):
+                        ref = item.media_reference
+                        path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
+                        duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
+                        video_clips.append({"path": path, "duration": duration, "name": item.name})
+            elif track.name == "A1_Narration":
+                for item in track:
+                    if isinstance(item, otio.schema.Clip):
+                        ref = item.media_reference
+                        path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
+                        duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
+                        audio_clips.append({"path": path, "duration": duration, "name": item.name})
 
     if not video_clips and not audio_clips:
         return json.dumps({"error": "No clips found in timeline", "output_path": ""})

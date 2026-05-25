@@ -1119,3 +1119,31 @@ def validate_timeline(phase: str, tool_context=None) -> str:
 
     return json.dumps({"valid": True, "phase": phase, "message": "All checks passed"})
 
+
+
+def add_video_clip_simple(
+    scene_num: int,
+    phrase_idx: int,
+    mp4_path: str,
+    duration: float,
+    lora_id: str = "",
+    timeline_path: str = "",
+) -> str:
+    """Simple wrapper for add_video_clip without tool_context."""
+    if not timeline_path:
+        from tools.otio_file_ops import resolve_timeline_path
+        timeline_path = resolve_timeline_path()
+    
+    class _Ctx:
+        state = {"_timeline_path": timeline_path}
+    
+    return add_video_clip(
+        scene_num=scene_num,
+        phrase_idx=phrase_idx,
+        mp4_path=mp4_path,
+        duration=duration,
+        source_range=duration,
+        available_range=duration,
+        lora_id=lora_id,
+        tool_context=_Ctx(),
+    )
