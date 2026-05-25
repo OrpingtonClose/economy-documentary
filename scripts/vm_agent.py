@@ -66,6 +66,7 @@ Your job is to generate media artifacts (narration audio or video clips) using t
 WHAT YOU HAVE ACCESS TO:
 - Qwen3-TTS: a text-to-speech model for generating narration audio. Model weights are at /workspace/models/qwen3-tts-voicedesign/ and the runner script is at repo/scripts/run_qwen3_tts.py.
 - LTX-2.3: a video generation model for producing documentary clips. The inference environment is at /workspace/ltx-2-repo/ and the runner script is at repo/scripts/run_ltx_2_3.py.
+- Model pin manifest: repo/scripts/model_pin.py contains exact model names, revisions, and SHA256 hashes for all required weights. If a model is missing, read this file to find what to download.
 - bash_command: your only tool. Use it to inspect the environment, run generation, debug failures, install missing dependencies, and verify outputs.
 
 HOW TO RESPOND:
