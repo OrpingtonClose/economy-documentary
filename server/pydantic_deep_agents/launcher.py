@@ -58,34 +58,29 @@ def launch_all() -> list[multiprocessing.Process]:
 def wait_for_agents(processes: list[multiprocessing.Process], timeout: float = 60.0) -> bool:
     """Wait for all agent HTTP servers to be ready.
 
-    Polls each agent's HTTP endpoint (POST /) until all respond with non-5xx.
+    Checks TCP ports are open (server is listening).
     Returns True if all agents are ready within timeout.
     """
+    import socket
     import time
 
-    import httpx
-
     deadline = time.time() + timeout
-    urls = [f"http://127.0.0.1:{port}" for _, port in AGENTS.values()]
+    ports = [port for _, port in AGENTS.values()]
+
+    def _port_open(port: int) -> bool:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2.0)
+            s.connect(("127.0.0.1", port))
+            s.close()
+            return True
+        except Exception:
+            return False
 
     while time.time() < deadline:
         if not all(p.is_alive() for p in processes):
             return False
-        ready = 0
-        for url in urls:
-            try:
-                # Agents only have POST /, not GET
-                resp = httpx.post(
-                    url + "/",
-                    content="ping",
-                    headers={"Content-Type": "text/plain"},
-                    timeout=5.0,
-                )
-                if resp.status_code < 500:
-                    ready += 1
-            except Exception:
-                pass
-        if ready == len(urls):
+        if all(_port_open(p) for p in ports):
             return True
         time.sleep(0.5)
     return False
