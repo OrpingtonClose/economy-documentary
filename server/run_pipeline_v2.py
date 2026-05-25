@@ -87,11 +87,18 @@ def _check_has_audio(timeline_path: str) -> bool:
     """Check if all audio jobs are completed and passed QA."""
     from job_queue import get_queue_summary
     summary = get_queue_summary("audio")
-    # Audio is "done" when there are completed jobs and no pending/assigned/running/needs_retry
     total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
     if total == 0:
         return False  # No jobs created yet
-    return summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0) + summary.get("needs_retry", 0) == 0
+    # Done only when all jobs are completed (no pending/assigned/running/needs_retry/failed)
+    incomplete = (
+        summary.get("pending", 0)
+        + summary.get("assigned", 0)
+        + summary.get("running", 0)
+        + summary.get("needs_retry", 0)
+        + summary.get("failed", 0)
+    )
+    return incomplete == 0 and summary.get("completed", 0) > 0
 
 
 def _check_has_video(timeline_path: str) -> bool:
@@ -101,7 +108,14 @@ def _check_has_video(timeline_path: str) -> bool:
     total = sum(summary.get(s, 0) for s in ["pending", "assigned", "running", "completed", "needs_retry", "failed"])
     if total == 0:
         return False  # No jobs created yet
-    return summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0) + summary.get("needs_retry", 0) == 0
+    incomplete = (
+        summary.get("pending", 0)
+        + summary.get("assigned", 0)
+        + summary.get("running", 0)
+        + summary.get("needs_retry", 0)
+        + summary.get("failed", 0)
+    )
+    return incomplete == 0 and summary.get("completed", 0) > 0
 
 
 def _check_has_output(timeline_path: str) -> bool:
