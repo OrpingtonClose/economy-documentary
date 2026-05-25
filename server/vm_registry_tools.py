@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 
 from strands import tool
-from vm_registry import get_vm, list_vms, record_health_check, record_provisioning
+from vm_registry import list_vms, record_provisioning
 
 logger = logging.getLogger(__name__)
 
@@ -47,57 +47,6 @@ def query_vm_registry(stage: str = "") -> str:
         )
 
     return "\n".join(lines)
-
-
-@tool
-def check_worker_health(instance_id: str, worker_url: str = "") -> str:
-    """Check if a worker VM is healthy and ready for jobs.
-
-    Performs HTTP GET to the worker URL and returns a plain-text status.
-    If worker_url is not provided, looks up the registry for the instance.
-    """
-    import urllib.request
-
-    vm = get_vm(instance_id)
-    if vm is None:
-        return f"VM {instance_id} not found in registry."
-
-    url = worker_url or vm.worker_url
-    if not url:
-        # Try to construct from SSH info
-        if vm.ssh_host:
-            url = f"http://{vm.ssh_host}:8880/"
-        else:
-            return f"VM {instance_id} has no worker URL or SSH info."
-
-    try:
-        with urllib.request.urlopen(url) as resp:
-            raw_text = resp.read().decode("utf-8", errors="replace")
-    except Exception as exc:
-        from maintainer import notify_maintainer
-        notify_maintainer(
-            operation="worker_health_check",
-            error=str(exc),
-            context={"instance_id": instance_id, "url": url},
-        )
-        return f"Worker at {url} is NOT reachable: {exc}"
-
-    # Extract typed status from raw HTTP text
-    status = record_health_check(instance_id, raw_text)
-
-    if status.ready:
-        return (
-            f"Worker {instance_id} at {url} is READY.\n"
-            f"Type: {status.worker_type}, GPU: {status.gpu_name}, "
-            f"VRAM: {status.vram_used_gb:.1f}/{status.vram_total_gb:.1f}GB, "
-            f"Queue: {status.jobs_in_queue} jobs, Uptime: {status.uptime_seconds:.0f}s"
-        )
-    else:
-        return (
-            f"Worker {instance_id} at {url} is NOT ready.\n"
-            f"Type: {status.worker_type}, Status: still loading or error.\n"
-            f"Raw response preview: {raw_text[:200]}"
-        )
 
 
 @tool

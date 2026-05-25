@@ -737,54 +737,73 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
 
     @tool
     def validate_audio() -> str:
-        """Validate audio output: narration clips must exist."""
+        """Validate audio output: narration clips must exist.
+
+        If A1 is empty but audio jobs are pending/running, do NOT fail —
+        the provisioner is still working. Return PASSED so the graph can
+        route to provisioner (via _has_pending_jobs) and cycle back.
+        """
         from tools.otio_file_ops import resolve_timeline_path, otio_read
         from tools.otio_metadata import read_pipeline_metadata
+        from job_queue import get_queue_summary
         tp = resolve_timeline_path()
-        errors = []
 
+        # Check A1 track
+        a1_empty = True
         try:
             timeline = otio_read(tp)
-            a1_track = None
             for track in timeline.tracks:
-                if track.name == "A1_Narration":
-                    a1_track = track
+                if track.name == "A1_Narration" and len(list(track)) > 0:
+                    a1_empty = False
                     break
-            if a1_track is None:
-                errors.append("No A1_Narration track found")
-            elif len(list(a1_track)) == 0:
-                errors.append("A1_Narration track is empty — no narration clips")
-        except Exception as e:
-            errors.append(f"Error reading timeline: {e}")
+        except Exception:
+            pass
 
-        if errors:
-            return "VALIDATION FAILED\n" + "\n".join(errors) + "\nROUTE BACKWARD TO: audio"
+        if not a1_empty:
+            # A1 has clips — audio stage is truly complete
+            text = read_pipeline_metadata(tp, "scenario_raw")
+            return f"VALIDATION PASSED\nNEXT STAGE: video\n\n--- SCENARIO TEXT ---\n{text or ''}\n--- END SCENARIO ---"
 
-        # Include scenario text so video agent receives it in its prompt
-        text = read_pipeline_metadata(tp, "scenario_raw")
-        return f"VALIDATION PASSED\nNEXT STAGE: video\n\n--- SCENARIO TEXT ---\n{text or ''}\n--- END SCENARIO ---"
+        # A1 is empty — check if jobs are still in flight
+        summary = get_queue_summary("audio")
+        pending = summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0)
+        if pending > 0:
+            # Jobs are still being processed. Tell the graph to route to
+            # provisioner so it can execute them, then cycle back.
+            return "VALIDATION PASSED\nNEXT STAGE: provisioner\nNOTE: Audio jobs still pending, routing to provisioner"
+
+        # No clips and no pending jobs — audio truly failed
+        return "VALIDATION FAILED\nA1_Narration track is empty and no pending audio jobs\nROUTE BACKWARD TO: audio"
 
     @tool
     def validate_video() -> str:
-        """Validate video output: clips must exist."""
+        """Validate video output: clips must exist.
+
+        If V1 is empty but video jobs are pending/running, do NOT fail —
+        the provisioner is still working. Return PASSED so the graph can
+        route to provisioner and cycle back.
+        """
         import opentimelineio as otio
         from tools.otio_file_ops import resolve_timeline_path, otio_read
+        from job_queue import get_queue_summary
         tp = resolve_timeline_path()
-        errors = []
+
+        # Check V1 track
+        v1_empty = True
         video_clips = []
         audio_clips = []
         try:
             timeline = otio_read(tp)
-            v1_track = None
             for track in timeline.tracks:
                 if track.name == "V1_Video":
-                    v1_track = track
                     for item in track:
                         if isinstance(item, otio.schema.Clip):
                             ref = item.media_reference
                             path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
                             duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
                             video_clips.append({"path": path, "duration": duration, "name": item.name})
+                    if len(video_clips) > 0:
+                        v1_empty = False
                 elif track.name == "A1_Narration":
                     for item in track:
                         if isinstance(item, otio.schema.Clip):
@@ -792,16 +811,21 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
                             path = ref.target_url.replace("file://", "") if hasattr(ref, "target_url") else ""
                             duration = float(item.duration().value) / float(item.duration().rate) if hasattr(item.duration(), "value") else 5.0
                             audio_clips.append({"path": path, "duration": duration, "name": item.name})
-            if v1_track is None:
-                errors.append("No V1_Video track found")
-            elif len(video_clips) == 0:
-                errors.append("V1_Video track is empty — no video clips")
-        except Exception as e:
-            errors.append(f"Error reading timeline: {e}")
-        if errors:
-            return "VALIDATION FAILED\n" + "\n".join(errors) + "\nROUTE BACKWARD TO: video"
-        clips_json = json.dumps({"video_clips": video_clips, "audio_clips": audio_clips})
-        return f"VALIDATION PASSED\nNEXT STAGE: assembly\n\n--- CLIP ARTIFACTS ---\n{clips_json}\n--- END CLIP ARTIFACTS ---"
+        except Exception:
+            pass
+
+        if not v1_empty:
+            # V1 has clips — video stage is truly complete
+            clips_json = json.dumps({"video_clips": video_clips, "audio_clips": audio_clips})
+            return f"VALIDATION PASSED\nNEXT STAGE: assembly\n\n--- CLIP ARTIFACTS ---\n{clips_json}\n--- END CLIP ARTIFACTS ---"
+
+        # V1 is empty — check if jobs are still in flight
+        summary = get_queue_summary("video")
+        pending = summary.get("pending", 0) + summary.get("assigned", 0) + summary.get("running", 0)
+        if pending > 0:
+            return "VALIDATION PASSED\nNEXT STAGE: provisioner\nNOTE: Video jobs still pending, routing to provisioner"
+
+        return "VALIDATION FAILED\nV1_Video track is empty and no pending video jobs\nROUTE BACKWARD TO: video"
 
     @tool
     def validate_assembly() -> str:
@@ -1587,10 +1611,10 @@ def _has_pending_jobs(state: GraphState) -> bool:
 
 
 def _audio_not_completed(state: GraphState) -> bool:
-    """Run Audio only if gate passed and A1_Narration track is empty.
+    """Run Audio only if gate passed, A1_Narration track is empty, AND no audio jobs are pending.
 
-    The orchestrator reads OTIO to decide routing — this is NOT an
-    agent write. Agents remain OTIO-free.
+    If jobs are pending, the provisioner must run instead — do NOT re-invoke
+    the audio agent while it is waiting for the provisioner.
     """
     if _gate_recovery_target(state):
         return False
@@ -1603,14 +1627,23 @@ def _audio_not_completed(state: GraphState) -> bool:
                 return False
     except Exception as exc:
         logger.warning("audio routing check failed: %s", exc)
+
+    # CRITICAL: Do NOT re-invoke audio agent while jobs are pending.
+    # The provisioner must execute them first; audio agent will poll
+    # completed jobs on its next invocation.
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("audio")
+    if summary.get("pending", 0) > 0 or summary.get("assigned", 0) > 0 or summary.get("running", 0) > 0:
+        return False
+
     return True
 
 
 def _video_not_completed(state: GraphState) -> bool:
-    """Run Video only if A1 has clips and V1_Video track is empty.
+    """Run Video only if A1 has clips, V1_Video track is empty, AND no video jobs are pending.
 
-    The orchestrator reads OTIO to decide routing — this is NOT an
-    agent write. Agents remain OTIO-free.
+    If jobs are pending, the provisioner must run instead — do NOT re-invoke
+    the video agent while it is waiting for the provisioner.
     """
     if _gate_recovery_target(state):
         return False
@@ -1631,6 +1664,13 @@ def _video_not_completed(state: GraphState) -> bool:
             return False
     except Exception as exc:
         logger.warning("video routing check failed: %s", exc)
+
+    # CRITICAL: Do NOT re-invoke video agent while jobs are pending.
+    from job_queue import get_queue_summary
+    summary = get_queue_summary("video")
+    if summary.get("pending", 0) > 0 or summary.get("assigned", 0) > 0 or summary.get("running", 0) > 0:
+        return False
+
     return True
 
 

@@ -140,12 +140,4 @@ def registry_query(stage: str = "") -> str:
     return query_vm_registry(stage)
 
 
-@tool
-def registry_check_health(instance_id: str, worker_url: str = "") -> str:
-    """Check if a worker VM is healthy.
 
-    Returns plain-text status. If not reachable, reports why.
-    """
-    from vm_registry_tools import check_worker_health
-
-    return check_worker_health(instance_id, worker_url)

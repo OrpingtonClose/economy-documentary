@@ -145,14 +145,6 @@ def query_vm_registry(stage: str = "") -> str:
     return _query(stage)
 
 
-@tool
-def check_worker_health(instance_id: str, worker_url: str = "") -> str:
-    """Check if a worker VM is healthy and ready for jobs."""
-    from vm_registry_tools import check_worker_health as _health
-
-    return _health(instance_id, worker_url)
-
-
 # Injected by launcher — explicit configuration, no env vars.
 _pipeline_dir: str | None = None
 
@@ -365,8 +357,9 @@ CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.
    to learn the authoritative GPU requirements. Then use CONSERVATIVE defaults.
 
 3. BEFORE provisioning: query_vm_registry(stage=<stage>)
-   If a VM exists, call check_worker_health(instance_id=<id>, worker_url=<url>).
-   If the VM is healthy, USE IT. Do not provision a second VM.
+   If a VM exists, check its health via BASH:
+   bash_command("curl -s --max-time 5 http://<worker_url>/ || echo 'WORKER DOWN'")
+   If the worker responds with READY status, USE IT. Do not provision a second VM.
 
 4. If you must provision:
    a. Call get_provisioning_guidance(stage, <your_reasoning>)
@@ -380,7 +373,7 @@ CORE RULE: You do NOT guess. You do NOT experiment. You follow what worked.
       bash_command("ssh -o StrictHostKeyChecking=no root@<ip> -p <port> 'cd /workspace && git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/economy-documentary && cd /workspace/economy-documentary && python3 -m pip install -e . && nohup python3 scripts/gpu_worker.py --mode tts --port 8880 > worker.log 2>&1 &'")
       (Use --mode ltx for video jobs)
    i. Update registry with worker URL: update_vm_worker_url(instance_id, "http://<ip>:8880/")
-   j. Wait for health: check_worker_health(instance_id) or bash_command("ssh ... 'curl ...'")
+   j. Wait for health: bash_command("curl -s --max-time 5 http://<worker_url>/ || echo 'WORKER DOWN'")
 
 5. After provisioning succeeds:
    remember(text='<stage> worker succeeded on <GPU> <VRAM>GB with image <image>', category='success')
@@ -435,7 +428,7 @@ def build_provisioner_agent(model) -> Any:
             set_job_failed,
             check_queue_status,
             query_vm_registry,
-            check_worker_health,
+
             get_provisioning_guidance,
             dispatch_tts_job,
             dispatch_video_job,

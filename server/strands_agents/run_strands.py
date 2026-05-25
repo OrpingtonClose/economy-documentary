@@ -84,12 +84,16 @@ def _get_model(model_id: str, api_key: str, base_url: str | None = None) -> Any:
     else:
         model_name = model_id.split("/")[-1]
 
-    # Kimi K2.6: disable thinking mode (reasoning_content not preserved by
-    # Strands in multi-turn tool calls → 400 from Moonshot API).
-    # Direct API requires temperature=0.6.
+    # Disable thinking mode for providers that require reasoning_content
+    # to be echoed back (Kimi, Moonshot, DeepSeek). Strands does not
+    # preserve reasoning_content across multi-turn tool calls → 400.
     params: dict[str, Any] = {"max_tokens": 8192}
     if "kimi" in model_lower or "moonshot" in model_lower:
         params["temperature"] = 0.6
+        params["extra_body"] = {"thinking": {"type": "disabled"}}
+    elif "deepseek" in model_lower:
+        # DeepSeek: ensure thinking mode is off to avoid reasoning_content
+        # requirements that Strands cannot satisfy
         params["extra_body"] = {"thinking": {"type": "disabled"}}
 
 
@@ -161,26 +165,56 @@ def _release_pipeline_lock(lock_file: str) -> None:
 
 
 def _destroy_all_vms() -> None:
-    """Destroy all VMs recorded in the VM registry."""
+    """Destroy all VMs recorded in the VM registry AND all orphan VMs on Vast.ai."""
     import subprocess
-    from vm_registry import list_vms
+    import json
 
-    vms = list_vms()
-    if not vms:
-        return
     destroyed = 0
-    for vm in vms:
-        if vm.instance_id:
-            try:
-                subprocess.run(
-                    ["vastai", "destroy", "instance", vm.instance_id],
-                    capture_output=True,
-                    timeout=60,
-                    check=False,
-                )
-                destroyed += 1
-            except Exception:
-                pass
+
+    # 1. Destroy VMs from local registry
+    try:
+        from vm_registry import list_vms
+        vms = list_vms()
+        for vm in vms:
+            if vm.instance_id:
+                try:
+                    subprocess.run(
+                        ["vastai", "destroy", "instance", vm.instance_id],
+                        capture_output=True,
+                        timeout=60,
+                        check=False,
+                    )
+                    destroyed += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # 2. Destroy orphan VMs on Vast.ai (not in registry, or registry lost)
+    try:
+        result = subprocess.run(
+            ["vastai", "show", "instances", "--raw"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode == 0:
+            instances = json.loads(result.stdout)
+            if isinstance(instances, list):
+                for inst in instances:
+                    iid = inst.get("id")
+                    if iid:
+                        subprocess.run(
+                            ["vastai", "destroy", "instance", str(iid)],
+                            capture_output=True,
+                            timeout=60,
+                            check=False,
+                        )
+                        destroyed += 1
+    except Exception:
+        pass
+
     if destroyed:
         print(f"  [CLEANUP] Destroyed {destroyed} VM(s).")
 
