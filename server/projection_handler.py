@@ -42,29 +42,31 @@ def apply_event(timeline: otio.schema.Timeline, effect: Effect) -> otio.schema.T
 
 
 def _handle_update_script(timeline: otio.schema.Timeline, effect: UpdateScript) -> otio.schema.Timeline:
-    """Write script changes to pipeline metadata."""
-    from tools.otio_metadata import write_pipeline_metadata
+    """Write script changes to pipeline metadata directly on the timeline object."""
+    meta = timeline.metadata.setdefault("documentary", {})
+    prov = meta.setdefault("_provenance", {})
 
     if effect.narration_v1:
-        write_pipeline_metadata(
-            timeline, "narration_v1", effect.narration_v1,
-            provenance={"agent": effect.agent_id, "scene": effect.scene_num},
-        )
+        meta["narration_v1"] = effect.narration_v1
+        prov["narration_v1"] = {"agent": effect.agent_id, "scene": effect.scene_num}
     if effect.narration_v2:
-        write_pipeline_metadata(
-            timeline, "narration_v2", effect.narration_v2,
-            provenance={"agent": effect.agent_id, "scene": effect.scene_num},
-        )
+        meta["narration_v2"] = effect.narration_v2
+        prov["narration_v2"] = {"agent": effect.agent_id, "scene": effect.scene_num}
     if effect.narration_v3:
-        write_pipeline_metadata(
-            timeline, "narration_v3", effect.narration_v3,
-            provenance={"agent": effect.agent_id, "scene": effect.scene_num},
-        )
+        meta["narration_v3"] = effect.narration_v3
+        prov["narration_v3"] = {"agent": effect.agent_id, "scene": effect.scene_num}
     if effect.visual_notes:
-        write_pipeline_metadata(
-            timeline, "visual_notes", effect.visual_notes,
-            provenance={"agent": effect.agent_id, "scene": effect.scene_num},
-        )
+        meta["visual_notes"] = effect.visual_notes
+        prov["visual_notes"] = {"agent": effect.agent_id, "scene": effect.scene_num}
+    if effect.dopamine_hook:
+        meta["dopamine_hook"] = effect.dopamine_hook
+        prov["dopamine_hook"] = {"agent": effect.agent_id, "scene": effect.scene_num}
+    if effect.pronunciation_hints:
+        meta["pronunciation_hints"] = effect.pronunciation_hints
+        prov["pronunciation_hints"] = {"agent": effect.agent_id, "scene": effect.scene_num}
+    if effect.duration_sec:
+        meta["duration_sec"] = effect.duration_sec
+        prov["duration_sec"] = {"agent": effect.agent_id, "scene": effect.scene_num}
     return timeline
 
 
