@@ -263,7 +263,7 @@ async def run_documentary(
         await shell.run(brief, initial_state={"_timeline_path": timeline_path})
         from tools.otio_lifecycle import get_otio_lifecycle_state
 
-        # Verify master.mp4 exists before claiming success
+        # Verify output MP4 exists before claiming success
         assembly_output = None
         try:
             from tools.otio_metadata import read_pipeline_metadata
@@ -272,6 +272,12 @@ async def run_documentary(
             pass
 
         master_mp4 = assembly_output or os.path.join(output_dir, "master.mp4")
+        # Fallback: scan output dir for any MP4
+        if not os.path.exists(master_mp4):
+            import glob
+            mp4_files = glob.glob(os.path.join(output_dir, "*.mp4"))
+            if mp4_files:
+                master_mp4 = mp4_files[0]
         if os.path.exists(master_mp4):
             size_mb = os.path.getsize(master_mp4) / (1024 * 1024)
             result = {

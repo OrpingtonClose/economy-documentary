@@ -760,18 +760,20 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
 
     @tool
     def validate_assembly() -> str:
-        """Validate assembly: final output file must exist."""
+        """Validate assembly: final output MP4 must exist on disk."""
+        import glob
         from tools.otio_file_ops import resolve_timeline_path
-        from tools.otio_metadata import read_pipeline_metadata
+        from tools.otio_metadata import write_pipeline_metadata
         tp = resolve_timeline_path()
-        errors = []
-        # Check that assembly produced an output
-        output_path = read_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH)
-        if not output_path:
-            errors.append("No assembly output path in OTIO metadata")
-        if errors:
-            return json.dumps({"valid": False, "errors": errors, "recovery_target": ASSEMBLY})
-        return json.dumps({"valid": True, "pipeline_complete": True, "output_path": output_path})
+        pipeline_dir = os.path.dirname(os.path.dirname(tp))
+        output_dir = os.path.join(pipeline_dir, "output")
+        mp4_files = glob.glob(os.path.join(output_dir, "*.mp4"))
+        if not mp4_files:
+            return "VALIDATION FAILED\nNo output MP4 found in output directory\nROUTE BACKWARD TO: assembly"
+        output_path = mp4_files[0]
+        # Record the path so run_strands.py can read it
+        write_pipeline_metadata(tp, MetadataSchema.ASSEMBLY_OUTPUT_PATH, output_path, provenance={"agent": "otio_gate"})
+        return f"VALIDATION PASSED\nPIPELINE COMPLETE\nOUTPUT: {output_path}"
 
     @tool
     def transition_to_authoritative() -> str:
@@ -915,7 +917,7 @@ def _build_otio_gate_agent(model, model_id: str = "") -> Agent:
             "- The scenario gate checks: scenes exist, visual_style exists, style_lock is true.\n"
             "- The audio gate checks: A1_Narration track has clips OR whisperx_alignment exists.\n"
             "- The video gate checks: V1_Video track has clips.\n"
-            "- The assembly gate checks: assembly_output_path exists.\n\n"
+            "- The assembly gate checks: output/*.mp4 exists on disk.\n\n"
             "WORKFLOW PER STAGE:\n"
             "1. SCENARIO: call ingest_scenario(text=<text from scenario agent>) → validate_scenario → transition_to_authoritative\n"
             "2. AUDIO: Parse the audio agent's output text for WAV file paths.\n"
@@ -1494,9 +1496,11 @@ def _scenario_not_completed(state: GraphState) -> bool:
 
 
 def _has_pending_jobs(state: GraphState) -> bool:
-    """Route to Provisioner only when gate passed and jobs are pending."""
-    if _gate_recovery_target(state):
-        return False  # Gate requested recovery — provisioner shouldn't run
+    """Route to Provisioner whenever jobs are pending — even during recovery.
+
+    The provisioner must drain the queue regardless of gate validation state.
+    Agents that retry will poll completed jobs; the provisioner executes them.
+    """
     from job_queue import get_queue_summary
     for stage in ("audio", "video"):
         summary = get_queue_summary(stage)

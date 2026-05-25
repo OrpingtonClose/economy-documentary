@@ -97,7 +97,29 @@ def create_job(
     payload: dict[str, Any],
     max_attempts: int = 3,
 ) -> Job:
-    """Create a new job and enqueue it."""
+    """Create a new job and enqueue it.
+
+    Idempotent: if a non-failed job for the same stage+scene already exists,
+    returns the existing job instead of creating a duplicate.
+    """
+    with _LOCK, _conn() as conn:
+        # Check for existing non-failed job
+        row = conn.execute(
+            """
+            SELECT * FROM jobs
+            WHERE stage = ? AND scene_num = ? AND status != 'failed'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (stage, scene_num),
+        ).fetchone()
+        if row:
+            existing = _row_to_job(row)
+            logger.info(
+                "job deduplicated | stage=<%s> scene=<%s> existing_job=<%s> status=<%s>",
+                stage, scene_num, existing.job_id, existing.status.value,
+            )
+            return existing
+
     job = Job(
         job_id=f"job_{uuid.uuid4().hex[:12]}",
         job_type=job_type,
