@@ -23,6 +23,14 @@ AGENTS: dict[str, tuple[str, int]] = {
 def _run_agent(module_name: str, port: int) -> None:
     """Import agent module and run uvicorn."""
     import importlib
+    import os
+    import sys
+
+    # Ensure server/ is on Python path so agents can import job_queue, models, etc.
+    server_dir = os.path.join(os.path.dirname(__file__), "..")
+    server_dir = os.path.abspath(server_dir)
+    if server_dir not in sys.path:
+        sys.path.insert(0, server_dir)
 
     mod = importlib.import_module(module_name)
     app = mod.app

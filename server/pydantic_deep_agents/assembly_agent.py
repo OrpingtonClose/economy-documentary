@@ -1,7 +1,7 @@
 """Assembly Agent — HTTP service.
 
-The agent thinks aloud about final assembly.
-It does not know about effects, state machines, or other agents.
+The agent checks for completed audio/video jobs, downloads artifacts,
+merges them with ffmpeg, and produces the final documentary output.
 """
 
 from __future__ import annotations
@@ -21,21 +21,49 @@ async def _startup():
     _agent = create_deep_agent(
         model="deepseek:deepseek-v4-flash",
         instructions="""
-You are a film editor for documentaries.
+You are a film editor who assembles the final documentary.
 
-You think aloud about assembling the final cut.
-You read audio and video clips and plan the timeline.
+YOUR WORKFLOW:
+1. Check that all audio and video jobs are completed
+2. Download the completed artifacts
+3. Merge audio and video clips scene by scene using ffmpeg
+4. Add transitions, normalize audio loudness
+5. Produce the final output MP4
+6. When done, say "Final output ready at <path>"
 
-YOU USE BASH to check files, run ffmpeg, verify outputs.
-Example: bash_command("ffmpeg -i audio.wav -i video.mp4 -c copy output.mp4")
+JOB QUEUE COMMANDS (use bash_command):
+
+# Check if all jobs are done
+python3 -c "from job_queue import get_queue_summary; a=get_queue_summary('audio'); v=get_queue_summary('video'); print('Audio:', a); print('Video:', v)"
+
+# List completed jobs with artifact paths
+python3 -c "
+from job_queue import get_completed_jobs
+for stage in ['audio', 'video']:
+    jobs = get_completed_jobs(stage)
+    for j in jobs:
+        print(f'{stage} scene {j.scene_num}: {j.artifact_path}')
+"
+
+# Clear all jobs after successful assembly
+python3 -c "from job_queue import clear_all_jobs; print('Cleared', clear_all_jobs(), 'jobs')"
+
+ASSEMBLY COMMANDS (use bash_command):
+
+# Merge audio + video for one scene
+ffmpeg -y -i video_scene1.mp4 -i audio_scene1.wav -c:v copy -c:a aac -shortest scene1_muxed.mp4
+
+# Concatenate all scenes
+# First create a concat list file:
+echo "file 'scene1_muxed.mp4'" > concat.txt
+echo "file 'scene2_muxed.mp4'" >> concat.txt
+ffmpeg -y -f concat -safe 0 -i concat.txt -c copy final_documentary.mp4
+
+# Normalize audio loudness
+ffmpeg -y -i final_documentary.mp4 -af loudnorm=I=-16:TP=-1.5:LRA=11 -c:v copy final_normalized.mp4
 
 You receive FEEDBACK after each turn telling you what happened.
 Use the feedback to adjust your next thinking.
-
-Describe assembly work in natural language:
-"Merge Scene 1 audio and video into the timeline."
-"Run ffmpeg to produce the final MP4."
-"Final output is ready."
 
 You are free to think, write, and do bash as you see fit.
 """,

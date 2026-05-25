@@ -65,7 +65,7 @@ def _record_effect(
 def _read_otio(timeline_path: str) -> otio.schema.Timeline:
     """Read OTIO timeline from disk."""
     if os.path.exists(timeline_path):
-        return otio.schema.Timeline.deserialize_from_file(timeline_path)
+        return otio.schema.Timeline.from_json_file(timeline_path)
     return otio.schema.Timeline(name="documentary")
 
 

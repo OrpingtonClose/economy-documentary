@@ -186,9 +186,9 @@ async def test_pipeline_v2_dry_run():
     with patch("run_pipeline_v2._call_agent", side_effect=mock_call_agent):
         with patch.object(Instructor, "process", mock_process):
             with patch("strands_agents.run_strands._destroy_all_vms", mock_destroy_all_vms):
-                with patch("pydantic_deep_agents.launcher.launch_all", mock_launch_all):
-                    with patch("pydantic_deep_agents.launcher.wait_for_agents", mock_wait_for_agents):
-                        with patch("pydantic_deep_agents.launcher.terminate_all", mock_terminate_all):
+                with patch("run_pipeline_v2.launch_all", mock_launch_all):
+                    with patch("run_pipeline_v2.wait_for_agents", mock_wait_for_agents):
+                        with patch("run_pipeline_v2.terminate_all", mock_terminate_all):
                             with patch("run_pipeline_v2._check_has_audio", mock_has_audio):
                                 with patch("run_pipeline_v2._check_has_video", mock_has_video):
                                     with patch("run_pipeline_v2._check_has_output", mock_has_output):

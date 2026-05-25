@@ -1,8 +1,7 @@
 """Scenario Agent — HTTP service.
 
-The agent thinks aloud about documentary scripts.
-It does not know about effects, state machines, or other agents.
-It receives feedback after each turn and adjusts.
+The agent writes documentary scripts with narration for 3 voices
+and visual notes. The script is stored in OTIO pipeline metadata.
 """
 
 from __future__ import annotations
@@ -24,22 +23,41 @@ async def _startup():
         instructions="""
 You are a documentary scriptwriter.
 
-You think aloud about what the documentary should contain.
-You write narration for 3 voices and visual notes.
+YOUR WORKFLOW:
+1. Read the creative brief
+2. Write a documentary script with narration for 3 voices
+3. Write visual notes for each scene
+4. The script will be parsed and stored in the OTIO timeline
 
-YOU USE BASH to check files, read scripts, verify outputs.
-Example: bash_command("cat /path/to/file.txt")
+SCRIPT FORMAT (write exactly like this):
+Scene 1 — {Title} ({duration}s)
+  V1 Hook: {emotional opening line}
+  V2 Expert: {factual explanation}
+  V3 Storyteller: {narrative connection}
+  Visual notes: {shot descriptions, camera angles, lighting}
+  Dopamine hook: {attention-grabbing phrase}
+
+GUIDELINES:
+- Each scene should be 25-35 seconds
+- V1 is emotional and gripping (the "hook")
+- V2 is authoritative and factual (the "expert")
+- V3 is warm and narrative (the "storyteller")
+- Visual notes should be detailed enough for video generation
+- Total documentary should be 30-60 seconds (1-2 scenes)
+
+OTIO COMMANDS (use bash_command):
+
+# Read current OTIO state
+python3 -c "
+import opentimelineio as otio
+import json
+timeline = otio.schema.Timeline.from_json_file('/path/to/timeline.otio')
+meta = timeline.metadata.get('pipeline', {})
+print(json.dumps(meta, indent=2))
+"
 
 You receive FEEDBACK after each turn telling you what happened.
 Use the feedback to adjust your next thinking.
-
-Write scripts in this natural format:
-Scene {N} — {Title} ({duration}s)
-  V1 Hook: {emotional opening}
-  V2 Expert: {factual explanation}
-  V3 Storyteller: {narrative connection}
-  Visual notes: {shot descriptions}
-  Dopamine hook: {attention grabber}
 
 You are free to think, write, and do bash as you see fit.
 """,

@@ -160,9 +160,9 @@ async def run_pipeline(
         timeline = otio.schema.Timeline(name="documentary")
         stack = otio.schema.Stack(name="tracks")
         timeline.tracks = stack
-        stack.append(otio.schema.Sequence(name="A1_Narration"))
-        stack.append(otio.schema.Sequence(name="V1_Video"))
-        timeline.serialize_to_file(timeline_path)
+        stack.append(otio.schema.Track(name="A1_Narration", kind=otio.schema.TrackKind.Audio))
+        stack.append(otio.schema.Track(name="V1_Video", kind=otio.schema.TrackKind.Video))
+        timeline.to_json_file(timeline_path)
         print(f"[INIT] Created fresh OTIO timeline: {timeline_path}")
 
     # 4. Create instructors for each unit

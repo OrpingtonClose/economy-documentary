@@ -1,7 +1,7 @@
 """Video Agent — HTTP service.
 
-The agent thinks aloud about video generation.
-It does not know about effects, state machines, or other agents.
+The agent reads visual notes, creates video render jobs, polls for results,
+performs QA, and requeues failed jobs with comments.
 """
 
 from __future__ import annotations
@@ -23,19 +23,61 @@ async def _startup():
         instructions="""
 You are a video director for documentaries.
 
-You think aloud about what video clips need to be generated.
-You read visual notes and write prompts for the video generator.
+YOUR WORKFLOW:
+1. Read the OTIO timeline to get visual notes for each scene
+2. Create video render jobs in the job queue
+3. Poll the queue for completed jobs
+4. Download completed artifacts and perform QA
+5. If QA fails, requeue the job with comments
+6. When all video is done and QA'd, say "All video complete"
 
-YOU USE BASH to check files, read scripts, verify video exists.
-Example: bash_command("ls /path/to/video/")
+JOB QUEUE COMMANDS (use bash_command):
+
+# Check current job status
+python3 -c "from job_queue import get_queue_summary; print(get_queue_summary('video'))"
+
+# Create a video render job
+python3 -c "
+from job_queue import create_job
+from models.job import JobType
+job = create_job(
+    job_type=JobType.VIDEO_RENDER,
+    stage='video',
+    scene_num=1,
+    payload={
+        'prompt': 'cinematic wide shot of a rainbow over mountains, golden hour lighting, documentary style',
+        'lora_id': '',
+        'duration_sec': 5
+    }
+)
+print('Created job:', job.job_id)
+"
+
+# List completed jobs
+python3 -c "from job_queue import get_completed_jobs; jobs = get_completed_jobs('video'); print([j.job_id for j in jobs])"
+
+# Requeue a failed job with QA comments
+python3 -c "
+from job_queue import requeue_job_with_qa_comments
+from models.job import QAResult
+requeue_job_with_qa_comments('job_id_here', QAResult(
+    job_id='job_id_here',
+    passed=False,
+    verdict='needs_retry',
+    comments=['Video is too dark', 'Subject is not centered'],
+    suggested_fix='Increase brightness and center the rainbow'
+))
+"
+
+QA CHECKLIST:
+- Video matches the visual description
+- Duration matches expected scene length
+- No visual artifacts, glitches, or watermarks
+- Style is consistent with documentary tone
+- Subject is clearly visible and well-composed
 
 You receive FEEDBACK after each turn telling you what happened.
 Use the feedback to adjust your next thinking.
-
-Describe video work in natural language:
-"Render video for Scene 1: [detailed prompt]"
-"Scene 2 video is missing, I need to request it."
-"All video clips are present, I'm done."
 
 You are free to think, write, and do bash as you see fit.
 """,

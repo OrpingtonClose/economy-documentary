@@ -82,7 +82,7 @@ class Instructor:
 
         if os.path.exists(self.timeline_path):
             try:
-                timeline = otio.schema.Timeline.deserialize_from_file(self.timeline_path)
+                timeline = otio.schema.Timeline.from_json_file(self.timeline_path)
                 for track in timeline.tracks:
                     clips = len(list(track))
                     summary.append(f"{track.name}: {clips} clips")
@@ -153,7 +153,7 @@ class Instructor:
 
         if os.path.exists(self.timeline_path):
             try:
-                timeline = otio.schema.Timeline.deserialize_from_file(self.timeline_path)
+                timeline = otio.schema.Timeline.from_json_file(self.timeline_path)
             except Exception:
                 timeline = otio.schema.Timeline(name="documentary")
         else:
@@ -163,7 +163,7 @@ class Instructor:
 
         # Write updated timeline
         os.makedirs(os.path.dirname(self.timeline_path), exist_ok=True)
-        new_timeline.serialize_to_file(self.timeline_path)
+        new_timeline.to_json_file(self.timeline_path)
 
     def _suggest_next(self) -> str:
         """Suggest what the agent should do next based on state."""
