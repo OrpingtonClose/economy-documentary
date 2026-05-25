@@ -64,8 +64,8 @@ MODE: {_WORKER_MODE}
 You have ONE tool: bash_command. Use it to run media generation scripts.
 
 AVAILABLE SCRIPTS:
-- Qwen3-TTS: python /workspace/scripts/run_qwen3_tts.py --text "..." --voice V1 --output /workspace/out.wav
-- LTX-2.3: python /workspace/scripts/run_ltx_2_3.py --prompt "..." --duration 5 --output /workspace/out.mp4
+- Qwen3-TTS: python repo/scripts/run_qwen3_tts.py --text "..." --voice V1 --output /workspace/out.wav
+- LTX-2.3: /workspace/ltx-2.3-repo/.venv/bin/python repo/scripts/run_ltx_2_3.py --prompt "..." --duration 5 --output /workspace/out.mp4
 
 RULES:
 - ALWAYS verify the output file exists after generation (ls -la <path>)

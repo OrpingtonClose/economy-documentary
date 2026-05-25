@@ -23,20 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # ``uvicorn`` worker — the frontend "View Trace" button hides itself
 # when ``/playground/config/langfuse`` returns ``enabled: false``, so
 # graceful degradation is wired end-to-end.
-try:
-    from strands_agents.playground.telemetry import (  # noqa: E402
-        setup_playground_otel,
-    )
-
-    setup_playground_otel()
-except Exception as _telemetry_err:  # noqa: BLE001 — telemetry is optional
-    import logging as _logging
-
-    _logging.getLogger(__name__).warning(
-        "playground telemetry disabled — /config/langfuse will report "
-        "enabled: false: %s",
-        _telemetry_err,
-    )
+# Strands pipeline archived — telemetry disabled, only v4 path remains
 
 app = FastAPI(
     title="Component Playground",

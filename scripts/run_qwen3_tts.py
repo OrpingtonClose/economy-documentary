@@ -60,6 +60,16 @@ def main() -> int:
     models_dir = "/workspace/models"
     model_path = os.path.join(models_dir, "qwen3-tts-voicedesign")
 
+    # Download weights on first use if not present locally
+    if not os.path.isdir(model_path):
+        logger.info("Model weights not found locally — downloading from HuggingFace...")
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            local_dir=model_path,
+        )
+        logger.info("Download complete.")
+
     model = Qwen3TTSModel.from_pretrained(
         model_path,
         device_map="cuda:0",
