@@ -287,62 +287,124 @@ def destroy_orphan_vms(event_store: EventStore) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Worker dispatch
+# Worker dispatch — REAL workers only
 # ---------------------------------------------------------------------------
 
-async def dispatch_pending_jobs(queue_jobs: dict, event_store: EventStore) -> bool:
-    """Claim pending jobs and dispatch them to workers.
+async def dispatch_pending_jobs(
+    queue_jobs: dict, event_store: EventStore, output_dir: str
+) -> bool:
+    """Dispatch pending jobs to real workers via HTTP.
 
-    Returns True if any work was done.
-    In production, this POSTs to worker URLs.
-    In test mode, completes immediately.
+    Returns True if any work was dispatched.
+    If no workers are available, returns False (provisioner must create them).
     """
+    import httpx
+
     acted = False
+
+    # Discover worker URLs from VM effects
+    records = event_store.read_all()
+    worker_urls: dict[str, str] = {}  # stage -> worker_url
+    for r in records:
+        if r.effect.effect_type == "VMAllocated":
+            eff = r.effect
+            if hasattr(eff, "worker_url") and eff.worker_url:
+                if "tts" in (eff.gpu_type or "").lower() or "audio" in str(getattr(eff, "label", "")).lower():
+                    worker_urls["audio"] = eff.worker_url
+                else:
+                    worker_urls["video"] = eff.worker_url
+
+    # Fallback to env vars
+    if "audio" not in worker_urls:
+        env_url = os.environ.get("QWEN3_TTS_WORKER_URL", "")
+        if env_url:
+            worker_urls["audio"] = env_url
+    if "video" not in worker_urls:
+        env_url = os.environ.get("LTX_VIDEO_WORKER_URL", "")
+        if env_url:
+            worker_urls["video"] = env_url
 
     for job in queue_jobs.values():
         if job.status not in ("pending", "needs_retry"):
             continue
 
-        print(f"  [WORKER] Dispatching {job.job_id} ({job.stage})")
+        worker_url = worker_urls.get(job.stage)
+        if not worker_url:
+            print(f"  [WORKER] No worker available for {job.stage} — provisioner needed")
+            continue
+
+        print(f"  [WORKER] Dispatching {job.job_id} to {worker_url}")
 
         # Mark started
         event_store.append(
             JobStarted(
                 agent_id="pipeline",
                 job_id=job.job_id,
-                worker_id="local-worker",
+                worker_id=worker_url,
                 stage=job.stage,
             ),
             otio_hash_before="",
         )
 
-        # Simulate work
-        await asyncio.sleep(0.3)
+        # POST to worker
+        try:
+            async with httpx.AsyncClient() as client:
+                if job.stage == "audio":
+                    payload = {
+                        "text": job.payload.get("text", ""),
+                        "voice_id": job.payload.get("voice", "V1"),
+                    }
+                    resp = await client.post(
+                        f"{worker_url.rstrip('/')}/tts/render",
+                        json=payload,
+                    )
+                else:
+                    payload = {
+                        "prompt": job.payload.get("prompt", ""),
+                        "duration_sec": job.payload.get("duration_sec", 5),
+                    }
+                    resp = await client.post(
+                        f"{worker_url.rstrip('/')}/render",
+                        json=payload,
+                    )
 
-        # Mark completed
-        suffix = "wav" if job.stage == "audio" else "mp4"
-        artifact_path = f"/tmp/{job.job_id}.{suffix}"
-        event_store.append(
-            JobCompleted(
-                agent_id="pipeline",
-                job_id=job.job_id,
-                artifact_path=artifact_path,
-                stage=job.stage,
-            ),
-            otio_hash_before="",
-        )
-        print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
-        acted = True
+                resp.raise_for_status()
+                result = resp.json()
+                artifact_path = result.get("artifact_path", f"{output_dir}/artifacts/{job.job_id}.{'wav' if job.stage == 'audio' else 'mp4'}")
+
+                event_store.append(
+                    JobCompleted(
+                        agent_id="pipeline",
+                        job_id=job.job_id,
+                        artifact_path=artifact_path,
+                        stage=job.stage,
+                    ),
+                    otio_hash_before="",
+                )
+                print(f"  [WORKER] {job.job_id} completed → {artifact_path}")
+                acted = True
+
+        except Exception as exc:
+            print(f"  [WORKER] {job.job_id} failed: {exc}")
+            event_store.append(
+                JobFailed(
+                    agent_id="pipeline",
+                    job_id=job.job_id,
+                    error_message=str(exc)[:500],
+                    stage=job.stage,
+                ),
+                otio_hash_before="",
+            )
 
     return acted
 
 
 # ---------------------------------------------------------------------------
-# Assembly
+# Assembly — REAL ffmpeg
 # ---------------------------------------------------------------------------
 
 def run_assembly(output_dir: str, queue_jobs: dict) -> bool:
-    """Assemble final video from completed audio/video clips.
+    """Assemble final video from completed audio/video clips using ffmpeg.
 
     Returns True if assembly was attempted.
     """
@@ -358,12 +420,29 @@ def run_assembly(output_dir: str, queue_jobs: dict) -> bool:
 
     os.makedirs(os.path.join(output_dir, "output"), exist_ok=True)
 
-    # In production: ffmpeg -i audio.wav -i video.mp4 -c copy output.mp4
-    with open(output_path, "w") as f:
-        f.write("dummy video output")
+    audio_path = completed_audio[0].artifact_path
+    video_path = completed_video[0].artifact_path
 
-    print(f"  [ASSEMBLY] Created {output_path}")
-    return True
+    # Verify inputs exist
+    if not os.path.exists(audio_path):
+        print(f"  [ASSEMBLY] Audio not found: {audio_path}")
+        return False
+    if not os.path.exists(video_path):
+        print(f"  [ASSEMBLY] Video not found: {video_path}")
+        return False
+
+    cmd = (
+        f"ffmpeg -y -i {video_path} -i {audio_path} "
+        f"-c:v copy -c:a aac -shortest {output_path}"
+    )
+    result = run_bash(cmd)
+
+    if result["returncode"] == 0 and os.path.exists(output_path):
+        print(f"  [ASSEMBLY] Created {output_path}")
+        return True
+    else:
+        print(f"  [ASSEMBLY] ffmpeg failed: {result['stderr'][:200]}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +653,7 @@ async def run_pipeline(
         timeline.to_json_file(timeline_path)
 
         # Dispatch pending jobs to workers
-        await dispatch_pending_jobs(queue_jobs, event_store)
+        await dispatch_pending_jobs(queue_jobs, event_store, output_dir)
 
         # Try assembly
         if audio_complete and video_complete and not has_output:
