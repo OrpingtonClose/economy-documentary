@@ -55,7 +55,7 @@ class EventStore:
                     except Exception:
                         continue
         except Exception:
-            pass
+            logger.exception("Event store read failed, starting fresh")
         return last_seq
 
     def append(self, effect: Effect, otio_hash_before: str) -> EventRecord:

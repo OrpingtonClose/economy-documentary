@@ -55,35 +55,41 @@ def launch_all() -> list[multiprocessing.Process]:
     return processes
 
 
-def wait_for_agents(processes: list[multiprocessing.Process], timeout: float = 60.0) -> bool:
+async def wait_for_agents(processes: list[multiprocessing.Process], timeout: float = 60.0) -> bool:
     """Wait for all agent HTTP servers to be ready.
 
-    Checks TCP ports are open (server is listening).
+    Checks TCP ports concurrently using asyncio.
     Returns True if all agents are ready within timeout.
     """
-    import socket
-    import time
+    import asyncio
 
-    deadline = time.time() + timeout
     ports = [port for _, port in AGENTS.values()]
 
-    def _port_open(port: int) -> bool:
+    async def _port_ready(port: int) -> bool:
+        """Wait for a single port to accept connections."""
+        while True:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection("127.0.0.1", port),
+                    timeout=1.0,
+                )
+                writer.close()
+                await writer.wait_closed()
+                return True
+            except Exception:
+                await asyncio.sleep(0.5)
+
+    async def _with_deadline(port: int) -> bool:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2.0)
-            s.connect(("127.0.0.1", port))
-            s.close()
-            return True
-        except Exception:
+            return await asyncio.wait_for(_port_ready(port), timeout=timeout)
+        except asyncio.TimeoutError:
             return False
 
-    while time.time() < deadline:
-        if not all(p.is_alive() for p in processes):
-            return False
-        if all(_port_open(p) for p in ports):
-            return True
-        time.sleep(0.5)
-    return False
+    if not all(p.is_alive() for p in processes):
+        return False
+
+    results = await asyncio.gather(*(_with_deadline(p) for p in ports))
+    return all(results)
 
 
 def terminate_all(processes: list[multiprocessing.Process]) -> None:

@@ -33,7 +33,11 @@ AGENT_URLS = {
 
 
 async def _call_agent(url: str, text: str, timeout: float = 300.0) -> str:
-    """Call an agent via HTTP POST with plain text."""
+    """Call an agent via HTTP POST with plain text.
+
+    /cheat: timeout is REQUIRED — agents run LLM inference which can take
+    30-300s. Without a timeout, a crashed agent hangs the pipeline forever.
+    """
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             url.rstrip("/") + "/",
@@ -156,7 +160,7 @@ async def run_pipeline(
     # 2. Launch agents
     print("[LAUNCH] Starting agents...")
     processes = launch_all()
-    if not wait_for_agents(processes, timeout=30):
+    if not await wait_for_agents(processes, timeout=30):
         print("[ERROR] Agents failed to start")
         terminate_all(processes)
         return "Failed: agents did not start"
