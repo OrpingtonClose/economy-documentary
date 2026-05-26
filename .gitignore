@@ -20,3 +20,8 @@ server/agent_memory/
 coverage.json
 *.acb-backups/
 .DS_Store
+
+*.egg-info/
+uv.lock
+server/pipeline_output/
+

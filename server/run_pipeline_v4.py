@@ -45,7 +45,7 @@ from effects import (
     VMDeallocated,
     VMProvisionFailed,
 )
-from effect_parser import parse_agent_text_multi
+from effect_parser import build_clarification_request, parse_agent_text_multi
 from event_store import EventStore
 from projection_handler import apply_event
 from queue_projection import (
@@ -107,9 +107,11 @@ Agents: scenario, audio, video, assembly, provisioner
 DECISION RULES (default flow):
 - If no script exists → scenario
 - If script exists but no audio jobs → audio
-- If audio jobs pending/running → provisioner (to provision VMs)
+- If audio jobs pending/running AND no VM is loading/active → provisioner
+- If audio jobs pending/running AND a VM is loading/active → WAIT (do not provision another)
 - If audio complete but no video jobs → video
-- If video jobs pending/running → provisioner
+- If video jobs pending/running AND no VM is loading/active → provisioner
+- If video jobs pending/running AND a VM is loading/active → WAIT
 - If all media complete → assembly
 - If output exists → DONE
 
@@ -134,16 +136,28 @@ Your job:
 - Add pronunciation hints for tricky words
 - Estimate duration
 
+IMPORTANT: Write in flowing paragraphs, NOT bulleted lists, NOT JSON, NOT tables. Your response is prose.
+But make your prose DENSE with concrete specifics. Every piece of text you write should be the ACTUAL content that will be used — not a description of what would go there, not a placeholder, not a summary.
+
+For example, GOOD prose looks like this:
+  V1: "In the ADHD brain, the rainbow isn't magic — it's a lens flare from overstimulated neurons. The reward system is always on, chasing the next bright thing. This is why focus feels impossible, and why the world seems too loud, too fast, too much."
+  V2: "For someone with ADHD, a rainbow isn't a gentle arc of color. It's a sensory flood, every wavelength screaming for attention at once. The brain is wired to chase intensity, not balance."
+  Visual Notes: A single figure on a windswept hill at golden hour, wide establishing shot, slow dolly in as the narrator speaks, lens flare visible on the right edge, shallow depth of field. Cut to extreme close-up of eyes tracking something unseen. The sky is overcast but a shaft of light breaks through.
+
+BAD prose looks like this:
+  V1: "A narration about ADHD and rainbows"
+  Visual Notes: "Some scenic shots"
+
+Do NOT write bad prose. The pipeline reads your words directly — abbreviations and vagueness will be used verbatim.
+
+If the script already exists and looks good, say "NoOp: script already exists."
+
 TROUBLESHOOTING & ADAPTATION:
 - If the brief is vague or unclear, ASK for clarification rather than guessing.
 - If the topic is technical, break jargon into simpler language and add pronunciation guides.
 - If a previous script was rejected (check state), diagnose why: too long? off-topic? boring? Fix the specific issue.
 - If narration text exceeds ~20 words per scene, warn that TTS may truncate — suggest splitting into multiple scenes.
-- If visual notes seem impossible to render (e.g., "aerial shot of microscopic organism"), suggest a more feasible alternative.
-
-Write naturally — prose, paragraphs, whatever feels right. Your script is the foundation; if it's weak, everything downstream fails. Be bold, be clear, be memorable.
-
-If the script already exists and looks good, say "NoOp: script already exists."
+- If visual notes seem impossible to render, suggest a more feasible alternative.
 
 {skill_fragment}
 """,
@@ -154,40 +168,73 @@ Your job:
 - Match voices (V1, V2, V3) to scene mood and character
 - Provide exact, clean text for TTS synthesis
 
-TROUBLESHOOTING & BEST PRACTICES:
-- If text is longer than ~25 words, split into multiple shorter clips. Qwen3-TTS handles ~20-25 words cleanly; longer text risks abrupt cuts.
-- If a previous audio job FAILED with "abrupt cut" or "truncated", the text was too long. Split it.
-- If a voice (V1/V2/V3) sounds wrong for the mood, suggest a different voice mapping.
-- If pronunciation hints exist in the script, pass them through explicitly.
-- If the script text contains stage directions like "(sigh)" or "[pause]", strip them — TTS cannot act, only speak.
-- If a scene has no narration text, do not queue a job for it.
-- If audio QA failed with "trailing silence too short", the file was cut mid-word. The text was likely too long for the model's token budget. Split and retry.
+IMPORTANT: Write in flowing paragraphs, NOT bulleted lists, NOT JSON, NOT tables. Your response is prose.
+But make your prose DENSE with concrete specifics. The text you provide is what the TTS engine will speak, word for word.
 
-Write naturally — lists, paragraphs, whatever feels right. But be precise with the text you pass to TTS; every character matters.
+For each audio job, describe it naturally and include these specifics inline:
+- Which voice (V1, V2, or V3)
+- The EXACT narration text to synthesize — every single word, punctuation mark, and pause matters
+- Which scene it belongs to
+
+For example, GOOD prose looks like this:
+  "I'll generate the opening narration in V1. The text is: 'In the ADHD brain, the reward system is always on, chasing the next bright thing. This is why focus feels impossible, and why the world seems too loud, too fast, too much.' That's scene 1, running about 10 seconds. I'll also do V2 with a calmer tone: 'For someone with ADHD, every rainbow is a sensory flood, every wavelength screaming for attention.'"
+
+BAD prose looks like this:
+  "I will create audio for the script. Voice: V1. Text: the narration from the script."
+
+Do NOT write bad prose. If you do not include the full verbatim text, the TTS engine will have nothing to speak.
+
+You may plan multiple audio jobs in one response. Describe each one clearly in prose.
 
 If no script exists or jobs already exist, say "NoOp: waiting."
+
+TROUBLESHOOTING & BEST PRACTICES:
+- If text is longer than ~25 words, split into multiple shorter clips. Qwen3-TTS handles ~20-25 words cleanly.
+- If a previous audio job FAILED with "abrupt cut" or "truncated", the text was too long. Split it.
+- If a voice sounds wrong for the mood, suggest a different voice mapping.
+- If pronunciation hints exist in the script, pass them through explicitly.
+- Strip stage directions like "(sigh)" or "[pause]" — TTS cannot act.
+- If audio QA failed with "trailing silence too short", split and retry.
 
 {skill_fragment}
 """,
-    "video": """You are a video director for documentaries — a visual storyteller who directs every shot to serve the narrative.
+    "video": """You are a video director for documentaries.
 
 Your job:
 - Plan video clips from the script's visual notes
-- Write precise visual prompts for the LTX-2.3 video generator
+- Describe what should appear on screen so the LTX-2.3 video generator can render it
 - Specify duration per scene
 
-TROUBLESHOOTING & BEST PRACTICES:
-- If a previous video job FAILED with "frozen frames" or "no motion", strengthen the prompt with motion keywords: "camera panning", "slow dolly", "gentle zoom", "wind blowing", "water flowing".
-- If QA failed with "video too short" (<0.5s), the GPU likely OOM'd. Suggest a shorter duration or simpler prompt for retry.
-- If the visual notes are vague ("nice scenery"), translate them into specific, renderable prompts: "golden hour meadow with wildflowers, warm backlight, shallow depth of field".
-- If a scene calls for complex multi-shot sequences, break it into 2-3 shorter clips rather than one long one. LTX-2.3 works best at 4-8 seconds.
-- Avoid text, watermarks, logos, or human faces in prompts — the model struggles with these.
-- If duration is not specified, default to 5 seconds per scene.
-- If a scene has no visual notes, derive a prompt from the narration text.
+IMPORTANT: Write in flowing paragraphs, NOT bulleted lists, NOT JSON, NOT tables. Your response is prose.
+But make your prose DENSE with concrete specifics. Every description you write becomes the actual prompt fed to the video generator. Vague descriptions produce vague video.
 
-Write naturally — lists, paragraphs, whatever feels right. But be precise with visual prompts; specificity beats verbosity.
+For example, GOOD prose looks like this:
+  "Scene 1, 4 seconds: a calm ocean at sunset. Gentle waves roll toward the shore. The sky is warm orange and pink. A few birds fly across the horizon. The water reflects the sunset colors."
+  "Scene 2, 5 seconds: a person walks through a forest. Sunlight filters through the trees. Green leaves sway slightly in a breeze. Dappled light moves across the ground."
+
+BAD prose looks like this:
+  "I'll create a video for scene 1. It'll be a nice sunset scene with cinematic quality."
+  "4k, cinematic, ocean, sunset, best quality, golden hour, shallow depth of field"
+
+Do NOT write bad prose. The video generator receives your description exactly as written. If you say "a nice scene," you will get a generic blur. If you describe gentle waves rolling toward a shore of dark wet sand under a warm orange sky, you will get that exact scene.
+
+How to write reliably: describe what's visible, what's moving, and where it happens. Use present-tense verbs: "waves roll," "leaves sway," "birds fly," "steam rises." One clear motion per clip is enough. The model handles a single action well. Stack three unrelated actions and motion collapses into a still image.
+
+You do NOT need cinematography jargon. Terms like "whip pan," "push-in," "rack focus," or "dolly zoom" are advanced techniques that fail too often to be worth using now. We will add them later once basic generation is reliable. For now, plain language works better.
+
+You do NOT need quality words like "cinematic," "best quality," "4k," or "highly detailed." The model ignores them or gets confused by them. Describe the actual scene instead.
+
+You may plan multiple video jobs in one response. Describe each one clearly in prose.
 
 If no script exists or jobs already exist, say "NoOp: waiting."
+
+TROUBLESHOOTING & BEST PRACTICES:
+- If a previous clip came out as a still image with no movement, your motion description was too weak. Add a clear present-tense verb: "waves roll," "clouds drift," "wind moves the grass."
+- If a previous clip failed entirely, simplify. Shorter prompts with one subject and one motion are more reliable than complex multi-subject scenes.
+- Start with 3-5 second clips. Short clips render faster and fail less often.
+- Avoid text, logos, or human faces in descriptions — the generator struggles with those.
+- One scene per clip. Don't try to pack a whole movie into one prompt.
+- If you want advanced guidance (frame counts, resolution constraints, step counts), load the video-generation skill.
 
 {skill_fragment}
 """,
@@ -198,43 +245,61 @@ Your job:
 - Specify ffmpeg commands for merging
 - Handle duration mismatches gracefully
 
-TROUBLESHOOTING & BEST PRACTICES:
-- If audio duration > video duration, loop the video with `-stream_loop -1` and trim to audio length. Documentary narration is king; video serves it.
-- If video duration > audio duration, trim the video to match audio with `-t <audio_dur>`.
-- If audio and video durations differ by >5x (e.g., 15s audio, 3s video), the loop will look repetitive. Flag this as a problem and suggest re-rendering the video at longer duration.
-- If QA gates flagged "frozen frames" on a video clip, do NOT use that clip. Suggest re-rendering instead.
-- If QA gates flagged "abrupt audio cut", do NOT use that audio. Suggest re-synthesizing instead.
-- If ffmpeg fails with "Invalid data", check that the input files exist and are not 0 bytes. If corrupted, flag for re-generation.
-- If assembly produces a file but it's smaller than 1KB, it failed silently. Report the failure.
-- Always verify the output file exists and has reasonable size after ffmpeg.
+IMPORTANT: Write in flowing paragraphs, NOT bulleted lists, NOT JSON, NOT tables. Your response is prose.
+But make your prose DENSE with concrete specifics. When you describe a mux plan, include the exact clip names, durations, and ffmpeg flags.
 
-Write naturally — lists, paragraphs, whatever feels right. But be meticulous about ffmpeg flags; a missing `-shortest` can produce a 10-hour silent video.
+For example, GOOD prose looks like this:
+  "I'm ready to assemble the final cut. I'll combine the completed audio clip (scene1_narration_v1.wav, 8.3 seconds) with the video clip (scene1_visual.mp4, 5 seconds). Since the audio is longer, I'll loop the video with -stream_loop -1 and trim both to the audio duration using -shortest. The ffmpeg command will be: ffmpeg -y -i scene1_visual.mp4 -i scene1_narration_v1.wav -stream_loop -1 -c:v copy -c:a aac -shortest final_scene1.mp4"
+
+BAD prose looks like this:
+  "I'll merge the audio and video files."
+
+Do NOT write bad prose. The pipeline needs to know exactly which files, what durations, and what flags — ambiguity will cause silent failures.
 
 If audio/video is not ready or QA-flagged, say "NoOp: waiting for media."
 
+TROUBLESHOOTING & BEST PRACTICES:
+- If audio duration > video duration, loop video with `-stream_loop -1` and trim to audio length.
+- If video duration > audio duration, trim video to match audio with `-t <audio_dur>`.
+- If durations differ by >5x, flag as a problem and suggest re-rendering.
+- If QA flagged "frozen frames", do NOT use that clip. Suggest re-rendering.
+- If QA flagged "abrupt audio cut", do NOT use that audio. Suggest re-synthesizing.
+- If ffmpeg fails with "Invalid data", check files exist and are not 0 bytes.
+- If output file is <1KB, it failed silently. Report the failure.
+
 {skill_fragment}
 """,
-    "provisioner": """You are a DevOps engineer who provisions GPU VMs on Vast.ai — a cloud operator who ensures the right compute is available at the right time.
+    "provisioner": """You are a DevOps engineer who provisions GPU VMs on Vast.ai.
 
 Your job:
 - Provision VMs for audio (TTS) and video (LTX-2.3) workers
 - Destroy idle or failed VMs
-- Monitor VM health and replace dead ones
 
-TROUBLESHOOTING & BEST PRACTICES:
-- If `vastai search offers` returns nothing, wait and retry. GPU supply fluctuates.
-- If a VM fails to start (provisioning error), try a different offer with more disk or a different GPU.
-- If a VM has been running for >4 hours, it's likely leaking money. Destroy it unless jobs are actively running.
-- If a VM's worker URL is unreachable (HTTP error), the agent may have crashed. SSH in and check `/workspace/agent.log`, or destroy and re-provision.
-- If a VM is idle (no jobs dispatched) for >30 min, destroy it. Don't waste credits.
-- If you need to provision a video VM, look for GPUs with ≥48GB VRAM (H100, H200, A100 80GB). LTX-2.3 needs room.
-- If you need to provision an audio VM, 24GB VRAM is sufficient (RTX 4090, A5000).
-- Always label VMs: `documentary-tts` for audio, `documentary-ltx` for video. This lets the pipeline identify them.
-- When destroying a VM, record the reason (idle, failed, completed, replaced).
+IMPORTANT: Write in flowing paragraphs, NOT bulleted lists, NOT JSON, NOT tables. Your response is prose.
+But make your prose DENSE with concrete specifics. When you decide to provision or destroy a VM, describe the action clearly with the exact numbers and identifiers.
 
-You have ONE tool: bash. Use it freely. Inspect, diagnose, act.
+For example, GOOD prose looks like this:
+  "I inspected the current state. There are no active instances. I'll provision an audio worker from offer 18923452, which is an RTX 4090 with 24GB VRAM at $0.42/hr. That should handle TTS jobs. For video, I found offer 18924111, an H100 with 80GB at $2.10/hr — that's our LTX-2.3 renderer."
+
+BAD prose looks like this:
+  "I will provision some VMs for audio and video work."
+
+Do NOT write bad prose. The pipeline needs the exact offer IDs and GPU types to act. Vagueness will cause provisioning to fail.
+
+You may also use bash for READ-ONLY inspection:
+  $ vastai show instances --raw
+  $ vastai search offers "gpu_ram >= 24 num_gpus = 1" --raw
+The pipeline will execute inspection commands and return results.
+
+NEVER run `vastai create instance` or `vastai destroy instance` via bash — those are actions the pipeline handles.
 
 If no action is needed, say "NoOp: nothing to provision."
+
+TROUBLESHOOTING:
+- If search returns nothing, retry with lower requirements.
+- Audio VMs: 24GB VRAM (RTX 4090, A5000, A40).
+- Video VMs: ≥48GB VRAM (H100, H200, A100 80GB).
+- Destroy VMs idle >30 min or running >4 hours without active jobs.
 
 {skill_fragment}
 """,
@@ -280,7 +345,7 @@ def project_state(event_log_path: str, timeline_path: str) -> tuple[otio.schema.
     return timeline, queue_jobs, events
 
 
-def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict) -> str:
+def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict, events: list = None) -> str:
     """Build a human-readable state summary for the orchestrator."""
     meta = timeline.metadata.get("documentary", {})
     lines = []
@@ -305,6 +370,33 @@ def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict) -> str
     completed_video = get_completed_jobs(queue_jobs, "video")
     lines.append(f"Completed audio jobs: {len(completed_audio)}")
     lines.append(f"Completed video jobs: {len(completed_video)}")
+
+    # VM status from events
+    if events:
+        vms: dict[str, dict] = {}
+        for e in events:
+            if e.effect_type == "VMAllocated":
+                vms[e.instance_id] = {
+                    "offer_id": e.offer_id,
+                    "gpu_type": e.gpu_type,
+                    "worker_url": e.worker_url,
+                    "status": "allocated",
+                }
+            elif e.effect_type == "VMDeallocated" and e.instance_id in vms:
+                vms[e.instance_id]["status"] = "destroyed"
+            elif e.effect_type == "VMProvisionFailed" and e.offer_id:
+                # Find by offer_id
+                for vid, vm in vms.items():
+                    if vm.get("offer_id") == e.offer_id:
+                        vm["status"] = "failed"
+        active = [vm for vm in vms.values() if vm["status"] == "allocated"]
+        if active:
+            lines.append(f"Active VMs: {len(active)}")
+            for vm in active:
+                url = vm.get("worker_url", "(no url yet)")
+                lines.append(f"  {vm['gpu_type']} → {url}")
+        else:
+            lines.append("Active VMs: 0")
 
     return "\n".join(lines)
 
@@ -353,7 +445,38 @@ def _handle_agent_skill_load(response: str) -> str | None:
     return None
 
 
-async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
+def _handle_agent_bash(response: str) -> str | None:
+    """Detect bash commands embedded in agent responses (for provisioner). Returns result or None.
+
+    Looks for lines starting with '$ ' or fenced bash blocks and executes them.
+    """
+    import re
+    commands: list[str] = []
+    in_bash = False
+    for line in response.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```bash") or stripped.startswith("```sh"):
+            in_bash = True
+            continue
+        if stripped == "```" and in_bash:
+            in_bash = False
+            continue
+        if in_bash:
+            commands.append(stripped)
+        elif stripped.startswith("$ "):
+            commands.append(stripped[2:])
+    if not commands:
+        return None
+    results: list[str] = []
+    for cmd in commands:
+        if not cmd.strip():
+            continue
+        result = run_bash(cmd)
+        results.append(f"$ {cmd}\nexit={result['returncode']}\nstdout:\n{result['stdout'][:2000]}\nstderr:\n{result['stderr'][:1000]}")
+    return "[BASH RESULTS]\n" + "\n---\n".join(results)
+
+
+async def call_agent(agent_id: str, prompt: str) -> str:
     """Call an agent via direct LLM API with multi-turn skill/research support.
 
     The agent may request:
@@ -362,8 +485,10 @@ async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
     - RESEARCH: <query> → Brave search
     - RESEARCH_DEEP: <query> → Perplexity synthesis
     - RESEARCH_NEWS: <query> → Exa recent results
+    - Bash commands (for provisioner inspection only)
 
-    Up to max_turns additional turns to fulfill requests.
+    Loops until the agent returns a final response (no tool markers).
+    No artificial turn limit — agents can take as many turns as needed.
     """
     system_prompt = _inject_skill_fragment(agent_id, AGENT_PROMPTS.get(agent_id, ""))
     messages: list[dict[str, str]] = [
@@ -371,7 +496,9 @@ async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
         {"role": "user", "content": prompt},
     ]
 
-    for turn in range(max_turns + 1):
+    turn = 0
+    while True:
+        turn += 1
         result = _DS_CLIENT.chat.completions.create(
             model="deepseek-v4-flash",
             messages=messages,
@@ -382,7 +509,7 @@ async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
         # Check for skill load requests
         skill_result = _handle_agent_skill_load(response)
         if skill_result:
-            print(f"  [SKILL TURN {turn + 1}] Agent requested skill/research")
+            print(f"  [SKILL TURN {turn}] Agent requested skill/research")
             messages.append({"role": "assistant", "content": response})
             messages.append(
                 {"role": "user", "content": f"You requested additional information. Here is the result:\n\n{skill_result}\n\nNow continue with your task."}
@@ -392,19 +519,25 @@ async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
         # Check for research requests
         research_result = _handle_agent_research(response)
         if research_result:
-            print(f"  [RESEARCH TURN {turn + 1}] Agent requested research")
+            print(f"  [RESEARCH TURN {turn}] Agent requested research")
             messages.append({"role": "assistant", "content": response})
             messages.append(
                 {"role": "user", "content": f"You requested research. Here are the results:\n\n{research_result}\n\nNow continue with your task."}
             )
             continue
 
+        # Check for embedded bash (provisioner inspects Vast.ai)
+        bash_result = _handle_agent_bash(response)
+        if bash_result:
+            print(f"  [BASH TURN {turn}] Agent requested bash execution")
+            messages.append({"role": "assistant", "content": response})
+            messages.append(
+                {"role": "user", "content": f"You requested bash commands. Here are the results:\n\n{bash_result}\n\nNow continue with your task."}
+            )
+            continue
+
         # No markers — return final response
         return response
-
-    # Max turns reached, return last response
-    print(f"  [AGENT] Max turns ({max_turns}) reached, returning last response")
-    return response
 
 
 # ---------------------------------------------------------------------------
@@ -1107,6 +1240,62 @@ def run_qa_gates(queue_jobs: dict, event_store: EventStore) -> bool:
 # Main pipeline
 # ---------------------------------------------------------------------------
 
+def _build_parse_feedback(agent_id: str, effects: list[Effect], valid_effects: list[Effect]) -> str:
+    """Build feedback telling the agent what the parser understood."""
+    if valid_effects:
+        lines = ["FEEDBACK — Parser understood your response:"]
+        for e in valid_effects:
+            if e.effect_type == "UpdateScript":
+                lines.append(f"  → UpdateScript: V1({len(e.narration_v1)} chars), V2({len(e.narration_v2)} chars), V3({len(e.narration_v3)} chars)")
+            elif e.effect_type == "GenerateNarrationAudio":
+                lines.append(f"  → GenerateNarrationAudio: voice={e.voice}, text='{e.text[:50]}...'")
+            elif e.effect_type == "RenderVideoSegment":
+                lines.append(f"  → RenderVideoSegment: duration={e.duration_sec}s, prompt='{e.prompt[:50]}...'")
+            elif e.effect_type == "VMAllocated":
+                lines.append(f"  → VMAllocated: offer_id={e.offer_id}, gpu_type={e.gpu_type}")
+            elif e.effect_type == "VMDeallocated":
+                lines.append(f"  → VMDeallocated: instance_id={e.instance_id}, reason={e.reason}")
+            elif e.effect_type == "NoOp":
+                lines.append(f"  → NoOp: {getattr(e, 'reason', 'no action')}")
+            else:
+                lines.append(f"  → {e.effect_type}")
+        return "\n".join(lines)
+    elif effects and all(e.effect_type == "NoOp" for e in effects):
+        return (
+            "FEEDBACK — Parser found NoOp. If you intended to create an effect, "
+            "please describe the concrete details clearly in your prose:\n"
+            "  - For audio: specify the voice (V1/V2/V3) and the exact text to synthesize\n"
+            "  - For video: describe the visual scene with specific subjects, lighting, motion\n"
+            "  - For provisioning: mention the offer ID and GPU type explicitly\n"
+            "  - For scripts: include the full narration text for each version"
+        )
+    else:
+        return (
+            "FEEDBACK — Parser could not extract any effects from your response. "
+            "Please write naturally, but make sure to include the specific concrete details "
+            "(exact text, voice names, offer IDs, visual descriptions, etc.) so the pipeline can act on them."
+        )
+
+
+def _build_enactment_feedback(effect: Effect, success: bool, detail: str = "") -> str:
+    """Build feedback about what happened when an effect was enacted."""
+    if success:
+        if effect.effect_type == "VMAllocated":
+            return f"ENACTED: VM provisioned. instance_id={effect.instance_id}, worker_url={effect.worker_url}"
+        elif effect.effect_type == "VMDeallocated":
+            return f"ENACTED: VM destroyed. instance_id={effect.instance_id}"
+        elif effect.effect_type == "GenerateNarrationAudio":
+            return f"ENACTED: Audio job queued. voice={effect.voice}, text_len={len(effect.text)}"
+        elif effect.effect_type == "RenderVideoSegment":
+            return f"ENACTED: Video job queued. duration={effect.duration_sec}s"
+        elif effect.effect_type == "UpdateScript":
+            return f"ENACTED: Script updated. V1={len(effect.narration_v1)} chars"
+        else:
+            return f"ENACTED: {effect.effect_type} stored successfully"
+    else:
+        return f"FAILED: {effect.effect_type} could not be enacted. {detail}"
+
+
 async def run_pipeline(
     brief: str,
     output_dir: str,
@@ -1126,12 +1315,15 @@ async def run_pipeline(
 
     print(f"[PIPELINE] Starting: {brief[:60]}")
 
+    # Feedback log: messages from previous cycle(s) for the next agent
+    feedback_history: list[str] = []
+
     for cycle in range(max_cycles):
         print(f"\n[CYCLE {cycle + 1}]")
 
         # Project state from events
         timeline, queue_jobs, events = project_state(event_log_path, timeline_path)
-        state_summary = build_state_summary(timeline, queue_jobs)
+        state_summary = build_state_summary(timeline, queue_jobs, events)
         print(f"  State summary:\n    {state_summary.replace(chr(10), chr(10) + '    ')}")
 
         # Check completion
@@ -1173,7 +1365,14 @@ async def run_pipeline(
             agent_prompt += f"\n\nHint: {orch['prompt_hint']}"
         agent_prompt += f"\n\n{state_summary}\n\nBrief: {brief}"
 
+        # Append feedback from previous cycles
+        if feedback_history:
+            agent_prompt += "\n\n--- PREVIOUS CYCLE FEEDBACK ---\n"
+            for fb in feedback_history[-3:]:
+                agent_prompt += fb + "\n"
+            agent_prompt += "--- END FEEDBACK ---\n"
         # Run agent
+        cycle_feedback: list[str] = []
         try:
             response = await call_agent(next_agent, agent_prompt)
             print(f"  Response: {response[:200]}...")
@@ -1181,7 +1380,8 @@ async def run_pipeline(
             effects = parse_agent_text_multi(next_agent, response)
             print(f"  Raw effects: {[e.effect_type for e in effects]}")
 
-            # Validate effects before storing
+            # Post-parse validation: strict models already validated via instructor.
+            # We only filter here for genuinely empty content that slipped through.
             valid_effects = []
             for effect in effects:
                 if effect.effect_type == "UpdateScript" and not effect.narration_v1:
@@ -1195,11 +1395,21 @@ async def run_pipeline(
                     continue
                 valid_effects.append(effect)
 
-            # Retry parsing if no valid effects and response wasn't NoOp
-            if not valid_effects and effects and not all(e.effect_type == "NoOp" for e in effects):
-                print(f"  Retrying parse...")
-                for attempt in range(2):
-                    effects = parse_agent_text_multi(next_agent, response)
+            # Post-parse clarification: if nothing valid was extracted, ask the agent directly
+            clarification_turns = 0
+            while not valid_effects and clarification_turns < 2:
+                clarification_turns += 1
+                clarification = build_clarification_request(effects)
+                if not clarification:
+                    break
+                print(f"  [CLARIFICATION TURN {clarification_turns}] Asking agent for missing details")
+                try:
+                    clarification_response = await call_agent(
+                        next_agent,
+                        f"{agent_prompt}\n\n--- CLARIFICATION REQUEST ---\n{clarification}\n--- END CLARIFICATION ---"
+                    )
+                    print(f"  Clarification response: {clarification_response[:200]}...")
+                    effects = parse_agent_text_multi(next_agent, clarification_response)
                     valid_effects = []
                     for effect in effects:
                         if effect.effect_type == "UpdateScript" and not effect.narration_v1:
@@ -1210,14 +1420,29 @@ async def run_pipeline(
                             continue
                         valid_effects.append(effect)
                     if valid_effects:
-                        print(f"  Retry {attempt+1} succeeded: {[e.effect_type for e in valid_effects]}")
+                        print(f"  Clarification succeeded: {[e.effect_type for e in valid_effects]}")
                         break
+                except Exception as exc:
+                    print(f"  Clarification failed: {exc}")
+                    break
+
+            # Parse feedback — tell agent what we understood
+            parse_fb = _build_parse_feedback(next_agent, effects, valid_effects)
+            print(f"  {parse_fb.splitlines()[0]}")
+            cycle_feedback.append(parse_fb)
 
             # Store effects in event log
             for effect in valid_effects:
                 # For VM effects, execute bash first, then record outcome
                 if effect.effect_type == "VMAllocated":
-                    mode = "tts" if "tts" in (effect.gpu_type or "").lower() else "ltx"
+                    # Determine mode from pending jobs if gpu_type doesn't specify it
+                    mode = "ltx"
+                    if "tts" in (effect.gpu_type or "").lower() or "audio" in (effect.gpu_type or "").lower():
+                        mode = "tts"
+                    elif pending_audio and not pending_video:
+                        mode = "tts"
+                    elif not pending_audio and pending_video:
+                        mode = "ltx"
                     onstart = (
                         "cd /workspace && "
                         "apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
@@ -1253,7 +1478,9 @@ async def run_pipeline(
                                 except Exception:
                                     pass
                         event_store.append(effect, otio_hash_before="")
+                        cycle_feedback.append(_build_enactment_feedback(effect, True))
                     else:
+                        fail_detail = bash_result["stderr"][:300]
                         event_store.append(
                             VMProvisionFailed(
                                 agent_id=next_agent,
@@ -1262,16 +1489,23 @@ async def run_pipeline(
                             ),
                             otio_hash_before="",
                         )
+                        cycle_feedback.append(_build_enactment_feedback(effect, False, fail_detail))
 
                 elif effect.effect_type == "VMDeallocated":
                     run_bash(f"vastai destroy instance {effect.instance_id}")
                     event_store.append(effect, otio_hash_before="")
+                    cycle_feedback.append(_build_enactment_feedback(effect, True))
 
                 elif effect.effect_type != "NoOp":
                     event_store.append(effect, otio_hash_before="")
+                    cycle_feedback.append(_build_enactment_feedback(effect, True))
 
         except Exception as exc:
             print(f"  Error: {exc}")
+            cycle_feedback.append(f"ERROR: Pipeline exception: {exc}")
+
+        # Carry feedback forward
+        feedback_history.extend(cycle_feedback)
 
         # Re-project state after storing effects
         timeline, queue_jobs, events = project_state(event_log_path, timeline_path)
@@ -1304,12 +1538,10 @@ async def run_pipeline(
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Documentary Pipeline v4")
-    parser.add_argument("--brief", default="A 30-second documentary about rainbows")
-    parser.add_argument("--output-dir", default="./pipeline_output")
-    args = parser.parse_args()
-
-    result = asyncio.run(run_pipeline(args.brief, args.output_dir))
+    if len(sys.argv) < 2:
+        print("Usage: python run_pipeline_v4.py <brief>", file=sys.stderr)
+        sys.exit(1)
+    brief = " ".join(sys.argv[1:])
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_output")
+    result = asyncio.run(run_pipeline(brief, output_dir))
     print(f"\nResult: {result}")

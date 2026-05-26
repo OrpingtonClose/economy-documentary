@@ -1,21 +1,31 @@
 """Parse agent text into typed algebraic effects.
 
-Uses instructor + DeepSeek v4-flash with Chain-of-Thought prompting.
-Agents write free text. The parser extracts structured effects.
-"""
+Multistage parsing with semantic validation:
+1. Fast path: explicit EFFECT: markers (deterministic)
+2. Fast path: regex section extraction for scripts
+3. Instructor extraction with strict discriminated-union models —
+   validation failures trigger instructor's built-in reasking
+4. Post-parse clarification — genuinely incomplete effects get clarification turns
 
+Agents write free-form prose rich in concrete details. The parser extracts
+structured effects. Per-effect-type validators ensure extracted data is real.
+"""
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing_extensions import Annotated
 
 from effects import (
     Effect,
     GenerateNarrationAudio,
     JobCompleted,
     JobFailed,
+    JobQuestionAnswered,
+    JobQuestionReceived,
     JobRequeued,
     JobStarted,
     MergeIntoOTIO,
@@ -30,112 +40,201 @@ from effects import (
 )
 
 
-class _SingleEffect(BaseModel):
-    """One effect extracted from agent text.
+# ---------------------------------------------------------------------------
+# Per-effect-type strict models — REQUIRED fields trigger instructor reasking
+# ---------------------------------------------------------------------------
 
-    Examples:
-        - "Narration V1: 'The rainbow arcs across the sky.'"
-          → effect_type="UpdateScript", narration_v1="The rainbow arcs across the sky.", scene_num=1
+class _NoOpEffect(BaseModel):
+    effect_type: Literal["NoOp"]
+    noop_reason: str = ""
 
-        - "Create audio for V1: 'The rainbow arcs across the sky.'"
-          → effect_type="GenerateNarrationAudio", voice="V1", text="The rainbow arcs across the sky.", scene_num=1
 
-        - "Render: 'Wide shot of rainbow over mountains'"
-          → effect_type="RenderVideoSegment", prompt="Wide shot of rainbow over mountains", scene_num=1
+class _UpdateScriptEffect(BaseModel):
+    effect_type: Literal["UpdateScript"]
+    narration_v1: str
+    narration_v2: str = ""
+    narration_v3: str = ""
+    visual_notes: str = ""
+    dopamine_hook: str = ""
+    pronunciation_hints: str = ""
+    duration_sec: int = 30
+    scene_num: int = 1
 
-        - "Provisioned VM instance 12345 from offer 67890"
-          → effect_type="VMAllocated", instance_id="12345", offer_id="67890"
-
-        - "NoOp: waiting for media"
-          → effect_type="NoOp", noop_reason="waiting for media"
-    """
-
-    effect_type: Literal[
-        "UpdateScript", "GenerateNarrationAudio", "RenderVideoSegment",
-        "MergeIntoOTIO", "VMAllocated", "VMDeallocated", "VMProvisionFailed",
-        "JobStarted", "JobCompleted", "JobFailed",
-        "JobQuestionReceived", "JobQuestionAnswered",
-        "QAPassed", "QAFailed", "JobRequeued",
-        "NoOp"
-    ] = Field(description="The type of effect this represents")
-    justification: str = Field(default="", description="Why this effect is being proposed")
-    scene_num: int = Field(default=1, description="Scene number (default 1)")
-    # UpdateScript fields
-    narration_v1: str = Field(default="", description="Primary narration text - complete sentences")
-    narration_v2: str = Field(default="", description="Alternative narration text")
-    narration_v3: str = Field(default="", description="Third narration version")
-    visual_notes: str = Field(default="", description="Visual description for video generation")
-    dopamine_hook: str = Field(default="", description="Opening engagement hook")
-    pronunciation_hints: str = Field(default="", description="Words needing special pronunciation")
-    duration_sec: int = Field(default=30, description="Scene duration in seconds")
-    # GenerateNarrationAudio fields
-    voice: str = Field(default="", description="Voice identifier: V1, V2, or V3")
-    text: str = Field(default="", description="Exact narration text to synthesize")
-    # RenderVideoSegment fields
-    prompt: str = Field(default="", description="Visual description for video generation")
-    lora_id: str = Field(default="", description="LoRA model ID (usually empty)")
-    # MergeIntoOTIO fields
-    audio_clips: list[dict] = Field(default_factory=list)
-    video_clips: list[dict] = Field(default_factory=list)
-    # VM fields
-    instance_id: str = Field(default="", description="VM instance ID")
-    offer_id: str = Field(default="", description="Vast.ai offer ID")
-    gpu_type: str = Field(default="", description="GPU type")
-    worker_url: str = Field(default="", description="Worker URL if available")
-    # VMProvisionFailed fields
-    error_message: str = Field(default="", description="Why provisioning failed")
-    # Job fields
-    job_id: str = Field(default="", description="Job ID")
-    worker_id: str = Field(default="", description="Worker that claimed the job")
-    stage: str = Field(default="", description="audio or video")
-    artifact_path: str = Field(default="", description="Path to generated file")
-    # QA fields
-    verdict: str = Field(default="", description="QA verdict text")
-    comments: list[str] = Field(default_factory=list, description="Specific issues found")
-    suggested_fix: str = Field(default="", description="How to fix the issues")
-    # NoOp fields
-    noop_reason: str = Field(default="", description="Why no action is taken")
-
-    @field_validator("effect_type")
+    @field_validator("narration_v1", mode="before")
     @classmethod
-    def validate_effect_type(cls, v: str) -> str:
-        valid = {
-            "UpdateScript", "GenerateNarrationAudio", "RenderVideoSegment",
-            "MergeIntoOTIO", "VMAllocated", "VMDeallocated", "VMProvisionFailed",
-            "JobStarted", "JobCompleted", "JobFailed",
-            "JobQuestionReceived", "JobQuestionAnswered",
-            "QAPassed", "QAFailed", "JobRequeued",
-            "NoOp"
-        }
-        if v not in valid:
-            raise ValueError(f"effect_type must be one of {valid}, got {v}")
+    def _v1_must_be_real(cls, v: Any) -> Any:
+        if isinstance(v, str) and len(v.strip()) < 5:
+            raise ValueError("narration_v1 must contain actual script text, not a placeholder")
         return v
 
 
+class _GenerateNarrationAudioEffect(BaseModel):
+    effect_type: Literal["GenerateNarrationAudio"]
+    voice: str
+    text: str
+    scene_num: int = 1
+
+    @field_validator("voice", mode="before")
+    @classmethod
+    def _voice_must_be_v123(cls, v: Any) -> Any:
+        if isinstance(v, str) and v.strip() not in ("V1", "V2", "V3"):
+            raise ValueError(f"voice must be V1, V2, or V3 (got '{v}')")
+        return v
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _text_must_be_real(cls, v: Any) -> Any:
+        if not isinstance(v, str) or len(v.strip()) < 3:
+            raise ValueError("text must be the actual narration text to synthesize")
+        return v
+
+
+class _RenderVideoSegmentEffect(BaseModel):
+    effect_type: Literal["RenderVideoSegment"]
+    prompt: str
+    duration_sec: int = 5
+    scene_num: int = 1
+
+    @field_validator("prompt", mode="before")
+    @classmethod
+    def _prompt_must_be_real(cls, v: Any) -> Any:
+        if not isinstance(v, str) or len(v.strip()) < 5:
+            raise ValueError("prompt must be a real visual description, not a placeholder")
+        return v
+
+
+class _VMAllocatedEffect(BaseModel):
+    effect_type: Literal["VMAllocated"]
+    offer_id: str
+    gpu_type: str
+    worker_url: str = ""
+
+    @field_validator("offer_id", mode="before")
+    @classmethod
+    def _offer_must_be_numeric(cls, v: Any) -> Any:
+        if not isinstance(v, str) or not v.strip().isdigit():
+            raise ValueError(f"offer_id must be a numeric Vast.ai offer ID (got '{v}')")
+        return v
+
+    @field_validator("gpu_type", mode="before")
+    @classmethod
+    def _gpu_must_be_real(cls, v: Any) -> Any:
+        if not isinstance(v, str) or len(v.strip()) < 2:
+            raise ValueError(f"gpu_type must name a real GPU (got '{v}')")
+        return v
+
+
+class _VMDeallocatedEffect(BaseModel):
+    effect_type: Literal["VMDeallocated"]
+    instance_id: str
+    reason: str = ""
+
+    @field_validator("instance_id", mode="before")
+    @classmethod
+    def _id_must_be_numeric(cls, v: Any) -> Any:
+        if not isinstance(v, str) or not v.strip().isdigit():
+            raise ValueError(f"instance_id must be a numeric VM ID (got '{v}')")
+        return v
+
+
+class _VMProvisionFailedEffect(BaseModel):
+    effect_type: Literal["VMProvisionFailed"]
+    offer_id: str = ""
+    error_message: str = ""
+
+
+class _MergeIntoOTIOEffect(BaseModel):
+    effect_type: Literal["MergeIntoOTIO"]
+    audio_clips: list[dict] = Field(default_factory=list)
+    video_clips: list[dict] = Field(default_factory=list)
+
+
+class _JobStartedEffect(BaseModel):
+    effect_type: Literal["JobStarted"]
+    job_id: str = ""
+    worker_id: str = ""
+    stage: str = ""
+
+
+class _JobCompletedEffect(BaseModel):
+    effect_type: Literal["JobCompleted"]
+    job_id: str = ""
+    artifact_path: str = ""
+    stage: str = ""
+
+
+class _JobFailedEffect(BaseModel):
+    effect_type: Literal["JobFailed"]
+    job_id: str = ""
+    error_message: str = ""
+    stage: str = ""
+
+
+class _JobQuestionReceivedEffect(BaseModel):
+    effect_type: Literal["JobQuestionReceived"]
+    job_id: str = ""
+    question: str = ""
+
+
+class _JobQuestionAnsweredEffect(BaseModel):
+    effect_type: Literal["JobQuestionAnswered"]
+    job_id: str = ""
+    answer: str = ""
+
+
+class _QAPassedEffect(BaseModel):
+    effect_type: Literal["QAPassed"]
+    job_id: str = ""
+    artifact_path: str = ""
+    verdict: str = ""
+
+
+class _QAFailedEffect(BaseModel):
+    effect_type: Literal["QAFailed"]
+    job_id: str = ""
+    artifact_path: str = ""
+    verdict: str = ""
+    comments: list[str] = Field(default_factory=list)
+    suggested_fix: str = ""
+
+
+class _JobRequeuedEffect(BaseModel):
+    effect_type: Literal["JobRequeued"]
+    job_id: str = ""
+    comments: list[str] = Field(default_factory=list)
+    suggested_fix: str = ""
+
+
+_EffectUnion = Annotated[
+    Union[
+        _NoOpEffect,
+        _UpdateScriptEffect,
+        _GenerateNarrationAudioEffect,
+        _RenderVideoSegmentEffect,
+        _VMAllocatedEffect,
+        _VMDeallocatedEffect,
+        _VMProvisionFailedEffect,
+        _MergeIntoOTIOEffect,
+        _JobStartedEffect,
+        _JobCompletedEffect,
+        _JobFailedEffect,
+        _JobQuestionReceivedEffect,
+        _JobQuestionAnsweredEffect,
+        _QAPassedEffect,
+        _QAFailedEffect,
+        _JobRequeuedEffect,
+    ],
+    Field(discriminator="effect_type"),
+]
+
+
 class _MultiEffect(BaseModel):
-    """Multiple effects extracted from agent text with reasoning.
-
-    Examples:
-        - Input: "V1: 'Rainbows are illusions.' V2: 'Light bends through water.'"
-          → chain_of_thought="Found narration text for V1 and V2. This is a script update.",
-            effects=[{effect_type:"UpdateScript", narration_v1:"Rainbows are illusions.", narration_v2:"Light bends through water."}],
-            confidence=8
-
-        - Input: "Can you give me a topic?"
-          → chain_of_thought="Agent is asking a question, not proposing action.",
-            effects=[{effect_type:"NoOp", noop_reason:"Agent asking for input"}],
-            confidence=10
-
-        - Input: "NoOp: waiting"
-          → chain_of_thought="Agent explicitly says waiting.",
-            effects=[{effect_type:"NoOp", noop_reason:"waiting"}],
-            confidence=10
-    """
+    """Multiple effects extracted from agent text with reasoning."""
 
     chain_of_thought: str = Field(
         description="Step-by-step reasoning: what did you find? What effects? Why?"
     )
-    effects: list[_SingleEffect] = Field(
+    effects: list[_EffectUnion] = Field(
         description="List of extracted effects. Empty if no actionable data. NEVER hallucinate."
     )
     confidence: int = Field(
@@ -143,63 +242,49 @@ class _MultiEffect(BaseModel):
         description="Confidence 0=empty chat, 10=perfectly clear effects"
     )
 
-    @field_validator("effects")
-    @classmethod
-    def validate_effects(cls, v: list[_SingleEffect]) -> list[_SingleEffect]:
-        # Ensure NoOp effects have a reason
-        for effect in v:
-            if effect.effect_type == "NoOp" and not effect.noop_reason:
-                effect.noop_reason = "No action needed"
-        return v
 
+# ---------------------------------------------------------------------------
+# System prompt — tells the parser to extract from prose, not demand structure
+# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """You are an expert document parser for a documentary pipeline.
 
-Your job: read free-form agent text and extract structured effects.
+Your job: read free-form agent prose and extract structured EFFECTS.
 
-STEP-BY-STEP:
-1. Read the ENTIRE text carefully.
-2. Identify what the agent is trying to do.
-3. Extract ALL structured data you can find — FULL text, not summaries.
-4. If no actionable data exists, return empty effects list.
+CRITICAL RULES:
+1. Agents write in natural prose. Your job is to FIND the concrete data hidden in their text.
+2. NEVER hallucinate. If the agent mentions an action but doesn't give the actual data, DO NOT invent it.
+3. Extract FULL CONTENT, not summaries. If the agent quotes narration, extract the complete quote.
+4. If no actionable data exists, return an empty effects list.
 5. Rate your confidence (0-10).
 
 EFFECT TYPES:
 - UpdateScript: Script changes. Extract narration_v1, narration_v2, narration_v3, visual_notes, dopamine_hook, pronunciation_hints, duration_sec, scene_num.
-  CRITICAL: Extract the FULL narration text, not a summary. If the text says "V1: 'The rainbow arcs across the sky.'", narration_v1="The rainbow arcs across the sky."
-  Extract EVERYTHING between the label and the next section/header.
+  The agent's prose may contain narration like: "V1: 'The rainbow arcs...'" or "Primary: The rainbow arcs..." — extract the FULL text after the label.
 
-- GenerateNarrationAudio: TTS request. Extract voice, text, scene_num.
-  CRITICAL: Extract the EXACT full narration text to synthesize.
+- GenerateNarrationAudio: TTS request. Extract voice (V1/V2/V3) and text (exact narration).
+  The agent may say: "For V1, use: 'In ADHD...'" — extract voice=V1, text="In ADHD..."
 
-- RenderVideoSegment: Video render. Extract prompt, lora_id, duration_sec, scene_num.
-  CRITICAL: Extract the FULL visual description prompt.
+- RenderVideoSegment: Video render. Extract prompt (full visual description) and duration_sec.
+  The agent may describe a scene in detail — that description IS the prompt.
 
-- MergeIntoOTIO: Merge clips. Extract audio_clips, video_clips.
-- VMAllocated: VM provisioned. Extract instance_id, offer_id, gpu_type, worker_url.
-- VMDeallocated: VM destroyed. Extract instance_id, reason.
-- VMProvisionFailed: Provisioning failed. Extract offer_id, error_message.
-- JobStarted: Worker started job. Extract job_id, worker_id, stage.
-- JobCompleted: Worker finished. Extract job_id, artifact_path, stage.
-- JobFailed: Worker failed. Extract job_id, error_message, stage.
-- QAPassed: QA approved. Extract job_id, artifact_path, verdict.
-- QAFailed: QA rejected. Extract job_id, artifact_path, verdict, comments, suggested_fix.
-- JobRequeued: Job sent back for retry. Extract job_id, comments, suggested_fix.
+- VMAllocated: VM provisioned. Extract offer_id (numeric ID) and gpu_type (e.g., RTX_4090, H100).
+  The agent may mention: "offer 12345 with an RTX 4090" — extract offer_id="12345", gpu_type="RTX_4090".
+
+- VMDeallocated: VM destroyed. Extract instance_id (numeric ID) and reason.
+
 - NoOp: No action. Use ONLY if genuinely nothing found.
 
-RULES:
-- NEVER hallucinate. If text is just chatting, return empty effects.
-- Extract FULL CONTENT, not labels or summaries. The text after "V1:" or "Narration:" is the content.
-- One GenerateNarrationAudio per voice per scene.
-- One RenderVideoSegment per scene.
-- If text says "NoOp" or "waiting", return empty effects or single NoOp.
-- Be conservative. Low confidence → fewer effects.
-- If you see a full script with narration text, ALWAYS extract it into UpdateScript.
+If an agent says they will do something but doesn't provide the concrete details, do NOT return that effect. Return empty effects instead — the pipeline will ask the agent for clarification.
 """
 
 
-def _build_effect(agent_id: str, text: str, parsed: _SingleEffect) -> Effect:
-    """Construct a typed Effect from a parsed single effect."""
+# ---------------------------------------------------------------------------
+# Effect construction
+# ---------------------------------------------------------------------------
+
+def _build_effect(agent_id: str, text: str, parsed: Any) -> Effect:
+    """Construct a typed Effect from a parsed union member."""
     effect_classes: dict[str, type[Effect]] = {
         "UpdateScript": UpdateScript,
         "GenerateNarrationAudio": GenerateNarrationAudio,
@@ -219,13 +304,14 @@ def _build_effect(agent_id: str, text: str, parsed: _SingleEffect) -> Effect:
         "NoOp": NoOp,
     }
 
-    cls = effect_classes.get(parsed.effect_type, NoOp)
+    et = parsed.effect_type
+    cls = effect_classes.get(et, NoOp)
 
     kwargs: dict[str, Any] = {
         "agent_id": agent_id,
         "timestamp": datetime.now(),
-        "justification": parsed.justification or text,
-        "scene_num": parsed.scene_num,
+        "justification": text,
+        "scene_num": getattr(parsed, "scene_num", 1),
     }
 
     for field_name in cls.model_fields:
@@ -245,7 +331,9 @@ def _build_effect(agent_id: str, text: str, parsed: _SingleEffect) -> Effect:
         )
 
 
-
+# ---------------------------------------------------------------------------
+# Pre-extraction fast paths
+# ---------------------------------------------------------------------------
 
 def _pre_extract_script(text: str) -> dict[str, str] | None:
     """Extract script fields using section-based parsing."""
@@ -253,26 +341,21 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
     lines = text.splitlines()
 
     def _extract_section(header_keywords: list[str], stop_keywords: list[str]) -> str:
-        """Extract text between a header and the next stop header."""
         capturing = False
         buffer: list[str] = []
         for line in lines:
             stripped = line.strip()
-            # Check for stop keywords
             if capturing and any(kw.lower() in stripped.lower() for kw in stop_keywords):
                 capturing = False
                 break
             if capturing:
-                # Strip blockquote markers
                 if stripped.startswith(">"):
                     stripped = stripped[1:].strip()
                 buffer.append(stripped)
-            # Check for start keywords
             if any(kw.lower() in stripped.lower() for kw in header_keywords):
                 capturing = True
         return "\n".join(buffer).strip()
 
-    # V1
     v1 = _extract_section(
         ["V1", "Primary Narration", "Primary narration"],
         ["V2", "V3", "Alternate Narration", "Third Take", "Visual Notes", "---", "Duration Estimate"]
@@ -280,7 +363,6 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
     if v1:
         result["narration_v1"] = v1
 
-    # V2
     v2 = _extract_section(
         ["V2", "Alternate Narration", "Alternate narration"],
         ["V3", "V1", "Primary Narration", "Third Take", "Visual Notes", "---", "Duration Estimate"]
@@ -288,7 +370,6 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
     if v2:
         result["narration_v2"] = v2
 
-    # V3
     v3 = _extract_section(
         ["V3", "Third Take", "Third take"],
         ["V1", "V2", "Primary Narration", "Alternate Narration", "Visual Notes", "---", "Duration Estimate"]
@@ -296,7 +377,6 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
     if v3:
         result["narration_v3"] = v3
 
-    # Visual notes
     visual = _extract_section(
         ["Visual Notes", "Visual notes", "Shot List", "frame-by-frame"],
         ["Duration Estimate", "Duration", "---", "Agent Note", "Pronunciation"]
@@ -304,7 +384,6 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
     if visual:
         result["visual_notes"] = visual
 
-    # Dopamine hook
     hook = _extract_section(
         ["Dopamine Hook", "Dopamine hook", "Opening", "Hook"],
         ["Narration", "V1", "Visual Notes", "Pronunciation", "---", "Duration"]
@@ -316,6 +395,78 @@ def _pre_extract_script(text: str) -> dict[str, str] | None:
         return result
     return None
 
+
+def _pre_extract_effect_markers(text: str) -> list[Any] | None:
+    """Extract effects from explicit EFFECT: markers in agent responses.
+
+    Format: EFFECT: <EffectType> field1="value" field2="value"
+    Example: EFFECT: GenerateNarrationAudio voice="V1" text="Hello world"
+    """
+    effects: list[Any] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.upper().startswith("EFFECT:"):
+            continue
+        body = stripped[7:].strip()
+        parts = body.split(None, 1)
+        if not parts:
+            continue
+        effect_type = parts[0]
+        fields: dict[str, str] = {}
+        if len(parts) > 1:
+            field_text = parts[1]
+            for m in re.finditer(r'(\w+)=(["\'])(.*?)\2|(\w+)=([^\s]+)', field_text):
+                if m.group(1):
+                    fields[m.group(1)] = m.group(3)
+                elif m.group(4):
+                    fields[m.group(4)] = m.group(5)
+        # Build the appropriate model based on effect_type
+        try:
+            if effect_type == "GenerateNarrationAudio":
+                effects.append(_GenerateNarrationAudioEffect(effect_type=effect_type, **fields))
+            elif effect_type == "RenderVideoSegment":
+                effects.append(_RenderVideoSegmentEffect(effect_type=effect_type, **fields))
+            elif effect_type == "VMAllocated":
+                effects.append(_VMAllocatedEffect(effect_type=effect_type, **fields))
+            elif effect_type == "VMDeallocated":
+                effects.append(_VMDeallocatedEffect(effect_type=effect_type, **fields))
+            elif effect_type == "NoOp":
+                effects.append(_NoOpEffect(effect_type=effect_type, **fields))
+            else:
+                effects.append(_NoOpEffect(effect_type="NoOp", noop_reason=f"Unknown effect type: {effect_type}"))
+        except Exception:
+            # Validation failed on marker — let instructor handle it
+            pass
+    return effects if effects else None
+
+
+# ---------------------------------------------------------------------------
+# Post-parse clarification
+# ---------------------------------------------------------------------------
+
+def build_clarification_request(effects: list[Effect]) -> str | None:
+    """If effects were parsed but are NoOp due to missing data, ask the agent.
+
+    Called AFTER instructor extraction + validation. If the parser
+    couldn't find concrete data, we ask the agent directly.
+    """
+    if len(effects) == 1 and effects[0].effect_type == "NoOp":
+        reason = getattr(effects[0], "reason", "")
+        if "missing" in reason.lower() or "placeholder" in reason.lower():
+            return (
+                "I understood you want to take action, but I couldn't find the "
+                "concrete details in your response. Please include the actual values:\n"
+                "- For audio: the exact text and voice (V1/V2/V3)\n"
+                "- For video: the full visual description and duration\n"
+                "- For provisioning: the offer ID and GPU type\n"
+                "Write naturally — just make sure the specific data is in your prose."
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Main parse entry points
+# ---------------------------------------------------------------------------
 
 def parse_agent_text(agent_id: str, text: str) -> Effect:
     """Parse raw agent text into a single typed Effect."""
@@ -334,14 +485,22 @@ def parse_agent_text(agent_id: str, text: str) -> Effect:
 def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """Parse raw agent text into a list of typed Effects.
 
-    Uses regex pre-extraction for common patterns, then instructor for validation.
-    Never raises — on any failure returns [NoOp].
+    Three-stage pipeline:
+    1. Fast regex extraction (EFFECT: markers, script sections)
+    2. Instructor extraction with strict discriminated-union validators
+       (validation failures trigger instructor's built-in reasking)
+    3. Post-parse clarification (escalate to agent if data genuinely missing)
     """
-    # Try regex pre-extraction for scripts first
+    # Stage 1: explicit EFFECT: markers
+    markers = _pre_extract_effect_markers(text)
+    if markers:
+        return [_build_effect(agent_id, text, m) for m in markers]
+
+    # Stage 2: regex script extraction
     if agent_id == "scenario":
         pre = _pre_extract_script(text)
         if pre:
-            print(f"  [PARSER] Regex pre-extract found v1_len={len(pre.get('narration_v1', ''))}")
+            print(f"  [PARSER] Regex pre-extract v1_len={len(pre.get('narration_v1', ''))}")
             return [UpdateScript(
                 agent_id=agent_id,
                 timestamp=datetime.now(),
@@ -355,7 +514,7 @@ def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
                 duration_sec=30,
             )]
 
-    # Fall back to instructor
+    # Stage 3: instructor with strict validation (re-asking built in)
     try:
         from structured_extract import extract
 
@@ -366,11 +525,12 @@ def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
             max_retries=3,
         )
     except Exception as exc:
+        # Instructor exhausted retries — effect genuinely couldn't be extracted
         return [NoOp(
             agent_id=agent_id,
             timestamp=datetime.now(),
             justification=text,
-            reason=f"Instructor parsing failed: {exc}",
+            reason=f"Parser could not extract effects: {exc}",
         )]
 
     if not parsed.effects:
@@ -378,7 +538,7 @@ def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
             agent_id=agent_id,
             timestamp=datetime.now(),
             justification=text,
-            reason="No actionable effects found",
+            reason="No actionable effects found in agent text",
         )]
 
     return [_build_effect(agent_id, text, p) for p in parsed.effects]
