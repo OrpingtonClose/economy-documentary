@@ -1594,5 +1594,26 @@ if __name__ == "__main__":
         sys.exit(1)
     brief = " ".join(sys.argv[1:])
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pipeline_output")
-    result = asyncio.run(run_pipeline(brief, output_dir))
+
+    # Auto-detect HTTP agents
+    agent_registry: dict[str, str] | None = None
+    if _HTTP_AVAILABLE:
+        import urllib.request
+        _test_ports = {"scenario": 9001, "audio": 9002, "video": 9003, "assembly": 9004, "provisioner": 9005, "orchestrator": 9006}
+        _found = {}
+        for aid, port in _test_ports.items():
+            try:
+                req = urllib.request.Request(f"http://localhost:{port}/", method="GET")
+                with urllib.request.urlopen(req) as resp:
+                    if resp.status == 200:
+                        _found[aid] = f"http://localhost:{port}"
+            except Exception:
+                pass
+        if len(_found) == len(_test_ports):
+            agent_registry = _found
+            print(f"[PIPELINE] Using HTTP agents: {agent_registry}")
+        elif _found:
+            print(f"[PIPELINE] Partial HTTP agents found ({len(_found)}/{len(_test_ports)}), falling back to direct API")
+
+    result = asyncio.run(run_pipeline(brief, output_dir, agent_registry=agent_registry))
     print(f"\nResult: {result}")
