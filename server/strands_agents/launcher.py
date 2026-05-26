@@ -50,7 +50,6 @@ def _run_service(
     from openai import OpenAI
     from strands_agents.agent_http_service import build_agent_http_service
 
-    # Load API key
     api_key = ""
     key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
     if os.path.exists(key_path):
@@ -59,7 +58,6 @@ def _run_service(
 
     client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
 
-    # Load system prompt from v4 prompts
     from run_pipeline_v4 import AGENT_PROMPTS, _inject_skill_fragment
     system_prompt = _inject_skill_fragment(node_id, AGENT_PROMPTS.get(node_id, ""))
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from typing import Any
 
@@ -19,7 +20,6 @@ from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
 
-# Lazy imports to avoid circular deps at module load time
 
 def _load_tools():
     """Lazy-load tool modules."""
@@ -114,8 +114,6 @@ def build_agent_http_service(
     The service receives prompts via POST, runs a multi-turn loop
     internally (skills, research, bash), and returns free-form prose.
     """
-    import sys
-
     app = FastAPI(title=f"agent-{agent_id}")
 
     _last_task: str = ""
@@ -156,7 +154,6 @@ def build_agent_http_service(
             {"role": "user", "content": text},
         ]
 
-        # Lazy-load tools only when needed
         tools = _load_tools()
 
         try:
@@ -168,7 +165,6 @@ def build_agent_http_service(
                 )
                 response = str(result.choices[0].message.content)
 
-                # Check for skill load requests
                 skill_result = _handle_skill_load(response, tools)
                 if skill_result:
                     logger.info("  [SKILL] Agent '%s' requested skill", agent_id)
@@ -179,7 +175,6 @@ def build_agent_http_service(
                     })
                     continue
 
-                # Check for research requests
                 research_result = _handle_research(response, tools)
                 if research_result:
                     logger.info("  [RESEARCH] Agent '%s' requested research", agent_id)
@@ -190,7 +185,6 @@ def build_agent_http_service(
                     })
                     continue
 
-                # Check for embedded bash (provisioner inspects Vast.ai)
                 bash_result = _handle_bash(response)
                 if bash_result:
                     logger.info("  [BASH] Agent '%s' requested bash", agent_id)
@@ -201,7 +195,6 @@ def build_agent_http_service(
                     })
                     continue
 
-                # No markers — return final response
                 _last_result = response
                 logger.info("Agent '%s' completed. Result length: %d chars", agent_id, len(response))
                 return Response(content=response, media_type="text/plain")

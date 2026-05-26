@@ -318,7 +318,7 @@ TROUBLESHOOTING:
 # State projection
 # ---------------------------------------------------------------------------
 
-def project_state(event_log_path: str, timeline_path: str) -> tuple[otio.schema.Timeline, dict, dict]:
+def project_state(event_log_path: str, timeline_path: str) -> tuple[otio.schema.Timeline, dict, list]:
     """Read event log and project both OTIO and queue state.
 
     Returns: (timeline, queue_jobs, events_list)
@@ -353,7 +353,7 @@ def project_state(event_log_path: str, timeline_path: str) -> tuple[otio.schema.
     return timeline, queue_jobs, events
 
 
-def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict, events: list = None) -> str:
+def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict, events: list | None = None) -> str:
     """Build a human-readable state summary for the orchestrator."""
     meta = timeline.metadata.get("documentary", {})
     lines = []
@@ -503,7 +503,7 @@ async def call_agent(agent_id: str, prompt: str, agent_registry: dict[str, str] 
 
     # --- Direct API path (fallback) ---
     system_prompt = _inject_skill_fragment(agent_id, AGENT_PROMPTS.get(agent_id, ""))
-    messages: list[dict[str, str]] = [
+    messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
@@ -513,7 +513,7 @@ async def call_agent(agent_id: str, prompt: str, agent_registry: dict[str, str] 
         turn += 1
         result = _DS_CLIENT.chat.completions.create(
             model="deepseek-v4-flash",
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             temperature=0.7,
         )
         response = str(result.choices[0].message.content)
@@ -694,12 +694,15 @@ async def dispatch_pending_jobs(
     for r in records:
         if r.effect.effect_type == "VMAllocated":
             eff = r.effect
-            if hasattr(eff, "worker_url") and eff.worker_url:
-                worker_instances[eff.worker_url] = getattr(eff, "instance_id", "")
-                if "tts" in (eff.gpu_type or "").lower() or "audio" in str(getattr(eff, "label", "")).lower():
-                    worker_urls["audio"] = eff.worker_url
+            wurl = getattr(eff, "worker_url", "")
+            if wurl:
+                worker_instances[wurl] = getattr(eff, "instance_id", "")
+                gpu = getattr(eff, "gpu_type", "")
+                label = str(getattr(eff, "label", "")).lower()
+                if "tts" in gpu.lower() or "audio" in label:
+                    worker_urls["audio"] = wurl
                 else:
-                    worker_urls["video"] = eff.worker_url
+                    worker_urls["video"] = wurl
 
     # Build script context once
     script_context = ""
@@ -1129,16 +1132,17 @@ def run_qa_gates(queue_jobs: dict, event_store: EventStore) -> bool:
     # Find the latest JobCompleted index for each job
     latest_completion_idx: dict[str, int] = {}
     for i, r in enumerate(records):
-        if r.effect.effect_type == "JobCompleted" and r.effect.job_id:
-            latest_completion_idx[r.effect.job_id] = i
+        jid = getattr(r.effect, "job_id", "")
+        if r.effect.effect_type == "JobCompleted" and jid:
+            latest_completion_idx[jid] = i
 
     # Find QA events that happened after the latest completion
     qa_done: set[str] = set()
     for i, r in enumerate(records):
         if r.effect.effect_type in ("QAPassed", "QAFailed"):
-            job_id = r.effect.job_id
-            if job_id in latest_completion_idx and i > latest_completion_idx[job_id]:
-                qa_done.add(job_id)
+            jid = getattr(r.effect, "job_id", "")
+            if jid in latest_completion_idx and i > latest_completion_idx[jid]:
+                qa_done.add(jid)
 
     for job in queue_jobs.values():
         if job.status != "completed":
@@ -1258,15 +1262,26 @@ def _build_parse_feedback(agent_id: str, effects: list[Effect], valid_effects: l
         lines = ["FEEDBACK — Parser understood your response:"]
         for e in valid_effects:
             if e.effect_type == "UpdateScript":
-                lines.append(f"  → UpdateScript: V1({len(e.narration_v1)} chars), V2({len(e.narration_v2)} chars), V3({len(e.narration_v3)} chars)")
+                v1 = getattr(e, "narration_v1", "")
+                v2 = getattr(e, "narration_v2", "")
+                v3 = getattr(e, "narration_v3", "")
+                lines.append(f"  → UpdateScript: V1({len(v1)} chars), V2({len(v2)} chars), V3({len(v3)} chars)")
             elif e.effect_type == "GenerateNarrationAudio":
-                lines.append(f"  → GenerateNarrationAudio: voice={e.voice}, text='{e.text[:50]}...'")
+                voice = getattr(e, "voice", "")
+                text = getattr(e, "text", "")
+                lines.append(f"  → GenerateNarrationAudio: voice={voice}, text='{text[:50]}...'")
             elif e.effect_type == "RenderVideoSegment":
-                lines.append(f"  → RenderVideoSegment: duration={e.duration_sec}s, prompt='{e.prompt[:50]}...'")
+                dur = getattr(e, "duration_sec", 0)
+                prompt = getattr(e, "prompt", "")
+                lines.append(f"  → RenderVideoSegment: duration={dur}s, prompt='{prompt[:50]}...'")
             elif e.effect_type == "VMAllocated":
-                lines.append(f"  → VMAllocated: offer_id={e.offer_id}, gpu_type={e.gpu_type}")
+                offer_id = getattr(e, "offer_id", "")
+                gpu_type = getattr(e, "gpu_type", "")
+                lines.append(f"  → VMAllocated: offer_id={offer_id}, gpu_type={gpu_type}")
             elif e.effect_type == "VMDeallocated":
-                lines.append(f"  → VMDeallocated: instance_id={e.instance_id}, reason={e.reason}")
+                inst_id = getattr(e, "instance_id", "")
+                reason = getattr(e, "reason", "")
+                lines.append(f"  → VMDeallocated: instance_id={inst_id}, reason={reason}")
             elif e.effect_type == "NoOp":
                 lines.append(f"  → NoOp: {getattr(e, 'reason', 'no action')}")
             else:
@@ -1293,15 +1308,22 @@ def _build_enactment_feedback(effect: Effect, success: bool, detail: str = "") -
     """Build feedback about what happened when an effect was enacted."""
     if success:
         if effect.effect_type == "VMAllocated":
-            return f"ENACTED: VM provisioned. instance_id={effect.instance_id}, worker_url={effect.worker_url}"
+            inst_id = getattr(effect, "instance_id", "")
+            url = getattr(effect, "worker_url", "")
+            return f"ENACTED: VM provisioned. instance_id={inst_id}, worker_url={url}"
         elif effect.effect_type == "VMDeallocated":
-            return f"ENACTED: VM destroyed. instance_id={effect.instance_id}"
+            inst_id = getattr(effect, "instance_id", "")
+            return f"ENACTED: VM destroyed. instance_id={inst_id}"
         elif effect.effect_type == "GenerateNarrationAudio":
-            return f"ENACTED: Audio job queued. voice={effect.voice}, text_len={len(effect.text)}"
+            voice = getattr(effect, "voice", "")
+            text = getattr(effect, "text", "")
+            return f"ENACTED: Audio job queued. voice={voice}, text_len={len(text)}"
         elif effect.effect_type == "RenderVideoSegment":
-            return f"ENACTED: Video job queued. duration={effect.duration_sec}s"
+            dur = getattr(effect, "duration_sec", 0)
+            return f"ENACTED: Video job queued. duration={dur}s"
         elif effect.effect_type == "UpdateScript":
-            return f"ENACTED: Script updated. V1={len(effect.narration_v1)} chars"
+            v1 = getattr(effect, "narration_v1", "")
+            return f"ENACTED: Script updated. V1={len(v1)} chars"
         else:
             return f"ENACTED: {effect.effect_type} stored successfully"
     else:
@@ -1406,13 +1428,13 @@ async def run_pipeline(
             # We only filter here for genuinely empty content that slipped through.
             valid_effects = []
             for effect in effects:
-                if effect.effect_type == "UpdateScript" and not effect.narration_v1:
+                if effect.effect_type == "UpdateScript" and not getattr(effect, "narration_v1", ""):
                     print(f"  Validation: UpdateScript missing narration_v1 — skipping")
                     continue
-                if effect.effect_type == "GenerateNarrationAudio" and not effect.text:
+                if effect.effect_type == "GenerateNarrationAudio" and not getattr(effect, "text", ""):
                     print(f"  Validation: GenerateNarrationAudio missing text — skipping")
                     continue
-                if effect.effect_type == "RenderVideoSegment" and not effect.prompt:
+                if effect.effect_type == "RenderVideoSegment" and not getattr(effect, "prompt", ""):
                     print(f"  Validation: RenderVideoSegment missing prompt — skipping")
                     continue
                 valid_effects.append(effect)
@@ -1435,11 +1457,11 @@ async def run_pipeline(
                     effects = parse_agent_text_multi(next_agent, clarification_response)
                     valid_effects = []
                     for effect in effects:
-                        if effect.effect_type == "UpdateScript" and not effect.narration_v1:
+                        if effect.effect_type == "UpdateScript" and not getattr(effect, "narration_v1", ""):
                             continue
-                        if effect.effect_type == "GenerateNarrationAudio" and not effect.text:
+                        if effect.effect_type == "GenerateNarrationAudio" and not getattr(effect, "text", ""):
                             continue
-                        if effect.effect_type == "RenderVideoSegment" and not effect.prompt:
+                        if effect.effect_type == "RenderVideoSegment" and not getattr(effect, "prompt", ""):
                             continue
                         valid_effects.append(effect)
                     if valid_effects:
@@ -1454,17 +1476,23 @@ async def run_pipeline(
             print(f"  {parse_fb.splitlines()[0]}")
             cycle_feedback.append(parse_fb)
 
+            # Re-compute queue state for VM mode decisions
+            _, queue_jobs_vm, _ = project_state(event_log_path, timeline_path)
+            pending_audio_vm = get_pending_jobs(queue_jobs_vm, "audio")
+            pending_video_vm = get_pending_jobs(queue_jobs_vm, "video")
+
             # Store effects in event log
             for effect in valid_effects:
                 # For VM effects, execute bash first, then record outcome
                 if effect.effect_type == "VMAllocated":
                     # Determine mode from pending jobs if gpu_type doesn't specify it
                     mode = "ltx"
-                    if "tts" in (effect.gpu_type or "").lower() or "audio" in (effect.gpu_type or "").lower():
+                    gpu_type = getattr(effect, "gpu_type", "")
+                    if "tts" in gpu_type.lower() or "audio" in gpu_type.lower():
                         mode = "tts"
-                    elif pending_audio and not pending_video:
+                    elif pending_audio_vm and not pending_video_vm:
                         mode = "tts"
-                    elif not pending_audio and pending_video:
+                    elif not pending_audio_vm and pending_video_vm:
                         mode = "ltx"
                     onstart = (
                         "cd /workspace && "

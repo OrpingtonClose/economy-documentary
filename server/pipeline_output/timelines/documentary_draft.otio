@@ -3,11 +3,35 @@
     "metadata": {
         "documentary": {
             "_provenance": {
+                "dopamine_hook": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
+                "duration_sec": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
                 "gate_audio": {
                     "agent": "otio_gate"
                 },
                 "gate_scenario": {
                     "agent": "otio_gate"
+                },
+                "narration_v1": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
+                "narration_v2": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
+                "narration_v3": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
+                "pronunciation_hints": {
+                    "agent": "scenario",
+                    "scene": 1
                 },
                 "scenario_raw": {
                     "agent": "otio_gate"
@@ -18,10 +42,16 @@
                 "style_lock": {
                     "agent": "otio_gate"
                 },
+                "visual_notes": {
+                    "agent": "scenario",
+                    "scene": 1
+                },
                 "visual_style": {
                     "agent": "otio_gate"
                 }
             },
+            "dopamine_hook": "A rainbow isn't magic. It's a 42-degree lie your eyes tell you about light.",
+            "duration_sec": 30,
             "gate_audio": {
                 "errors": [],
                 "stage": "audio",
@@ -32,6 +62,126 @@
                 "stage": "scenario",
                 "valid": true
             },
+            "narration_v1": "Sunlight looks white, but it's a crowd of colors traveling at different speeds. When a raindrop bends this light — first when it enters, again when it reflects off the back, and once more when it exits — the colors spread apart. Red bends the least, violet the most. That separation, that spray of pure wavelength, is the rainbow. Your eye is just catching the angle where physics sings.",
+            "narration_v2": "Think of a raindrop as a tiny glass sphere. Light enters, slows down, and turns — that's refraction. It hits the far wall and bounces back — that's internal reflection. Then it exits, bending again. Every color takes a different escape route. Red comes out at a shallower angle; violet climbs steeper. Stack billions of drops at exactly the same angle, and your brain stitches them into a perfect arc. No pot of gold. Just geometry and water.",
+            "narration_v3": "The recipe for a rainbow: one sun behind you, a wall of rain in front, and each raindrop acting like a miniature prism. The light doesn't just pass through — it splits. White light fractures into red, orange, yellow, green, blue, indigo, violet. But here's the trick: you can never reach the end of a rainbow. Because it's not a thing — it's an optical illusion, a moving target that shifts as you do. The only way to see it fully is to stand still and let the light do its work.",
+            "pending_audio_jobs": [
+                {
+                    "agent": "audio",
+                    "scene_num": 1,
+                    "text": "In ADHD, these dopamine signals are short-lived.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "scenario",
+                    "scene_num": 1,
+                    "text": "Sunlight looks white, but it's a crowd of colors traveling at different speeds. When a raindrop bends this light — first when it enters, again when it reflects off the back, and once more when it exits — the colors spread apart. Red bends the least, violet the most. That separation, that spray of pure wavelength, is the rainbow. Your eye is just catching the angle where physics sings.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "scenario",
+                    "scene_num": 1,
+                    "text": "The recipe for a rainbow: one sun behind you, a wall of rain in front, and each raindrop acting like a miniature prism. The light doesn't just pass through — it splits. White light fractures into red, orange, yellow, green, blue, indigo, violet. But here's the trick: you can never reach the end of a rainbow. Because it's not a thing — it's an optical illusion, a moving target that shifts as you do. The only way to see it fully is to stand still and let the light do its work.",
+                    "voice": "V3"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 2,
+                    "text": "When sunlight enters a raindrop, it bends and fans out into separate colors.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 3,
+                    "text": "The light reflects off the inside of the raindrop and exits back toward you.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 2,
+                    "text": "When sunlight meets a raindrop, the light bends and splits. This bending is called refraction, and it unlocks the spectrum.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 3,
+                    "text": "Different colors bend at different angles. Red bends the least, violet bends the most. That is why the colors spread apart.",
+                    "voice": "V3"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 4,
+                    "text": "The light reflects off the inside of the droplet and exits again, separating even further on its way out.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 5,
+                    "text": "Millions of raindrops work together to paint a rainbow across the sky. A hidden spectrum revealed by water and light.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 3,
+                    "text": "Light reflects off the droplet and exits toward you.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 4,
+                    "text": "Every raindrop creates its own rainbow forming the visible arc.",
+                    "voice": "V3"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 5,
+                    "text": "Physics painting the sky with refracted sunlight.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 6,
+                    "text": "Every raindrop splits light the same way. But you only see the rainbow when the sun is behind you.",
+                    "voice": "V3"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 7,
+                    "text": "The angle is always forty-two degrees. That is why rainbows always appear in the same part of the sky.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 8,
+                    "text": "Red is on the outside. Violet is on the inside. The other colors live between them in perfect order.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 9,
+                    "text": "Each droplet acts like a tiny prism. Together millions of them paint the sky with light.",
+                    "voice": "V3"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 10,
+                    "text": "To see a double rainbow, look for the second arc. The colors there are reversed and fainter.",
+                    "voice": "V1"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 11,
+                    "text": "Rainbows remind us that light is never just white. It is always hiding a full spectrum of beauty.",
+                    "voice": "V2"
+                },
+                {
+                    "agent": "audio",
+                    "scene_num": 12,
+                    "text": "Next time you see a rainbow, remember. You are watching sunlight tell its true story in color.",
+                    "voice": "V3"
+                }
+            ],
+            "pronunciation_hints": "Refraction (ri-FRAK-shun), internal reflection (in-TUR-nul ri-FLEK-shun), dispersion (dis-PER-zhun), violet (VY-oh-let), indigo (IN-dih-go), prism (PRIZ-um).",
             "scenario_raw": "VISUAL STYLE:\n  Style: Cinematic slow-motion with prismatic light play\n  Realism anchors: water droplets, sunlight, blue sky\n  Avoid: cartoon rainbows, leprechauns, pots of gold\n  Palette: full visible spectrum — ROYGBIV, against dark storm clouds transitioning to clear blue\n  Camera language: macro water-droplet shots pulling back to wide sky arc\n  Reference genre: BBC Earth / Planet Earth style nature close-ups\n\nSTYLE LOCK:\n  Dominant style: Cinematic nature documentary\n  Forbidden styles: animated, fantasy, children's illustration, surreal\n  Positive fragment: real water, real light, real science made beautiful\n  Negative fragment: no fantasy elements, no artificial CGI rainbows\n\nSCENES:\n  Scene 1 — The Anatomy of a Rainbow (30s)\n    Narration (V1 Hook): Every rainbow is sunlight disguised. Billions of raindrops each act as tiny prisms, bending white light into color. You're watching physics paint the sky.\n    Narration (V2 Expert): When sunlight enters a raindrop, it refracts, reflects internally, and exits split into wavelengths. Red bends least at 42 degrees. Violet bends most.\n    Narration (V3 Storyteller): Ancient cultures called rainbows bridges between worlds. Now we know: each one is unique. Your angle, your moment — no one else sees the exact same arc.\n    Visual notes: Open on extreme macro — single water droplet on a leaf, light hitting it, prismatic flash. Cut to slow-motion rain shower in golden hour light. Wide shot of full double rainbow arc against dark receding storm clouds. Final close-up on child's face looking up, rainbow reflected in eyes.\n    Dopamine hook: Physics paint the sky\n    Pronunciation hints: RAIN-bow = /ˈreɪn.boʊ/, RE-fracts = /rɪˈfrækts/, PRISM = /ˈprɪz.əm/\n    Hook spec: topic_specific_motif=light-splitting-through-water, motion_description=slow-motion droplet fall pulling back to reveal sky-wide arc, narrative_pull=the hidden mechanism behind something familiar\n    Outro spec: closing_shot=child's eyes reflecting rainbow, recap_sentence=Light and water — nature's perfect partnership., cta=Next time rain clears, look up and find your own., brand_card=logo on dark gradient",
             "scenes": [
                 {
@@ -66,6 +216,7 @@
                 "negative_fragment": "no fantasy elements, no artificial CGI rainbows",
                 "positive_fragment": "real water, real light, real science made beautiful"
             },
+            "visual_notes": "Open on a close-up of a single raindrop clinging to a leaf, backlit by the sun, sparkling. Smooth camera push into the drop as the narrator speaks — the drop becomes a sphere filling the frame. Cut to a macro simulation animation: a ray of white light enters a spherical drop, shown as a thin beam. Inside, the beam splits into a fan of colored rays — red, orange, yellow, green, blue, violet — all refracting and reflecting. Use slow-motion particles to represent photons. Then cut to a wide shot of an open field with a distant rainbow arcing over a valley, the ground wet from a just-passed shower. The camera pans slowly left to right, following the arc. Final shot: a person standing on a hill, looking toward the rainbow, and as they take a step forward, the rainbow seems to shift in the sky — a subtle dolly-out reveals the illusion. Soft, ambient sound — dripping water, distant thunder fading, a single bird call.",
             "visual_style": {
                 "avoid": [
                     "cartoon rainbows",
