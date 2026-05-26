@@ -63,6 +63,14 @@ from qa_gates_v4 import (
 from skill_loader import get_skill_prompt_fragment, load_skill, read_skill_resource
 from search_tools import search_brave, search_perplexity, search_exa
 
+# HTTP agent support (optional — falls back to direct API if agents not running)
+try:
+    from strands_agents.agent_http_client import AgentHTTPClient
+    _HTTP_AVAILABLE = True
+except ImportError:
+    _HTTP_AVAILABLE = False
+    AgentHTTPClient = None  # type: ignore[misc,assignment]
+
 
 # ---------------------------------------------------------------------------
 # DeepSeek client
@@ -476,20 +484,24 @@ def _handle_agent_bash(response: str) -> str | None:
     return "[BASH RESULTS]\n" + "\n---\n".join(results)
 
 
-async def call_agent(agent_id: str, prompt: str) -> str:
-    """Call an agent via direct LLM API with multi-turn skill/research support.
+async def call_agent(agent_id: str, prompt: str, agent_registry: dict[str, str] | None = None) -> str:
+    """Call an agent — via HTTP service if available, else direct LLM API.
 
-    The agent may request:
-    - LOAD_SKILL: <name> → full skill instructions injected
-    - READ_RESOURCE: <skill>/<path> → specific resource file
-    - RESEARCH: <query> → Brave search
-    - RESEARCH_DEEP: <query> → Perplexity synthesis
-    - RESEARCH_NEWS: <query> → Exa recent results
-    - Bash commands (for provisioner inspection only)
+    Supports multi-turn skill/research/bash loops. Agents may request:
+    - LOAD_SKILL, READ_RESOURCE, RESEARCH, RESEARCH_DEEP, RESEARCH_NEWS
+    - Bash commands (provisioner inspection)
 
-    Loops until the agent returns a final response (no tool markers).
-    No artificial turn limit — agents can take as many turns as needed.
+    No artificial turn limit.
     """
+    # --- HTTP path: agent is a remote service ---
+    if agent_registry and agent_id in agent_registry and _HTTP_AVAILABLE and AgentHTTPClient is not None:
+        client = AgentHTTPClient(agent_registry[agent_id], agent_id)
+        try:
+            return await client.invoke(prompt)
+        except Exception as exc:
+            print(f"  [HTTP] Agent '{agent_id}' failed: {exc}. Falling back to direct API.")
+
+    # --- Direct API path (fallback) ---
     system_prompt = _inject_skill_fragment(agent_id, AGENT_PROMPTS.get(agent_id, ""))
     messages: list[dict[str, str]] = [
         {"role": "system", "content": system_prompt},
@@ -1008,7 +1020,7 @@ def run_assembly(output_dir: str, queue_jobs: dict) -> bool:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-async def consult_orchestrator(state_summary: str, brief: str) -> dict[str, str]:
+async def consult_orchestrator(state_summary: str, brief: str, agent_registry: dict[str, str] | None = None) -> dict[str, str]:
     """Ask the orchestrator agent what to do next.
 
     Returns: {"next_agent": str, "reason": str, "prompt_hint": str}
@@ -1020,7 +1032,7 @@ Brief: {brief}
 
 What should the pipeline do next?"""
 
-    response = await call_agent("orchestrator", prompt)
+    response = await call_agent("orchestrator", prompt, agent_registry=agent_registry)
     print(f"  [ORCHESTRATOR] {response[:200]}...")
 
     # Parse the orchestrator response
@@ -1058,7 +1070,7 @@ What should the pipeline do next?"""
     }
 
 
-async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, brief: str) -> bool:
+async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, brief: str, agent_registry: dict[str, str] | None = None) -> bool:
     """Find jobs where the worker asked a question and generate answers.
 
     Uses the orchestrator to decide how to answer each question.
@@ -1085,7 +1097,7 @@ async def answer_pending_questions(queue_jobs: dict, event_store: EventStore, br
         )
 
         try:
-            response = await call_agent("orchestrator", collab_prompt)
+            response = await call_agent("orchestrator", collab_prompt, agent_registry=agent_registry)
             answer = response.strip()
             if answer:
                 event_store.append(
@@ -1300,8 +1312,18 @@ async def run_pipeline(
     brief: str,
     output_dir: str,
     max_cycles: int = 50,
+    agent_registry: dict[str, str] | None = None,
 ) -> str:
-    """Run the pipeline."""
+    """Run the pipeline.
+
+    Args:
+        brief: Documentary topic.
+        output_dir: Where to write events, timelines, artifacts.
+        max_cycles: Safety limit on orchestrator cycles.
+        agent_registry: Optional mapping of agent_id → HTTP base URL.
+            If provided, agents are called via HTTP services.
+            If omitted, agents are called via direct LLM API.
+    """
     os.makedirs(output_dir, exist_ok=True)
     timeline_dir = os.path.join(output_dir, "timelines")
     os.makedirs(timeline_dir, exist_ok=True)
@@ -1350,7 +1372,7 @@ async def run_pipeline(
             return f"Pipeline complete in {cycle + 1} cycles."
 
         # Consult orchestrator
-        orch = await consult_orchestrator(state_summary, brief)
+        orch = await consult_orchestrator(state_summary, brief, agent_registry=agent_registry)
         next_agent = orch["next_agent"]
 
         if next_agent == "done" or not next_agent:
@@ -1374,7 +1396,7 @@ async def run_pipeline(
         # Run agent
         cycle_feedback: list[str] = []
         try:
-            response = await call_agent(next_agent, agent_prompt)
+            response = await call_agent(next_agent, agent_prompt, agent_registry=agent_registry)
             print(f"  Response: {response[:200]}...")
 
             effects = parse_agent_text_multi(next_agent, response)
@@ -1406,7 +1428,8 @@ async def run_pipeline(
                 try:
                     clarification_response = await call_agent(
                         next_agent,
-                        f"{agent_prompt}\n\n--- CLARIFICATION REQUEST ---\n{clarification}\n--- END CLARIFICATION ---"
+                        f"{agent_prompt}\n\n--- CLARIFICATION REQUEST ---\n{clarification}\n--- END CLARIFICATION ---",
+                        agent_registry=agent_registry,
                     )
                     print(f"  Clarification response: {clarification_response[:200]}...")
                     effects = parse_agent_text_multi(next_agent, clarification_response)
@@ -1518,7 +1541,7 @@ async def run_pipeline(
         script_meta["has_script"] = bool(script_meta.get("narration_v1"))
 
         # Answer any questions workers asked before dispatching more work
-        await answer_pending_questions(queue_jobs, event_store, brief)
+        await answer_pending_questions(queue_jobs, event_store, brief, agent_registry=agent_registry)
 
         # Dispatch pending jobs to workers
         await dispatch_pending_jobs(queue_jobs, event_store, output_dir, script_meta)
