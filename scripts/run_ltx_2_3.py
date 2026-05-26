@@ -14,10 +14,17 @@ import subprocess
 import sys
 import uuid
 
-# Add LTX-2 venv site-packages so ltx_pipelines is importable
-_LTX_VENV = f"/workspace/ltx-2-repo/.venv/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
-if os.path.isdir(_LTX_VENV) and _LTX_VENV not in sys.path:
-    sys.path.insert(0, _LTX_VENV)
+# Add the LTX-2.3 uv-managed venv site-packages so the LTX-2.3 pipeline is importable.
+# The LTX-2.3 monorepo venv was created with `uv sync --python 3.12`; try common paths.
+_LTX23_VENV_PATHS = [
+    "/workspace/ltx-2-repo/.venv/lib/python3.12/site-packages",
+    "/workspace/ltx-2-repo/.venv/lib/python3.11/site-packages",
+    "/workspace/ltx-2-repo/.venv/lib/python3.10/site-packages",
+]
+for _LTX23_VENV in _LTX23_VENV_PATHS:
+    if os.path.isdir(_LTX23_VENV) and _LTX23_VENV not in sys.path:
+        sys.path.insert(0, _LTX23_VENV)
+        break
 
 import numpy as np
 import torch

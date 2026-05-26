@@ -61,6 +61,9 @@ fi
 # Write DeepSeek API key for the VM agent
 echo "$1" > /workspace/.deepseek_key
 
+# Write Vast.ai credentials for the self-destruct monitor
+echo "$2" > /workspace/.vast_api_key
+
 # Start the VM agent
 nohup python repo/scripts/vm_agent.py --port 8880 \
     > /workspace/agent.log 2>&1 &

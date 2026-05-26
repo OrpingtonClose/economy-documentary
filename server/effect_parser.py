@@ -54,6 +54,7 @@ class _SingleEffect(BaseModel):
         "UpdateScript", "GenerateNarrationAudio", "RenderVideoSegment",
         "MergeIntoOTIO", "VMAllocated", "VMDeallocated", "VMProvisionFailed",
         "JobStarted", "JobCompleted", "JobFailed",
+        "JobQuestionReceived", "JobQuestionAnswered",
         "QAPassed", "QAFailed", "JobRequeued",
         "NoOp"
     ] = Field(description="The type of effect this represents")
@@ -102,6 +103,7 @@ class _SingleEffect(BaseModel):
             "UpdateScript", "GenerateNarrationAudio", "RenderVideoSegment",
             "MergeIntoOTIO", "VMAllocated", "VMDeallocated", "VMProvisionFailed",
             "JobStarted", "JobCompleted", "JobFailed",
+            "JobQuestionReceived", "JobQuestionAnswered",
             "QAPassed", "QAFailed", "JobRequeued",
             "NoOp"
         }
@@ -209,6 +211,8 @@ def _build_effect(agent_id: str, text: str, parsed: _SingleEffect) -> Effect:
         "JobStarted": JobStarted,
         "JobCompleted": JobCompleted,
         "JobFailed": JobFailed,
+        "JobQuestionReceived": JobQuestionReceived,
+        "JobQuestionAnswered": JobQuestionAnswered,
         "QAPassed": QAPassed,
         "QAFailed": QAFailed,
         "JobRequeued": JobRequeued,

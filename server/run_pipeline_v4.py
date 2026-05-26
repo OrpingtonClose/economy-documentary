@@ -72,6 +72,12 @@ if os.path.exists(_deepseek_key_path):
     with open(_deepseek_key_path) as _f:
         _DEEPSEEK_API_KEY = _f.read().strip()
 
+_VAST_API_KEY = ""
+_vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
+if os.path.exists(_vast_key_path):
+    with open(_vast_key_path) as _f:
+        _VAST_API_KEY = _f.read().strip()
+
 _DS_CLIENT = OpenAI(api_key=_DEEPSEEK_API_KEY, base_url="https://api.deepseek.com/v1")
 
 
@@ -266,7 +272,7 @@ def run_bash(command: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def destroy_orphan_vms(event_store: EventStore) -> None:
-    """Find and destroy orphan VMs, recording VMDeallocated effects."""
+    """Find and destroy orphan VMs with documentary-* labels, recording VMDeallocated effects."""
     print("[CLEANUP] Checking for orphan VMs...")
     result = run_bash("vastai show instances --raw 2>/dev/null || echo '[]'")
     if result["returncode"] != 0:
@@ -283,7 +289,8 @@ def destroy_orphan_vms(event_store: EventStore) -> None:
     destroyed = 0
     for inst in instances:
         inst_id = inst.get("id")
-        if inst_id:
+        label = inst.get("label", "")
+        if inst_id and label and label.startswith("documentary-"):
             run_bash(f"vastai destroy instance {inst_id}")
             event_store.append(
                 VMDeallocated(
@@ -1057,7 +1064,7 @@ async def run_pipeline(
                         "cd /workspace && "
                         "apt-get update -qq && apt-get install -y -qq git curl wget ffmpeg && "
                         "git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git repo && "
-                        f"bash repo/scripts/vm_onstart_{mode}.sh '{_DEEPSEEK_API_KEY}'"
+                        f"bash repo/scripts/vm_onstart_{mode}.sh '{_DEEPSEEK_API_KEY}' '{_VAST_API_KEY}'"
                     )
                     cmd = (
                         f"vastai create instance {effect.offer_id} "

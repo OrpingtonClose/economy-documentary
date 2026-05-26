@@ -115,10 +115,15 @@ _agent.tool_plain(bash_command)
 
 def _start_self_destruct() -> None:
     script = """#!/bin/bash
-INSTANCE_ID="${VAST_INSTANCE_ID:-${INSTANCE_ID:-}}"
-API_KEY="${VAST_API_KEY:-${VAST_AI_KEY:-}}"
+# VAST_INSTANCE_ID is set by the Vast.ai platform in every container.
+INSTANCE_ID="${VAST_INSTANCE_ID:-}"
+# API key is written by the onstart script (avoids env var for secrets).
+API_KEY=""
+if [ -f /workspace/.vast_api_key ]; then
+  API_KEY=$(cat /workspace/.vast_api_key)
+fi
 if [ -z "$INSTANCE_ID" ] || [ -z "$API_KEY" ]; then
-  echo "self-destruct: missing vars" >> /workspace/self_destruct.log
+  echo "self-destruct: missing instance id or api key" >> /workspace/self_destruct.log
   exit 1
 fi
 while true; do
