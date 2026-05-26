@@ -29,15 +29,14 @@ cd "$LTX2_DIR"
 /root/.local/bin/uv sync --python 3.12
 cd /workspace
 
-LTX_PYTHON="$LTX2_DIR/.venv/bin/python"
-"$LTX_PYTHON" -c "import ltx_pipelines.ti2vid_one_stage; print('ltx_pipelines OK')" || {
+/workspace/ltx-2-repo/.venv/bin/python -c "import ltx_pipelines.ti2vid_one_stage; print('ltx_pipelines OK')" || {
     echo "ERROR: ltx_pipelines not importable" >&2
     exit 1
 }
 
 # Pre-download LTX-2.3 video model weights.
 mkdir -p /workspace/models/ltx23
-"$LTX_PYTHON" -c "
+/workspace/ltx-2-repo/.venv/bin/python -c "
 from huggingface_hub import hf_hub_download
 hf_hub_download(
     repo_id='Lightricks/LTX-2.3',

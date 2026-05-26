@@ -1068,7 +1068,7 @@ async def run_pipeline(
                     )
                     cmd = (
                         f"vastai create instance {effect.offer_id} "
-                        f"--image pytorch/pytorch:2.10.0-cuda12.6-cudnn9-runtime "
+                        f"--image nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04 "
                         f"--disk 150 --ssh --direct --label documentary-{mode} "
                         f"--onstart-cmd '{onstart}'"
                     )
