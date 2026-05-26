@@ -60,6 +60,8 @@ from qa_gates_v4 import (
     qa_stills_judge,
     qa_video_artifact_probe,
 )
+from skill_loader import get_skill_prompt_fragment, load_skill, read_skill_resource
+from search_tools import search_brave, search_perplexity, search_exa
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +122,8 @@ TROUBLESHOOTING RULES (override defaults when problems detected):
 - If a worker asked a QUESTION and awaits answer → DO NOT dispatch new work; answer the question first
 
 You are not a traffic cop. You are a diagnostician. State the problem, propose the fix, and choose the right agent to execute it.
+
+{skill_fragment}
 """,
     "scenario": """You are a documentary scriptwriter — a storyteller who crafts compelling 30-second narratives.
 
@@ -140,6 +144,8 @@ TROUBLESHOOTING & ADAPTATION:
 Write naturally — prose, paragraphs, whatever feels right. Your script is the foundation; if it's weak, everything downstream fails. Be bold, be clear, be memorable.
 
 If the script already exists and looks good, say "NoOp: script already exists."
+
+{skill_fragment}
 """,
     "audio": """You are an audio producer for documentaries — an engineer who turns scripts into spoken word that moves people.
 
@@ -160,6 +166,8 @@ TROUBLESHOOTING & BEST PRACTICES:
 Write naturally — lists, paragraphs, whatever feels right. But be precise with the text you pass to TTS; every character matters.
 
 If no script exists or jobs already exist, say "NoOp: waiting."
+
+{skill_fragment}
 """,
     "video": """You are a video director for documentaries — a visual storyteller who directs every shot to serve the narrative.
 
@@ -180,6 +188,8 @@ TROUBLESHOOTING & BEST PRACTICES:
 Write naturally — lists, paragraphs, whatever feels right. But be precise with visual prompts; specificity beats verbosity.
 
 If no script exists or jobs already exist, say "NoOp: waiting."
+
+{skill_fragment}
 """,
     "assembly": """You are a video editor who assembles documentaries — a craftsman who weaves audio and video into a cohesive whole.
 
@@ -201,6 +211,8 @@ TROUBLESHOOTING & BEST PRACTICES:
 Write naturally — lists, paragraphs, whatever feels right. But be meticulous about ffmpeg flags; a missing `-shortest` can produce a 10-hour silent video.
 
 If audio/video is not ready or QA-flagged, say "NoOp: waiting for media."
+
+{skill_fragment}
 """,
     "provisioner": """You are a DevOps engineer who provisions GPU VMs on Vast.ai — a cloud operator who ensures the right compute is available at the right time.
 
@@ -223,6 +235,8 @@ TROUBLESHOOTING & BEST PRACTICES:
 You have ONE tool: bash. Use it freely. Inspect, diagnose, act.
 
 If no action is needed, say "NoOp: nothing to provision."
+
+{skill_fragment}
 """,
 }
 
@@ -299,17 +313,98 @@ def build_state_summary(timeline: otio.schema.Timeline, queue_jobs: dict) -> str
 # Agent calling
 # ---------------------------------------------------------------------------
 
-async def call_agent(agent_id: str, prompt: str) -> str:
-    """Call an agent via direct LLM API (free text, no instructor)."""
-    result = _DS_CLIENT.chat.completions.create(
-        model="deepseek-v4-flash",
-        messages=[
-            {"role": "system", "content": AGENT_PROMPTS.get(agent_id, "")},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.7,
-    )
-    return str(result.choices[0].message.content)
+def _inject_skill_fragment(agent_id: str, prompt: str) -> str:
+    """Replace {skill_fragment} placeholder with actual skill discovery text."""
+    fragment = get_skill_prompt_fragment(agent_id)
+    return prompt.replace("{skill_fragment}", fragment)
+
+
+def _handle_agent_research(response: str) -> str | None:
+    """Detect RESEARCH markers and execute search. Returns result or None."""
+    lines = response.splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("RESEARCH_DEEP:"):
+            query = stripped.split(":", 1)[1].strip()
+            return f"[RESEARCH_DEEP result for '{query}']\n{search_perplexity(query, count=3)}"
+        if stripped.upper().startswith("RESEARCH_NEWS:"):
+            query = stripped.split(":", 1)[1].strip()
+            return f"[RESEARCH_NEWS result for '{query}']\n{search_exa(query, count=3)}"
+        if stripped.upper().startswith("RESEARCH:"):
+            query = stripped.split(":", 1)[1].strip()
+            return f"[RESEARCH result for '{query}']\n{search_brave(query, count=3)}"
+    return None
+
+
+def _handle_agent_skill_load(response: str) -> str | None:
+    """Detect LOAD_SKILL or READ_RESOURCE markers and load content. Returns result or None."""
+    lines = response.splitlines()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.upper().startswith("LOAD_SKILL:"):
+            name = stripped.split(":", 1)[1].strip()
+            return f"[SKILL LOADED: {name}]\n{load_skill(name)}"
+        if stripped.upper().startswith("READ_RESOURCE:"):
+            path = stripped.split(":", 1)[1].strip()
+            if "/" in path:
+                skill_name, resource = path.split("/", 1)
+                return f"[RESOURCE: {path}]\n{read_skill_resource(skill_name, resource)}"
+            return f"[ERROR] READ_RESOURCE format is '<skill_name>/<path>'. Got: {path}"
+    return None
+
+
+async def call_agent(agent_id: str, prompt: str, max_turns: int = 3) -> str:
+    """Call an agent via direct LLM API with multi-turn skill/research support.
+
+    The agent may request:
+    - LOAD_SKILL: <name> → full skill instructions injected
+    - READ_RESOURCE: <skill>/<path> → specific resource file
+    - RESEARCH: <query> → Brave search
+    - RESEARCH_DEEP: <query> → Perplexity synthesis
+    - RESEARCH_NEWS: <query> → Exa recent results
+
+    Up to max_turns additional turns to fulfill requests.
+    """
+    system_prompt = _inject_skill_fragment(agent_id, AGENT_PROMPTS.get(agent_id, ""))
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+    for turn in range(max_turns + 1):
+        result = _DS_CLIENT.chat.completions.create(
+            model="deepseek-v4-flash",
+            messages=messages,
+            temperature=0.7,
+        )
+        response = str(result.choices[0].message.content)
+
+        # Check for skill load requests
+        skill_result = _handle_agent_skill_load(response)
+        if skill_result:
+            print(f"  [SKILL TURN {turn + 1}] Agent requested skill/research")
+            messages.append({"role": "assistant", "content": response})
+            messages.append(
+                {"role": "user", "content": f"You requested additional information. Here is the result:\n\n{skill_result}\n\nNow continue with your task."}
+            )
+            continue
+
+        # Check for research requests
+        research_result = _handle_agent_research(response)
+        if research_result:
+            print(f"  [RESEARCH TURN {turn + 1}] Agent requested research")
+            messages.append({"role": "assistant", "content": response})
+            messages.append(
+                {"role": "user", "content": f"You requested research. Here are the results:\n\n{research_result}\n\nNow continue with your task."}
+            )
+            continue
+
+        # No markers — return final response
+        return response
+
+    # Max turns reached, return last response
+    print(f"  [AGENT] Max turns ({max_turns}) reached, returning last response")
+    return response
 
 
 # ---------------------------------------------------------------------------
