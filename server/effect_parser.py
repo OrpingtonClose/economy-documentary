@@ -1,22 +1,16 @@
-"""Parse agent text into typed algebraic effects.
+"""Semantic parser — extracts typed algebraic effects from agent natural language.
 
-Multistage parsing with semantic validation:
-1. Fast path: explicit EFFECT: markers (deterministic)
-2. Fast path: regex section extraction for scripts
-3. Instructor extraction with strict discriminated-union models —
-   validation failures trigger instructor's built-in reasking
-4. Post-parse clarification — genuinely incomplete effects get clarification turns
-
-Agents write free-form prose rich in concrete details. The parser extracts
-structured effects. Per-effect-type validators ensure extracted data is real.
+Agents write free-form prose and nothing else. They do not emit markers, JSON,
+section labels, or any structured format. ALL extraction complexity lives here
+in the parser. The parser uses instructor + deepseek-v4-flash with strict
+discriminated-union validation. Complexity is expected and welcome.
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from typing import Any, Literal, Union
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 from typing_extensions import Annotated
 
 from effects import (
@@ -244,23 +238,25 @@ class _MultiEffect(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# System prompt — tells the parser to extract from prose, not demand structure
+# System prompt — all extraction complexity lives here
 # ---------------------------------------------------------------------------
 
-_SYSTEM_PROMPT = """You are an expert document parser for a documentary pipeline.
+_SYSTEM_PROMPT = """You are an expert semantic parser for a documentary pipeline.
 
-Your job: read free-form agent prose and extract structured EFFECTS.
+Agents write NATURAL LANGUAGE ONLY. They do not use markers, JSON, labels, or any
+structured format. Your job is to READ their free-form prose and EXTRACT structured
+effects using deep semantic understanding.
 
 CRITICAL RULES:
-1. Agents write in natural prose. Your job is to FIND the concrete data hidden in their text.
-2. NEVER hallucinate. If the agent mentions an action but doesn't give the actual data, DO NOT invent it.
+1. Agents write in natural prose. FIND the concrete data hidden in their text.
+2. NEVER hallucinate. If the agent mentions an action but doesn't give actual data, DO NOT invent it.
 3. Extract FULL CONTENT, not summaries. If the agent quotes narration, extract the complete quote.
 4. If no actionable data exists, return an empty effects list.
 5. Rate your confidence (0-10).
 
 EFFECT TYPES:
 - UpdateScript: Script changes. Extract narration_v1, narration_v2, narration_v3, visual_notes, dopamine_hook, pronunciation_hints, duration_sec, scene_num.
-  The agent's prose may contain narration like: "V1: 'The rainbow arcs...'" or "Primary: The rainbow arcs..." — extract the FULL text after the label.
+  The agent's prose may contain narration like: "V1 says 'The rainbow arcs...'" or "Primary narration: The rainbow arcs..." — extract the FULL text.
 
 - GenerateNarrationAudio: TTS request. Extract voice (V1/V2/V3) and text (exact narration).
   The agent may say: "For V1, use: 'In ADHD...'" — extract voice=V1, text="In ADHD..."
@@ -332,115 +328,6 @@ def _build_effect(agent_id: str, text: str, parsed: Any) -> Effect:
 
 
 # ---------------------------------------------------------------------------
-# Pre-extraction fast paths
-# ---------------------------------------------------------------------------
-
-def _pre_extract_script(text: str) -> dict[str, str] | None:
-    """Extract script fields using section-based parsing."""
-    result: dict[str, str] = {}
-    lines = text.splitlines()
-
-    def _extract_section(header_keywords: list[str], stop_keywords: list[str]) -> str:
-        capturing = False
-        buffer: list[str] = []
-        for line in lines:
-            stripped = line.strip()
-            if capturing and any(kw.lower() in stripped.lower() for kw in stop_keywords):
-                capturing = False
-                break
-            if capturing:
-                if stripped.startswith(">"):
-                    stripped = stripped[1:].strip()
-                buffer.append(stripped)
-            if any(kw.lower() in stripped.lower() for kw in header_keywords):
-                capturing = True
-        return "\n".join(buffer).strip()
-
-    v1 = _extract_section(
-        ["V1", "Primary Narration", "Primary narration"],
-        ["V2", "V3", "Alternate Narration", "Third Take", "Visual Notes", "---", "Duration Estimate"]
-    )
-    if v1:
-        result["narration_v1"] = v1
-
-    v2 = _extract_section(
-        ["V2", "Alternate Narration", "Alternate narration"],
-        ["V3", "V1", "Primary Narration", "Third Take", "Visual Notes", "---", "Duration Estimate"]
-    )
-    if v2:
-        result["narration_v2"] = v2
-
-    v3 = _extract_section(
-        ["V3", "Third Take", "Third take"],
-        ["V1", "V2", "Primary Narration", "Alternate Narration", "Visual Notes", "---", "Duration Estimate"]
-    )
-    if v3:
-        result["narration_v3"] = v3
-
-    visual = _extract_section(
-        ["Visual Notes", "Visual notes", "Shot List", "frame-by-frame"],
-        ["Duration Estimate", "Duration", "---", "Agent Note", "Pronunciation"]
-    )
-    if visual:
-        result["visual_notes"] = visual
-
-    hook = _extract_section(
-        ["Dopamine Hook", "Dopamine hook", "Opening", "Hook"],
-        ["Narration", "V1", "Visual Notes", "Pronunciation", "---", "Duration"]
-    )
-    if hook:
-        result["dopamine_hook"] = hook
-
-    if result.get("narration_v1"):
-        return result
-    return None
-
-
-def _pre_extract_effect_markers(text: str) -> list[Any] | None:
-    """Extract effects from explicit EFFECT: markers in agent responses.
-
-    Format: EFFECT: <EffectType> field1="value" field2="value"
-    Example: EFFECT: GenerateNarrationAudio voice="V1" text="Hello world"
-    """
-    effects: list[Any] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.upper().startswith("EFFECT:"):
-            continue
-        body = stripped[7:].strip()
-        parts = body.split(None, 1)
-        if not parts:
-            continue
-        effect_type = parts[0]
-        fields: dict[str, str] = {}
-        if len(parts) > 1:
-            field_text = parts[1]
-            for m in re.finditer(r'(\w+)=(["\'])(.*?)\2|(\w+)=([^\s]+)', field_text):
-                if m.group(1):
-                    fields[m.group(1)] = m.group(3)
-                elif m.group(4):
-                    fields[m.group(4)] = m.group(5)
-        # Build the appropriate model based on effect_type
-        try:
-            if effect_type == "GenerateNarrationAudio":
-                effects.append(_GenerateNarrationAudioEffect(effect_type=effect_type, **fields))
-            elif effect_type == "RenderVideoSegment":
-                effects.append(_RenderVideoSegmentEffect(effect_type=effect_type, **fields))
-            elif effect_type == "VMAllocated":
-                effects.append(_VMAllocatedEffect(effect_type=effect_type, **fields))
-            elif effect_type == "VMDeallocated":
-                effects.append(_VMDeallocatedEffect(effect_type=effect_type, **fields))
-            elif effect_type == "NoOp":
-                effects.append(_NoOpEffect(effect_type=effect_type, **fields))
-            else:
-                effects.append(_NoOpEffect(effect_type="NoOp", noop_reason=f"Unknown effect type: {effect_type}"))
-        except Exception:
-            # Validation failed on marker — let instructor handle it
-            pass
-    return effects if effects else None
-
-
-# ---------------------------------------------------------------------------
 # Post-parse clarification
 # ---------------------------------------------------------------------------
 
@@ -485,36 +372,9 @@ def parse_agent_text(agent_id: str, text: str) -> Effect:
 def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """Parse raw agent text into a list of typed Effects.
 
-    Three-stage pipeline:
-    1. Fast regex extraction (EFFECT: markers, script sections)
-    2. Instructor extraction with strict discriminated-union validators
-       (validation failures trigger instructor's built-in reasking)
-    3. Post-parse clarification (escalate to agent if data genuinely missing)
+    Single-phase semantic extraction via instructor + deepseek-v4-flash.
+    All complexity lives in the parser. Agents write natural language only.
     """
-    # Stage 1: explicit EFFECT: markers
-    markers = _pre_extract_effect_markers(text)
-    if markers:
-        return [_build_effect(agent_id, text, m) for m in markers]
-
-    # Stage 2: regex script extraction
-    if agent_id == "scenario":
-        pre = _pre_extract_script(text)
-        if pre:
-            print(f"  [PARSER] Regex pre-extract v1_len={len(pre.get('narration_v1', ''))}")
-            return [UpdateScript(
-                agent_id=agent_id,
-                timestamp=datetime.now(),
-                justification=text,
-                scene_num=1,
-                narration_v1=pre.get("narration_v1", ""),
-                narration_v2=pre.get("narration_v2", ""),
-                narration_v3=pre.get("narration_v3", ""),
-                visual_notes=pre.get("visual_notes", ""),
-                dopamine_hook=pre.get("dopamine_hook", ""),
-                duration_sec=30,
-            )]
-
-    # Stage 3: instructor with strict validation (re-asking built in)
     try:
         from structured_extract import extract
 
