@@ -40,27 +40,32 @@ async def main():
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR)
 
-    run_id = f"production_run_{int(time.time())}"
-    logger.info(f"Starting production run: {run_id}")
+    resume_run_id = sys.argv[1] if len(sys.argv) > 1 else None
+    if resume_run_id:
+        run_id = resume_run_id
+        logger.info(f"Resuming production run: {run_id}")
+    else:
+        run_id = f"production_run_{int(time.time())}"
+        logger.info(f"Starting production run: {run_id}")
 
-    # Set up initial events in SQLite WAL Event Store
-    start_event = PipelineStarted(
-        run_id=run_id,
-        agent="operator",
-        config={
-            "topic": "Lacanian obsessional personality",
-            "target_duration_sec": 60.0
-        }
-    )
-    event_store.append(run_id, start_event, otio_hash_before="")
+        # Set up initial events in SQLite WAL Event Store
+        start_event = PipelineStarted(
+            run_id=run_id,
+            agent="operator",
+            config={
+                "topic": "Lacan's notion of objet petit a",
+                "target_duration_sec": 60.0
+            }
+        )
+        event_store.append(run_id, start_event, otio_hash_before="")
 
-    budget_event = BudgetSet(
-        run_id=run_id,
-        agent="operator",
-        budget_usd=15.0,  # 15 USD budget
-        reason="run_start",
-    )
-    event_store.append(run_id, budget_event, otio_hash_before="")
+        budget_event = BudgetSet(
+            run_id=run_id,
+            agent="operator",
+            budget_usd=15.0,  # 15 USD budget
+            reason="run_start",
+        )
+        event_store.append(run_id, budget_event, otio_hash_before="")
 
     logger.info("Booting GSA and Agent servers...")
     # Import apps dynamically
@@ -82,24 +87,25 @@ async def main():
     logger.info("All servers booted. Waiting 5 seconds to initialize...")
     await asyncio.sleep(5.0)
 
-    # Post initial instruction to Scenario Agent to trigger script writing (non-blocking, fast connection timeout)
-    logger.info("Posting instruction to Scenario Agent...")
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "http://localhost:8001/",
-                json={
-                    "run_id": run_id,
-                    "notification_type": "instruction",
-                    "context": {
-                        "instruction": "Generate a short 1-minute documentary about the 'Lacanian obsessional personality'."
-                    }
-                },
-                timeout=5.0
-            )
-            logger.info(f"Scenario Agent trigger response: {resp.status_code} - {resp.text}")
-    except Exception as exc:
-        logger.error(f"Failed to post instruction to Scenario Agent: {exc}")
+    if not resume_run_id:
+        # Post initial instruction to Scenario Agent to trigger script writing (non-blocking, fast connection timeout)
+        logger.info("Posting instruction to Scenario Agent...")
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "http://localhost:8001/",
+                    json={
+                        "run_id": run_id,
+                        "notification_type": "instruction",
+                        "context": {
+                            "instruction": "Generate a short 1-minute documentary about Lacan's notion of objet petit a (petit object a)."
+                        }
+                    },
+                    timeout=5.0
+                )
+                logger.info(f"Scenario Agent trigger response: {resp.status_code} - {resp.text}")
+        except Exception as exc:
+            logger.error(f"Failed to post instruction to Scenario Agent: {exc}")
 
     logger.info("Monitors starting. Watching emergent pipeline convergence...")
     
@@ -148,22 +154,26 @@ async def main():
                 "provisioner": 8081,
             }
             agent_error_detected = False
+            any_agent_busy = False
             for agent_name, port in agent_ports.items():
                 try:
                     async with httpx.AsyncClient() as client:
                         a_resp = await client.get(f"http://localhost:{port}/?run_id={run_id}", timeout=2.0)
                         if a_resp.status_code == 200:
                             h_data = a_resp.json()
-                            if h_data.get("status") == "error":
+                            status = h_data.get("status")
+                            if status == "error":
                                 logger.error(f"Material Timeout: Agent '{agent_name}' is in ERROR state: {h_data.get('last_error')}")
                                 agent_error_detected = True
                                 break
+                            elif status == "busy":
+                                any_agent_busy = True
                 except Exception as e:
                     pass
             if agent_error_detected:
                 break
 
-            # 3. Check for inactivity timeout (only when there are no running VMs or pending jobs)
+            # 3. Check for inactivity timeout (only when there are no running VMs or pending jobs, and no busy agents)
             has_active_work = False
             try:
                 async with httpx.AsyncClient() as client:
@@ -178,8 +188,8 @@ async def main():
             except Exception:
                 pass
 
-            if not has_active_work and (time.time() - last_activity_time > inactivity_timeout_sec):
-                logger.error(f"Material Timeout: No new events for {inactivity_timeout_sec}s and no active jobs/VMs.")
+            if not has_active_work and not any_agent_busy and (time.time() - last_activity_time > inactivity_timeout_sec):
+                logger.error(f"Material Timeout: No new events for {inactivity_timeout_sec}s, no active jobs/VMs, and no busy agents.")
                 break
 
             await asyncio.sleep(10.0)

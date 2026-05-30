@@ -331,6 +331,8 @@ RULES FOR WRITING:
 6. NEVER USE STRUCTURED FORMATS. No JSON, no XML, no markdown tables,
    no EFFECT: markers, no labeled sections. Write as if composing an email
    to a colleague who needs to understand exactly what you did and why.
+
+7. NO CLOCK TIMEOUTS / SLEEPS. Never run 'sleep' commands or introduce artificial blocking delays in your bash commands. If a resource or VM is still loading/provisioning, output a summary and return a NoOp or end your turn. The agent loop will automatically check progress on your next turn a few seconds later.
 """
 
 ROLE_INSTRUCTIONS = {
@@ -348,6 +350,8 @@ and the constraints of audio-visual production.
 - One action per turn. Write narration that fits the scene and duration target.
 - You have ONE tool: bash_command. Use it to query the GSA and see which slots
   need filling, which scenes are incomplete, and what revisions are requested.
+
+CRITICAL: Under no circumstances should you ever output markdown tables, summary lists, or structured previews of the script blocks in your explanation text. The parser extracts the script from your output, so if you include tables or bulleted lists summarizing the blocks, the parser will extract those summaries instead of the actual full narration text, destroying the documentary. Always write your rationale as simple paragraphs, and only write the script blocks inside your single final UpdateScript action representation.
 
 === SKILL CATALOG ===
 - server/skills/documentary-writing/SKILL.md — Compelling scripts, ADHD rules, structure, voices, shot planning
@@ -615,7 +619,7 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
         include_plan=False,
         include_memory=False,
         include_checkpoints=False,
-        web_search=True,
+        web_search=False,
         web_fetch=True,
         include_skills=True,
         include_subagents=True,
@@ -684,6 +688,17 @@ Available Skills:
         from pydantic_ai import UsageLimits
         result = await agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=300))
         agent_text = result.output
+
+        try:
+            with open(f"/tmp/documentary-pipeline/agent_debug_{role}.log", "a", encoding="utf-8") as f:
+                f.write(f"\n\n========================================\n")
+                f.write(f"TURN START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"RUN ID: {run_id}\n")
+                f.write(f"PROMPT:\n{prompt}\n")
+                f.write(f"RESPONSE:\n{agent_text}\n")
+                f.write(f"========================================\n")
+        except Exception:
+            pass
 
         # 6. Parse effects
         from effect_parser import parse_agent_text_multi

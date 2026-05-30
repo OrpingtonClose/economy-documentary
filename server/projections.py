@@ -120,14 +120,17 @@ class Timeline(Projection):
                     "artifact_uri": None,
                 }
 
+        updated_scenes = {block.scene_num for block in event.blocks}
         for addr in list(self.slots.keys()):
             if addr not in new_slot_addrs:
-                clip = self._find_clip_by_name(addr)
-                if clip is not None:
-                    t = clip.parent()
-                    if t is not None:
-                        t.remove(clip)
-                self.slots.pop(addr, None)
+                slot_scene = self.slots[addr].get("scene_num")
+                if slot_scene in updated_scenes:
+                    clip = self._find_clip_by_name(addr)
+                    if clip is not None:
+                        t = clip.parent()
+                        if t is not None:
+                            t.remove(clip)
+                    self.slots.pop(addr, None)
 
     def _update_clip_duration(self, slot_addr: str, duration_sec: float) -> None:
         clip = self._find_clip_by_name(slot_addr)
