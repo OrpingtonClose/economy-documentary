@@ -71,8 +71,12 @@ async def test_agent_post_endpoint(temp_log_dir):
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
-        assert data["effects_extracted"] == ["update_script"]
+        assert data["effects_extracted"] == []
         assert data["agent"] == "scenario"
+
+        # Yield to let the background turn task execute
+        import asyncio
+        await asyncio.sleep(0.1)
 
         mock_turn.assert_called_once_with(
             run_id=run_id,
