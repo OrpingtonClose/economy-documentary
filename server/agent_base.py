@@ -515,6 +515,15 @@ Read this skill: bash_command("cat server/skills/gpu-provisioning/SKILL.md")
 
 {COMMUNICATION_STYLE}
 
+=== ASYNCHRONOUS OBSERVATION & INTELLIGENT WAITING ===
+- Never attempt to wait for a VM to boot or download files using a sleep command or sequential polling commands in a single turn.
+- A single turn is a quick decision checkpoint. If you observe that a VM is in the "loading" or "booting" state:
+  1. State that the VM is loading/booting.
+  2. Emit a `NoOp` (or `VMObserved` representing the loading state) for this turn.
+  3. End your turn immediately.
+- The pipeline coordinator will trigger your next turn automatically in a few seconds. When you wake up on that subsequent turn, query the GSA or Vast.ai status again to check if it has transitioned to "ready" or "active".
+- This allows you to observe progress dynamically across turns, safe from blocking timeouts.
+
 === DECISION FRAMEWORK ===
 1. Query the GSA. Read jobs and VMs state.
 2. If memory exists of a successful VM config (in your prompt from prior turns
