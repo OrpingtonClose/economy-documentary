@@ -1,9 +1,0 @@
-{
-  "error_type": "catastrophic",
-  "tool": "render_video",
-  "stage": "assembly",
-  "error_message": "Worker process crashed with SIGKILL (OOM)",
-  "recoverable": false,
-  "severity": "critical",
-  "worker_id": "gpu-worker-02"
-}

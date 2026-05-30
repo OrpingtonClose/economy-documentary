@@ -1,9 +1,0 @@
-{
-  "error_type": "invariant_violation",
-  "tool": "render_audio",
-  "stage": "audio",
-  "invariant": "uniform_lufs",
-  "violation_detail": "Narration block LUFS range 3.2 dB exceeds 2.0 dB threshold",
-  "recoverable": false,
-  "severity": "high"
-}

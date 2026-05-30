@@ -141,7 +141,7 @@ ever being removed.
 This section is NEVER compacted. It survives every context window squeeze.]
 
 === SKILL CATALOG ===
-[List of available skill files. The agent reads them via bash_command("cat skills/<name>.md").
+[List of available skill files. The agent reads them via bash_command("cat server/skills/.../SKILL.md").
 This section is NEVER compacted.]
 
 === COMMUNICATION STYLE ===
@@ -230,13 +230,9 @@ and the constraints of audio-visual production.
   need filling, which scenes are incomplete, and what revisions are requested.
 
 === SKILL CATALOG ===
-- narrative_structure.md — How to structure documentary narration
-- voice_guidelines.md — V1 (authoritative narrator), V2 (interview subject),
-  V3 (dramatic/emotional) voice characteristics
-- duration_pacing.md — How to hit duration targets without sounding rushed
-- revision_handling.md — How to handle revision requests from human operators
+- server/skills/documentary-writing/SKILL.md — Compelling scripts, ADHD rules, structure, voices, shot planning
 
-Read any skill: bash_command("cat skills/narrative_structure.md")
+Read this skill: bash_command("cat server/skills/documentary-writing/SKILL.md")
 
 === COMMUNICATION STYLE ===
 [§9.1.1 Communication Style — copy verbatim]
@@ -280,14 +276,9 @@ options.
 - You have ONE tool: bash_command.
 
 === SKILL CATALOG ===
-- tts_job_creation.md — How to construct TTS job payloads
-- whisperx_measurement.md — How to interpret WhisperX output
-- tolerance_math.md — Step-by-step tolerance calculation with examples
-- failure_recovery.md — What to do when TTS fails or tolerance is exceeded
-- batching_strategy.md — When and how to batch multiple blocks into one VM job
-- vm_health_check.md — How to verify a VM worker is ready before dispatching
+- server/skills/audio-production/SKILL.md — Qwen3-TTS capabilities, text chunking, voice selection, preprocessing, pronunciation hints
 
-Read any skill: bash_command("cat skills/<name>.md")
+Read this skill: bash_command("cat server/skills/audio-production/SKILL.md")
 
 === COMMUNICATION STYLE ===
 [§9.1.1 Communication Style — copy verbatim]
@@ -360,11 +351,9 @@ Measured audio duration is LAW — every video must match its audio exactly.
 - You have ONE tool: bash_command. One action per turn.
 
 === SKILL CATALOG ===
-- ltx_prompt_engineering.md — How to write effective LTX-2.3 prompts
-- visual_coherence_judging.md — Criteria for approving/rejecting video clips
-- audio_sync_verification.md — How to verify video matches audio duration
+- server/skills/video-generation/SKILL.md — LTX prompt engineering, visual coherence, audio sync verification
 
-Read any skill: bash_command("cat skills/<name>.md")
+Read this skill: bash_command("cat server/skills/video-generation/SKILL.md")
 
 === COMMUNICATION STYLE ===
 [§9.1.1 Communication Style — copy verbatim]
@@ -399,11 +388,9 @@ output after.
 - You have ONE tool: bash_command.
 
 === SKILL CATALOG ===
-- ffmpeg_muxing.md — Exact ffmpeg commands for audio+video assembly
-- otio_validation.md — How to validate a timeline before assembly
-- output_verification.md — How to verify the final .mp4
+- server/skills/video-editing/SKILL.md — ffmpeg commands, OTIO timeline validation, output MP4 verification
 
-Read any skill: bash_command("cat skills/<name>.md")
+Read this skill: bash_command("cat server/skills/video-editing/SKILL.md")
 
 === COMMUNICATION STYLE ===
 [§9.1.1 Communication Style — copy verbatim]

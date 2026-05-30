@@ -1,124 +1,177 @@
-"""Append-only event store. The single source of truth for the pipeline.
-
-Every validated effect becomes an immutable EventRecord appended to the log.
-OTIO is a read model rebuilt from these events.
-Nothing is ever deleted or mutated.
-"""
-
-from __future__ import annotations
-
-import json
-import os
-from typing import Any
-
-from pydantic import BaseModel, Field, SerializeAsAny, model_validator
-
-from effects import Effect
-
-
-_EFFECT_CLASSES: dict[str, type[Effect]] = {
-    "UpdateScript": __import__("effects", fromlist=["UpdateScript"]).UpdateScript,
-    "GenerateNarrationAudio": __import__("effects", fromlist=["GenerateNarrationAudio"]).GenerateNarrationAudio,
-    "RenderVideoSegment": __import__("effects", fromlist=["RenderVideoSegment"]).RenderVideoSegment,
-    "MergeIntoOTIO": __import__("effects", fromlist=["MergeIntoOTIO"]).MergeIntoOTIO,
-    "JobQueued": __import__("effects", fromlist=["JobQueued"]).JobQueued,
-    "JobStarted": __import__("effects", fromlist=["JobStarted"]).JobStarted,
-    "JobCompleted": __import__("effects", fromlist=["JobCompleted"]).JobCompleted,
-    "JobFailed": __import__("effects", fromlist=["JobFailed"]).JobFailed,
-    "JobQuestionReceived": __import__("effects", fromlist=["JobQuestionReceived"]).JobQuestionReceived,
-    "JobQuestionAnswered": __import__("effects", fromlist=["JobQuestionAnswered"]).JobQuestionAnswered,
-    "VMAllocated": __import__("effects", fromlist=["VMAllocated"]).VMAllocated,
-    "VMDeallocated": __import__("effects", fromlist=["VMDeallocated"]).VMDeallocated,
-    "VMProvisionFailed": __import__("effects", fromlist=["VMProvisionFailed"]).VMProvisionFailed,
-    "QAPassed": __import__("effects", fromlist=["QAPassed"]).QAPassed,
-    "QAFailed": __import__("effects", fromlist=["QAFailed"]).QAFailed,
-    "JobRequeued": __import__("effects", fromlist=["JobRequeued"]).JobRequeued,
-    "NoOp": __import__("effects", fromlist=["NoOp"]).NoOp,
-}
+import sqlite3
+from pathlib import Path
+from contextlib import contextmanager
+from pydantic import BaseModel
+from effects import Effect, EffectUnion, KIND_TO_MODEL
 
 
 class EventRecord(BaseModel):
     """A single immutable event in the log."""
-
-    seq: int = Field(description="Monotonically increasing sequence number")
-    effect: SerializeAsAny[Effect] = Field(description="The typed effect that caused this event")
-    otio_hash_before: str = Field(description="OTIO hash before applying this effect")
-    otio_hash_after: str = Field(default="", description="OTIO hash after applying this effect")
-    validated: bool = Field(default=True, description="Whether this effect passed validation")
-    rejected_reason: str = Field(default="", description="If rejected, why")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _parse_effect_subclass(cls, v: Any) -> Any:
-        """Deserialize effect into its proper subclass based on effect_type."""
-        if isinstance(v, dict) and "effect" in v:
-            effect_data = v["effect"]
-            if isinstance(effect_data, dict):
-                effect_type = effect_data.get("effect_type", "NoOp")
-                effect_cls = _EFFECT_CLASSES.get(effect_type, _EFFECT_CLASSES["NoOp"])
-                v["effect"] = effect_cls(**effect_data)
-        return v
+    seq: int
+    effect: EffectUnion
+    otio_hash_before: str
 
 
 class EventStore:
-    """Append-only event log backed by a JSONL file.
+    """Append-only SQLite event store. One DB file per run.
 
-    The event log is the single source of truth.
-    OTIO is a materialized view rebuilt from events.
+    Cross-process safe via SQLite WAL mode + BEGIN IMMEDIATE.
     """
 
-    def __init__(self, log_path: str) -> None:
-        self.log_path = log_path
-        self._seq = self._last_seq()
+    def __init__(self, log_dir: str) -> None:
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self._dbs: dict[str, Path] = {}  # run_id -> db path
 
-    def _last_seq(self) -> int:
-        """Read the last sequence number from the log."""
-        if not os.path.exists(self.log_path):
-            return 0
-        last_seq = 0
+    def _path(self, run_id: str) -> Path:
+        path = self.log_dir / f"events_{run_id}.db"
+        self._dbs[run_id] = path
+        return path
+
+    def _init_db(self, run_id: str) -> None:
+        """Create schema if DB does not exist."""
+        path = self._path(run_id)
+        with sqlite3.connect(path, timeout=30.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    effect_id TEXT UNIQUE NOT NULL,
+                    kind TEXT NOT NULL,
+                    effect_json TEXT NOT NULL,
+                    otio_hash_before TEXT NOT NULL,
+                    agent TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    appended_at REAL DEFAULT (unixepoch())
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent)")
+            conn.commit()
+
+    @contextmanager
+    def _connect(self, run_id: str):
+        """Yield a connection with WAL mode and busy-timeout."""
+        path = self._path(run_id)
+        conn = sqlite3.connect(path, timeout=30.0, isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
-            with open(self.log_path, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = EventRecord.model_validate_json(line)
-                        last_seq = max(last_seq, record.seq)
-                    except Exception:
-                        continue
-        except Exception:
-            logger.exception("Event store read failed, starting fresh")
-        return last_seq
+            yield conn
+        finally:
+            conn.close()
 
-    def append(self, effect: Effect, otio_hash_before: str) -> EventRecord:
-        """Append a validated effect to the log. Returns the record."""
-        self._seq += 1
-        record = EventRecord(
-            seq=self._seq,
+    def append(self, run_id: str, effect: Effect, otio_hash_before: str) -> EventRecord:
+        """Append an effect. Idempotent via UNIQUE(effect_id).
+
+        SQLite BEGIN IMMEDIATE acquires the write lock at the OS level,
+        serializing all writers across processes.
+        """
+        self._init_db(run_id)
+
+        effect_id = str(effect.effect_id)
+        kind = effect.kind
+        effect_json = effect.model_dump_json()
+        agent = effect.agent
+        timestamp = effect.timestamp.timestamp() if hasattr(effect.timestamp, "timestamp") else float(effect.timestamp)
+
+        with self._connect(run_id) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+
+            try:
+                conn.execute(
+                    """INSERT INTO events
+                       (effect_id, kind, effect_json, otio_hash_before, agent, timestamp)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (effect_id, kind, effect_json, otio_hash_before, agent, timestamp),
+                )
+            except sqlite3.IntegrityError:
+                # Duplicate effect_id — idempotent no-op
+                conn.execute("ROLLBACK")
+                return self._find_by_effect_id(run_id, effect_id)
+
+            # Fetch the auto-incremented sequence number
+            cur = conn.execute("SELECT seq FROM events WHERE effect_id = ?", (effect_id,))
+            seq = cur.fetchone()[0]
+
+            conn.execute("COMMIT")
+
+        return EventRecord(
+            seq=seq,
             effect=effect,
             otio_hash_before=otio_hash_before,
         )
-        with open(self.log_path, "a") as f:
-            f.write(record.model_dump_json() + "\n")
-        return record
 
-    def read_all(self) -> list[EventRecord]:
-        """Read all events from the log."""
-        events: list[EventRecord] = []
-        if not os.path.exists(self.log_path):
-            return events
-        with open(self.log_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
+    def _find_by_effect_id(self, run_id: str, effect_id: str) -> EventRecord:
+        """Return existing record by effect_id (used for idempotent dedup)."""
+        with self._connect(run_id) as conn:
+            cur = conn.execute(
+                "SELECT seq, effect_json, otio_hash_before FROM events WHERE effect_id = ?",
+                (effect_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(f"effect_id {effect_id} not found")
+            seq, effect_json, otio_hash = row
+            # Validate through EventRecord which handles validation of unions automatically
+            record = EventRecord.model_validate({
+                "seq": seq,
+                "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                "otio_hash_before": otio_hash
+            })
+            return record
+
+    def read_all(self, run_id: str) -> list[EventRecord]:
+        """Read all events for a run, in sequence order."""
+        self._init_db(run_id)
+        records: list[EventRecord] = []
+        with self._connect(run_id) as conn:
+            cur = conn.execute(
+                "SELECT seq, effect_json, otio_hash_before FROM events ORDER BY seq"
+            )
+            for row in cur:
+                seq, effect_json, otio_hash = row
                 try:
-                    events.append(EventRecord.model_validate_json(line))
+                    # Validate through EventRecord to load concrete Pydantic models
+                    record = EventRecord.model_validate({
+                        "seq": seq,
+                        "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                        "otio_hash_before": otio_hash
+                    })
+                    records.append(record)
                 except Exception:
                     continue
-        return events
+        return records
 
-    def count(self) -> int:
-        """Return the total number of events in the log."""
-        return self._seq
+    def read_since(self, run_id: str, from_seq: int) -> list[EventRecord]:
+        """Return events with sequence > from_seq."""
+        self._init_db(run_id)
+        records: list[EventRecord] = []
+        with self._connect(run_id) as conn:
+            cur = conn.execute(
+                "SELECT seq, effect_json, otio_hash_before FROM events WHERE seq > ? ORDER BY seq",
+                (from_seq,),
+            )
+            for row in cur:
+                seq, effect_json, otio_hash = row
+                try:
+                    record = EventRecord.model_validate({
+                        "seq": seq,
+                        "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                        "otio_hash_before": otio_hash
+                    })
+                    records.append(record)
+                except Exception:
+                    continue
+        return records
+
+    def replay(self, run_id: str) -> list[EventRecord]:
+        """Full replay from sequence 1."""
+        return self.read_all(run_id)
+
+    def export_to_jsonl(self, run_id: str, out_path: str) -> None:
+        """Export events to JSONL for human inspection or backup."""
+        records = self.read_all(run_id)
+        with open(out_path, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(rec.model_dump_json() + "\n")

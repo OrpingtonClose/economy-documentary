@@ -52,7 +52,7 @@ curl -s http://gsa:8000/ | jq '.timeline.slots | length'
 If it needs a skill:
 
 ```bash
-cat skills/audio_measurement_procedure.md
+cat server/skills/audio-production/SKILL.md
 ```
 
 If it needs to check the event store:
@@ -161,27 +161,19 @@ are Markdown files. No DSL, no schema, no registry service.
 ### 7.4.1 Skill Files
 
 ```
-skills/
-├── narrative_structure.md
-├── voice_guidelines.md
-├── duration_pacing.md
-├── revision_handling.md
-├── tts_job_creation.md
-├── whisperx_measurement.md
-├── tolerance_math.md
-├── failure_recovery.md
-├── batching_strategy.md
-├── vm_health_check.md
-├── ltx_prompt_engineering.md
-├── visual_coherence_judging.md
-├── audio_sync_verification.md
-├── ffmpeg_muxing.md
-├── otio_validation.md
-├── output_verification.md
-├── provision_vm.md
-├── dispatch_job.md
-├── cost_optimization.md
-└── exa_research.md
+server/skills/
+├── audio-production/
+│   └── SKILL.md
+├── documentary-writing/
+│   └── SKILL.md
+├── gpu-provisioning/
+│   └── SKILL.md
+├── pipeline-troubleshooting/
+│   └── SKILL.md
+├── video-editing/
+│   └── SKILL.md
+└── video-generation/
+    └── SKILL.md
 ```
 
 ### 7.4.2 Skill Format
@@ -212,7 +204,7 @@ The agent's system prompt lists all skill filenames in `=== SKILL CATALOG ===`.
 When the agent encounters a situation it needs help with, it reads the skill:
 
 ```bash
-bash_command("cat skills/tolerance_math.md")
+bash_command("cat server/skills/audio-production/SKILL.md")
 ```
 
 The skill text enters the message history. The agent reasons with it. On the
@@ -280,8 +272,8 @@ See §9 for the complete system prompts for each agent.
 |---|---|
 | Query GSA | `curl -s http://gsa:8000/` |
 | Parse GSA JSON | `curl -s http://gsa:8000/ | jq '.timeline.slots'` |
-| Read skill | `cat skills/tolerance_math.md` |
-| List skills | `ls skills/` |
+| Read skill | `cat server/skills/audio-production/SKILL.md` |
+| List skills | `ls server/skills/` |
 | Check event store | `sqlite3 /data/events/events_{run_id}.db "SELECT ..."` |
 | Run Vast.ai | `vastai search offers --type on-demand --raw` |
 | Health check worker | `curl -s http://worker-ip:8880/` |

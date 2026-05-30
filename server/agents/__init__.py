@@ -1,1 +1,0 @@
-# Documentary Pipeline — Agent definitions

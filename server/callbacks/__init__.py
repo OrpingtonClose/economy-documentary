@@ -1,1 +1,0 @@
-# Documentary Pipeline — ADK Callbacks
