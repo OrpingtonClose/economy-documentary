@@ -265,9 +265,8 @@ def get_active_runs() -> list[str]:
     return active
 
 
-def bash_command(ctx, command: str) -> str:
-    """Run a bash command locally with a fallback host resolution for gsa and a 30s timeout."""
-    import subprocess
+async def bash_command(ctx, command: str) -> str:
+    """Run a bash command locally with a fallback host resolution for gsa."""
     import socket
     if "gsa:8000" in command:
         try:
@@ -276,11 +275,13 @@ def bash_command(ctx, command: str) -> str:
             command = command.replace("gsa:8000", "localhost:8000")
             command = command.replace("gsa", "localhost")
 
-    try:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30.0)
-        return result.stdout + result.stderr
-    except subprocess.TimeoutExpired:
-        return "Error: Command timed out after 30.0 seconds."
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode() + stderr.decode()
 
 
 # ===========================================================================
@@ -614,11 +615,12 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
         include_plan=False,
         include_memory=False,
         include_checkpoints=False,
-        web_search=False,
-        web_fetch=False,
-        include_skills=False,
-        include_subagents=False,
-        include_builtin_subagents=False,
+        web_search=True,
+        web_fetch=True,
+        include_skills=True,
+        include_subagents=True,
+        include_builtin_subagents=True,
+        skill_directories=["skills"],
         thinking=False,
         cost_tracking=True,
         cost_budget_usd=10.0,
@@ -673,9 +675,9 @@ Available Skills:
 
         # 4. Register tool
         @agent.tool
-        def run_bash(ctx, command: str) -> str:
+        async def run_bash(ctx, command: str) -> str:
             """Run an arbitrary bash command on the local machine."""
-            return bash_command(ctx, command)
+            return await bash_command(ctx, command)
 
         # 5. Run the agent
         deps = PipelineDeps(gsa_url=gsa_url, agent_role=role, compaction_model=model_instance)

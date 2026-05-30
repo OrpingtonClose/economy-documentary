@@ -13,21 +13,19 @@
 
 # Agent Environment & Tools
 
-> **V7.1 redesign:** Agents have exactly one tool: `bash_command`. All interaction
-> with the world — querying the GSA, reading skills, running diagnostics — happens
-> through bash. The handler is minimal: it builds the prompt (system instructions +
-> skill catalog + memory), runs the agent, parses output, appends effects. The agent
-> is autonomous. It curls the GSA. It reads skills. It reasons from raw state.
+> **V7.1 redesign:** Standard agent capabilities (skills catalog loader, subagent delegation, web search, web fetch) are enabled. The primary tool is an asynchronous `bash_command`. All interaction with the world — querying the GSA, reading skills, running diagnostics — happens through bash. The handler is minimal: it builds the prompt (system instructions + skill catalog + memory), runs the agent, parses output, appends effects. The agent is autonomous. It curls the GSA. It reads skills. It reasons from raw state.
 
 ---
 
-## 7.1 Design Principle: One Tool
+## 7.1 Design Principle: Core Tools
+
+Standard pydantic-deep agent platform tools are enabled (`list_skills`, `load_skill`, `task`, `web_search`, etc.). In addition, each agent is equipped with a custom async `bash_command` tool:
 
 ```python
 AGENT_TOOLS = [
     {
         "name": "bash_command",
-        "description": "Execute a bash command. Use this to query the GSA (curl), read skill files, run diagnostics, or interact with any system. Output is captured and returned to you.",
+        "description": "Execute a bash command asynchronously. Use this to query the GSA (curl), read skill files, run diagnostics, or interact with any system. Output is captured and returned to you.",
         "parameters": {
             "command": {"type": "string", "description": "The bash command to execute"}
         }

@@ -17,29 +17,31 @@ The **Provisioner** (port 8081) is an agent — the most intelligence-requiring
 component in the architecture. It provisions GPU VMs, dispatches jobs to workers,
 collects results, and learns from failures across runs.
 
-**Hard architectural principle:** `bash_command` is the **only** tool. The
-Provisioner is autonomous. It curls the GSA when it needs state. It reads skills
-when it needs knowledge. It produces natural language describing what it did.
-The parser extracts effects. The handler appends them.
+**Hard architectural principle:** The Provisioner is autonomous. It curls the GSA when it needs state. It reads skills when it needs knowledge. It produces natural language describing what it did. The parser extracts effects. The handler appends them.
 
-#### 10.0.1 The Only Tool
+#### 10.0.1 The Async Bash Tool
 
 ```python
 from strands import tool
 
 @tool
-def bash_command(command: str) -> str:
-    """Run an arbitrary bash command on the local machine.
+async def bash_command(command: str) -> str:
+    """Run an arbitrary bash command on the local machine asynchronously.
     Returns stdout+stderr as a single string.
     """
-    import subprocess
-    result = subprocess.run(command, shell=True, capture_output=True, text=True)
-    return result.stdout + result.stderr
+    import asyncio
+    proc = await asyncio.create_subprocess_shell(
+        command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode() + stderr.decode()
 ```
 
 ### 10.1 Architecture
 
-#### 10.1.1 Agent with bash_command only
+#### 10.1.1 Agent Implementation
 
 The Provisioner is a pydantic-deep agent wrapped in a FastAPI HTTP service.
 On `POST /`, the handler builds the prompt (system instructions + skill catalog
@@ -106,13 +108,17 @@ VMObserved, NoOp, ClarificationRequest
 agent = create_deep_agent(
     model=config.agent_models["provisioner"],
     instructions=PROVISIONER_INSTRUCTION,
-    tools=[bash_command],  # ONLY tool
     on_before_compress=otio_aware_compress,
     history_processors=[...],
     include_todo=False,
     include_filesystem=False,
     include_plan=False,
     include_memory=False,
+    include_skills=True,
+    include_subagents=True,
+    include_builtin_subagents=True,
+    web_search=True,
+    web_fetch=True,
 )
 ```
 
