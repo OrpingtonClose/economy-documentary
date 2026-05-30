@@ -1,0 +1,393 @@
+
+New Chat
+⌘
+K
+Slides
+Websites
+Docs
+Deep Research
+Sheets
+Agent Swarm
+Kimi Code
+Kimi Claw
+Kimi Claw
+Kimi Claw is ready—let's chat!
+Fast Recovery Lab Metrics
+V7 Architecture Completeness Assessment
+Historical Obsessional Example
+Best Stable Lat Pulldown Machines
+Disturbance as Jouissance
+Get App
+V7 Architecture Completeness Assessment
+2
+md
+ARCHITECTURE_V7.md
+
+md
+299.81 kb
+assess with completeness of implementation in mind
+Edit
+Copy
+Share
+Could you provide the internal reasoning (THINKING) so I can craft the title?
+V7 Architecture Completeness Assessment
+Verdict
+The document is a coherent high-level design with a strong event-sourcing core, but it contains critical schema discontinuities, unresolved architectural tensions between the "effects-only" mutation model and the Provisioner's tool-based side effects, and numerous referenced-but-undefined components that would block a clean-room implementation. It reads as a principled V6→V7 delta that has not yet been fully reconciled into a single, implementable specification.
+1. Critical Blockers (Will Prevent Build or Runtime Failure)
+Table
+#	Issue	Location	Impact
+1	Parser extracts non-existent effect types. The parser's _EffectUnion (§9.5.1.1) includes _GenerateNarrationAudioEffect, _RenderVideoSegmentEffect, _QAPassedEffect, _QAFailedEffect, _JobQuestionReceivedEffect, and _JobQuestionAnsweredEffect. None of these appear in the canonical 32-effect schema (§3.10.1 / §3.10.2). A developer implementing the parser against the event store will hit a ValueError on every extraction because KIND_TO_MODEL has no mapping.	§9.5.1.1 vs §3.10	System halt on first parse.
+2	Parser discriminant is effect_type; Event store discriminant is kind. The parser models use effect_type: Literal[...] as the union tag (§9.5.1.1), while Effect base class and KIND_TO_MODEL use kind (§3.1.1, §3.10.2). The handler code that bridges parser output to event store append is not specified. Without an explicit mapping layer, extracted effects cannot be validated against EffectUnion.	§9.5.1.1 vs §3.1.1	Type system fracture.
+3	HumanInstruction schema collision with Effect base class. HumanInstruction defines agent as the target agent (§3.8.1: "target agent name or 'all'"), but the base Effect class defines agent as the producer component (§3.1.1: "component that produced the effect"). When a human posts HumanInstruction, the agent field is semantically overloaded. This breaks attribution and loop detection.	§3.8.1 vs §3.1.1	Attribution / causality corruption.
+4	Slot addressing inconsistency: canonical format vs. code. §6.1.3 specifies canonical slot addresses as {track_short}:{scene_num}:{phrase_idx} (e.g. A1:3:2). But OTIOProjection._build_from_script() (§6.2.1) constructs slot_addr = f"{track_name}:{block.scene_num}:{block.block_id}" where track_name is "A1_Narration" (full name), producing A1_Narration:3:block_id. _reorder_scenes splits on : expecting the full name. The examples and the MergeIntoOTIO schema expect the short form.	§6.1.3 vs §6.2.1	OTIO slot resolution fails.
+5	Per-run serialization lock is process-local only. §5.6.1 uses asyncio.Lock in a global dict _run_locks. If the FastAPI agent app runs with multiple uvicorn workers (processes), the lock does not serialize across workers. Two POSTs for the same run_id can interleave, causing duplicate/conflicting effects. The doc explicitly says "queueing is simpler" but asyncio.Lock is not a queue and is not cross-process.	§5.6.1	Race conditions under multi-worker deployment.
+6	ReconciliationPartial referenced but undefined. The Audio Agent's permitted effects list (§9.2) and the category-conditioned table (§9.5.2) include reconciliation_partial, but it is absent from EffectUnion and KIND_TO_MODEL.	§9.2, §9.5.2 vs §3.10	Parser validation failure.
+7	ScriptProposed and FinalComposition used in startup sequence but undefined. §12.5.2 says the parser extracts ScriptProposed (should be UpdateScript) and §12.5.3 says the parser extracts FinalComposition (should be PipelineComplete or similar). These are phantom effect types.	§12.5.2–3	Startup sequence is unimplementable as written.
+2. Schema & API Inconsistencies (Will Cause Integration Bugs)
+Table
+#	Issue	Location
+8	UpdateScript parser model doesn't match event schema. Parser extracts _UpdateScriptEffect with fields narration_v1, narration_v2, narration_v3 (§9.5.1.1), but the actual UpdateScript effect contains blocks: list[ScriptBlock] where each block has text: str (§3.2.1). No mapping function is provided.	§9.5.1.1 vs §3.2.1
+9	JobRequeued field mismatch in data flow. §12.2.4 shows JobRequeued carrying adjusted_text, but the schema (§3.3.1) defines only new_params: dict | None. The diagram implies a string field that does not exist.	§12.2.4 vs §3.3.1
+10	HumanInstruction action literal mismatch. §3.8.1 defines action: Literal["budget_override", "emergency_abort", ...], but §12.4.3 uses action="human_abort", which is not in the literal.	§12.4.3 vs §3.8.1
+11	StateResponse and GlobalStateResponse both contain latest_sequence. Redundant field at two levels of the response hierarchy.	§6.7.4 vs §6.7.6
+12	OTIOSlotState includes "dirty" literal, but projection code never sets it. _build_from_script marks changed blocks as "scripted" and unchanged as "measured"/"delivered". The "dirty" status is mentioned in the literal but not produced by the projection logic shown.	§6.7.1 vs §6.2.1
+13	MergeIntoOTIO carries start_time "computed by projection". If the projection computes it, it should not be in the effect payload; the effect should declare intent (slot + artifact) and the projection derives timing. This invites stale-data bugs.	§3.6.1
+14	Table of 11 principles contains 12 rows. §1.9.1 claims "Table of 11 hard principles" but lists principles 1–12.	§1.9.1
+15	ProductionFailed routing table vs. SuggestedFix.fix_type misalignment. The routing table (§3.9.1) describes routing actions (requeue, rewrite_script, etc.) but does not cleanly map to the SuggestedFix.fix_type literal values, creating ambiguity about which field drives behavior.	§3.9.1
+3. Undefined / Orphaned Components (Referenced but Not Specified)
+Table
+#	Component	Referenced In	Missing Specification
+16	structured_extract.py / extract() function.	§9.5.1.3	Not in file structure (§15.1). The parser's entry point is undefined.
+17	remember / recall_memory storage backend.	§10.1.1	No database schema, file path, or persistence mechanism specified for cross-run memory.
+18	research_model_requirements tool implementation.	§10.1.1	No API contract, no search provider specified (Exa? Perplexity?).
+19	evaluate_vastai_offers tool implementation.	§10.1.1	No ranking schema, no prompt template, no output format.
+20	claim_job, set_job_running, set_job_completed, set_job_failed, check_queue_status, query_vm_registry, record_vm, update_vm_worker_url, dispatch_tts_job, dispatch_video_job tools.	§10.1.1	These appear to be direct state-mutation tools, but their side-effect semantics, idempotency, and failure modes are unspecified.
+21	_emit_budget_effect callback.	§8.2	Referenced in on_cost_update but never defined.
+22	create_sliding_window_processor factory.	§8.2	Referenced but not imported or defined.
+23	PipelineConfig / PipelineDeps / DeepAgentDeps types.	§7.4.1, §8.2, §8.3	Used in signatures but not defined in §14 or elsewhere.
+24	Config.max_queue_wait_sec.	§7.4.1	Used in derive_situations but absent from Config (§14.1).
+25	LoopDetectorConfig class.	§13.3	Defined but never wired into StateProjection or agent initialization.
+26	CostTracking (P2) reference in BudgetExceeded.	§3.7	"P2" is undefined in V7; appears to be a V6 orphan.
+27	B2 authentication / credential management.	§11.5	b2 CLI commands are shown, but no env vars or keys are listed in §14.3.
+4. Architectural Principle Violations
+The document establishes hard principles (§1.9 / §2.4.5) but several subsystems violate them:
+Table
+Principle	Violation	Evidence
+§1.2.2: No direct state mutation outside event store append.	Provisioner tools mutate world state before effects are extracted. The Provisioner calls bash_command("vastai create instance ...") and dispatch_tts_job(...) directly. These actions create VMs and dispatch jobs before the parser extracts VMAllocated or JobStarted. If the agent crashes between tool success and text generation, the event store has no record of the mutation.	§10.1.1 tool list
+§1.7: Natural language only — agents never emit structured output.	Agents use tool calls (structured output). The Provisioner uses bash_command, dispatch_tts_job, etc. These are structured tool calls, not natural language. The final output is natural language, but the agent's behavior is driven by structured tool use, which leaks architecture into the agent.	§10.1.1
+§2.4.5 Invariant 5: Only agents have LLM.	VM Worker runs LLM quality check. §11.3.1 explicitly calls deepseek-v4-flash inside the VM Worker for pass/fail classification. The doc acknowledges this as the "only non-agent LLM usage," but it is still a direct violation of the stated invariant.	§11.3.1, §2.4.5
+§2.4.5 Invariant 5: Only agents have LLM.	evaluate_vastai_offers tool likely uses an LLM. The doc states it uses deepseek-v4-flash to rank offers. If this is a tool inside the Provisioner agent, it's an LLM inside a tool, not an agent.	§10.2.1
+§1.4: No timeouts in code.	HTTP requests and subprocess calls "run to completion". While the policy bans asyncio.timeout, HTTP clients and subprocesses can hang indefinitely. The doc says "operator intervenes on hung jobs," but without any heartbeat or stale-job detection (§1.9 principle 10 says no automatic stale-state detection), the operator must manually poll every VM. This is operationally unworkable for GPU jobs that may hang for hours.	§1.4.1, §11.4.2
+§1.9 Principle 10: No automatic stale-state detection.	Combined with §1.4, this creates a liveness gap. The system has no mechanism to detect a hung TTS inference or a dead VM except human polling. For a pipeline renting GPU time by the second, this is a costly omission.	§1.9 table
+5. Operational & Deployment Gaps
+Table
+#	Issue	Location
+28	GSA is a single point of failure with no failover. If the GSA crashes, all agents lose state visibility. The doc says "agents retry with exponential backoff," but there is no specification of how long they wait, whether they queue work, or how they recover from GSA partition.	§5.6.4
+29	EventStoreDB disk full / connection loss handling is unspecified. If ESDB rejects an append (disk full, network partition), the handler's behavior is not defined. Do agents halt? Retry? Emit ClarificationRequest?	§5.1.1
+30	No specification of agent-to-agent wake delivery failure. If Audio Agent POSTs wake to Video Agent and gets 502, is the wake lost? Is there a retry mechanism? The doc says "may POST wake notifications to other agents" but does not specify delivery semantics.	§12.1.1
+31	VM Worker JobResult POST to Provisioner uses callback_url, but Provisioner's POST / expects AgentPayload. The schema mismatch means the worker cannot directly POST to the Provisioner's agent endpoint without a translation layer.	§11.1.1 vs §2.2.2
+32	Model download failure at VM boot is unhandled. §11.0.1 downloads weights via python3 -m worker.download_weights. If this fails (network, disk full, huggingface down), the VM starts unhealthy but the Provisioner may not detect it until a job dispatch fails.	§11.0.1
+33	Checkpoint directory /tmp/gsa-checkpoints/ is ephemeral. If the GSA container restarts, /tmp is wiped and checkpoints are lost, forcing full replay. The doc mentions "persistent volume if deployed with one" but does not mandate it.	§5.5.2
+34	No specification of how causation_id and correlation_id are tracked across agent restarts. The handler is supposed to track the previous effect's event_id, but if the handler crashes mid-turn, the causation chain is broken on restart.	§5.1.1
+35	AgentHealthResponse includes idle_since and current_task, but no mechanism is shown for updating these fields. The agent handler code in §8.3 and §9 does not show health state being mutated.	§2.2.2
+6. Recommendations by Priority
+P0 — Fix Before Any Code Is Written
+Reconcile the parser schema with the event store schema. Either define the 6 missing parser effect types (_GenerateNarrationAudioEffect, etc.) as proper Effect subclasses in §3, or remove them from the parser union and map parser output to real effects via an explicit transform layer.
+Unify the discriminant name. Use kind everywhere (parser internal models + event store), or specify the effect_type → kind mapping function in the handler.
+Resolve HumanInstruction.agent collision. Rename the target field to target_agent and keep agent as the producer (emitter).
+Fix slot addressing. Standardize on either A1_Narration:3:2 (full track name) or A1:3:2 (short) everywhere in §6, and update _find_clip_by_name logic accordingly.
+Replace asyncio.Lock with a persistent serialization mechanism (e.g., EventStoreDB stream append serialization + idempotency, or a distributed lock) if multi-worker deployment is intended; otherwise, explicitly document that each agent must run as a single process.
+P1 — Fix Before Integration Testing
+Specify the handler's bridge from parser output to EffectUnion validation. Show the exact code that takes _MultiEffect and produces validated Effect instances.
+Define all Provisioner tools explicitly with input/output schemas, and clarify whether they are read-only queries or mutating actions. If mutating, acknowledge the side-effect/effect ordering risk and specify a recovery strategy (e.g., idempotent tool design).
+Add max_queue_wait_sec to Config and remove phantom references (CostTracking (P2), ScriptProposed, FinalComposition, human_abort).
+Specify the VM Worker → Provisioner callback schema translation so JobResult can be ingested by the agent handler.
+P2 — Fix Before Production
+Add lightweight VM health / job liveness observation without violating Principle 4. This can be done via the Provisioner agent's periodic GSA queries (it checks JobProjection vs VMProjection and reasons about stuck jobs), but the current doc only mentions this in passing (§10.2.4). Make it an explicit, prompt-driven behavior.
+Specify the memory storage backend for remember/recall_memory (SQLite, ESDB stream, or flat file).
+Define B2 credential injection and make the bucket name in §11.5.2 reference Config.b2_bucket_name.
+Clarify the subagent boundary. If subagents are pydantic-deep internal tools, specify that their outputs are not parsed for effects and are invisible to the event store.
+P3 — Polish
+Remove or justify the VM Worker LLM quality check. If invariant 5 is absolute, move QC to the Video/Audio Agent. If the exception stays, document it explicitly in §2.4.5 as a permanent exception, not a footnote.
+Add ReconciliationPartial to the effect family or remove it from all permitted-effects tables.
+Standardize on effect_type vs kind in the parser and ensure build_clarification_request uses the correct field name.
+md
+ARCHITECTURE_V7.1.md
+
+md
+308.75 kb
+new document, same please
+Edit
+Copy
+Share
+Debugging Missing Dependencies and Undefined References in Codebase
+V7.1 Architecture Completeness Assessment
+Verdict
+V7.1 is a partial corrective delta over V7. It successfully replaces the undefined EventStoreDB client with a concrete JSONL implementation (§5) and adds valuable ecosystem audit (§17) and authoring workflow (§18) sections. However, the majority of V7's critical blockers remain unaddressed, and V7.1 introduces new runtime-breaking inconsistencies between the JSONL store and the projection/agent code, which still assumes the V7 EventStoreDB API. The document reads as a specification patch that has not been reconciled against its own implementation examples.
+1. What V7.1 Actually Fixed (Acknowledged)
+Table
+#	Fix	Location
+1	JSONL EventStore class fully specified. append(), read_all(), read_since(), replay() with EventRecord schema and idempotency logic.	§5.1.2–3
+2	EventStoreDB migration path isolated to Appendix A. ESDB interface is now clearly a future swappable backend, not the current undefined store.	Appendix A
+3	HooksCapability vs on_before_compress misattribution corrected. Now properly identified as a direct create_deep_agent() parameter, not a capability hook.	§8.1, §8.2, §17.2.3
+4	Ecosystem packages audited and mapped. ProvenanceCapability, TodoCapability, ContextManagerCapability, CostTracking, ToolGuard are traced to real packages.	§17
+5	Authoring workflow for quasi-deterministic agents added. YAML script format + TodoCapability integration provides a plausible middle path between rigid scripts and unbounded agents.	§18
+2. Critical Blockers Carried Over from V7 (Still Unfixed)
+Table
+#	Issue	Location	Impact
+1	Parser _EffectUnion contains 6 phantom effect types. _GenerateNarrationAudioEffect, _RenderVideoSegmentEffect, _QAPassedEffect, _QAFailedEffect, _JobQuestionReceivedEffect, _JobQuestionAnsweredEffect are not in the canonical 32-effect schema or KIND_TO_MODEL.	§9.5.1.1 vs §3.10	System halt on first parse.
+2	Parser discriminant is effect_type; event store discriminant is kind. No bridge function specified to map parser output to EffectUnion validation.	§9.5.1.1 vs §3.1.1	Type system fracture.
+3	HumanInstruction.agent field semantically collides with Effect.agent. Target agent vs. producer agent overloads the same field, breaking attribution and loop detection.	§3.8.1 vs §3.1.1	Causality corruption.
+4	Slot addressing inconsistency: canonical A1:3:2 vs. code A1_Narration:3:block_id. _build_from_script() constructs full track name; canonical scheme uses short name.	§6.1.3 vs §6.2.1	OTIO slot resolution fails.
+5	Per-run serialization is process-local asyncio.Lock only. Multi-worker uvicorn deployment breaks serialization guarantee.	§5.6.1	Race conditions.
+6	reconciliation_partial referenced but undefined. Still appears in Audio Agent permitted effects.	§9.2, §9.5.2	Parser validation failure.
+7	Phantom effect types in startup sequence. ScriptProposed (should be UpdateScript) and FinalComposition (should be PipelineComplete) used in §12.5.	§12.5.2–3	Startup sequence unimplementable.
+8	Parser _UpdateScriptEffect schema mismatches event UpdateScript. Parser extracts narration_v1/v2/v3; event schema uses blocks: list[ScriptBlock].	§9.5.1.1 vs §3.2.1	Effect extraction fails.
+9	JobRequeued data flow shows adjusted_text field that does not exist. Schema only has new_params: dict.	§12.2.4 vs §3.3.1	Schema mismatch.
+10	HumanInstruction action "human_abort" not in literal. §3.8.1 defines emergency_abort, not human_abort.	§12.4.3 vs §3.8.1	Validation error.
+11	Table of 11 hard principles still contains 12 rows.	§1.9.1	Cosmetic but sloppy.
+12	structured_extract.py / extract() function still not in file structure. The parser's entry point is undefined.	§9.5.1.3 vs §15.1	Missing implementation.
+13	remember / recall_memory storage backend still undefined. No database schema, file path, or persistence mechanism.	§10.1.1	Cross-run memory is vaporware.
+14	13 Provisioner tools are completely undefined. Only bash_command is shown; claim_job, dispatch_tts_job, remember, etc. have no schemas or implementations.	§10.1.1	Provisioner is unimplementable.
+15	VM Worker LLM quality check still violates Invariant 5. deepseek-v4-flash call inside VM Worker is explicitly prohibited by §2.4.5.	§11.3.1, §2.4.5	Principle violation.
+16	Provisioner tools mutate world state before effects are extracted. Violates §1.2.2 (no direct state mutation outside event store).	§10.1.1	Event log becomes inconsistent with reality.
+17	B2 credential injection still unspecified. b2 CLI commands shown, but no env vars or keys in §14.3 / §15.3.	§11.5	Operational gap.
+18	_emit_budget_effect callback referenced but undefined.	§8.2	Missing implementation.
+19	create_sliding_window_processor factory referenced but undefined.	§8.2	Missing implementation.
+20	PipelineConfig / PipelineDeps / DeepAgentDeps types used but not defined.	§7.4.1, §8.2, §8.3	Type system gap.
+21	Config.max_queue_wait_sec still used but absent from Config.	§7.4.1 vs §14.1	Runtime AttributeError.
+22	LoopDetectorConfig class still orphaned. Defined in §13.3 but never wired into agent initialization.	§13.3	Dead code.
+23	CostTracking (P2) orphan still present in BudgetExceeded docstring.	§3.7	V6 debris.
+3. New Critical Blockers Introduced in V7.1
+These issues did not exist in V7 and are introduced by the JSONL migration or new sections.
+Table
+#	Issue	Location	Impact
+24	EventStore._seen idempotency set is NOT rebuilt on restart. If the process restarts, _seen is empty; duplicate effect_id appends will write duplicates to the JSONL file.	§5.1.3	Duplicate events after crash/restart.
+25	derive_situations checks slot.status == "dirty", but OTIOProjection never sets status to "dirty". Changed blocks are marked "scripted". The Audio Agent will never find dirty blocks to reconcile.	§7.4.1 vs §6.2.1	Audio pipeline deadlock — no TTS jobs ever queued.
+26	DurationAdjusted effect lacks slot_id; OTIOProjection uses event.block_id as slot address. If block_id is "block_b" (not the full "A1_Narration:3:block_b"), _find_clip_by_name() fails.	§3.4.1 vs §6.2.1	Duration adjustments silently dropped.
+27	Config is missing agent_models dict. create_pipeline_agent() calls config.agent_models[role] (§8.2), but Config only has individual fields (scenario_model, audio_model, etc.).	§8.2 vs §14.1	Agent factory crashes on startup.
+28	Config is missing log_dir for EventStore. The store is instantiated with log_dir parameter, but no config field provides it.	§5.1.3 vs §14.1	Event store has no configured path.
+29	Config max_attempts vs max_attempts_per_block naming mismatch. derive_situations references config.max_attempts (§7.4.1); Config defines max_attempts_per_block.	§7.4.1 vs §14.1	AttributeError in narrative builder.
+30	SITUATION_TEMPLATES["fresh_dirty_block"] uses {max_attempts} placeholder not provided by derive_situations. The facts dict only contains attempts, not max_attempts.	§7.4.2 vs §7.4.1	Template format KeyError at runtime.
+31	Projection.tick() and build_memory() still assume V7 EventStoreDB dict API. tick() calls await read_since(run_id, ...) as a bare function expecting dicts with "sequence" keys (§6.1.1). build_memory() calls replay(run_id) and accesses e["kind"], e["payload_json"], e["metadata"] (§7.4.4). The V7.1 JSONL store returns EventRecord objects with typed .effect, .seq, and no metadata envelope.	§6.1.1, §7.4.4	All projections and memory building are broken for JSONL.
+32	Maintainer Agent references phantom effects BlockRequeued and OTIOUpdated. These are not in EffectUnion.	§4.4	Maintainer parser would reject its own output.
+33	Authoring workflow run_authorized_turn passes instructions to agent.run(). pydantic-ai.Agent.run() does not accept an instructions parameter; system prompts are immutable after agent construction.	§18.4	API mismatch — agent call fails.
+34	VMIsolationConfig.destroy_after_stage_seconds is a timeout/timer, directly contradicting Principle 4 ("No timeouts in code").	§13.4 vs §1.4.1, §19.6	Architectural self-contradiction.
+35	ProvenanceCapability and other ecosystem packages are used in §8.2 but omitted from requirements.txt / §15.2.	§15.2 vs §8.2, §17	Dependency resolution fails on install.
+36	PipelineDeps extends DeepAgentDeps, which is not defined in the document.	§8.2	Base class undefined.
+37	PeriodicReminderConfig and SubAgentConfig are used but not defined or imported.	§8.2	Missing types.
+38	llm_complete helper used in otio_aware_compress is not defined.	§8.2	Missing implementation.
+39	DurationAdjusted diagram in §12.4.1 shows human_override=true field not present in the schema.	§12.4.1 vs §3.4.1	Phantom field.
+40	RunRequest Pydantic model referenced in startup sequence but never defined.	§12.5.2	Cannot validate run creation payload.
+4. Schema & API Inconsistencies (V7.1 Specific)
+Table
+#	Issue	Location
+41	AgentHealthResponse fields (last_run, current_task, idle_since, last_error) are never updated in any shown handler code. The health endpoint returns static/empty values.	§2.2.2
+42	StateResponse.latest_sequence is redundant with GlobalStateResponse.latest_sequence.	§6.7.4 vs §6.7.6
+43	BudgetResponse.remaining_usd is a static field, but BudgetProjection.remaining_usd() is a computed method. Serialization logic is not shown.	§6.7.5 vs §6.5.1
+44	OTIOSlotState literal includes "dirty", but projection code only ever produces "scripted", "measured", "delivered".	§6.7.1 vs §6.2.1
+45	EventStoreBackend Protocol defines async methods, but EventStore implements them as sync.	§A.3 vs §5.1.3
+46	EventRecord has no metadata field, but read_agent_events (§7.4.4) expects e.get("metadata", "{}") from V7 ESDB.	§5.1.2 vs §7.4.4
+47	_parse_payload() glue function (§5.1.4) is unnecessary for JSONL because EventRecord.effect is already typed. Its presence suggests incomplete migration from V7.	§5.1.4
+48	parse_effects(result.output) in §9 handler has mismatched signature with parse_agent_text_multi(agent_id, text) in §9.5.6.	§9 vs §9.5.6
+49	derive_situations(projections, AGENT_ROLE) in §9 handler is missing required config parameter.	§9 vs §7.4.1
+50	build_memory(payload.run_id, AGENT_ROLE, store, limit=5) in §5.6.1 handler passes store, but build_memory signature in §7.4.4 does not accept it.	§5.6.1 vs §7.4.4
+5. Architectural Principle Violations (Still Present)
+Table
+Principle	Violation	Evidence
+§1.2.2: No direct state mutation outside event store append.	Provisioner tools (bash_command, dispatch_tts_job, etc.) mutate VMs and dispatch jobs before parser extracts effects.	§10.1.1
+§1.7: Natural language only — agents never emit structured output.	Agents use tool calls (structured output) extensively. Only final text is natural language.	§10.1.1 tool list
+§2.4.5 Invariant 5: Only agents have LLM.	VM Worker runs deepseek-v4-flash for QC.	§11.3.1
+§1.4: No timeouts in code.	VMIsolationConfig.destroy_after_stage_seconds is a hardcoded 60-second timer for VM destruction.	§13.4
+§1.9 Principle 10: No automatic stale-state detection.	Combined with §1.4, creates a liveness gap with no hung-job detection.	§1.9 table, §11.4.2
+6. Recommendations by Priority
+P0 — Fix Before Any Code Is Written (Same as V7 + New V7.1 Items)
+Reconcile parser schema with event store schema. Remove phantom effect types from _EffectUnion or add them to KIND_TO_MODEL and the canonical 32-effect list.
+Unify discriminant name. Use kind everywhere, or specify the effect_type → kind mapping function explicitly.
+Fix HumanInstruction.agent collision. Rename target field to target_agent.
+Fix slot addressing. Standardize on either short form (A1:3:2) or full form (A1_Narration:3:block_id) everywhere.
+Fix EventStore._seen rebuild on restart. Scan the JSONL file to populate _seen in __init__ or _last_seq.
+Fix Audio Agent dirty-block detection. Change derive_situations to check slot.status == "scripted" (or add "dirty" to projection logic).
+Add slot_id to DurationAdjusted, or derive the full slot address from block_id + scene_num in OTIOProjection.
+Add agent_models: dict[str, str] to Config so create_pipeline_agent() can resolve model names by role.
+Add log_dir: str to Config for EventStore instantiation.
+Fix Config field names to match derive_situations (max_attempts_per_block → max_attempts or update caller).
+P1 — Fix Before Integration Testing
+Rewrite Projection.tick(), build_memory(), and read_agent_events() to use the V7.1 EventStore API (store.read_since(), record.seq, record.effect) instead of V7 ESDB dicts.
+Specify the handler bridge from parser output (_MultiEffect with effect_type) to event store append (EffectUnion with kind).
+Define all Provisioner tools with input/output schemas, or remove them and replace with a smaller, concrete set.
+Fix SITUATION_TEMPLATES variable references to match derive_situations facts exactly.
+Remove phantom effect types from startup sequence (ScriptProposed, FinalComposition) and Maintainer Agent docs (BlockRequeued, OTIOUpdated).
+Add missing dependencies to §15.2: pydantic-ai-provenance, pydantic-ai-todo, pydantic-ai-summarization, pydantic-ai-shields.
+Define PipelineDeps, DeepAgentDeps, PeriodicReminderConfig, SubAgentConfig, llm_complete, notify_downstream, rebuild_projections.
+P2 — Fix Before Production
+Replace asyncio.Lock with a persistent serialization mechanism (file-locking or single-process constraint) if multi-worker deployment is intended.
+Remove or justify VM Worker LLM QC. Move QC to Audio/Video Agent, or document Invariant 5 exception explicitly.
+Resolve VMIsolationConfig.destroy_after_stage_seconds against Principle 4. Either remove it or amend the principle to allow security-policy timers.
+Wire LoopDetectorConfig into StateProjection initialization.
+Specify B2 credential injection in Config or environment variable table.
+Define RunRequest model for the startup sequence POST payload.
+7. Summary Delta: V7 → V7.1
+Table
+Category	V7 Count	V7.1 Count	Notes
+Critical blockers	7	10	+3 new JSONL/store mismatches
+Schema inconsistencies	8	9	+1 agent_models missing
+Undefined / orphaned components	10	12	+2 new undefined types (DeepAgentDeps, etc.)
+Principle violations	5	5	Unchanged; new destroy_after_stage_seconds adds contradiction
+Operational gaps	5	7	+2 new config/dependency gaps
+Bottom line: V7.1 added valuable specification depth in the event store layer and ecosystem audit, but the executable surface of the architecture (projections, agents, handler glue) is still written against the V7 EventStoreDB API. A clean-room implementation from V7.1 would fail immediately because the JSONL store and the consumer code speak different protocols. The core recommendation is to reconcile all code examples in §5–§9 against the actual EventStore method signatures and return types before proceeding.
+
+
+K2.6 Thinking
+
+Architecture V7.1 Implementation Completeness Assessment
+assess with completeness of implementation in mind
+We need to assess the completeness of implementation of this architecture V7.1. The user asks: "assess with completeness of implementation in mind". Likely they want a review of whether the architecture document provides sufficient detail for implementation, i.e., is it complete enough to build? Or maybe assess the current state (not given) against this architecture. Given the context, the file is the architecture document. The prompt is to assess with completeness of implementation. That could mean: evaluate how complete this architecture spec is for a developer to implement. It could also mean assess a current implementation's completeness against this spec, but no implementation details are provided. Most plausible: assess the document itself for implementation completeness.
+
+I'll write an assessment covering: what is specified well, what is missing or ambiguous, and overall readiness for implementation. Focus on actionability, clarity, edge cases, integration points, testing, deployment, monitoring, etc.
+
+The document is very detailed (approx 3000 lines). I'll produce a structured assessment.
+
+Assessment of V7.1 Architecture for Implementation Completeness
+The architecture document is extraordinarily detailed – 20 chapters, ~3000 lines, covering philosophy, components, effect schemas, projections, agents, event store, provisioning, workers, security, config, and even discarded alternatives. For the most part, it provides production‑ready specifications. However, a few gaps and ambiguities remain that would hinder a complete, unambiguous implementation. Below is a structured assessment organised by strength and then open issues.
+
+1. What Is Well Specified (Ready for Implementation)
+Area	Completeness
+Core invariants	11 hard principles with enforcement mechanisms – crystal clear.
+Effect system	32 typed Pydantic effects, EffectUnion, KIND_TO_MODEL, validation rules, naming conventions – fully specified.
+Event store (JSONL)	EventStore class, EventRecord schema, idempotency via effect_id, read_since, checkpoints – ready to code.
+Projections	Five projections (OTIO, Job, VM, State, Budget) with apply(), tick(), and serializable response schemas – complete. OTIO slot addressing and merge logic are exact.
+Agent HTTP contract	POST / and GET / payloads, headers (X‑Run‑ID, X‑Effect‑ID), status codes – fully defined.
+pydantic‑deep agent construction	Explicit creation factory, capability list (TodoCapability, ContextManagerCapability, etc.), compaction callback, subagent config – all pinned.
+Parser (semantic only)	instructor‑based extraction, per‑effect discriminated models, reask flow, confidence handling – unambiguous.
+Provisioner agent	Tools (bash_command, remember, recall_memory), reasoning rules, failure handling – enough detail to implement.
+VM worker	GET /, POST / endpoints, job dispatcher, WhisperX 3‑run measurement, B2 upload, no timeouts – concrete.
+Security	ExecuteRawBash allowlist, budget enforcement, VM isolation (ephemeral, JWT, egress blocks) – specific rules.
+Configuration	Config Pydantic model with defaults – all tunables named.
+Traceability	run_id, effect_id, X‑Run‑ID header, log format, projection‑derived metrics – sufficient for operation.
+Authoring workflow	YAML script format, read_script tool, prerequisite checking – defines “quasi‑deterministic” agents concretely.
+Discarded propositions	Rationale for each – prevents re‑debate.
+Verdict: The architecture is 80‑90% implementation‑ready for a team familiar with Python, FastAPI, pydantic, OTIO, and the mentioned libraries.
+
+2. Missing or Ambiguous Specifications (Would Block Implementation)
+2.1 EventStoreDB Integration Is Only Sketchy
+Appendix A gives an esdbclient snippet but no complete EventStore‑compatible class. Methods like read_since() and read_all() are not implemented for ESDB. The JSONL class uses sync file I/O; ESDB is async – no guidance on bridging.
+
+No error handling for ESDB connection loss, stream not found, or authentication.
+
+No migration path from JSONL to ESDB described (e.g., how to replay events from JSONL into ESDB streams).
+
+Impact: Teams that need distributed deployment will have to design the ESDB adapter from scratch.
+
+2.2 OTIO Projection’s _build_from_script Is Incomplete
+The method uses self.timeline.tracks[0] – but there are multiple tracks (A1_Narration, V1_Video, A2_Music). It only updates A1_Narration. Script changes should not affect video or music tracks, but the document does not explain how those tracks are built or kept in sync.
+
+_sync_from_otio() is referenced in JobProjection but never implemented in the OTIOProjection snippet.
+
+No method to compute otio_hash_before (used in EventRecord). How is the hash generated? Which fields are included?
+
+Impact: Developers would guess how to handle multiple tracks and compute hashes.
+
+2.3 Narrative Builder (Chapter 7.4) Lacks Integration Details
+derive_situations() depends on a PipelineConfig object that is defined only in Chapter 14 – but the config fields used (e.g., max_queue_wait_sec, max_attempts) are not in the Config model. Missing fields: max_queue_wait_sec, max_tts_cost_hr (exists), max_ltx_cost_hr (exists), context_manager_max_tokens (exists) – but not all are named consistently.
+
+build_narrative() calls projections.budget.summary() – but BudgetResponse does not have a summary() method (that’s on BudgetProjection class, not the serializable response). The GSA returns BudgetResponse (Chapter 6.7.5), which lacks a summary string.
+
+The function read_agent_events() queries the JSONL store by scanning all events and filtering by agent – O(N) each turn. No index is described. For long runs (2000 events) and 5 agents, that’s acceptable, but the architecture does not acknowledge this as a performance trade‑off.
+
+Impact: Inconsistent data models (projection vs response) cause immediate implementation bugs.
+
+2.4 Effect Parser’s “Category‑Conditioned” Enforcement Is Vague
+Section 9.5.2 says “the system prompt instructs the model to only extract permitted kinds” but the _EffectUnion still contains all types. The parser uses the same union for every agent, relying on a prompt to filter. That is brittle – an agent could hallucinate a non‑permitted effect and the parser would accept it (since the union includes it).
+
+No code or validation step that rejects a well‑formed but disallowed effect based on the agent’s role.
+
+Impact: An agent could e.g., emit VMAllocated even if not permitted, leading to state corruption.
+
+2.5 Provisioner’s Memory Tools Are Not Defined
+remember and recall_memory are mentioned as tools but no schema for stored memory records (key, value, TTL, embedding?). How is memory scoped? Per run? Across runs? Persistent storage (JSONL, SQLite, vector DB)? No details.
+
+The bash_command tool returns stdout+stderr – but no timeout or size limit. A runaway command could hang the agent forever (violates “no timeouts in code” but also makes the agent unresponsive).
+
+Impact: Memory is a central feature for learning across runs, but left as a TODO.
+
+2.6 Testing and Deployment Are Missing
+No test strategy – The architecture mentions “integration tests that run real agents” (19.7) but does not specify how to run them, how to mock Vast.ai, or how to keep costs low.
+
+No deployment instructions – How are the nine HTTP services (GSA + 5 agents + Provisioner + maybe maintainer) orchestrated? docker-compose.yml is listed but not provided. Process supervision (systemd, k8s?) not discussed.
+
+No backup/restore procedure for JSONL files beyond shutil.copy2.
+
+No upgrade/migration plan when effect schemas change (e.g., adding a new required field to an existing effect).
+
+Impact: Architecture describes a system that cannot be operated in production without filling many gaps.
+
+2.7 Edge Cases and Failure Modes Underspecified
+Scenario	Document says	Missing
+JSONL file corruption mid‑run	read_all() skips malformed line, sequence gap remains.	Operator action to repair? No fsck tool.
+GSA restarts while agents are running	Checkpoints reduce replay, but agents may have stale GSA state.	No invalidation mechanism – agents could use old projections for seconds.
+POST / to an agent that is already processing the same run	Returns 202 Accepted with no effects.	No queueing – second wake is dropped. Might cause lost wake notifications.
+Provisioner’s bash_command hangs forever	No timeout (by design).	Agent thread blocks indefinitely – no supervision.
+VM worker receives POST / while busy	Returns 409 Conflict.	No retry logic on Provisioner side – it must notice and re‑dispatch.
+Duplicate effect_id across different runs	Not disallowed – the _seen set is per‑run, so duplicate across runs is fine.	Not a problem, but undocumented.
+3. Ambiguities in Terminology or Logic
+“No timeouts in code” (Principle 4) – Yet the Provisioner’s bash_command could hang forever. The principle should clarify that no code may initiate a timer, but subprocesses may still block. The operator is the only timeout mechanism. This is stated, but the consequence (a hanged bash_command stalls the Provisioner forever) is not discussed.
+
+“Sole source of truth” – The JSONL event store is the only persistent storage, but the GSA maintains in‑memory projections that are not checkpointed to the event store. If GSA crashes, projections are rebuilt from JSONL – that is fine. However, the otio_hash_before stored in EventRecord comes from the projection; on replay the hash may differ because the same effect applied to a different base state? The document does not explain what the hash protects (probably against concurrent modifications) nor how it is verified.
+
+notification_type in AgentPayload has "wake", "instruction", "human". But who sets "instruction"? The document says “upstream agent” but the wake chain (12.5.3) uses plain POSTs without a specific "instruction" payload. So that field is practically unused.
+
+4. Completeness Score (Subjective)
+Category	% Complete	Notes
+Core concepts & invariants	100%	Clear and enforceable.
+Effect schemas	100%	All 32 effects defined with validation.
+Event store (JSONL)	95%	Missing only hash generation and corruption repair.
+Projections	90%	OTIO track handling incomplete; response/projection mismatch.
+Agent HTTP API	100%	Exact schemas, headers, status codes.
+Parser	85%	Category enforcement weak; reask flow only sketched.
+Provisioner	70%	Memory tools missing; bash tool unsafe; no retry policy.
+VM worker	95%	Clear, except deployment details (on‑start scripts).
+Security	90%	Allowlist defined but no example of ClarificationRequest for blocked commands.
+Configuration	80%	Missing several fields used in code examples.
+Observability	80%	Log format defined; alerts manual – acceptable but not “complete”.
+Deployment & testing	30%	Almost nothing – biggest gap.
+Overall Implementation Readiness: 75% – A skilled team could start coding, but they will encounter missing pieces (memory, ESDB adapter, test harness, orchestration) that require significant design decisions not covered here.
+
+5. Recommended Next Steps Before Implementation
+Fill the gaps
+
+Specify memory tool schema (remember/recall_memory) – key‑value, TTL, scope.
+
+Implement a full ESDB adapter class (matching EventStore interface) or decide to stick with JSONL permanently.
+
+Add missing config fields: max_queue_wait_sec, context_manager_max_tokens (exists but check name), max_tts_attempts (already max_attempts_per_block).
+
+Define how otio_hash_before is computed (e.g., SHA256 of sorted OTIO JSON).
+
+Resolve ambiguities
+
+Decide how multiple OTIO tracks are built and updated – separate projections or a unified timeline?
+
+Add a validation step in the handler that rejects effects not in the agent’s permitted list, regardless of parser output.
+
+Provide a concrete example of notification_type: "instruction" – or remove it.
+
+Add deployment & test specification
+
+Provide a docker-compose.yml for all nine services with dependency order.
+
+Define a test harness that starts real agents with a mock Vast.ai (e.g., local script that returns fixed offers).
+
+Describe how to run a full end‑to‑end test with a tiny script (budget $0.10, mocked models).
+
+Clarify operational edge cases
+
+What happens when bash_command hangs? (Provisioner stops responding to new wake calls – operator must restart.)
+
+How does an agent recover from a 409 Conflict when waking another agent? (Not described – implicit retry on next wake.)
+
+How are stuck VMs that never respond to GET / deallocated? (Provisioner infers from vm_observed but no retry loop is defined.)
+
+The architecture is excellent as a design document, but to be a true “implementation specification” it needs these final 25% of operational details. With the additions above, it would be ready for a team to build without further architectural decisions.
+
+
