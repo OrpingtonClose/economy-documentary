@@ -333,6 +333,11 @@ RULES FOR WRITING:
    to a colleague who needs to understand exactly what you did and why.
 
 7. NO CLOCK TIMEOUTS / SLEEPS. Never run 'sleep' commands or introduce artificial blocking delays in your bash commands. If a resource or VM is still loading/provisioning, output a summary and return a NoOp or end your turn. The agent loop will automatically check progress on your next turn a few seconds later.
+
+8. DO NOT POLL OR WAIT WITHIN A TURN. In this event-driven architecture, any effects you decide to emit (such as queueing a job, allocating a VM, or updating the script) are ONLY committed to the database after your current turn completely finishes. Therefore, you can NEVER observe the results of your current turn's decisions by querying the GSA or running bash commands within the same turn.
+   - Do not attempt to query GSA repeatedly to check if a job you just decided to queue has appeared or completed.
+   - Once you decide on an action (e.g., QueueJob, VMAllocated, JobApproved, NoOp), state your decision clearly and END YOUR TURN immediately.
+   - Trust the asynchronous pipeline: the coordinator will trigger your next turn after other agents (like the Provisioner or VM workers) have acted on your decisions.
 """
 
 ROLE_INSTRUCTIONS = {
@@ -394,6 +399,15 @@ Read this skill: bash_command("cat server/skills/audio-production/SKILL.md")
 
 {COMMUNICATION_STYLE}
 
+=== ASYNCHRONOUS OBSERVATION & INTELLIGENT WAITING ===
+- Never attempt to wait for TTS or Whisper jobs to finish using sleep commands or sequential polling commands in a single turn.
+- A single turn is a quick decision checkpoint. If you observe that jobs are in the "pending" or "running" state:
+  1. State which jobs are pending/running.
+  2. Emit a `NoOp` for this turn.
+  3. End your turn immediately.
+- The pipeline coordinator will automatically trigger your next turn later. When you wake up on that subsequent turn, query the GSA again to check if they have transitioned to "completed" or "failed".
+- This allows you to observe job progress dynamically across turns, safe from blocking timeouts.
+
 === DECISION FRAMEWORK ===
 When you see dirty blocks (status=scripted, no audio yet):
   1. Query the GSA. Read the full block list. Count dirty blocks.
@@ -454,6 +468,15 @@ Measured audio duration is LAW — every video must match its audio exactly.
 Read this skill: bash_command("cat server/skills/video-generation/SKILL.md")
 
 {COMMUNICATION_STYLE}
+
+=== ASYNCHRONOUS OBSERVATION & INTELLIGENT WAITING ===
+- Never attempt to wait for LTX video jobs to finish using sleep commands or sequential polling commands in a single turn.
+- A single turn is a quick decision checkpoint. If you observe that jobs are in the "pending" or "running" state:
+  1. State which jobs are pending/running.
+  2. Emit a `NoOp` for this turn.
+  3. End your turn immediately.
+- The pipeline coordinator will automatically trigger your next turn later. When you wake up on that subsequent turn, query the GSA again to check if they have transitioned to "completed" or "failed".
+- This allows you to observe job progress dynamically across turns, safe from blocking timeouts.
 
 === PERMITTED EFFECTS ===
 QueueJob, JobApproved, JobRequeued, MergeIntoOTIO,
