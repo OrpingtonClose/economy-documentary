@@ -184,21 +184,13 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     )
 
 
-@app.get("/", response_model=GlobalStateResponse)
+@app.get("/runs/{run_id}", response_model=GlobalStateResponse)
 async def get_state(
-    run_id: Optional[str] = Query(None, description="Run ID to retrieve state for"),
-    x_run_id: Optional[str] = Header(None, alias="X-Run-ID", description="Fallback Run ID header"),
+    run_id: str,
 ):
     """Retrieve the authoritative rebuilt projections for the given run_id."""
-    effective_run_id = run_id or x_run_id
-    if not effective_run_id:
-        raise HTTPException(
-            status_code=400,
-            detail="run_id must be provided via query parameter or X-Run-ID header",
-        )
-
     try:
-        return build_global_state(effective_run_id)
+        return build_global_state(run_id)
     except Exception as exc:
         raise HTTPException(
             status_code=500,

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # Phase 2 Implementation Plan — Gates, Validation, and Recovery Ladders
 
 This document specifies the implementation of Phase 2: the **gates, validation, and recovery ladders** that sit between pipeline stages. It builds on Phase 1's stateless OTIO file protocol and codifies the architecture described in `docs/ARCHITECTURE_DIAGRAMS.md` (diagrams 1–10) into concrete files, functions, integration points, and test strategies.

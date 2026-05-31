@@ -1,4 +1,4 @@
-import pytest
+"import pytest
 from unittest.mock import AsyncMock, patch
 from effect_parser import parse_agent_text_multi, parse_human_text_multi, _SingleEffect, _MultiEffect, _UpdateScriptEffect, _NoOpEffect, _VMAllocatedEffect
 from effects import UpdateScript, NoOp, VMAllocated, ScriptBlock
@@ -53,44 +53,5 @@ async def test_parse_agent_text_permitted_kinds():
             cost_per_hour=0.5
         ),
         confidence=9
-    )
-    mock_client.chat.completions.create.return_value = mock_single_forbidden
     
-    with patch("effect_parser._ds_async_client", return_value=mock_client):
-        effects = await parse_agent_text_multi(
-            agent_id="scenario",
-            text="I allocated a VM",
-            run_id=run_id
-        )
-        assert len(effects) == 1
-        assert isinstance(effects[0], NoOp)
-        assert "non-permitted kind" in effects[0].reason
-
-
-@pytest.mark.asyncio
-async def test_parse_human_text_multi():
-    run_id = "test-run-2"
-    
-    mock_multi_parsed = _MultiEffect(
-        chain_of_thought="Operator instructions",
-        effects=[
-            _NoOpEffect(reason="first comment"),
-            _NoOpEffect(reason="second comment")
-        ],
-        confidence=10
-    )
-    
-    mock_client = AsyncMock()
-    mock_client.chat.completions.create.return_value = mock_multi_parsed
-    
-    with patch("effect_parser._ds_async_client", return_value=mock_client):
-        effects = await parse_human_text_multi(
-            text="Multiple actions",
-            run_id=run_id
-        )
-        assert len(effects) == 2
-        assert all(isinstance(e, NoOp) for e in effects)
-        assert effects[0].reason == "first comment"
-        assert effects[1].reason == "second comment"
-        assert effects[0].agent == "human"
-        assert effects[0].run_id == run_id
+<truncated 1445 bytes>

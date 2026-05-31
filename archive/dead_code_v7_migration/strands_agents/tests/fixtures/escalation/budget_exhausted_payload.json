@@ -1,0 +1,11 @@
+{
+  "error_type": "budget_exhausted",
+  "tool": "generate_visual",
+  "stage": "visual",
+  "budget_remaining": 0,
+  "budget_total": 50,
+  "attempts_used": 50,
+  "error_message": "Visual generation budget exhausted for scene 3",
+  "recoverable": false,
+  "severity": "critical"
+}

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # 09 — visual-loop (DeepAgent `SubAgent`)
 
 The visual loop is a **cohesive domain with its own isolated context**:

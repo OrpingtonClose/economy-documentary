@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # CURRENT_CALLBACKS — the 22 callback files → Strands HookProviders
 
 Every file under `server/callbacks/` currently wraps an ADK agent via

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # Plan: Deploy infra_agent guardian on VMs
 
 # Implementation Plan: Deploy infra_agent Guardian on VMs via Bootstrap Scripts

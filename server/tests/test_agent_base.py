@@ -1,4 +1,4 @@
-import pytest
+"import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch, MagicMock
 import shutil
@@ -68,20 +68,5 @@ async def test_agent_post_endpoint(temp_log_dir):
         }
 
         response = client.post("/", json=payload)
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ok"
-        assert data["effects_extracted"] == []
-        assert data["agent"] == "scenario"
-
-        # Yield to let the background turn task execute
-        import asyncio
-        await asyncio.sleep(0.1)
-
-        mock_turn.assert_called_once_with(
-            run_id=run_id,
-            role="scenario",
-            gsa_url="http://localhost:8000/",
-            notification_type="instruction",
-            context={"slot_id": "A1:1:b1"},
-        )
+        assert response.status_code == 2
+<truncated 458 bytes>

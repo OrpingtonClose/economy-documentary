@@ -443,7 +443,7 @@ correctly from dirty blocks to clean blocks.
 - Query GSA: bash_command("curl -s http://gsa:8000/")
 
 === TEST PROCEDURE ===
-1. Inject ScriptTextUpdated effects for test blocks into the store.
+1. Inject UpdateScript effects for test blocks into the store.
 2. Wait for the Audio Agent to process (poll GSA until blocks change status).
 3. Verify that QueueJob effects were extracted and appended.
 4. Simulate VM worker completion by appending JobCompleted effects.

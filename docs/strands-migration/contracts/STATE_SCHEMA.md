@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # STATE_SCHEMA — canonical shapes for cross-component data
 
 Every key written to `agent.state` or `invocation_state` has a schema

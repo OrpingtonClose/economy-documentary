@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # Documentary Pipeline — Architecture Flow Diagrams
 
 This document is the companion to [ARCHITECTURE.md](./ARCHITECTURE.md). It specifies the correct (intended) shape of the pipeline as a set of eleven Mermaid diagrams. Each diagram carries its rationale as inline `%%` comments so the specification travels with the diagram source.

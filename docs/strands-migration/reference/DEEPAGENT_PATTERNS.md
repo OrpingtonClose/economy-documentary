@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # DEEPAGENT_PATTERNS — canonical snippets for the orchestrator layer
 
 Every orchestrator-touching component (05, 09, 10, 13, 14, 15) cites this

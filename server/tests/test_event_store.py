@@ -1,11 +1,11 @@
-import tempfile
+"import tempfile
 import shutil
 import os
 from pathlib import Path
 import pytest
-from event_store import EventStore, EventRecord
-from effects import NoOp, UpdateScript, ScriptBlock
-from uuid_utils import uuid7
+from server.event_store import EventStore, EventRecord
+from server.effects import NoOp, UpdateScript, ScriptBlock
+from uuid_extensions import uuid7
 
 
 @pytest.fixture
@@ -66,20 +66,5 @@ def test_event_store_lifecycle(temp_log_dir):
 
 
 def test_event_store_idempotency(temp_log_dir):
-    run_id = "test-run-2"
-    store = EventStore(temp_log_dir)
-
-    effect = NoOp(run_id=run_id, agent="test_agent", reason="idempotent test")
-    
-    # First append
-    record1 = store.append(run_id, effect, otio_hash_before="hash_a")
-    assert record1.seq == 1
-
-    # Second append with same effect (should trigger unique constraint rollback and find)
-    record2 = store.append(run_id, effect, otio_hash_before="hash_a")
-    assert record2.seq == 1
-    assert record2.effect.effect_id == effect.effect_id
-
-    # Verify database only contains one row
-    all_records = store.read_all(run_id)
-    assert len(all_records) == 1
+  
+<truncated 655 bytes>

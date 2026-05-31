@@ -1,0 +1,904 @@
+# Abstract Architecture — Documentary Pipeline
+
+> High-level software architecture. Implementation-agnostic. Flesh out with concrete code, prompts, and schemas afterward.
+
+---
+
+## 1. System Topology
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              HUMAN OPERATOR                              │
+│  Can GET any agent (observe) or POST to any agent (intervene) at will   │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+           ┌────────────────────────┼────────────────────────┐
+           │                        │                        │
+           ▼                        ▼                        ▼
+┌───────────────┐        ┌───────────────┐        ┌───────────────────────┐
+│  ORCHESTRATOR  │───────▶│   AGENTS      │◀──────│   EVENT STORE (JSONL)  │
+│   (decides)    │        │  (7 types)    │       │   (immutable, append)  │
+└───────────────┘        └───────────────┘       └───────────────────────┘
+                               │                          ▲
+                               │ produce                  │
+                               ▼                          │
+┌─────────────────────────────────────────────────────────┐
+│                    EFFECT PARSER                         │
+│         (text → typed algebraic effect)                  │
+│              using instructor + pydantic                  │
+└─────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────┐
+│              PROJECTION HANDLERS                         │
+│    (rebuild read-models from event stream)               │
+└─────────────────────────────────────────────────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+│   OTIO STATE  │    │  JOB QUEUES   │    │  VM REGISTRY  │
+│  (materialized│    │  (audio/video)│    │  (active VMs) │
+│   timeline)   │    │               │    │               │
+└───────────────┘    └───────────────┘    └───────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────┐
+│                 VM WORKERS (ephemeral)                   │
+│            GPU instances on Vast.ai — each runs          │
+│          an agent that self-monitors and self-destructs   │
+└─────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────┐
+│              ARTIFACT STORE (Backblaze B2)               │
+│              Ground truth for all media files             │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 2. Components (Abstract Responsibilities)
+
+### 2.1 Orchestrator
+- **Single input:** State summary (script, queues, VMs, completed jobs)
+- **Single output:** Decision — which agent runs next + reason
+- **No side effects.** Read-only observer. Delegates all action to agents.
+- **Hard rule:** The orchestrator never runs tools directly. It only decides.
+
+### 2.2 Agents (7 Types)
+
+| Agent | Responsibility | Side Effects |
+|---|---|---|
+| **Scenario** | Writes/refines narration text. Produces `UpdateScript` effects. | None (text on disk only) |
+| **Audio** | Formulates TTS jobs from narration. Produces `GenerateNarrationAudio` effects. Reads queue, QA's completed jobs. | Queues jobs via effects |
+| **Video** | Formulates LTX jobs from visual notes. Produces `RenderVideoSegment` effects. Reads queue, QA's completed jobs. | Queues jobs via effects |
+| **Provisioner** | Sees job queues, provisions GPU VMs via bash. Produces `VMAllocated` / `VMDeallocated` effects. | Calls Vast CLI |
+| **OTIO Gate** | **ONLY** component that writes the timeline. Consumes effects, produces `MergeIntoOTIO` effects. | Writes OTIO |
+| **Assembly** | Combines final clips into MP4. Produces `MergeIntoOTIO` + completion effects. | Triggers final render |
+| **Maintainer** | Called on exceptions. Diagnoses, proposes fixes, may produce any effect. | Exception handler |
+
+**VM Agent** (runs ON each GPU instance, not in pipeline):
+- **Is an LLM.** There are no "dumb inference endpoints." The VM agent reasons about its own survival, output quality, and retry strategy.
+- Boots, installs deps, pulls jobs from queue
+- Runs TTS or LTX inference (the inference models are tools/resources, not the agent itself)
+- QA's own output using reasoning, retries on failure using reasoning
+- Monitors overseer heartbeat; **reasons** about whether to self-destruct (~15 min deadman)
+- Reports `JobCompleted` or `JobFailed` back to pipeline
+
+### 2.3 Effect Parser
+- **Input:** Raw natural-language text from any agent
+- **Output:** Zero or more typed `Effect` objects
+- **Mechanism:** instructor + DeepSeek v4-flash extracts typed effects from raw text. No regex pre-extraction. Types are *implied in text* — semantically present in the agent's natural language.
+- **Validation:** Pydantic discriminated unions enforce schema. instructor re-asks the model on validation failure (up to `max_retries`).
+- **Failure mode:** If instructor exhausts retries, emit a `ClarificationRequest` effect to the same agent — don't guess
+- **Hard rule:** Never silently drop unparsable text. Always report back.
+
+### 2.4 Event Store
+- **Interface:** `append(effect)` — atomic, append-only
+- **Storage:** JSONL file (`events.jsonl`)
+- **Properties:** Immutable, ordered, replayable
+- **Hard rule:** The event log is the ONLY source of truth. No other persistent state.
+
+### 2.5 Projection Handlers
+- **Input:** Stream of effects from event store
+- **Output:** Materialized read-models (OTIO, queues, VM registry)
+- **Properties:** Deterministic, idempotent, pure functions
+- **Hard rule:** Read models are rebuilt from events on every cycle. Never read OTIO or queues directly without projecting first.
+
+### 2.6 State Summary Builder
+- **Input:** Projected read-models
+- **Output:** Human-readable state summary string fed to orchestrator
+- **Properties:** Includes VM observed status, queue counts, completed jobs
+- **Hard rule:** State summary must be truthful. No optimistic locking. No caching.
+
+### 2.7 HTTP Agent Surface
+- **Interface per agent:** `GET /` (probe, no context mutation), `POST /` (instruction, appends to agent context)
+- **Properties:** Plain text in, plain text out. No JSON envelope. No status codes with semantics.
+- **Hard rule:** Only GET / and POST /. No other endpoints. No special paths for special actions.
+
+---
+
+## 3. Data Flow
+
+### 3.1 Normal Cycle
+```
+1. Rebuild state from event log (projection handlers)
+2. Build state summary
+3. Orchestrator decides → "run [agent]"
+4. Construct agent prompt: prompt_template + state_summary + brief + feedback
+5. Call agent (HTTP if available, else direct LLM API)
+6. Receive raw text response
+7. Parse into effects (Effect Parser)
+8. Validate effects (strict validators)
+9. Append valid effects to event log
+10. Go to 1
+```
+
+### 3.2 Exception Flow
+```
+1. Exception occurs in any component
+2. Catch and route to Maintainer Agent
+3. Maintainer receives: exception type, traceback, current state summary
+4. Maintainer responds with diagnosis + proposed fix (as effects)
+5. Effects parsed, validated, appended to event log
+6. Cycle resumes from step 1
+7. If Maintainer declares unrecoverable → KILL EVERYTHING
+```
+
+### 3.3 Human Intervention Flow
+```
+1. Human POSTs text to any agent URL
+2. Text is appended to agent context (like any other turn)
+3. Agent's next response incorporates human instruction
+4. Pipeline continues from step 6 of normal cycle
+5. Human can also GET any agent to observe its current context
+```
+
+### 3.4 VM Lifecycle Flow
+```
+1. Provisioner agent sees pending jobs in queue
+2. Provisioner uses bash tool → vastai CLI → creates instance
+3. VMAllocated effect appended to event log
+4. VM boots, VM agent starts, reports health
+5. VM agent pulls job, runs inference, QA's output
+6. JobCompleted or JobFailed effect appended
+7. VM agent monitors overseer; if gone → self-destruct
+8. Pipeline may explicitly deallocate VM when done
+```
+
+---
+
+## 4. State Machine
+
+### 4.1 States (Pipeline Stages)
+The pipeline progresses through coarse stages, but transitions are **not hardcoded**. The orchestrator decides based on state:
+
+```
+[INIT] → [SCRIPT] → [AUDIO+VIDEO parallel] → [ASSEMBLY] → [DONE]
+           ↑______________|___________|
+                    (retry loops)
+```
+
+- **INIT:** No script exists. Orchestrator runs scenario agent.
+- **SCRIPT:** Script exists. Orchestrator runs audio + video agents (parallel or sequential).
+- **AUDIO+VIDEO:** Jobs in queues. Provisioner provisions VMs. Workers produce clips.
+- **ASSEMBLY:** All clips ready. Assembly agent merges into final MP4.
+- **DONE:** Output exists. Pipeline stops.
+
+**Hard rule:** The orchestrator is free to transition between any states based on the actual state summary. No hardcoded stage sequence.
+
+### 4.2 State Mutation Rules
+- State changes ONLY via effects appended to event log
+- Effects are produced ONLY by agents (or by system on their behalf)
+- Agents produce effects ONLY in response to prompts
+- Prompts are constructed ONLY from the event log (truth) + brief (input)
+
+### 4.3 Retry Mechanics
+- Failed jobs are requeued with `JobRequeued` effect containing QA comments
+- Agents see requeued jobs with comments in their state summary
+- Agents decide whether to retry, modify, or escalate
+- **Hard rule:** No automatic retry count limits. Agent decides when to stop.
+
+---
+
+## 5. Communication Contracts
+
+### 5.1 Agent ↔ Pipeline
+- **Protocol:** Plain text over HTTP (or direct LLM call)
+- **Request:** Text prompt (natural language)
+- **Response:** Text (natural language, may contain effect markers)
+- **Stateless:** Pipeline reconstructs state on every cycle. Agent receives full context each time.
+
+### 5.2 Agent ↔ Agent
+- **No direct communication.** Agents only talk to the pipeline.
+- The pipeline passes context from one agent to another via state summary.
+- **Hard rule:** Agents never message each other directly.
+
+### 5.3 Pipeline ↔ VM Workers
+- **Protocol:** Plain text over HTTP (GET / health, POST / jobs)
+- **Job submission:** Text describing the work (narration text for TTS, prompt for LTX)
+- **Result retrieval:** Text or binary (WAV/MP4), uploaded to B2 immediately
+- **Hard rule:** Pipeline never pulls artifacts from VM directly. VM uploads to B2, pipeline reads from B2.
+
+---
+
+## 6. The Dynamic State Machine
+
+### 6.1 Lightweight State Machine Per Pipeline
+
+Instead of a heavy orchestration layer, each pipeline instance owns a **lightweight finite state machine** (e.g., `python-statemachine` or `pytransitions`) that tracks the pipeline's phase. The state machine is **not** the orchestrator — it is a **prompt construction engine** that shapes what each agent believes its job is.
+
+**Properties:**
+- One state machine per pipeline run.
+- States are coarse phases: `INIT`, `SCRIPT_DRAFT`, `SCRIPT_REVIEW`, `PROVISIONING`, `AUDIO_PRODUCTION`, `VIDEO_PRODUCTION`, `QA`, `ASSEMBLY`, `DONE`.
+- Transitions are triggered by effects appended to the event log.
+- The state machine is **ephemeral** — reconstructed from events on every cycle, never persisted independently.
+
+**Library choice:** `python-statemachine` is preferred for its statechart features. Use `StateChart` (not `StateMachine`) for compound states, parallel regions, and history states. `StateMachine` is flat-only; `StateChart` supports Harel statecharts. The state machine is a control-flow engine under the hood, not an agent framework like LangGraph or CrewAI.
+
+**Concrete API:**
+```python
+from statemachine import StateChart, State
+
+class ProductionStateChart(StateChart):
+    # Compound state for parallel media production
+    class media_production(State.Compound):
+        class audio_track(State.Compound):
+            pending = State(initial=True)
+            rendering = State()
+            complete = State(final=True)
+
+        class video_track(State.Compound):
+            pending = State(initial=True)
+            rendering = State()
+            complete = State(final=True)
+
+    # Or use parallel regions for true concurrency
+    class parallel_media(State.Parallel):
+        audio_region = State.Parallel()
+        video_region = State.Parallel()
+
+    # Flat states
+    init = State(initial=True)
+    script_draft = State()
+    script_review = State()
+    provisioning = State()
+    qa = State()
+    assembly = State()
+    done = State(final=True)
+
+    # Transitions triggered by effects
+    script_approved = script_review.to(provisioning)
+    audio_complete = media_production.to(qa)
+```
+
+**Key properties:**
+- Async `on_enter_*` and `on_exit_*` callbacks are supported natively.
+- `error.execution` internal event catches exceptions in callbacks; define a transition for it to handle errors within the state machine itself.
+- The state machine is defined in Python code (no SCXML import/export in python-statemachine).
+
+### 6.2 Dynamic System Prompt Construction
+
+**System prompts are NOT persisted on disk.** They are dynamically constructed at runtime from three sources:
+
+```
+System Prompt = Base Persona + State Instructions + Context Window
+```
+
+| Component | Source |
+|---|---|
+| **Base Persona** | Hardcoded identity ("You are the audio agent...") |
+| **State Instructions** | Looked up from state machine definition based on current state |
+| **Context Window** | Prior conversation + state summary + feedback |
+
+**The state machine affects agents by changing the State Instructions injected into their system prompt.**
+
+Example state instructions:
+- **State: `SCRIPT_DRAFT`** → "Your goal is to produce a complete narration script. Do not worry about visuals yet."
+- **State: `AUDIO_PRODUCTION`** → "Your goal is to formulate TTS jobs for every narration line. Check queue status before adding."
+- **State: `QA`** → "Your goal is to judge completed clips. Be strict. Requeue with detailed comments if below standard."
+
+### 6.3 The Research Problem: Recognition & Enactment
+
+**How does an agent recognize that the state (and thus its instructions) have changed? How does it enact the new behavior?**
+
+This is an open research question. The literature suggests several strategies, and the canonical design uses a hybrid:
+
+#### Strategy A: Explicit State Disclosure (Visible to Agent)
+Embed the current state name and transition history in the system prompt:
+```
+Current pipeline state: AUDIO_PRODUCTION
+Previous state: SCRIPT_REVIEW
+You have transitioned because the script was approved.
+```
+- **Pros:** Agent knows exactly what changed and why. Can reason about transitions.
+- **Cons:** Agent may fixate on state names rather than the task. Adds cognitive overhead.
+
+#### Strategy B: Implicit Prompt Shift (Hidden from Agent) — DEFAULT
+Change the instructions without telling the agent the state changed:
+```
+# Before (SCRIPT_DRAFT state)
+"Write a narration script about the topic. Focus on clarity and pacing."
+
+# After (AUDIO_PRODUCTION state) — same agent, different prompt
+"The script is finalized. Your job now is to turn each narration line into a TTS job."
+```
+- **Pros:** Agent behaves organically. No meta-cognitive distraction. More "agentic."
+- **Cons:** Agent may not realize its role shifted. May continue script-writing behavior. Requires careful prompt design.
+
+#### Strategy C: Self-Prompting / Chain-of-States (StateAct-style)
+The agent is instructed to track its own state internally and emit state updates:
+```
+After each response, include a [STATE_REFLECTION] block describing:
+- What you just accomplished
+- What state the pipeline appears to be in
+- What you should do next
+```
+- **Pros:** Agent becomes self-aware of progression. Enables creative recovery.
+- **Cons:** Adds output overhead. May conflict with effect parser.
+
+#### Strategy D: Reflection-on-Goal (ReflAct-style)
+Before each turn, the agent reflects on its goal relative to the current world state:
+```
+Given the current state summary, reflect: Are you closer or further from the goal? Should your behavior change?
+```
+- **Pros:** Grounds reasoning in actual state, not assumed state. World-grounded.
+- **Cons:** Extra LLM call or prompt overhead. May be redundant with orchestrator.
+
+### 6.4 Proposed Hybrid Approach
+
+The canonical design uses **Strategy B (Implicit) as default, with Strategy A (Explicit) as escalation:**
+
+1. **Default:** State machine constructs prompts implicitly. The agent receives new instructions without being told "the state changed."
+2. **If agent produces wrong effects for current state** (e.g., script-writing in AUDIO_PRODUCTION), the system:
+   - Appends a clarifying feedback message
+   - On next turn, switches to **explicit disclosure**: "Note: the pipeline has entered AUDIO_PRODUCTION state. Your role has changed."
+3. **The agent's conversation history is NOT cleared on state change.** Prior context remains. The agent must reconcile old context with new instructions.
+
+This mirrors human team dynamics: a team member gets new instructions mid-project and must adapt without having their memory wiped.
+
+### 6.5 Guardrails & Tool Control
+
+Drawing from **Statewright** and **Stately Agent**, the state machine can enforce tool-level guardrails:
+
+- **Per-state tool allow-lists:** In `SCRIPT_DRAFT`, only text-writing tools. In `PROVISIONING`, only bash/Vast CLI tools.
+- **Blocked action feedback:** If agent calls a tool outside current state, reject with message: "Tool X not available in current phase. Available: [list]."
+- **Transition conditions:** Require QA pass before exiting `QA` state. Require B2 upload before exiting `AUDIO_PRODUCTION`.
+- **Approval gates:** Human must approve transitions out of critical states (optional).
+
+The state machine is **laws, not suggestions.** It constrains what agents CAN do, while the orchestrator decides what they SHOULD do.
+
+**Concrete implementation with pydantic-ai:**
+
+pydantic-ai provides three mechanisms for tool-level guardrails:
+
+1. **`prepare_tools` callback** — runs before each step, receives `RunContext` and list of `ToolDefinition`, returns filtered list (or `None` to disable all tools):
+```python
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.tools import ToolDefinition
+
+def prepare_tools_for_state(
+    ctx: RunContext[PipelineState],
+    tool_defs: list[ToolDefinition]
+) -> list[ToolDefinition] | None:
+    allowed = STATE_TOOL_ALLOWLISTS[ctx.deps.current_state]
+    return [t for t in tool_defs if t.name in allowed]
+
+agent = Agent(
+    'deepseek-v4-flash',
+    prepare_tools=prepare_tools_for_state,
+    deps_type=PipelineState,
+)
+```
+
+2. **`FilteredToolset`** — wraps a toolset and filters per step via a predicate:
+```python
+from pydantic_ai.toolsets import FilteredToolset
+
+allowed = STATE_TOOL_ALLOWLISTS[current_state]
+filtered = base_toolset.filtered(
+    lambda ctx, tool: tool.name in allowed
+)
+agent = Agent('deepseek-v4-flash', toolsets=[filtered])
+```
+
+3. **`tool_guard` / deferred approval** — intercepts tool calls *after* the model selects a tool but *before* execution, enabling post-selection authorization:
+```python
+# Pattern: reject with explanation if tool not allowed in current state
+def tool_guard(ctx: RunContext[PipelineState], tool_name: str) -> bool:
+    allowed = STATE_TOOL_ALLOWLISTS[ctx.deps.current_state]
+    if tool_name not in allowed:
+        raise ToolNotAllowedError(
+            f"Tool '{tool_name}' not available in {ctx.deps.current_state}. "
+            f"Available: {allowed}"
+        )
+    return True
+```
+
+**Recommendation:** Use `prepare_tools` (pre-filter, model never sees disallowed tools) as primary guardrail. Use `tool_guard` (post-selection catch) as safety net. Blocked action feedback must include the reason and available alternatives.
+
+### 6.6 Creativity & Resilience
+
+By making the state machine lightweight and the prompts dynamic:
+- **Agents can improvise within state boundaries.** The state machine says "formulate TTS jobs" but doesn't prescribe exactly how.
+- **Agents can suggest state transitions.** An agent might produce an effect that implies "I think we should move to QA now" — the orchestrator decides whether to allow the transition.
+- **Recovery is state-aware.** If audio fails repeatedly, the state machine can shift to a recovery state with different instructions (e.g., "simplify narration, reduce clip count").
+- **Long-term evolution:** New states can be added without rewriting agent code. The state machine definition becomes a configuration file that shapes behavior.
+
+### 6.7 Prompt Parameterization
+
+Drawing from **Policy-Parameterized Prompts** research, each state prompt is decomposed into five components:
+
+| Component | Content |
+|---|---|
+| **T — Task/Persona** | Base identity of the agent |
+| **M — Memory** | Dialogue history, prior context |
+| **D — Domain Knowledge** | Skills, reference material |
+| **R — Rules/Constraints** | State-specific rules (what agent can/cannot do) |
+| **W — Weights/Priorities** | Emphasis on responsiveness, rebuttal, evidence, non-repetition, stance shift |
+
+The state machine selects **R** (rules) and adjusts **W** (weights) based on current state, while **T**, **M**, and **D** remain relatively stable.
+
+### 6.8 The Hidden Controller Pattern
+
+The state machine is an **external orchestration layer with hidden state.** The model is stateless with respect to the FSM. This is the pattern used by:
+- **LangGraph** — StateGraph with typed state, nodes read/update state, edges route conditionally
+- **CrewAI Flows** — Event-driven state machine with `@listen(event_type)` decorators
+- **Stately Agent** — XState machine + observations/feedback/planning
+- **Statewright** — State machine guardrails controlling tool access per phase
+- **Timbal** — Action Control Engine as behavioral runtime proxy
+
+The agent receives only the **current task/context**, not the FSM graph or transition table. The controller owns state and decides transitions. This gives deterministic control without teaching the model about the machine's internals.
+
+**Implementation via pydantic-ai `@agent.system_prompt`:**
+```python
+from pydantic_ai import Agent, RunContext
+
+agent = Agent('deepseek-v4-flash', deps_type=PipelineState)
+
+@agent.system_prompt
+def base_persona(ctx: RunContext[PipelineState]) -> str:
+    return "You are the audio agent. You formulate TTS jobs."
+
+@agent.system_prompt
+def state_instructions(ctx: RunContext[PipelineState]) -> str:
+    # The agent never sees the state name — only the instructions
+    return STATE_INSTRUCTIONS[ctx.deps.current_state]
+
+@agent.system_prompt
+def context_window(ctx: RunContext[PipelineState]) -> str:
+    return build_state_summary(ctx.deps)
+```
+
+System prompts are appended in definition order. The agent receives `Base Persona + State Instructions + Context Window` as a single system prompt. No state names are exposed unless escalation is triggered.
+
+### 6.9 Research Context
+
+This design draws from several recent research directions:
+
+| Paper / Framework | Key Insight | Relevance |
+|---|---|---|
+| **Policy-Parameterized Prompts** (arXiv:2603.09890) | Prompts are actions; dynamically constructed from 5 components based on agent state | Validates prompt-as-action approach |
+| **StateAct** (arXiv:2410.02810) | Self-prompting + chain-of-states tracks state info over time | Provides self-awareness mechanism |
+| **ReflAct** (arXiv:2505.15182) | Shifts reasoning from planning actions to reflecting on agent's state relative to goal | Grounds behavior in state-goal distance |
+| **StateFlow** (arXiv:2403.11322) | Models LLM workflows as state machines; SF_Agent has per-state prompts with instruction/example/format | Per-state prompt construction precedent |
+| **MetaAgent** (arXiv:2507.22606) | Auto-constructs multi-agent systems from FSM; each state has task-solving agent + condition verifier + state instruction | FSM-driven multi-agent orchestration |
+| **TME** (arXiv:2504.08525) | Prompt synthesis dynamically generates prompts based on active node path in task tree | Dynamic prompt generation from graph structure |
+| **CaveAgent** (arXiv:2601.01569) | Dual-stream architecture: semantic stream for reasoning, runtime stream for persistent execution | Separates state management from reasoning |
+| **FSM-agent-flow** (GitHub) | python-statemachine + LLM validator for test-driven agentic workflows | Practical FSM+LLM integration |
+| **Statewright** (GitHub) | State machine guardrails controlling which tools agents can use in each phase | Tool-level state enforcement |
+| **Stately Agent** (GitHub) | XState + RL concepts (rewards, feedback, episodes, decision policies) | State machine + learning from experience |
+| **LangGraph** (LangChain) | StateGraph: typed state shared by nodes, conditional edges, durable execution | Production stateful orchestration |
+| **CrewAI Flows** | `@listen(event_type)` decorator-based event wiring, Flows separate from Crews | Event-driven agent orchestration |
+| **Timbal** | Action Control Engine as behavioral runtime proxy, persistent context across interactions | Runtime behavior steering |
+| **Pydantic AI** | `@agent.system_prompt` decorator for dynamic prompt functions | Runtime prompt construction in Python |
+
+### 6.10 Concrete Implementation Patterns
+
+This section translates the abstract design into concrete code patterns using the chosen libraries.
+
+#### State Machine Reconstruction from Events
+
+The state machine is rebuilt on every cycle by replaying all state-transition effects from the event log:
+
+```python
+from statemachine import StateChart
+
+class PipelineStateChart(StateChart):
+    # ... states and transitions defined above ...
+    pass
+
+def rebuild_state_machine(events: list[Effect]) -> PipelineStateChart:
+    sm = PipelineStateChart()
+    for event in events:
+        if isinstance(event, StateTransitionEffect):
+            # Trigger the transition corresponding to this effect
+            getattr(sm, event.transition_name)()
+    return sm
+```
+
+**Key invariant:** The state machine is never persisted. It is always reconstructed from the event log. If the event log is lost, the state machine state is lost — but the event log is append-only JSONL, so this is acceptable.
+
+#### pydantic-graph Integration
+
+The pipeline is a pydantic-graph where each node is an agent turn. The graph carries shared mutable state:
+
+```python
+from dataclasses import dataclass, field
+from pydantic_graph import Graph, GraphRunContext, BaseNode
+from pydantic_graph.beta import GraphBuilder
+
+@dataclass
+class PipelineGraphState:
+    events: list[Effect] = field(default_factory=list)
+    read_models: ReadModels = field(default_factory=ReadModels)
+    current_agent: str | None = None
+    feedback: list[str] = field(default_factory=list)
+
+@dataclass
+class OrchestratorNode(BaseNode[PipelineGraphState, None, str]):
+    async def run(self, ctx: GraphRunContext[PipelineGraphState]) -> str:
+        # 1. Rebuild state machine from events
+        sm = rebuild_state_machine(ctx.state.events)
+        # 2. Build state summary
+        summary = build_state_summary(ctx.state.read_models)
+        # 3. Ask orchestrator agent
+        decision = await orchestrator_agent.run(
+            f"State summary:\n{summary}\n\nWhat agent should run next?"
+        )
+        ctx.state.current_agent = decision.data
+        return decision.data
+
+@dataclass
+class AgentNode(BaseNode[PipelineGraphState, str, list[Effect]]):
+    async def run(self, ctx: GraphRunContext[PipelineGraphState], agent_name: str) -> list[Effect]:
+        # 1. Rebuild state machine
+        sm = rebuild_state_machine(ctx.state.events)
+        # 2. Construct prompt
+        prompt = construct_agent_prompt(agent_name, sm, ctx.state)
+        # 3. Run agent with state-aware tool filtering
+        agent = get_agent_for_name(agent_name)
+        result = await agent.run(prompt, deps=PipelineState(current_state=sm.current_state.id))
+        # 4. Parse effects
+        effects = parse_effects(result.data)
+        # 5. Validate and append
+        valid = [e for e in effects if validate_effect(e)]
+        ctx.state.events.extend(valid)
+        return valid
+```
+
+**Parallel execution** (audio + video simultaneously) uses pydantic-graph beta broadcast/join:
+
+```python
+from pydantic_graph.beta import GraphBuilder
+from pydantic_graph.beta.join import reduce_list_append
+
+g = GraphBuilder(state_type=PipelineGraphState, output_type=list[Effect])
+
+@g.step
+async def broadcast_media(ctx: StepContext[PipelineGraphState, None, None]) -> list[str]:
+    return ["audio_agent", "video_agent"]
+
+@g.step
+async def run_media_agent(ctx: StepContext[PipelineGraphState, None, str]) -> list[Effect]:
+    agent_name = ctx.inputs
+    return await run_agent(agent_name, ctx.state)
+
+collect = g.join(reduce_list_append, initial_factory=list[Effect])
+```
+
+#### Decision Nodes for Conditional Branching
+
+The orchestrator's decision is modeled as a pydantic-graph Decision node that routes to different agent nodes:
+
+```python
+from pydantic_graph.beta import Decision
+
+@g.decision
+async def route_next(ctx: StepContext[PipelineGraphState, None, str]) -> type[BaseNode]:
+    agent_name = ctx.inputs
+    if agent_name == "done":
+        return EndNode
+    elif agent_name == "scenario":
+        return ScenarioAgentNode
+    elif agent_name == "audio":
+        return AudioAgentNode
+    elif agent_name == "video":
+        return VideoAgentNode
+    elif agent_name == "provisioner":
+        return ProvisionerAgentNode
+    elif agent_name == "assembly":
+        return AssemblyAgentNode
+    elif agent_name == "maintainer":
+        return MaintainerAgentNode
+    else:
+        raise ValueError(f"Unknown agent: {agent_name}")
+```
+
+#### Effect Parsing with instructor + DeepSeek v4-flash — Semantic Mode
+
+Effects are **not tools**. The agent does not "call" an UpdateScript tool. The agent writes natural language — "The script is complete. Scene 1 narration: 'In the beginning...'" — and the **effect parser reads that text** and extracts the implied types semantically.
+
+**instructor operates in semantic mode, not tool-calling mode:**
+
+```python
+from pydantic import BaseModel, Field
+from typing import Literal, Annotated
+import instructor
+from openai import OpenAI
+
+class UpdateScript(BaseModel):
+    type: Literal["UpdateScript"] = "UpdateScript"
+    script_text: str
+
+class GenerateNarrationAudio(BaseModel):
+    type: Literal["GenerateNarrationAudio"] = "GenerateNarrationAudio"
+    line_id: str
+    narration_text: str
+    voice_profile: str
+
+Effect = Annotated[
+    UpdateScript | GenerateNarrationAudio | ...,  # all effect types
+    Field(discriminator="type")
+]
+
+# instructor-wrapped DeepSeek client — semantic extraction, NOT tool calling
+client = instructor.from_openai(
+    OpenAI(
+        api_key=deepseek_api_key,
+        base_url="https://api.deepseek.com",
+    ),
+    mode=instructor.Mode.JSON,  # Model reads text, outputs JSON extraction
+)
+
+def parse_effects(agent_text: str) -> list[Effect]:
+    """Semantic extraction: read agent text, comprehend meaning, emit typed effects.
+
+    The agent wrote natural language. The parser (v4-flash) reads it like a
+    human would — understanding intent, identifying actions, mapping them to
+    typed effect objects. No regex. No markers. No tool calling.
+    """
+    effects = client.chat.completions.create(
+        model="deepseek-v4-flash",
+        response_model=list[Effect],
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Read the agent's message and extract all effects implied in the text. "
+                    "The agent describes actions in natural language. "
+                    "Map those descriptions to the appropriate effect types. "
+                    "Return an empty list if no effects are present."
+                ),
+            },
+            {"role": "user", "content": agent_text},
+        ],
+        max_retries=2,  # instructor re-asks on validation failure
+    )
+    return effects
+```
+
+**The critical distinction: effects are parsed, not invoked.**
+
+| Aspect | Tool Calling (WRONG for this arch) | Semantic Parsing (CORRECT) |
+|---|---|---|
+| Agent output | JSON function call | Plain natural language |
+| What agent "does" | Invokes tools | Describes actions in text |
+| Parser role | Validates tool arguments | Reads text, comprehends intent |
+| instructor mode | `Mode.TOOLS` | `Mode.JSON` |
+| Where JSON exists | In agent's output (violates "no JSON") | Inside parser only (invisible to agents) |
+
+**How instructor handles failures:**
+
+1. **Validation failure:** Pydantic validation fails on the parser's JSON output.
+2. **Re-ask:** instructor appends the validation error to the parser's conversation and asks it to correct.
+3. **Retry:** Up to `max_retries` correction attempts.
+4. **Exhaustion:** If all retries fail, `InstructorRetryException` is raised.
+
+**On exhaustion, ask the agent for clarification (honest failure):**
+
+```python
+from instructor.core.exceptions import InstructorRetryException
+
+def parse_effects_safe(agent_text: str) -> list[Effect]:
+    try:
+        return parse_effects(agent_text)
+    except InstructorRetryException as e:
+        # Build clarification request from failed attempts
+        errors = "\n".join(
+            f"Attempt {a.attempt_number}: {a.exception}"
+            for a in e.failed_attempts
+        )
+        return [
+            ClarificationRequest(
+                type="ClarificationRequest",
+                reason=f"Could not parse effects after {e.n_attempts} attempts.\n{errors}",
+                original_text=agent_text,
+            )
+        ]
+```
+
+**Key principles:**
+- **Effects are NOT tools.** The agent's only tool is `bash`. Effects are semantic content extracted from the agent's text.
+- **No regex pre-extraction.** Deterministic markers (`EFFECT: TypeName`) are an anti-pattern — they force the agent to write structured text.
+- **No JSON in prompts.** The agent is never told to "return JSON." It writes natural language; the parser handles extraction.
+- **JSON is internal to the parser only.** JSON never enters the pipeline between agents. It exists only as the parser model's intermediate representation before Pydantic validation.
+- **DeepSeek v4-flash is the extraction model.** Fast, cheap, purpose-built for semantic reading comprehension. The agent may run on deepseek-chat; the parser always uses v4-flash.
+- **Discriminated unions** via `Annotated[..., Field(discriminator="type")]` — Pyright handles these correctly.
+
+**Why instructor, not DSPy:**
+- **DSPy** optimizes prompts and signatures for task performance. It is a prompt engineering framework.
+- **instructor** enforces output schemas and validates structured data. It is a parsing/validation framework.
+- For effect parsing, we need schema enforcement + validation + re-ask on the parser's output, not prompt optimization. Instructor is the right tool.
+
+#### State-Aware Agent Factory
+
+Agents are not singletons. They are constructed fresh for each turn with the current state's tool allowlist and prompt:
+
+```python
+from pydantic_ai import Agent
+
+AGENT_BASE_PERSONAS: dict[str, str] = {
+    "scenario": "You are the scenario agent. You write narration scripts.",
+    "audio": "You are the audio agent. You formulate TTS jobs.",
+    "video": "You are the video agent. You formulate LTX jobs.",
+    "provisioner": "You are the provisioner agent. You manage GPU VMs.",
+    "assembly": "You are the assembly agent. You merge clips into final video.",
+    "maintainer": "You are the maintainer agent. You diagnose and fix problems.",
+}
+
+STATE_INSTRUCTIONS: dict[str, str] = {
+    "init": "The pipeline is starting. Produce an initial script outline.",
+    "script_draft": "Produce a complete narration script. Focus on clarity and pacing.",
+    "script_review": "Review the script for errors. Suggest improvements or approve.",
+    "provisioning": "Monitor job queues. Provision VMs when needed.",
+    "audio_production": "Turn each narration line into a TTS job. Check queue status.",
+    "video_production": "Turn each visual note into an LTX job. Check queue status.",
+    "qa": "Judge completed clips. Be strict. Requeue with detailed comments if bad.",
+    "assembly": "Combine all approved clips into a final MP4.",
+    "done": "Pipeline complete. No further action needed.",
+}
+
+STATE_TOOL_ALLOWLISTS: dict[str, set[str]] = {
+    "init": {"write_file", "read_file"},
+    "script_draft": {"write_file", "read_file", "append_file"},
+    "script_review": {"read_file", "write_file"},
+    "provisioning": {"bash", "read_file"},
+    "audio_production": {"queue_job", "read_file", "check_b2"},
+    "video_production": {"queue_job", "read_file", "check_b2"},
+    "qa": {"read_file", "check_b2", "requeue_job"},
+    "assembly": {"bash", "read_file", "check_b2", "merge_clips"},
+    "done": set(),  # No tools in done state
+}
+
+def construct_agent(agent_name: str, current_state: str) -> Agent:
+    """Build a fresh agent for this turn with state-aware configuration."""
+    deps = PipelineState(current_state=current_state)
+
+    agent = Agent(
+        'deepseek-v4-flash',
+        deps_type=PipelineState,
+        prepare_tools=prepare_tools_for_state,
+    )
+
+    @agent.system_prompt
+    def persona(ctx: RunContext[PipelineState]) -> str:
+        return AGENT_BASE_PERSONAS[agent_name]
+
+    @agent.system_prompt
+    def instructions(ctx: RunContext[PipelineState]) -> str:
+        return STATE_INSTRUCTIONS[ctx.deps.current_state]
+
+    # Register all tools
+    for tool in ALL_TOOLS:
+        agent.add_tool(tool)
+
+    return agent
+```
+
+---
+
+## 7. Hard Principles (Architecture Invariants)
+
+### 7.1 Truth
+- **Event log is the only source of truth.** Everything else is a projection.
+- **B2 is ground truth for artifacts.** VMs are ephemeral.
+- **State summary must be truthful.** No caching, no optimistic updates.
+
+### 7.2 Agency
+- **Orchestrator decides; agents act; code does not constrain.**
+- **No procedural logic overriding agent decisions.** No "if idle > 30 min, destroy VM." The agent decides.
+- **No timeout-based kills.** Agent reasons about intervention.
+
+### 7.3 Communication
+- **Plain text only between agents and pipeline.** No JSON, no schemas in prompts.
+- **GET / and POST / only.** No special endpoints.
+- **Text is accidental structure.** Structure is extracted by parser, not demanded from agent.
+
+### 7.4 Failure
+- **Never silently fail.** If stuck, report to human immediately.
+- **Kill everything on unrecoverable failure.** Destroy all VMs, stop all processes.
+- **Honest failure:** Missing dependency → pipeline fails. No graceful degradation.
+
+### 7.5 Isolation
+- **Each pipeline run is self-contained.** Zero state from previous runs.
+- **Registry is in-memory, never persistent.**
+- **No global mutable state.** Everything flows through graph context.
+
+### 7.6 Configuration
+- **No environment variables.** File reads or parameters only.
+- **No CLI arguments.** Hardcoded entry point.
+- **Hardcoded model:** `deepseek-v4-flash` everywhere.
+
+### 7.7 VMs
+- **Vast.ai CLI is source of truth.** No wrapper abstractions.
+- **Start with one VM, confirm health, then escalate.**
+- **VMs self-destruct when overseer gone.** ~15 min deadman.
+- **Upload to B2 immediately.** VM may vanish any moment.
+
+### 7.8 Quality
+- **Pyright zero errors.** No `Any` types.
+- **Ruff clean.** Mandatory static check gate.
+- **No mocks, stubs, placeholders.** Every tool calls real services.
+- **No premature optimization.** Produce movies, not perfect architecture.
+
+---
+
+## 8. Flesh-Out Checklist
+
+The following must be specified before the system runs:
+
+- [x] **Effect schema** — Pydantic `BaseModel` per effect type with `Literal` discriminator field; composed into `Annotated` discriminated union for instructor
+- [ ] **Agent prompts** — Full system prompt text for each of the 7 agent types
+- [x] **State machine definition** — `python-statemachine.StateChart` with compound/parallel states; transitions triggered by effects
+- [x] **Prompt construction logic** — `@agent.system_prompt` decorators: persona + state instructions + context; appended in definition order
+- [ ] **Event store interface** — `append()`, `read_all()`, `replay()` signatures
+- [ ] **Projection handler functions** — How each effect mutates OTIO, queues, VM registry
+- [ ] **State summary builder** — Exact format and content of the summary string
+- [x] **Effect parser** — Raw agent text → instructor + Pydantic discriminated union → typed `Effect`. No regex pre-extraction. Types are *implied in text* — extracted semantically by instructor. On validation failure, instructor re-asks model with error feedback. On exhaustion, ask agent for clarification.
+- [ ] **Orchestrator prompt** — How the orchestrator is told to make decisions
+- [x] **pydantic-graph nodes** — `BaseNode` subclasses with `PipelineGraphState`; beta broadcast/join for parallel media; Decision nodes for orchestrator routing
+- [ ] **HTTP agent wrapper** — FastAPI app, `GET /`, `POST /`, auto-detection
+- [ ] **Bash tool** — How agents execute bash (including Vast CLI)
+- [ ] **B2 upload tool** — How artifacts are uploaded and referenced
+- [ ] **Worker implementations** — TTS agent code, video agent code that run on VMs
+- [ ] **QA gates** — What "good" audio/video looks like, how to check
+- [ ] **Assembly pipeline** — ffmpeg invocation, sync, final render
+- [ ] **Maintainer hook** — Exception → maintainer agent routing
+- [ ] **Deadman switch** — Separate process or VM-side timer
+- [ ] **Skill system** — How `LOAD_SKILL: name` resolves to prompt fragments
+- [ ] **Entry point** — The async main loop tying everything together
+
+---
+
+## 9. Glossary
+
+| Term | Definition |
+|---|---|
+| **Effect** | A typed, immutable record of a state change proposed by an agent |
+| **Event** | An effect that has been validated and appended to the event log |
+| **Projection** | A read model (OTIO, queue, VM registry) rebuilt deterministically from events |
+| **Agent** | An LLM with memory, reasoning, and the ability to produce effects |
+| **Worker** | A GPU VM running an agent that performs inference (TTS/LTX) |
+| **Orchestrator** | The agent that decides which agent runs next — no direct side effects |
+| **OTIO Gate** | The sole agent authorized to mutate the timeline |
+| **State Summary** | A human-readable string describing current pipeline state |
+| **Skill** | A loadable prompt fragment giving advanced params for a domain |
+| **B2** | Backblaze B2 — ground truth artifact storage |
+| **State Machine** | Lightweight FSM per pipeline that constructs agent prompts from current state |
+| **State Instructions** | Dynamic prompt fragment injected based on current state |
+| **Base Persona** | Hardcoded agent identity that persists across all states |
+| **Context Window** | Prior conversation + state summary + feedback fed to agent |
+| **Hidden Controller** | Orchestrator/state machine that is not exposed to the agent |
+| **Tool Guardrails** | Per-state restrictions on which tools an agent may invoke |
+| **Prompt Parameterization** | Decomposing prompts into Task/Memory/Knowledge/Rules/Weights components |
+| **Effect Parser** | Component that extracts typed `Effect` objects from raw agent text via instructor + DeepSeek v4-flash |
+| **instructor** | Python library for structured LLM extraction: Pydantic schema → LLM call → validation → re-ask on failure |
+| **Types Implied in Text** | Semantic type information naturally present in LLM natural-language output, extracted without regex or markers |
+| **Re-ask** | instructor's feedback loop: validation error → append to conversation → ask model to correct |
+| **ClarificationRequest** | Effect type emitted when parsing exhausts all retries, asking the agent to rephrase |
+
+---
+
+*Abstract version: 2026-05-17*

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # Architecture
 
 See also [ARCHITECTURE_DIAGRAMS.md](./ARCHITECTURE_DIAGRAMS.md) for the eleven companion flow diagrams (top-level flow, narration reconciliation, Preference Ledger, production stage, escalation ladder, RecoveryDecision shape, critique substrate, human gates, GPU fleet + infra escalation, intermediate preview assemblies, dashboard).

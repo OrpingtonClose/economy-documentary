@@ -1,0 +1,11 @@
+{
+  "error_type": "style_drift",
+  "tool": "generate_visual",
+  "stage": "visual",
+  "scene": 4,
+  "drift_metric": 0.72,
+  "drift_threshold": 0.5,
+  "error_message": "Visual concept for scene 4 deviates from established style (cosine similarity 0.72 < 0.80)",
+  "recoverable": true,
+  "severity": "medium"
+}

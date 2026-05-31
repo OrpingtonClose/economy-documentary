@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # 15 — approval-gates (`HumanInTheLoopMiddleware` via `interrupt_on`)
 
 Human-in-the-loop is **declarative** in deepagents. You don't write

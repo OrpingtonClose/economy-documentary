@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # 13 — escalation-supervisor (DeepAgent `SubAgent`)
 
 The escalation supervisor is the **last agentic stop** before a human.

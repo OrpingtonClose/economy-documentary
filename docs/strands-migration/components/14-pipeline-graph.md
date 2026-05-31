@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # 14 — pipeline orchestrator (`create_deep_agent`)
 
 The full end-to-end orchestrator. Not a graph. One `create_deep_agent`

@@ -1,3 +1,7 @@
+> [!WARNING]
+> **NON-AUTHORITATIVE / SECONDARY DOCUMENTATION**
+> Only the files inside the `obsidian-vault/` directory are the authoritative, up-to-date documentation for this project. This file is secondary and may be outdated.
+
 # PR #343 — Test Plan (inner tool events + stall rail fix)
 
 **Target:** staging at http://142.171.48.138:29561 running commit `2eb360e` (or later).

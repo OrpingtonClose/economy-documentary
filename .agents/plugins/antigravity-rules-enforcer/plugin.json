@@ -1,0 +1,5 @@
+{
+  "name": "antigravity-rules-enforcer",
+  "description": "Enforces codebase rules and architecture integrity using DeepSeek API on file edits",
+  "version": "1.0.0"
+}

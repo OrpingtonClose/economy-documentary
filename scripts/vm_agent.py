@@ -16,6 +16,8 @@ import sys
 import threading
 import time
 from typing import Any
+import argparse
+import uvicorn
 
 from pydantic_ai import Agent
 
@@ -28,6 +30,9 @@ _DEEPSEEK_API_KEY = ""
 if os.path.exists("/workspace/.deepseek_key"):
     with open("/workspace/.deepseek_key") as f:
         _DEEPSEEK_API_KEY = f.read().strip()
+if _DEEPSEEK_API_KEY:
+    os.environ["DEEPSEEK_API_KEY"] = _DEEPSEEK_API_KEY
+    os.environ["OPENAI_API_KEY"] = _DEEPSEEK_API_KEY
 
 _WORKER_MODE = "both"
 _CONTEXT = ""
