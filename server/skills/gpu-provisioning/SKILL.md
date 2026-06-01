@@ -76,7 +76,7 @@ The video generation workload is NOT one-size-fits-all. The GPU you provision MU
 **Instance Creation:**
 ```bash
 vastai create instance <offer_id> \
-  --image nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 \
+  --image pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime \
   --disk 150 --ssh --direct \
   --label documentary-<mode> \
   --onstart-cmd '<bootstrap>'

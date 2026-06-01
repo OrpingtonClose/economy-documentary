@@ -122,8 +122,15 @@ class HostVideoHelper:
                     env={"VAST_API_KEY": self.api_key},
                     input=b"y\n"
                 )
+        
+        # Tear down directory env entirely (no persistent state)
+        import shutil
+        try:
+            shutil.rmtree("/tmp/documentary-pipeline")
+        except Exception:
+            pass
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def video_helper():
     helper = HostVideoHelper(agent_port=8003)
     helper.start_gsa()
@@ -136,17 +143,26 @@ def event_store():
     return EventStore(log_dir="/tmp/documentary-pipeline")
 
 def clear_local_event_store():
+    import shutil
+    db_dir = "/tmp/documentary-pipeline"
+    try:
+        shutil.rmtree(db_dir)
+    except Exception:
+        pass
+    os.makedirs(db_dir, exist_ok=True)
+
+    # Clean up deepagents sessions to prevent legacy session interference and improve performance
     import glob
-    for pattern in ["/tmp/documentary-pipeline/events_*.db*", "/tmp/documentary-pipeline/events.db*"]:
-        for file in glob.glob(pattern):
-            try:
-                os.remove(file)
-            except Exception:
-                pass
+    for f in glob.glob(os.path.expanduser("~/.deepagents/sessions.db*")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 @given('the GSA event store contains a queued "video" job for "ltx"')
 def step_queued_video_job(event_store):
     clear_local_event_store()
+    event_store._init_db()
     event_store.append(PipelineStarted(agent="operator"), "")
     event_store.append(BudgetSet(agent="operator", budget_usd=20.0), "")
     

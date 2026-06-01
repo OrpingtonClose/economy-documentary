@@ -105,8 +105,15 @@ class HostScenarioHelper:
             self.gsa_process.wait()
         subprocess.run("kill -9 $(lsof -t -i:8000) 2>/dev/null || true", shell=True)
         subprocess.run(f"kill -9 $(lsof -t -i:{self.agent_port}) 2>/dev/null || true", shell=True)
+        
+        # Tear down directory env entirely (no persistent state)
+        import shutil
+        try:
+            shutil.rmtree("/tmp/documentary-pipeline")
+        except Exception:
+            pass
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def scenario_helper():
     helper = HostScenarioHelper()
     helper.start_gsa()
@@ -123,17 +130,26 @@ def event_store():
     return EventStore(log_dir="/tmp/documentary-pipeline")
 
 def clear_local_event_store():
+    import shutil
+    db_dir = "/tmp/documentary-pipeline"
+    try:
+        shutil.rmtree(db_dir)
+    except Exception:
+        pass
+    os.makedirs(db_dir, exist_ok=True)
+
+    # Clean up deepagents sessions to prevent legacy session interference and improve performance
     import glob
-    for pattern in ["/tmp/documentary-pipeline/events_*.db*", "/tmp/documentary-pipeline/events.db*"]:
-        for file in glob.glob(pattern):
-            try:
-                os.remove(file)
-            except Exception:
-                pass
+    for f in glob.glob(os.path.expanduser("~/.deepagents/sessions.db*")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 @given("the GSA event store is clean")
 def step_clean_store(event_store):
     clear_local_event_store()
+    event_store._init_db()
 
 @given("the Scenario Agent is running on the host")
 def step_agent_running(scenario_helper):
