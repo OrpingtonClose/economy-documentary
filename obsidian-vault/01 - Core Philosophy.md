@@ -88,9 +88,13 @@ Agents use **pydantic-deep** (built on pydantic-ai). Context compaction is imple
 
 **Why pre-processing, not watcher-side compaction:** Token management is an agent-internal concern. pydantic-deep provides the hook infrastructure via `on_before_compress`; we provide the OTIO-aware compaction logic.
 
-### 1.10 Principles at a Glance
+### 1.10 Prompt-Only HTTP Interface
 
-#### 1.10.1 Table of 12 hard principles with enforcement mechanism per principle
+No fields from JSON request payloads or custom request headers/query parameters (such as `run_id`, `notification_type`, or `context`) may ever be consumed or processed by any agent or platform logic. The HTTP interface serves solely to trigger execution or transmit prompts. All context (such as the active `run_id`) must be dynamically resolved from the environment/filesystem (e.g., scanning the directory for the active events database).
+
+### 1.11 Principles at a Glance
+
+#### 1.11.1 Table of 13 hard principles with enforcement mechanism per principle
 
 | # | Principle | Enforcement | V6→V7 Change |
 |---|---|---|---|
@@ -106,6 +110,8 @@ Agents use **pydantic-deep** (built on pydantic-ai). Context compaction is imple
 | 10 | **No automatic stale-state detection** | Operator monitors via `GET /` on agents and intervenes manually. No VM-side timers. | Removed TimeoutObserved; operator owns intervention |
 | 11 | **Serialized per run, concurrent across runs** | Agent handlers use per-run_id locks. DB file access is serialized per run_id by asyncio.Lock. | §5.6 |
 | 12 | **Tick-driven** | Agents are HTTP services; they autonomous polling of GSA. EventStoreDB provides native push subscriptions for distributed deployments. No central watcher loop. | **Watcher removed** |
+| 13 | **Prompt-only HTTP interface** | No payload fields or query parameters are consumed. HTTP GET/POST serves only to transmit prompts. | **NEW** — ensures pure prompt-driven context |
+
 
 
 ---

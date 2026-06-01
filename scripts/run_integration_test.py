@@ -50,10 +50,10 @@ event_store = EventStore(log_dir=LOG_DIR)
 # Mock Agent Responses Generator based on GSA State
 # ===========================================================================
 
-async def get_mock_completion(role: str, run_id: str) -> str:
+async def get_mock_completion(role: str) -> str:
     """Simulate detailed flowery natural language reasoning for each agent role."""
     async with httpx.AsyncClient() as client:
-        resp = await client.get(f"http://localhost:8000/?run_id={run_id}")
+        resp = await client.get("http://localhost:8000/")
         state = resp.json()
 
     current_phase = state.get("state", {}).get("current_phase", "init")
@@ -242,14 +242,14 @@ def mock_bash_command(ctx, command: str) -> str:
 original_parse_agent_text = effect_parser.parse_agent_text_multi
 
 
-async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> list[Effect]:
+async def mock_parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """Try to parse using deepseek, fallback to regex mapping if offline or no key."""
     try:
         # Check if deepseek api key file is present and not empty
         api_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
         if os.path.exists(api_key_path) and os.path.getsize(api_key_path) > 0:
             logger.info("Querying live DeepSeek API for effect extraction...")
-            effects = await original_parse_agent_text(agent_id, text, run_id)
+            effects = await original_parse_agent_text(agent_id, text)
             if effects and effects[0].kind != "noop":
                 logger.info(f"Live DeepSeek parsed effect: {effects[0].kind}")
                 return effects
@@ -261,7 +261,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "updatescript" in text_lower or "narration script for scene 1" in text_lower:
         return [UpdateScript(
-            run_id=run_id,
             agent=agent_id,
             blocks=[ScriptBlock(
                 scene_num=1,
@@ -276,7 +275,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
         job_type = "ltx" if "ltx" in text_lower else "tts"
         job_id = "ltx_job_intro" if job_type == "ltx" else "tts_job_intro"
         return [QueueJob(
-            run_id=run_id,
             agent=agent_id,
             job_id=job_id,
             job_type=job_type,
@@ -288,7 +286,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
     if "vmallocated" in text_lower or "provisioned offer" in text_lower:
         role = "ltx" if "ltx" in text_lower else "tts"
         return [VMAllocated(
-            run_id=run_id,
             agent=agent_id,
             instance_id="vm_instance_1",
             role=role,
@@ -301,7 +298,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
     if "jobstarted" in text_lower or "dispatch pending job" in text_lower or "start job" in text_lower:
         job_id = "ltx_job_intro" if "ltx_job_intro" in text_lower or "ltx" in text_lower else "tts_job_intro"
         return [JobStarted(
-            run_id=run_id,
             agent=agent_id,
             job_id=job_id,
             vm_instance_id="vm_instance_1"
@@ -311,7 +307,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
         job_id = "ltx_job_intro" if "ltx_job_intro" in text_lower or "ltx" in text_lower else "tts_job_intro"
         artifact = "/tmp/video.mp4" if "ltx" in job_id else "/tmp/out.wav"
         return [JobCompleted(
-            run_id=run_id,
             agent=agent_id,
             job_id=job_id,
             artifact_uri=artifact,
@@ -321,7 +316,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "durationadjusted" in text_lower or "judge this block as passing" in text_lower:
         return [DurationAdjusted(
-            run_id=run_id,
             agent=agent_id,
             block_id="A1:1:intro",
             slot_id="A1:1:intro",
@@ -333,7 +327,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "reconciliationcomplete" in text_lower or "reconciliation is complete" in text_lower:
         return [ReconciliationComplete(
-            run_id=run_id,
             agent=agent_id,
             blocks_total=1,
             blocks_passed=1,
@@ -344,7 +337,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "mergeintootio" in text_lower or "merge the visual" in text_lower:
         return [MergeIntoOTIO(
-            run_id=run_id,
             agent=agent_id,
             job_id="ltx_job_intro",
             block_id="intro",
@@ -357,7 +349,6 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "pipelinecomplete" in text_lower or "all tracks are fully delivered" in text_lower:
         return [PipelineComplete(
-            run_id=run_id,
             agent=agent_id,
             output_path="/tmp/final_documentary.mp4",
             duration_sec=6.8
@@ -365,13 +356,12 @@ async def mock_parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> 
 
     if "vmdeallocated" in text_lower or "destroying idle vm" in text_lower:
         return [VMDeallocated(
-            run_id=run_id,
             agent=agent_id,
             instance_id="vm_instance_1",
             reason="job_done"
         )]
 
-    return [NoOp(run_id=run_id, agent=agent_id, reason="No effects matched in fallback")]
+    return [NoOp(agent=agent_id, reason="No effects matched in fallback")]
 
 
 # ===========================================================================
@@ -391,8 +381,7 @@ async def main():
     logger.info("Initializing temporary DB directory...")
     # Clean out any old runs in tmp log dir
     if os.path.exists(LOG_DIR):
-        import shutil
-        for file in glob.glob(os.path.join(LOG_DIR, "events_*.db*")):
+        for file in glob.glob(os.path.join(LOG_DIR, "events*.db*")):
             try:
                 os.remove(file)
             except Exception:
@@ -400,23 +389,18 @@ async def main():
     else:
         os.makedirs(LOG_DIR)
 
-    run_id = f"integration_run_{int(time.time())}"
-    logger.info(f"Target Run ID: {run_id}")
-
     # Set up initial events in SQLite WAL Event Store
     start_event = PipelineStarted(
-        run_id=run_id,
         agent="operator",
     )
-    event_store.append(run_id, start_event, otio_hash_before="")
+    event_store.append(start_event, otio_hash_before="")
 
     budget_event = BudgetSet(
-        run_id=run_id,
         agent="operator",
         budget_usd=10.0,
         reason="run_start",
     )
-    event_store.append(run_id, budget_event, otio_hash_before="")
+    event_store.append(budget_event, otio_hash_before="")
 
     logger.info("Booting GSA and Agent servers...")
     # Import apps dynamically
@@ -440,12 +424,7 @@ async def main():
     # Define mock Agent.run method
     async def mock_run(self, prompt, deps=None, **kwargs):
         role = deps.agent_role if deps else "unknown"
-        cur_run_id = run_id
-        for line in prompt.split("\n"):
-            if "Run ID:" in line:
-                cur_run_id = line.split(":", 1)[1].strip()
-
-        output_text = await get_mock_completion(role, cur_run_id)
+        output_text = await get_mock_completion(role)
 
         res = MagicMock()
         res.output = output_text
@@ -471,7 +450,7 @@ async def main():
         try:
             # Query GSA
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"http://localhost:8000/?run_id={run_id}")
+                resp = await client.get("http://localhost:8000/")
                 if resp.status_code == 200:
                     state_data = resp.json()
                     phase = state_data.get("state", {}).get("current_phase", "init")

@@ -24,7 +24,6 @@ V7 does not adopt OpenTelemetry, W3C Trace Context, or structured metrics. Trace
 | `effect_id` | Every effect (UUIDv7) | Idempotency key; also serves as exact event identifier |
 | `agent` field | Every effect | Identifies which component produced the text from which the effect was extracted |
 | `timestamp` | Every effect | Epoch seconds; monotonic within a run |
-| `X-Run-ID` header | Every HTTP request (agent→agent, operator→agent, worker→provisioner) | Correlates HTTP traffic with event-stream data |
 | `sequence` | SQLite event sequence number | Total order of events within a run |
 
 ### 16.2 Operator observability
@@ -192,13 +191,12 @@ Output:
 7: AudioMeasured (job_id=job-123)
 ```
 
-**HTTP tracing:** The `X-Run-ID` header is present on every agent-to-agent POST. The `X-Effect-ID` header is present on effect append responses, carrying the `effect_id` for correlation. This allows correlating HTTP traffic with event stream data:
+**HTTP tracing:** The `X-Effect-ID` header is present on effect append responses, carrying the `effect_id` for correlation. This allows correlating HTTP traffic with event stream data:
 
 ```
 Audio Agent completes turn; Video Agent polls GSA independently
   Headers:
     Content-Type: application/json
-    X-Run-ID: run-abc
     X-Effect-ID: 0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b  # the ReconciliationComplete appended this turn
 ```
 

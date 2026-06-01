@@ -16,13 +16,11 @@ class Effect(BaseModel):
     """Base for all effect types. NEVER instantiated directly.
 
     Fields present on every effect emitted into the event store:
-    - run_id:        pipeline run identifier (opaque string)
     - effect_id:     UUIDv7 generated client-side for idempotent retries
     - kind:          Literal discriminant string (overridden per subclass)
     - agent:         component that produced the effect (e.g. "scenario")
     - timestamp:     seconds since epoch at creation time
     """
-    run_id: str
     effect_id: UUID = Field(default_factory=uuid7)
     kind: str = "effect"  # overridden per subclass via Literal
     agent: str
@@ -240,7 +238,6 @@ class VMDeallocated(Effect):
     ]
     final_cost: float = Field(default=0.0, ge=0.0)
     runtime_sec: float = Field(default=0.0, ge=0.0)
-    run_id: str = ""  # for ownership guard: only destroy VMs belonging to this run
 
 
 class VMProvisionFailed(Effect):

@@ -731,11 +731,7 @@ def test_scenario_agent_first_draft():
     store.append(run_id, PipelineStarted(run_id=run_id, agent="operator"), "")
     store.append(run_id, BudgetSet(run_id=run_id, agent="operator", budget_usd=10.0), "")
     
-    resp = httpx.post("http://127.0.0.1:8001/", json={
-        "run_id": run_id,
-        "notification_type": "instruction",
-        "context": {"instruction": "Write a short documentary about Lacan."}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8001/", content="Write a short documentary about Lacan.", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8001)
     
@@ -743,7 +739,7 @@ def test_scenario_agent_first_draft():
     kinds = [e.effect.kind for e in events]
     assert "update_script" in kinds
 
-    gsa_resp = httpx.get("http://127.0.0.1:8000/", headers={"X-Run-ID": run_id})
+    gsa_resp = httpx.get("http://127.0.0.1:8000/")
     assert gsa_resp.status_code == 200
     slots = gsa_resp.json()["otio"]["slots"]
     assert "A1:1:intro" in slots
@@ -782,11 +778,7 @@ def test_scenario_agent_rewrite_response():
         )]
     ), "")
     
-    resp = httpx.post("http://127.0.0.1:8001/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8001/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8001)
     
@@ -807,11 +799,7 @@ def test_audio_agent_queues_tts():
         blocks=[ScriptBlock(scene_num=1, block_id="intro", speaker="V1", text="Hello world.", duration_sec=6.5)]
     ), "")
     
-    resp = httpx.post("http://127.0.0.1:8002/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8002/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8002)
     
@@ -835,11 +823,7 @@ def test_audio_agent_validates_duration_pass():
     store.append(run_id, QueueJob(run_id=run_id, agent="audio", job_id="tts_job_intro", job_type="tts", scene_num=1, block_id="intro", slot_id="A1:1:intro"), "")
     store.append(run_id, JobCompleted(run_id=run_id, agent="provisioner", job_id="tts_job_intro", artifact_uri="/tmp/audio.wav", duration_sec=6.8, vm_instance_id="vm_instance_1"), "")
     
-    resp = httpx.post("http://127.0.0.1:8002/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8002/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8002)
     
@@ -861,11 +845,7 @@ def test_audio_agent_validates_duration_fail_requeue():
     store.append(run_id, QueueJob(run_id=run_id, agent="audio", job_id="tts_job_intro", job_type="tts", scene_num=1, block_id="intro", slot_id="A1:1:intro"), "")
     store.append(run_id, JobCompleted(run_id=run_id, agent="provisioner", job_id="tts_job_intro", artifact_uri="/tmp/audio.wav", duration_sec=3.0, vm_instance_id="vm_instance_1"), "")
     
-    resp = httpx.post("http://127.0.0.1:8002/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8002/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8002)
     
@@ -890,11 +870,7 @@ def test_audio_agent_escalation_on_attempts():
         store.append(run_id, JobCompleted(run_id=run_id, agent="provisioner", job_id=f"tts_job_{i}", artifact_uri="/tmp/audio.wav", duration_sec=3.0, vm_instance_id="vm_instance_1"), "")
         store.append(run_id, JobRequeued(run_id=run_id, agent="audio", job_id=f"tts_job_{i}", reason="too short"), "")
         
-    resp = httpx.post("http://127.0.0.1:8002/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8002/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8002)
     
@@ -916,11 +892,7 @@ def test_audio_agent_reconciliation_complete():
     ), "")
     store.append(run_id, DurationAdjusted(run_id=run_id, agent="audio", block_id="intro", slot_id="A1:1:intro", scene_num=1, voice_role="V1", scripted_sec=6.5, measured_sec=6.8), "")
     
-    resp = httpx.post("http://127.0.0.1:8002/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8002/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8002)
     
@@ -942,11 +914,7 @@ def test_video_agent_queues_ltx():
     store.append(run_id, DurationAdjusted(run_id=run_id, agent="audio", block_id="intro", slot_id="A1:1:intro", scene_num=1, voice_role="V1", scripted_sec=6.5, measured_sec=6.8), "")
     store.append(run_id, ReconciliationComplete(run_id=run_id, agent="audio", blocks_total=1, blocks_passed=1, blocks_failed=0, worst_delta_sec=0.3, total_measured_sec=6.8), "")
     
-    resp = httpx.post("http://127.0.0.1:8003/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8003/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8003)
     
@@ -971,11 +939,7 @@ def test_video_agent_merges_video():
     store.append(run_id, QueueJob(run_id=run_id, agent="video", job_id="ltx_job_intro", job_type="ltx", scene_num=1, block_id="intro", slot_id="A1:1:intro"), "")
     store.append(run_id, JobCompleted(run_id=run_id, agent="provisioner", job_id="ltx_job_intro", artifact_uri="/tmp/video.mp4", duration_sec=6.8, vm_instance_id="vm_instance_1"), "")
     
-    resp = httpx.post("http://127.0.0.1:8003/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8003/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8003)
     
@@ -996,11 +960,7 @@ def test_provisioner_agent_allocates_vm():
     ), "")
     store.append(run_id, QueueJob(run_id=run_id, agent="audio", job_id="tts_job_intro", job_type="tts", scene_num=1, block_id="intro", slot_id="A1:1:intro"), "")
     
-    resp = httpx.post("http://127.0.0.1:8081/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8081/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8081)
     
@@ -1022,11 +982,7 @@ def test_provisioner_agent_dispatches_job():
     store.append(run_id, QueueJob(run_id=run_id, agent="audio", job_id="tts_job_intro", job_type="tts", scene_num=1, block_id="intro", slot_id="A1:1:intro"), "")
     store.append(run_id, VMAllocated(run_id=run_id, agent="provisioner", instance_id="vm_instance_1", role="tts", offer_id="1234", worker_url="http://localhost:8880", gpu_type="RTX 4090", cost_per_hour=0.45), "")
     
-    resp = httpx.post("http://127.0.0.1:8081/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8081/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8081)
     
@@ -1061,11 +1017,7 @@ def test_provisioner_agent_handles_stuck_vm():
     allocated_ev.timestamp = old_time
     store.append(run_id, allocated_ev, "")
     
-    resp = httpx.post("http://127.0.0.1:8081/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8081/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8081)
     
@@ -1082,11 +1034,7 @@ def test_provisioner_agent_deallocates_idle_vms():
     store.append(run_id, BudgetSet(run_id=run_id, agent="operator", budget_usd=10.0), "")
     store.append(run_id, VMAllocated(run_id=run_id, agent="provisioner", instance_id="vm_instance_1", role="tts", offer_id="1234", worker_url="http://localhost:8880", gpu_type="RTX 4090", cost_per_hour=0.45), "")
     
-    resp = httpx.post("http://127.0.0.1:8081/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8081/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8081)
     
@@ -1119,11 +1067,7 @@ def test_assembly_agent_success():
         duration_sec=6.8
     ), "")
     
-    resp = httpx.post("http://127.0.0.1:8005/", json={
-        "run_id": run_id,
-        "notification_type": "wake",
-        "context": {}
-    }, timeout=5.0)
+    resp = httpx.post("http://127.0.0.1:8005/", content="Wake up and check GSA", timeout=5.0)
     assert resp.status_code == 200
     wait_for_agent(8005)
     
@@ -1263,6 +1207,17 @@ def test_integration_audio_drift():
 
 def run_test(name, func):
     print(f"\nRunning {name}...", end="", flush=True)
+    # Clean DB files before running each test case to ensure isolation
+    import glob
+    for file in glob.glob(os.path.join(TEMP_LOG_DIR, "events.db*")):
+        try:
+            os.remove(file)
+        except Exception:
+            pass
+    # Re-initialize database schema
+    agent_base.event_store._init_db()
+    global_state_agent.event_store._init_db()
+    
     try:
         func()
         print(" \033[92m[PASSED]\033[0m")
@@ -1273,6 +1228,28 @@ def run_test(name, func):
         return False
 
 def main():
+    # Monkeypatch EventStore methods to handle deprecated run_id argument
+    original_append = EventStore.append
+    original_read_all = EventStore.read_all
+
+    def patched_append(self, *args, **kwargs):
+        # old signature: append(self, run_id, effect, otio_hash_before)
+        # new signature: append(self, effect, otio_hash_before)
+        if len(args) == 3 and isinstance(args[0], str):
+            run_id = args[0]
+            effect = args[1]
+            otio_hash_before = args[2]
+            if hasattr(effect, "config") and isinstance(effect.config, dict):
+                effect.config["run_id"] = run_id
+            return original_append(self, effect, otio_hash_before, **kwargs)
+        return original_append(self, *args, **kwargs)
+
+    def patched_read_all(self, *args, **kwargs):
+        return original_read_all(self)
+
+    EventStore.append = patched_append
+    EventStore.read_all = patched_read_all
+
     global TEMP_LOG_DIR
     TEMP_LOG_DIR = tempfile.mkdtemp(prefix="doc_pipeline_endpoint_test_")
     
@@ -1332,4 +1309,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-2

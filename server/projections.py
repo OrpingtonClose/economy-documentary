@@ -3,11 +3,29 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import deque, defaultdict
 import time
-from typing import Any, Optional, Literal
+from typing import Any, Optional, Literal, cast
 import opentimelineio as otio
 from pydantic import BaseModel, Field
 
-from effects import Effect, UpdateScript, ReorderScenes, KIND_TO_MODEL
+from effects import (
+    Effect,
+    UpdateScript,
+    ReorderScenes,
+    MergeIntoOTIO,
+    DurationAdjusted,
+    DeleteScene,
+    DeleteFromOTIO,
+    QueueJob,
+    JobStarted,
+    JobCompleted,
+    JobFailed,
+    JobRequeued,
+    VMAllocated,
+    VMDeallocated,
+    VMObserved,
+    ProductionFailed,
+    KIND_TO_MODEL,
+)
 from event_store import EventStore
 
 
@@ -17,12 +35,12 @@ class Projection(ABC):
     def __init__(self) -> None:
         self.last_sequence: int = 0
 
-    def tick(self, run_id: str, store: EventStore) -> int:
+    def tick(self, store: EventStore) -> int:
         """Fetch events since ``last_sequence`` and apply each.
 
         Returns the number of events processed.
         """
-        records = store.read_since(run_id, self.last_sequence)
+        records = store.read_since(self.last_sequence)
         processed = 0
         for record in records:
             self.apply(record.effect)
@@ -56,17 +74,17 @@ class Timeline(Projection):
 
     def apply(self, event: Effect) -> None:
         if event.kind == "update_script":
-            self._build_from_script(event)
+            self._build_from_script(cast(UpdateScript, event))
         elif event.kind == "merge_into_otio":
-            self._merge_clip(event)
+            self._merge_clip(cast(MergeIntoOTIO, event))
         elif event.kind == "duration_adjusted":
-            self._adjust_slot_duration(event)
+            self._adjust_slot_duration(cast(DurationAdjusted, event))
         elif event.kind == "delete_scene":
-            self._delete_scene(event)
+            self._delete_scene(cast(DeleteScene, event))
         elif event.kind == "reorder_scenes":
-            self._reorder_scenes(event)
+            self._reorder_scenes(cast(ReorderScenes, event))
         elif event.kind == "delete_from_otio":
-            self._remove_clip(event)
+            self._remove_clip(cast(DeleteFromOTIO, event))
 
     def _build_from_script(self, event: UpdateScript) -> None:
         track_name = "A1_Narration"
@@ -143,7 +161,7 @@ class Timeline(Projection):
             duration=new_duration,
         )
 
-    def _merge_clip(self, event: Effect) -> None:
+    def _merge_clip(self, event: MergeIntoOTIO) -> None:
         slot_addr = event.slot_id
         clip = self._find_clip_by_name(slot_addr)
         if clip is None:
@@ -156,7 +174,7 @@ class Timeline(Projection):
             self.slots[slot_addr]["status"] = "delivered"
             self.slots[slot_addr]["artifact_uri"] = event.artifact_uri
 
-    def _adjust_slot_duration(self, event: Effect) -> None:
+    def _adjust_slot_duration(self, event: DurationAdjusted) -> None:
         slot_addr = event.block_id
         clip = self._find_clip_by_name(slot_addr)
         if clip is None:
@@ -171,7 +189,7 @@ class Timeline(Projection):
             self.slots[slot_addr]["measured_sec"] = event.measured_sec
             self.slots[slot_addr]["status"] = "measured"
 
-    def _delete_scene(self, event: Effect) -> None:
+    def _delete_scene(self, event: DeleteScene) -> None:
         scene_num = event.scene_num
         to_remove = [
             addr for addr, slot in self.slots.items()
@@ -217,7 +235,7 @@ class Timeline(Projection):
                 new_slots[clip.name] = self.slots[clip.name]
         self.slots = new_slots
 
-    def _remove_clip(self, event: Effect) -> None:
+    def _remove_clip(self, event: DeleteFromOTIO) -> None:
         clip = self._find_clip_by_name(event.slot_id)
         if clip is not None:
             track = clip.parent()
@@ -351,33 +369,35 @@ class Jobs(Projection):
 
     def apply(self, event: Effect) -> None:
         if event.kind == "queue_job":
-            self._on_queue(event)
+            self._on_queue(cast(QueueJob, event))
         elif event.kind == "job_started":
-            self._on_start(event)
+            self._on_start(cast(JobStarted, event))
         elif event.kind == "job_completed":
-            self._on_complete(event)
+            self._on_complete(cast(JobCompleted, event))
         elif event.kind == "job_failed":
-            self._on_fail(event)
+            self._on_fail(cast(JobFailed, event))
         elif event.kind == "job_requeued":
-            self._on_requeue(event)
+            self._on_requeue(cast(JobRequeued, event))
         elif event.kind == "reconciliation_complete":
             self.reconciliation_complete = True
             self.dirty_blocks.clear()
         elif event.kind == "reconciliation_failed":
             self.reconciliation_complete = False
         elif event.kind == "production_failed":
+            pf_event = cast(ProductionFailed, event)
             self.production_failures.append({
-                "slot_id": getattr(event, "slot_id", ""),
-                "failure_type": getattr(event, "failure_type", ""),
-                "expected": getattr(event, "expected", ""),
-                "actual": getattr(event, "actual", ""),
-                "suggested_fix": getattr(event, "suggested_fix", {}).model_dump() if hasattr(getattr(event, "suggested_fix", {}), "model_dump") else getattr(event, "suggested_fix", {}),
+                "slot_id": pf_event.slot_id,
+                "failure_type": pf_event.failure_type,
+                "expected": pf_event.expected,
+                "actual": pf_event.actual,
+                "suggested_fix": pf_event.suggested_fix.model_dump() if pf_event.suggested_fix else {},
             })
         elif event.kind == "update_script":
-            self._resolve_failures_on_script_update(event)
-            self._sync_from_otio(event)
+            us_event = cast(UpdateScript, event)
+            self._resolve_failures_on_script_update(us_event)
+            self._sync_from_otio(us_event)
 
-    def _on_queue(self, event: Effect) -> None:
+    def _on_queue(self, event: QueueJob) -> None:
         job_id = event.job_id
         if job_id not in self.jobs:
             job = JobState(
@@ -392,13 +412,13 @@ class Jobs(Projection):
             if block_id and event.job_type == "tts":
                 self.block_attempts[block_id] += 1
 
-    def _on_start(self, event: Effect) -> None:
+    def _on_start(self, event: JobStarted) -> None:
         job = self.jobs.get(event.job_id)
         if job:
             job.status = "running"
             job.vm_instance_id = getattr(event, "vm_instance_id", None)
 
-    def _on_complete(self, event: Effect) -> None:
+    def _on_complete(self, event: JobCompleted) -> None:
         job = self.jobs.get(event.job_id)
         if job:
             job.status = "completed"
@@ -410,20 +430,20 @@ class Jobs(Projection):
                 self.dirty_blocks.discard(block_id)
                 self.clean_blocks.add(block_id)
 
-    def _on_fail(self, event: Effect) -> None:
+    def _on_fail(self, event: JobFailed) -> None:
         job = self.jobs.get(event.job_id)
         if job:
             job.status = "failed"
             job.error_message = getattr(event, "error_message", "unknown")
 
-    def _on_requeue(self, event: Effect) -> None:
+    def _on_requeue(self, event: JobRequeued) -> None:
         job = self.jobs.get(event.job_id)
         if job:
             job.status = "pending"
             job.requeue_count += 1
             job.error_message = None
-            if getattr(event, "new_params", None):
-                job.params.update(event.new_params)
+            if event.new_params is not None:
+                job.params.update(cast(dict[str, Any], event.new_params))
             if job.slot_id:
                 self.dirty_blocks.add(job.slot_id)
                 self.clean_blocks.discard(job.slot_id)
@@ -511,23 +531,26 @@ class VMs(Projection):
 
     def apply(self, event: Effect) -> None:
         if event.kind == "vm_allocated":
-            self.vms[event.instance_id] = VMRecord(
-                instance_id=event.instance_id,
+            vm_alloc = cast(VMAllocated, event)
+            self.vms[vm_alloc.instance_id] = VMRecord(
+                instance_id=vm_alloc.instance_id,
                 status="active",
-                role=getattr(event, "role", ""),
-                offer_id=getattr(event, "offer_id", ""),
-                worker_url=getattr(event, "worker_url", ""),
-                hourly_rate_usd=getattr(event, "cost_per_hour", 0.0),
-                started_at=getattr(event, "timestamp", 0.0),
+                role=getattr(vm_alloc, "role", ""),
+                offer_id=getattr(vm_alloc, "offer_id", ""),
+                worker_url=getattr(vm_alloc, "worker_url", ""),
+                hourly_rate_usd=getattr(vm_alloc, "cost_per_hour", 0.0),
+                started_at=getattr(vm_alloc, "timestamp", 0.0),
             )
         elif event.kind == "vm_deallocated":
-            rec = self.vms.get(event.instance_id)
+            vm_dealloc = cast(VMDeallocated, event)
+            rec = self.vms.get(vm_dealloc.instance_id)
             if rec:
                 rec.status = "destroyed"
         elif event.kind == "vm_observed":
-            rec = self.vms.get(event.instance_id)
+            vm_obs = cast(VMObserved, event)
+            rec = self.vms.get(vm_obs.instance_id)
             if rec:
-                rec.observed_status = getattr(event, "observed_status", None)
+                rec.observed_status = getattr(vm_obs, "observed_status", None)
                 if rec.observed_status == "not_found" and rec.status == "active":
                     rec.status = "observed_gone"
 
@@ -610,7 +633,6 @@ class StateProjection(Projection):
         super().__init__()
         self.current_phase: str = "init"
         self.phase_history: list[PhaseChangeRecord] = []
-        self.run_id: Optional[str] = None
         self.recent_effects: dict[str, deque[Effect]] = defaultdict(
             lambda: deque(maxlen=loop_buffer_size)
         )
@@ -622,7 +644,6 @@ class StateProjection(Projection):
             self.recent_effects[agent].append(event)
 
         if event.kind == "pipeline_started":
-            self.run_id = getattr(event, "run_id", None)
             self.current_phase = "init"
             self.phase_history.clear()
             self.recent_effects.clear()
@@ -763,7 +784,6 @@ class BudgetResponse(BaseModel):
 
 
 class GlobalStateResponse(BaseModel):
-    run_id: str
     timestamp: float
     otio: OTIOResponse
     jobs: JobResponse

@@ -111,12 +111,6 @@ Every HTTP surface in the pipeline uses **JSON** (`Content-Type: application/jso
 
 **Endpoint:** `POST /` on every agent port (8001–8005, 8081)  
 **Content-Type:** `application/json`  
-**Required headers:**
-
-| Header | Value | Required | Purpose |
-|---|---|---|---|
-| `Content-Type` | `application/json` | Yes | Request body format |
-| `X-Run-ID` | `{run_id}` | Yes | Correlates HTTP request with event stream |
 
 **Body:** `AgentPayload` Pydantic model  
 **Response:** `AgentResponse` Pydantic model  
@@ -209,7 +203,6 @@ class AgentResponse(BaseModel):
 
 **Endpoint:** `GET /` on every agent port  
 **Content-Type:** `application/json`  
-**Query params:** `?run_id={run_id}` (optional on agents, required on GSA)  
 **Response:** Varies by component
 
 **Agent GET / (ports 8001–8005, 8081):**
@@ -230,9 +223,8 @@ class AgentHealthResponse(BaseModel):
 The Global State Agent returns `GlobalStateResponse` (§2.4.2 / §6.7.6). This is the only component whose `GET /` returns full state rather than just health.
 
 ```
-GET http://localhost:8000/?run_id=0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
+GET http://localhost:8000/
 Content-Type: application/json
-X-Run-ID: 0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b
 
 → GlobalStateResponse (§6.7.6)
 ```

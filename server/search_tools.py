@@ -9,15 +9,24 @@ _BRAVE_KEY = ""
 if not _BRAVE_KEY and os.path.exists(os.path.expanduser("~/api_keys/brave_key.txt")):
     with open(os.path.expanduser("~/api_keys/brave_key.txt")) as f:
         _BRAVE_KEY = f.read().strip()
+if not _BRAVE_KEY and os.path.exists(os.path.expanduser("~/api_keys/LLMS/brave_key.txt")):
+    with open(os.path.expanduser("~/api_keys/LLMS/brave_key.txt")) as f:
+        _BRAVE_KEY = f.read().strip()
 
 _PERPLEXITY_KEY = ""
 if not _PERPLEXITY_KEY and os.path.exists(os.path.expanduser("~/api_keys/LLMS/perplexity_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/LLMS/perplexity_api_key.txt")) as f:
         _PERPLEXITY_KEY = f.read().strip()
+if not _PERPLEXITY_KEY and os.path.exists(os.path.expanduser("~/api_keys/perplexity_api_key.txt")):
+    with open(os.path.expanduser("~/api_keys/perplexity_api_key.txt")) as f:
+        _PERPLEXITY_KEY = f.read().strip()
 
 _EXA_KEY = ""
 if not _EXA_KEY and os.path.exists(os.path.expanduser("~/api_keys/exa_api_key.txt")):
     with open(os.path.expanduser("~/api_keys/exa_api_key.txt")) as f:
+        _EXA_KEY = f.read().strip()
+if not _EXA_KEY and os.path.exists(os.path.expanduser("~/api_keys/LLMS/exa_api_key.txt")):
+    with open(os.path.expanduser("~/api_keys/LLMS/exa_api_key.txt")) as f:
         _EXA_KEY = f.read().strip()
 
 def search_brave(query: str, count: int = 3) -> str:

@@ -53,9 +53,7 @@ _CRITIQUE_SUBDIR = "critiques"
 def _default_root() -> Path:
     """Return the default on-disk root for critique records.
 
-    Mirrors :mod:`tools.b2_checkpoint`'s local-cache layout: runs are
-    scoped by the ``B2_RUN_ID`` env var (falling back to a generic
-    ``default`` run if unset) under ``/tmp/documentary-pipeline``.
+    Mirrors :mod:`tools.b2_checkpoint`'s local-cache layout under ``/tmp/documentary-pipeline``.
     Tests always inject an explicit ``root=`` so this default never
     surprises them.
     """
@@ -64,8 +62,7 @@ def _default_root() -> Path:
         "CRITIQUE_STORE_ROOT",
         "/tmp/documentary-pipeline",
     )
-    run_id = os.environ.get("B2_RUN_ID", "default")
-    return Path(base) / run_id
+    return Path(base)
 
 
 def _safe_component(value: str) -> str:

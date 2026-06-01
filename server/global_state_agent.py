@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Optional
+from typing import Optional, Literal, cast
 from fastapi import FastAPI, HTTPException, Header, Query
 from pydantic import BaseModel
 
@@ -33,8 +33,8 @@ LOG_DIR = "/tmp/documentary-pipeline"
 event_store = EventStore(log_dir=LOG_DIR)
 
 
-def build_global_state(run_id: str) -> GlobalStateResponse:
-    """Replay all events from sequence 0 for a run_id and return the GlobalStateResponse."""
+def build_global_state() -> GlobalStateResponse:
+    """Replay all events from sequence 0 and return the GlobalStateResponse."""
     # Build clean projection states on every call (stateless catch-up/replay from 0)
     timeline = Timeline()
     jobs = Jobs()
@@ -43,11 +43,11 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     state = StateProjection()
 
     # Tick all projections from sequence 0
-    timeline.tick(run_id, event_store)
-    jobs.tick(run_id, event_store)
-    vms.tick(run_id, event_store)
-    budget.tick(run_id, event_store)
-    state.tick(run_id, event_store)
+    timeline.tick(event_store)
+    jobs.tick(event_store)
+    vms.tick(event_store)
+    budget.tick(event_store)
+    state.tick(event_store)
 
     # 1. Map OTIO (Timeline)
     scenes = set()
@@ -88,9 +88,9 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     for job_id, j in jobs.jobs.items():
         job_items[job_id] = JobResponseItem(
             job_id=j.job_id,
-            job_type=j.job_type,
+            job_type=cast(Literal['tts', 'ltx'], j.job_type),
             slot_id=j.slot_id,
-            status=j.status,
+            status=cast(Literal['pending', 'running', 'completed', 'failed'], j.status),
             params=j.params,
             artifact_uri=j.artifact_uri,
             duration_sec=j.duration_sec,
@@ -117,8 +117,8 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     for instance_id, v in vms.vms.items():
         vm_items[instance_id] = VMResponseItem(
             instance_id=v.instance_id,
-            status=v.status,
-            role=v.role,
+            status=cast(Literal['active', 'destroyed', 'observed_gone'], v.status),
+            role=cast(Literal['tts', 'ltx', ''], v.role),
             offer_id=v.offer_id,
             worker_url=v.worker_url,
             hourly_rate_usd=v.hourly_rate_usd,
@@ -173,7 +173,6 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     )
 
     return GlobalStateResponse(
-        run_id=run_id,
         timestamp=time.time(),
         otio=otio_res,
         jobs=jobs_res,
@@ -184,13 +183,17 @@ def build_global_state(run_id: str) -> GlobalStateResponse:
     )
 
 
-@app.get("/runs/{run_id}", response_model=GlobalStateResponse)
-async def get_state(
-    run_id: str,
-):
-    """Retrieve the authoritative rebuilt projections for the given run_id."""
+@app.get("/", response_model=GlobalStateResponse)
+async def get_state():
+    """Retrieve the authoritative rebuilt projections."""
+    import os
+    if not os.path.exists(os.path.join(LOG_DIR, "events.db")):
+        raise HTTPException(
+            status_code=400,
+            detail="No active events database found.",
+        )
     try:
-        return build_global_state(run_id)
+        return build_global_state()
     except Exception as exc:
         raise HTTPException(
             status_code=500,

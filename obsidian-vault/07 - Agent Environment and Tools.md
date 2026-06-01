@@ -19,7 +19,7 @@
 
 ## 7.1 Design Principle: Core Tools
 
-Standard pydantic-deep agent platform tools are enabled (`list_skills`, `load_skill`, `task`, `web_search`, etc.). In addition, each agent is equipped with a custom async `bash_command` tool:
+Standard pydantic-deep agent platform tools are enabled (`list_skills`, `load_skill`, `task`, `web_search`, etc.). In addition, each agent is equipped with a custom async `bash_command` tool and dedicated external knowledge search tools:
 
 ```python
 AGENT_TOOLS = [
@@ -29,11 +29,46 @@ AGENT_TOOLS = [
         "parameters": {
             "command": {"type": "string", "description": "The bash command to execute"}
         }
+    },
+    {
+        "name": "search_web_brave",
+        "description": "Search the web using Brave Search for real-time information.",
+        "parameters": {
+            "query": {"type": "string", "description": "The search term or query"},
+            "count": {"type": "integer", "description": "Number of results to return (default: 3)"}
+        }
+    },
+    {
+        "name": "search_web_perplexity",
+        "description": "Query Perplexity LLM search model for complex questions requiring reasoning and web search.",
+        "parameters": {
+            "query": {"type": "string", "description": "The reasoning or search query"},
+            "count": {"type": "integer", "description": "Number of citations to return (default: 3)"}
+        }
+    },
+    {
+        "name": "search_web_exa",
+        "description": "Search the web using Exa neural search to retrieve clean, content-rich matching web pages.",
+        "parameters": {
+            "query": {"type": "string", "description": "The neural search query"},
+            "count": {"type": "integer", "description": "Number of results to return (default: 3)"}
+        }
     }
 ]
 ```
 
-That's it. No `query_gsa` tool, no `read_memory` tool, no custom abstractions.
+### 7.1.1 External Search & Knowledge Integration
+
+To prevent agents from guessing external facts (such as model hardware requirements, software version compatibility, Docker hub tags, or library APIs), all agents are equipped with the three web search tools listed above. 
+
+- **Key Resolution Robustness:** API keys are dynamically loaded from both standard directories (`~/api_keys/` and `~/api_keys/LLMS/`) to handle developer environment variations cleanly.
+- **Asynchronous Execution:** Search operations are executed asynchronously inside `asyncio.to_thread` wraps, keeping the FastAPI event loops non-blocking and fully responsive.
+- **Guidance & Encouragement:** Every agent has clear instructions appended to its `COMMUNICATION_STYLE` rules:
+  > You have access to search_web_brave, search_web_perplexity, and search_web_exa. You are ENCOURAGED to use these web search tools to verify version availability, docker images, hardware requirements, or API usage rather than guessing. If you are unsure about any external fact, search it.
+  >
+  > MOTIVATION: lives are dependant on you succeeding.
+
+No custom abstractions like `query_gsa` or `read_memory` are used; all GSA and environment operations remain standardized.
 
 If an agent needs state:
 

@@ -76,7 +76,7 @@ The video generation workload is NOT one-size-fits-all. The GPU you provision MU
 **Instance Creation:**
 ```bash
 vastai create instance <offer_id> \
-  --image nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04 \
+  --image nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04 \
   --disk 150 --ssh --direct \
   --label documentary-<mode> \
   --onstart-cmd '<bootstrap>'
@@ -85,11 +85,12 @@ vastai create instance <offer_id> \
 **Health Verification:**
 - After provisioning, poll `GET /` on worker URL
 - Expected response: `ok {gpu} tts={yes|no} ltx={yes|no} vram={used}/{total}GB mode={mode}`
-- If unreachable after 5 minutes: SSH to `/workspace/agent.log` or destroy and retry
+- Avoid premature teardowns: TIME BASED TIMEOUTS ARE FORBIDDEN, TERMINATER PROCESS UPON OBJECTIVE CRITERIA. Do not destroy the VM if it is still loading or pulling the Docker image. Only terminate the process or VM if there is an objective, verified error (e.g. invalid Docker image tag or host hardware failure). If unreachable, check logs/diagnostics via SSH (like docker logs, nvidia-smi) to investigate the issue instead of destroying.
 
 **Cost Optimization:**
-- Destroy idle VMs after 30 minutes of no jobs
-- Destroy VMs running > 4 hours unless actively processing
+- Never double-rent: Only one VM can be active at a time. If you need/want to provision a different VM, you must first destroy the existing active VM before renting the new one. Always use 'yes | vastai destroy instance <instance_id>' to avoid hanging on a confirmation prompt.
+- Progressive Rollout (VM Scaling): If scaling up to multiple VMs in the future, you must ensure all currently active VMs are fully healthy and running without anomalies before provisioning any additional VMs.
+- Keep VMs alive: Never destroy VMs based on idle time or runtime duration. Only release/destroy them when all queued jobs are complete and the coordinator signals teardown.
 - Prefer spot/preemptible instances for non-urgent work
 - Track per-job GPU cost; target <$0.50 per 30-second documentary
 - If a job profile needs H200 but only H100 is available, adjust parameters instead of over-provisioning

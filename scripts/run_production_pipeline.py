@@ -40,32 +40,32 @@ async def main():
     if not os.path.exists(LOG_DIR):
         os.makedirs(LOG_DIR)
 
-    resume_run_id = sys.argv[1] if len(sys.argv) > 1 else None
-    if resume_run_id:
-        run_id = resume_run_id
-        logger.info(f"Resuming production run: {run_id}")
-    else:
-        run_id = f"production_run_{int(time.time())}"
-        logger.info(f"Starting production run: {run_id}")
+    # Clean out any old runs in tmp log dir to isolate
+    import glob
+    for file in glob.glob(os.path.join(LOG_DIR, "events*.db*")):
+        try:
+            os.remove(file)
+        except Exception:
+            pass
 
-        # Set up initial events in SQLite WAL Event Store
-        start_event = PipelineStarted(
-            run_id=run_id,
-            agent="operator",
-            config={
-                "topic": "Lacan's notion of objet petit a",
-                "target_duration_sec": 60.0
-            }
-        )
-        event_store.append(run_id, start_event, otio_hash_before="")
+    logger.info("Starting production run")
 
-        budget_event = BudgetSet(
-            run_id=run_id,
-            agent="operator",
-            budget_usd=15.0,  # 15 USD budget
-            reason="run_start",
-        )
-        event_store.append(run_id, budget_event, otio_hash_before="")
+    # Set up initial events in SQLite WAL Event Store
+    start_event = PipelineStarted(
+        agent="operator",
+        config={
+            "topic": "Lacan's notion of objet petit a",
+            "target_duration_sec": 60.0
+        }
+    )
+    event_store.append(start_event, otio_hash_before="")
+
+    budget_event = BudgetSet(
+        agent="operator",
+        budget_usd=15.0,  # 15 USD budget
+        reason="run_start",
+    )
+    event_store.append(budget_event, otio_hash_before="")
 
     logger.info("Booting GSA and Agent servers...")
     # Import apps dynamically
@@ -87,25 +87,18 @@ async def main():
     logger.info("All servers booted. Waiting 5 seconds to initialize...")
     await asyncio.sleep(5.0)
 
-    if not resume_run_id:
-        # Post initial instruction to Scenario Agent to trigger script writing (non-blocking, fast connection timeout)
-        logger.info("Posting instruction to Scenario Agent...")
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    "http://localhost:8001/",
-                    json={
-                        "run_id": run_id,
-                        "notification_type": "instruction",
-                        "context": {
-                            "instruction": "Generate a short 1-minute documentary about Lacan's notion of objet petit a (petit object a)."
-                        }
-                    },
-                    timeout=5.0
-                )
-                logger.info(f"Scenario Agent trigger response: {resp.status_code} - {resp.text}")
-        except Exception as exc:
-            logger.error(f"Failed to post instruction to Scenario Agent: {exc}")
+    # Post initial instruction to Scenario Agent to trigger script writing (non-blocking, fast connection timeout)
+    logger.info("Posting instruction to Scenario Agent...")
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "http://localhost:8001/",
+                content="Generate a short 1-minute documentary about Lacan's notion of objet petit a (petit object a).",
+                timeout=5.0
+            )
+            logger.info(f"Scenario Agent trigger response: {resp.status_code} - {resp.text}")
+    except Exception as exc:
+        logger.error(f"Failed to post instruction to Scenario Agent: {exc}")
 
     logger.info("Monitors starting. Watching emergent pipeline convergence...")
     
@@ -119,7 +112,7 @@ async def main():
             try:
                 # 1. Query GSA state
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"http://localhost:8000/?run_id={run_id}")
+                    resp = await client.get("http://localhost:8000/")
                     if resp.status_code == 200:
                         state_data = resp.json()
                         phase = state_data.get("state", {}).get("current_phase", "init")
@@ -158,7 +151,7 @@ async def main():
             for agent_name, port in agent_ports.items():
                 try:
                     async with httpx.AsyncClient() as client:
-                        a_resp = await client.get(f"http://localhost:{port}/?run_id={run_id}", timeout=2.0)
+                        a_resp = await client.get(f"http://localhost:{port}/", timeout=2.0)
                         if a_resp.status_code == 200:
                             h_data = a_resp.json()
                             status = h_data.get("status")
@@ -177,7 +170,8 @@ async def main():
             has_active_work = False
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"http://localhost:8000/?run_id={run_id}")
+                    resp = await client.get("http://localhost:8000/")
+
                     if resp.status_code == 200:
                         state_data = resp.json()
                         jobs = state_data.get("jobs", {}).get("jobs", {})

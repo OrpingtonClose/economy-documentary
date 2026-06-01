@@ -203,7 +203,6 @@ class _VMDeallocatedEffect(BaseModel):
     reason: Literal["job_done", "cost_limit", "stale", "provision_failed", "manual"]
     final_cost: float = 0.0
     runtime_sec: float = 0.0
-    run_id: str = ""
 
 
 class _VMProvisionFailedEffect(BaseModel):
@@ -465,7 +464,7 @@ ROLE_PERMITTED_KINDS = {
 }
 
 
-async def parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> list[Effect]:
+async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """Extract effects from agent natural-language output.
 
     Uses _SingleEffect schema to enforce one-action-per-turn.
@@ -488,30 +487,29 @@ async def parse_agent_text_multi(agent_id: str, text: str, run_id: str) -> list[
         )
     except Exception as exc:
         logger.error(f"Parser could not extract: {exc}")
-        return [NoOp(run_id=run_id, agent=agent_id, reason=f"Parser could not extract: {exc}")]
+        return [NoOp(agent=agent_id, reason=f"Parser could not extract: {exc}")]
 
     parsed = result.effect
     if parsed.kind not in permitted:
         logger.warning(f"Agent {agent_id} tried to emit non-permitted kind '{parsed.kind}', falling back to noop")
-        return [NoOp(run_id=run_id, agent=agent_id, reason=f"Attempted non-permitted kind '{parsed.kind}'")]
+        return [NoOp(agent=agent_id, reason=f"Attempted non-permitted kind '{parsed.kind}'")]
 
     model_class = KIND_TO_MODEL.get(parsed.kind)
     if model_class is None:
-        return [NoOp(run_id=run_id, agent=agent_id, reason=f"Unknown effect kind: {parsed.kind}")]
+        return [NoOp(agent=agent_id, reason=f"Unknown effect kind: {parsed.kind}")]
 
-    # Construct the actual Effect subclass, injecting run_id and agent
+    # Construct the actual Effect subclass, injecting agent
     data = parsed.model_dump()
-    data["run_id"] = run_id
     data["agent"] = agent_id
 
     try:
         effect = model_class.model_validate(data)
         return [effect]
     except Exception as exc:
-        return [NoOp(run_id=run_id, agent=agent_id, reason=f"Model validation failed: {exc}")]
+        return [NoOp(agent=agent_id, reason=f"Model validation failed: {exc}")]
 
 
-async def parse_human_text_multi(text: str, run_id: str) -> list[Effect]:
+async def parse_human_text_multi(text: str) -> list[Effect]:
     """Extract multiple effects from human or batch input."""
     sys_prompt = _SYSTEM_PROMPT.format(permitted_kinds="all kinds allowed")
     client = _ds_async_client()
@@ -527,7 +525,7 @@ async def parse_human_text_multi(text: str, run_id: str) -> list[Effect]:
             max_retries=3,
         )
     except Exception as exc:
-        return [NoOp(run_id=run_id, agent="human", reason=f"Parser could not extract: {exc}")]
+        return [NoOp(agent="human", reason=f"Parser could not extract: {exc}")]
 
     effects: list[Effect] = []
     for parsed in result.effects:
@@ -535,7 +533,6 @@ async def parse_human_text_multi(text: str, run_id: str) -> list[Effect]:
         if model_class is None:
             continue
         data = parsed.model_dump()
-        data["run_id"] = run_id
         data["agent"] = "human"
         try:
             effects.append(model_class.model_validate(data))
@@ -543,12 +540,12 @@ async def parse_human_text_multi(text: str, run_id: str) -> list[Effect]:
             continue
 
     if not effects:
-        return [NoOp(run_id=run_id, agent="human", reason="No actionable effects found")]
+        return [NoOp(agent="human", reason="No actionable effects found")]
 
     return effects
 
 
-def build_clarification_request(effects: list[Effect], run_id: str) -> str | None:
+def build_clarification_request(effects: list[Effect]) -> str | None:
     if len(effects) == 1 and effects[0].kind == "noop":
         reason = getattr(effects[0], "reason", "")
         if "missing" in reason.lower() or "placeholder" in reason.lower():
