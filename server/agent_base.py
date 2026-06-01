@@ -358,7 +358,7 @@ RULES FOR WRITING:
    - Once you decide on an action (e.g., QueueJob, VMAllocated, JobApproved, NoOp), state your decision clearly and END YOUR TURN immediately.
    - Trust the asynchronous pipeline: the coordinator will trigger your next turn after other agents (like the Provisioner or VM workers) have acted on your decisions.
 
-9. BE MAXIMALLY INQUISITIVE ON OBSTACLES.
+9. MAXIMALLY INQUISITIVE ON OBSTACLES.
 """
 
 ROLE_INSTRUCTIONS = {
