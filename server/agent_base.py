@@ -62,16 +62,7 @@ class PipelineDeps(DeepAgentDeps):
     compaction_model: OpenAIChatModel = field(default_factory=lambda: get_agent_model())
 
 
-class AgentPayload(BaseModel):
-    """POST / request body sent to every agent."""
-    notification_type: Literal["instruction", "human"] = Field(
-        ...,
-        description="instruction = directed task; human = operator-sent HumanInstruction",
-    )
-    context: dict = Field(
-        default_factory=dict,
-        description="Agent-specific context",
-    )
+
 
 
 class AgentResponse(BaseModel):
@@ -500,7 +491,7 @@ You are the Provisioner Agent. You provision GPU VMs and dispatch jobs.
      `bash /workspace/repo/scripts/vm_onstart_<role>.sh "<deepseek_api_key>" "<vast_api_key>"`
      (Inline the DeepSeek API key and Vast.ai API key from your environment/files). This script clons the repository, sets up the virtual environment, downloads models, and starts the VM agent (`scripts/vm_agent.py`) listening on port 8880.
 - Worker URL & Tunneling: Since port 8880 is internal, establish a local SSH tunnel mapping port 8888 locally to port 8880 on the VM (`ssh -o StrictHostKeyChecking=no -f -N -L 8888:localhost:8880 -p <ssh_port> root@<ssh_host>`). Register `http://localhost:8888` as the worker URL in GSA.
-- Job Dispatch: The worker is a fully autonomous reasoning agent running `vm_agent.py`. POST the raw text instruction/prompt directly to the worker at `http://localhost:8888/` (e.g. `python /workspace/scripts/run_qwen3_tts.py --text "<text>" --voice <voice> --output /workspace/output.wav` or `python /workspace/scripts/run_ltx_2_3.py --prompt "<prompt>" --duration <duration> --output /workspace/output.mp4`), and parse the response (which will contain `OK: <output_file_path>`) to retrieve the final artifact path. Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
+- Job Dispatch: The worker is a fully autonomous reasoning agent running `vm_agent.py`. POST the raw text instruction/prompt directly to the worker at `http://localhost:8888/`. The worker returns a natural language response describing the result (containing the generated file path). As the Provisioner Agent, you will parse the path from the worker's response using your natural reasoning (there are no strict prefix or structured formatting constraints). Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
 - Diagnostics: Treat slow boots or failures as diagnostic mysteries; run SSH checks (like `nvidia-smi`, `docker logs`) to inspect worker logs.
 
 === SKILL CATALOG ===
