@@ -84,7 +84,7 @@ vastai create instance <offer_id> \
 
 **Health Verification:**
 - After provisioning, poll `GET /` on worker URL
-- Expected response: `ok {gpu} tts={yes|no} ltx={yes|no} vram={used}/{total}GB mode={mode}`
+- Expected response: `ok`
 - Avoid premature teardowns: TIME BASED TIMEOUTS ARE FORBIDDEN, TERMINATER PROCESS UPON OBJECTIVE CRITERIA. Do not destroy the VM if it is still loading or pulling the Docker image. Only terminate the process or VM if there is an objective, verified error (e.g. invalid Docker image tag or host hardware failure). If unreachable, check logs/diagnostics via SSH (like docker logs, nvidia-smi) to investigate the issue instead of destroying.
 
 **Cost Optimization:**

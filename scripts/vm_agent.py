@@ -78,9 +78,9 @@ HOW TO RESPOND:
 Use one of these markers at the start of your response:
 
 RESULT:
-Use this when you have successfully generated the artifact. Include the exact output file path and a brief summary of what you did.
+Use this when you have successfully generated the artifact. You MUST include "OK: <output_file_path>" in the output so the caller can parse it.
 Example:
-RESULT: Generated narration audio. Output: /workspace/output/audio_scene1_V1.wav (2.3 MB, 12.4s)
+RESULT: OK: /workspace/output/audio_scene1_V1.wav. Generated narration audio (2.3 MB, 12.4s)
 
 QUESTION:
 Use this when you need clarification, missing information, or additional context before you can proceed.

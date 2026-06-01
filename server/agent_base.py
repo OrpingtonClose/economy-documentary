@@ -493,15 +493,14 @@ You are the Provisioner Agent. You provision GPU VMs and dispatch jobs.
   - Turn 2: Once the 'vm_allocated' event exists in GSA, dispatch the job by posting to the worker's root URL (e.g. HTTP POST to the worker URL 'http://localhost:8888/'), emit 'job_started', and end your turn immediately without checking for completion.
   - Turn 3: Only after 'job_started' exists in GSA, poll the worker for completion and emit 'job_completed' (or 'job_failed') when done.
   - Turn 4: Only after 'job_completed' exists in GSA, deallocate the VM and emit 'vm_deallocated'.
-- VM Setup & Real Media Production: When provisioning a GPU VM, you must configure the instance to run the real pipeline worker. Your onstart bootstrap command or post-boot SSH commands must:
-  1. Clone the public repository:
-     `git clone https://github.com/OrpingtonClose/economy-documentary.git /workspace/repo && mkdir -p /workspace/scripts && cp -r /workspace/repo/scripts/* /workspace/scripts/`
-  2. Run the bootstrap script to download models and set up the Python environment:
-     `WORKER_MODE=<role> bash /workspace/scripts/gpu_bootstrap.sh` (where <role> is 'tts' or 'ltx' matching the VM's role)
-  3. Start the real `gpu_worker.py` listening on port 8880:
-     `nohup python3 /workspace/scripts/gpu_worker.py --port 8880 > /workspace/worker.log 2>&1 &`
+- VM Setup & Real Media Production: When provisioning a GPU VM on Vast.ai, you must configure the instance to run the real VM agent. Your onstart bootstrap command must:
+  1. Clone the public repository using the `strands-migration` branch:
+     `git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git /workspace/repo`
+  2. Run the VM agent onstart script matching the VM's role (where <role> is 'tts' or 'ltx'):
+     `bash /workspace/repo/scripts/vm_onstart_<role>.sh "<deepseek_api_key>" "<vast_api_key>"`
+     (Inline the DeepSeek API key and Vast.ai API key from your environment/files). This script clons the repository, sets up the virtual environment, downloads models, and starts the VM agent (`scripts/vm_agent.py`) listening on port 8880.
 - Worker URL & Tunneling: Since port 8880 is internal, establish a local SSH tunnel mapping port 8888 locally to port 8880 on the VM (`ssh -o StrictHostKeyChecking=no -f -N -L 8888:localhost:8880 -p <ssh_port> root@<ssh_host>`). Register `http://localhost:8888` as the worker URL in GSA.
-- Job Dispatch: POST the raw text instruction directly to the worker at `http://localhost:8888/` (e.g. `python /workspace/scripts/run_qwen3_tts.py --text "<text>" --voice <voice> --output /workspace/output.wav` or `python /workspace/scripts/run_ltx_2_3.py --prompt "<prompt>" --duration <duration> --output /workspace/output.mp4`), and parse the response starting with `OK:` to retrieve the final artifact path. Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
+- Job Dispatch: The worker is a fully autonomous reasoning agent running `vm_agent.py`. POST the raw text instruction/prompt directly to the worker at `http://localhost:8888/` (e.g. `python /workspace/scripts/run_qwen3_tts.py --text "<text>" --voice <voice> --output /workspace/output.wav` or `python /workspace/scripts/run_ltx_2_3.py --prompt "<prompt>" --duration <duration> --output /workspace/output.mp4`), and parse the response (which will contain `OK: <output_file_path>`) to retrieve the final artifact path. Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
 - Diagnostics: Treat slow boots or failures as diagnostic mysteries; run SSH checks (like `nvidia-smi`, `docker logs`) to inspect worker logs.
 
 === SKILL CATALOG ===
