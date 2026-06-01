@@ -25,7 +25,7 @@ The event store is the single source of truth for all pipeline effects. It must 
 
 ### 5.1 SQLite Implementation (Current)
 
-The implementation uses SQLite in WAL (Write-Ahead Log) mode. One database file per run: `events_{run_id}.db`. WAL mode allows readers to not block writers and provides crash recovery.
+The implementation uses SQLite in WAL (Write-Ahead Log) mode. A single global database file `events.db` is stored under `/tmp/documentary-pipeline/`. WAL mode allows readers to not block writers and provides crash recovery.
 
 #### 5.1.1 Why SQLite, not JSONL
 
@@ -73,28 +73,30 @@ CREATE INDEX idx_events_agent ON events(agent);
 import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
+from typing import cast
+from pydantic import BaseModel
+from effects import Effect, EffectUnion, KIND_TO_MODEL
+
+class EventRecord(BaseModel):
+    seq: int
+    effect: EffectUnion
+    otio_hash_before: str
 
 class EventStore:
-    """Append-only SQLite event store. One DB file per run.
+    """Append-only SQLite event store. Stored in a single events.db.
 
     Cross-process safe via SQLite WAL mode + BEGIN IMMEDIATE.
-    Interface designed to be swappable with EventStoreDB backend.
     """
 
     def __init__(self, log_dir: str) -> None:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self._dbs: dict[str, Path] = {}  # run_id -> db path
+        self.db_path = self.log_dir / "events.db"
+        self._init_db()
 
-    def _path(self, run_id: str) -> Path:
-        path = self.log_dir / f"events_{run_id}.db"
-        self._dbs[run_id] = path
-        return path
-
-    def _init_db(self, run_id: str) -> None:
+    def _init_db(self) -> None:
         """Create schema if DB does not exist."""
-        path = self._path(run_id)
-        with sqlite3.connect(path, timeout=30.0) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS events (
@@ -113,10 +115,9 @@ class EventStore:
             conn.commit()
 
     @contextmanager
-    def _connect(self, run_id: str):
+    def _connect(self):
         """Yield a connection with WAL mode and busy-timeout."""
-        path = self._path(run_id)
-        conn = sqlite3.connect(path, timeout=30.0, isolation_level=None)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=30000")
         try:
@@ -124,26 +125,22 @@ class EventStore:
         finally:
             conn.close()
 
-    def append(self, run_id: str, effect: Effect, otio_hash_before: str) -> EventRecord:
+    def append(self, effect: Effect, otio_hash_before: str) -> EventRecord:
         """Append an effect. Idempotent via UNIQUE(effect_id).
 
-        V7.1: Pessimistic locking only. SQLite BEGIN IMMEDIATE acquires the
-        write lock at the OS level, serializing all writers across processes.
-        No optimistic concurrency check — if another agent wrote since we read
-        state, our next turn will see it. Simplicity over theoretical correctness.
+        SQLite BEGIN IMMEDIATE acquires the write lock at the OS level,
+        serializing all writers across processes.
         """
-        self._init_db(run_id)
-
         effect_id = str(effect.effect_id)
         kind = effect.kind
         effect_json = effect.model_dump_json()
         agent = effect.agent
-        timestamp = effect.timestamp.timestamp() if hasattr(effect.timestamp, "timestamp") else float(effect.timestamp)
+        ts_method = getattr(effect.timestamp, "timestamp", None)
+        timestamp = ts_method() if ts_method else float(effect.timestamp)
 
-        with self._connect(run_id) as conn:
+        with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
 
-            # Insert with idempotency — UNIQUE constraint rejects duplicates
             try:
                 conn.execute(
                     """INSERT INTO events
@@ -154,7 +151,7 @@ class EventStore:
             except sqlite3.IntegrityError:
                 # Duplicate effect_id — idempotent no-op
                 conn.execute("ROLLBACK")
-                return self._find_by_effect_id(run_id, effect_id)
+                return self._find_by_effect_id(effect_id)
 
             # Fetch the auto-incremented sequence number
             cur = conn.execute("SELECT seq FROM events WHERE effect_id = ?", (effect_id,))
@@ -164,13 +161,13 @@ class EventStore:
 
         return EventRecord(
             seq=seq,
-            effect=effect,
+            effect=cast(EffectUnion, effect),
             otio_hash_before=otio_hash_before,
         )
 
-    def _find_by_effect_id(self, run_id: str, effect_id: str) -> EventRecord:
+    def _find_by_effect_id(self, effect_id: str) -> EventRecord:
         """Return existing record by effect_id (used for idempotent dedup)."""
-        with self._connect(run_id) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 "SELECT seq, effect_json, otio_hash_before FROM events WHERE effect_id = ?",
                 (effect_id,),
@@ -179,31 +176,37 @@ class EventStore:
             if row is None:
                 raise ValueError(f"effect_id {effect_id} not found")
             seq, effect_json, otio_hash = row
-            effect = Effect.model_validate_json(effect_json)
-            return EventRecord(seq=seq, effect=effect, otio_hash_before=otio_hash)
+            record = EventRecord.model_validate({
+                "seq": seq,
+                "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                "otio_hash_before": otio_hash
+            })
+            return record
 
-    def read_all(self, run_id: str) -> list[EventRecord]:
-        """Read all events for a run, in sequence order."""
-        self._init_db(run_id)
+    def read_all(self) -> list[EventRecord]:
+        """Read all events, in sequence order."""
         records: list[EventRecord] = []
-        with self._connect(run_id) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 "SELECT seq, effect_json, otio_hash_before FROM events ORDER BY seq"
             )
             for row in cur:
                 seq, effect_json, otio_hash = row
                 try:
-                    effect = Effect.model_validate_json(effect_json)
-                    records.append(EventRecord(seq=seq, effect=effect, otio_hash_before=otio_hash))
+                    record = EventRecord.model_validate({
+                        "seq": seq,
+                        "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                        "otio_hash_before": otio_hash
+                    })
+                    records.append(record)
                 except Exception:
                     continue
         return records
 
-    def read_since(self, run_id: str, from_seq: int) -> list[EventRecord]:
+    def read_since(self, from_seq: int) -> list[EventRecord]:
         """Return events with sequence > from_seq."""
-        self._init_db(run_id)
         records: list[EventRecord] = []
-        with self._connect(run_id) as conn:
+        with self._connect() as conn:
             cur = conn.execute(
                 "SELECT seq, effect_json, otio_hash_before FROM events WHERE seq > ? ORDER BY seq",
                 (from_seq,),
@@ -211,31 +214,27 @@ class EventStore:
             for row in cur:
                 seq, effect_json, otio_hash = row
                 try:
-                    effect = Effect.model_validate_json(effect_json)
-                    records.append(EventRecord(seq=seq, effect=effect, otio_hash_before=otio_hash))
+                    record = EventRecord.model_validate({
+                        "seq": seq,
+                        "effect": KIND_TO_MODEL[Effect.model_validate_json(effect_json).kind].model_validate_json(effect_json),
+                        "otio_hash_before": otio_hash
+                    })
+                    records.append(record)
                 except Exception:
                     continue
         return records
 
-    def replay(self, run_id: str) -> list[EventRecord]:
+    def replay(self) -> list[EventRecord]:
         """Full replay from sequence 1."""
-        return self.read_all(run_id)
+        return self.read_all()
 
-    def export_to_jsonl(self, run_id: str, out_path: str) -> None:
+    def export_to_jsonl(self, out_path: str) -> None:
         """Export events to JSONL for human inspection or backup."""
-        with self._connect(run_id) as conn:
-            cur = conn.execute(
-                "SELECT seq, effect_json, otio_hash_before FROM events ORDER BY seq"
-            )
-            with open(out_path, "w") as f:
-                for row in cur:
-                    seq, effect_json, otio_hash = row
-                    record = EventRecord(
-                        seq=seq,
-                        effect=Effect.model_validate_json(effect_json),
-                        otio_hash_before=otio_hash,
-                    )
-                    f.write(record.model_dump_json() + "\n")
+        records = self.read_all()
+        with open(out_path, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(rec.model_dump_json() + "\n")
+```
 ```
 
 #### 5.1.4 _parse_payload() — effect deserialization glue
@@ -306,7 +305,7 @@ The `UNIQUE` constraint is enforced at the database level, globally across all p
 
 #### 5.3.1 read_since() for incremental projection updates
 
-Every projection tracks `last_sequence` — the highest sequence it has processed. On activation, the projection calls `read_since(run_id, last_sequence)` and receives only new events.
+Every projection tracks `last_sequence` — the highest sequence it has processed. On activation, the projection calls `read_since(last_sequence)` and receives only new events.
 
 ```python
 class Timeline:
@@ -317,9 +316,9 @@ class Timeline:
         self.tracks: dict[str, Any] = {}
         self.last_sequence = 0
 
-    async def tick(self, run_id: str, store: EventStore):
+    async def tick(self, store: EventStore):
         """Process only events newer than last_sequence."""
-        records = store.read_since(run_id, self.last_sequence)
+        records = store.read_since(self.last_sequence)
         for record in records:
             self._apply(record.effect)
             self.last_sequence = record.seq
@@ -334,7 +333,7 @@ class Timeline:
 
 #### 5.3.2 Full replay for state reconstruction
 
-`replay(run_id)` returns every event from sequence 1 to highest assigned. Used for:
+`replay()` returns every event from sequence 1 to highest assigned. Used for:
 
 | Scenario | Trigger | Action |
 |---|---|---|
@@ -343,10 +342,10 @@ class Timeline:
 | Run audit | Operator inspection | Return full event history |
 
 ```python
-async def rebuild_job_projection(run_id: str, store: EventStore) -> Jobs:
+async def rebuild_job_projection(store: EventStore) -> Jobs:
     """Construct fresh Jobs by replaying all events."""
     proj = Jobs()
-    for record in store.replay(run_id):
+    for record in store.replay():
         proj.apply(record.effect)
     return proj
 ```
@@ -357,16 +356,14 @@ async def rebuild_job_projection(run_id: str, store: EventStore) -> Jobs:
 
 #### 5.4.1 Disk usage monitoring
 
-SQLite files grow linearly with event count. A typical documentary run (500–2000 events) produces a file of ~1–3 MB. For 100 concurrent runs: 100–300 MB total. WAL files are auto-truncated by SQLite when checkpoints occur.
-
-Monitor via `du -sh log_dir/`. If disk fills, SQLite raises `OperationalError`. The handler catches this and returns `AgentResponse(status="error", error_message="disk full")`.
+SQLite files grow linearly with event count. A typical documentary run (500–2000 events) produces a file of ~1–3 MB. Monitor via `du -sh log_dir/`. If disk fills, SQLite raises `OperationalError`. The handler catches this and returns `AgentResponse(status="error", error_message="disk full")`.
 
 #### 5.4.2 Backup strategy
 
-SQLite files are binary but portable. Backup by copying the file while no writers hold locks:
+SQLite files are binary but portable. Backup by copying the file:
 
 ```bash
-sqlite3 events_run_123.db ".backup backup_run_123.db"
+sqlite3 events.db ".backup backup_events.db"
 ```
 
 Or programmatically:
@@ -374,21 +371,20 @@ Or programmatically:
 ```python
 import sqlite3
 
-def backup_run(run_id: str, backup_path: str, store: EventStore) -> None:
-    src = store._path(run_id)
-    with sqlite3.connect(src) as src_conn:
+def backup_store(backup_path: str, store: EventStore) -> None:
+    with sqlite3.connect(store.db_path) as src_conn:
         with sqlite3.connect(backup_path) as dst_conn:
             src_conn.backup(dst_conn)
 ```
 
-**Recovery:** Copy the backup file back to `log_dir/` and restart agents. Projections replay automatically.
+**Recovery:** Copy the backup file back to the db path and restart agents. Projections replay automatically.
 
 #### 5.4.3 WAL checkpointing
 
-SQLite automatically checkpoints the WAL into the main database. Under heavy write load, the WAL file may grow. Agents can force a checkpoint during idle periods:
+SQLite automatically checkpoints the WAL into the main database. Under heavy write load, the WAL file may grow. Checkpoint during idle periods:
 
 ```python
-with store._connect(run_id) as conn:
+with store._connect() as conn:
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 ```
 
@@ -396,12 +392,12 @@ with store._connect(run_id) as conn:
 
 ### 5.5 GSA Catch-Up (V7.1: No Checkpointing)
 
-**V7.1 architectural decision:** Checkpointing is deleted entirely. The GSA is a pure, stateless fold over the event log. For documentary runs (500–2000 events), replay from sequence 0 takes milliseconds.
+**V7.1 architectural decision:** Checkpointing is deleted entirely. The GSA is a pure, stateless fold over the event log. Replay from sequence 0 takes milliseconds.
 
 ```python
-async def gsa_catch_up(run_id: str, projections: ProjectionBundle, store: EventStore):
-    """Catch up a single run's projections from sequence 0."""
-    for record in store.replay(run_id):
+async def gsa_catch_up(projections: ProjectionBundle, store: EventStore):
+    """Catch up projections from sequence 0."""
+    for record in store.replay():
         for proj in projections:
             proj.apply(record.effect)
             proj.last_sequence = record.seq
@@ -409,7 +405,7 @@ async def gsa_catch_up(run_id: str, projections: ProjectionBundle, store: EventS
     # Live tail: poll read_since() every second
     while True:
         await asyncio.sleep(1.0)
-        records = store.read_since(run_id, projections[0].last_sequence)
+        records = store.read_since(projections[0].last_sequence)
         for record in records:
             for proj in projections:
                 proj.apply(record.effect)
@@ -427,26 +423,15 @@ async def gsa_catch_up(run_id: str, projections: ProjectionBundle, store: EventS
 
 ### 5.6 Concurrency and Race Condition Handling
 
-#### 5.6.1 Cross-process writer serialization
+#### 5.6.1 Turn execution serialization via global lock
 
-**V7.1 correction:** The previous JSONL design relied on `asyncio.Lock` per `run_id`, which only works within a single Python process. Each agent runs as an independent ASGI process on its own port (§2). SQLite `BEGIN IMMEDIATE` acquires the write lock at the OS level, serializing writers across all processes:
+**V7.1 correction:** Concurrency control is enforced via a global `LoopBoundLock` (specifically, `run_lock_manager`) that serializes turn execution globally across the Python process.
+This ensures only one agent runs a turn handler at any given moment, preventing simultaneous event extraction, parsing, and write-lock contention.
 
-```
-Process A (Audio Agent, port 8002)
-  BEGIN IMMEDIATE        → acquires write lock
-  INSERT ...             → writes event
-  COMMIT                 → releases lock
+#### 5.6.2 Database serialization
 
-Process B (Video Agent, port 8003)
-  BEGIN IMMEDIATE        → waits if lock held
-  INSERT ...             → proceeds after A commits
-```
-
+At the storage level, SQLite `BEGIN IMMEDIATE` acquires the write lock at the OS level, serializing any concurrent writes.
 SQLite's busy timeout (30s) handles transient contention. If a process crashes while holding the lock, the OS releases it automatically.
-
-#### 5.6.2 Simultaneous appends across different runs
-
-Different runs use different database files. Appends are independent and fully concurrent — no locking contention between runs.
 
 #### 5.6.3 What if the GSA is down?
 
@@ -457,7 +442,7 @@ Agents return `AgentResponse(status="error", error_message="GSA unreachable")`. 
 `BEGIN IMMEDIATE` is **pessimistic** — it acquires the write lock before any work is done. If another agent is writing, this agent waits. When the lock is acquired, the agent's read-state may be stale (another agent wrote in between), but that is acceptable:
 
 - The agent appends its effect based on the state it read.
-- On its **next turn**, it will read fresh state (including the other agent's effect) from the GSA.
+- On its **next turn**, it will read fresh state from the GSA.
 - No retry loop, no hash validation, no complexity.
 
 The documentary pipeline is not a financial ledger. Occasional stale-read turns are harmless — the agent will self-correct on the next cycle. Pessimistic locking keeps the architecture simple.
@@ -469,7 +454,7 @@ The documentary pipeline is not a financial ledger. Occasional stale-read turns 
 Existing JSONL files from testing can be imported:
 
 ```python
-def migrate_jsonl_to_sqlite(jsonl_path: str, store: EventStore, run_id: str) -> int:
+def migrate_jsonl_to_sqlite(jsonl_path: str, store: EventStore) -> int:
     """Import a JSONL file into SQLite. Returns count of imported events."""
     count = 0
     with open(jsonl_path, "r") as f:
@@ -479,7 +464,7 @@ def migrate_jsonl_to_sqlite(jsonl_path: str, store: EventStore, run_id: str) -> 
                 continue
             try:
                 record = EventRecord.model_validate_json(line)
-                store.append(run_id, record.effect, record.otio_hash_before)
+                store.append(record.effect, record.otio_hash_before)
                 count += 1
             except Exception:
                 continue

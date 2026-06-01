@@ -119,7 +119,7 @@ async def llm_complete(system: str, user: str, model: str) -> str:
     return result.output
 
 
-def _check_budget_and_append(cost_data: dict, store: EventStore, run_id: str) -> None:
+def _check_budget_and_append(cost_data: dict, store: EventStore) -> None:
     """V7.1: Check if budget exceeded and append BudgetExceeded effect.
 
     Called by handler after agent turn completes. Not called by CostTracking
@@ -131,11 +131,10 @@ def _check_budget_and_append(cost_data: dict, store: EventStore, run_id: str) ->
     if spent > budget:
         from effects import BudgetExceeded
         effect = BudgetExceeded(
-            total_cost_usd=spent,
-            budget_usd=budget,
-            reason=f"Budget exceeded: ${spent:.2f} > ${budget:.2f}",
+            spent_usd=spent,
+            limit_usd=budget,
         )
-        store.append(run_id, effect)
+        store.append(effect, otio_hash_before="")
 
 
 def _render_messages(messages: list) -> str:
@@ -415,7 +414,7 @@ while agent_is_running:
         text = run_one_turn(agent, state)
         effects = parse_agent_text_multi(my_role, text)
         for effect in effects:
-            append_to_store(run_id, effect)
+            append_to_store(effect)
     sleep(poll_interval)
 ```
 

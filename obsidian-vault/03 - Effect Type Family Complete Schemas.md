@@ -14,7 +14,7 @@
 # Effect Type Family — Complete Schemas
 
 
-All pipeline mutations pass through the SQLite event store as **effects** — Pydantic v2 models serialized to JSON lines. Every effect carries `run_id` (identifies the pipeline run), `effect_id` (UUIDv7 for client-side idempotency), `agent` (which component produced it), and `timestamp` (seconds since epoch). The `kind` field serves as the discriminant for parsing and union dispatch.
+All pipeline mutations pass through the SQLite event store as **effects** — Pydantic v2 models serialized to JSON lines. Every effect carries `effect_id` (UUIDv7 for client-side idempotency), `agent` (which component produced it), and `timestamp` (seconds since epoch). The `kind` field serves as the discriminant for parsing and union dispatch.
 
 This section defines 32 concrete effect types organized into 8 families, plus the base `Effect` model and the `ReconciliationFailureDetail` and `SuggestedFix` sub-models. All together, 35 Pydantic models. Every model is a complete, runnable schema with type annotations, `Literal` discriminants, and `Field` constraints. The section closes with the `EffectUnion` discriminated union definition and the `KIND_TO_MODEL` routing table used by the parser.
 
@@ -46,32 +46,29 @@ class Effect(BaseModel):
     """Base for all effect types. NEVER instantiated directly.
 
     Fields present on every effect emitted into the event store:
-    - run_id:        pipeline run identifier (opaque string)
     - effect_id:     UUIDv7 generated client-side for idempotent retries
     - kind:          Literal discriminant string (overridden per subclass)
     - agent:         component that produced the effect (e.g. "scenario")
     - timestamp:     seconds since epoch at creation time
 
-    The SQLite event store deduplicates on effect_id via in-memory set (rebuilt on restart).
+    The SQLite event store deduplicates on effect_id via unique constraint.
     Client-side generation means an agent can retry an append with the same
     effect_id and the duplicate is silently dropped by the server.
     """
-    run_id: str
     effect_id: UUID = Field(default_factory=uuid7)
     kind: str = "effect"  # overridden per subclass via Literal
     agent: str
     timestamp: float = Field(default_factory=time.time)
 ```
 
-`effect_id` uses UUIDv7 because it encodes a timestamp in the high bits, making event logs naturally time-sortable without leaking sequence gaps. Client-side generation means an agent can retry a failed append with the same `effect_id` and the SQLite store silently drops duplicates via its `_seen` set.
+`effect_id` uses UUIDv7 because it encodes a timestamp in the high bits, making event logs naturally time-sortable without leaking sequence gaps. Client-side generation means an agent can retry a failed append with the same `effect_id` and the SQLite store silently drops duplicates.
 
 #### 3.1.2 Event store idempotency
 
-The SQLite event store provides idempotency on `effect_id` within a run. The client passes `effect_id` when appending. If the same `effect_id` is appended to the same run twice, the store treats the second append as a no-op by checking its `_seen` set. On process restart, the `_seen` set is rebuilt by scanning the SQLite file.
+The SQLite event store provides idempotency on `effect_id`. The client passes `effect_id` when appending. If the same `effect_id` is appended twice, the store treats the second append as a no-op by handling IntegrityError on insertion.
 
 | Field | Type | Source | Purpose |
 |---|---|---|---|
-| `run_id` | `str` | caller | scopes all effects to one pipeline run; becomes stream name suffix |
 | `effect_id` | `UUID` | `uuid7()` client-side | idempotency key; survives retry |
 | `kind` | `str` (Literal per subclass) | agent/parser | discriminant for `EffectUnion` |
 | `agent` | `str` | caller | attribution for loop detection |
@@ -399,7 +396,6 @@ class VMDeallocated(Effect):
     ]
     final_cost: float = Field(default=0.0, ge=0.0)
     runtime_sec: float = Field(default=0.0, ge=0.0)
-    run_id: str = ""  # for ownership guard: only destroy VMs belonging to this run
 
 
 class VMProvisionFailed(Effect):

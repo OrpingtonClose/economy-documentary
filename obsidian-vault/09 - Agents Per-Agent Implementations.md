@@ -70,17 +70,18 @@ async def health():
 
 
 @app.post("/")
-async def handle(payload: AgentPayload, store: EventStore, config: Config):
+async def handle(request: Request, store: EventStore, config: Config):
     """Minimal handler. Agent is autonomous."""
+    body = await request.body()
+    instruction_text = body.decode("utf-8").strip()
+
     _agent_health["agent"] = AGENT_ROLE
     _agent_health["status"] = "running"
     _agent_health["last_run"] = time.time()
 
     try:
         # 1. Read last 5 effects by this agent
-        memory = store.read_last_n(
-            payload.run_id, agent=AGENT_ROLE, n=5
-        )
+        memory = read_last_n_effects(AGENT_ROLE, 5)
         memory_text = format_memory(memory)
 
         # 2. Build prompt
@@ -89,7 +90,6 @@ async def handle(payload: AgentPayload, store: EventStore, config: Config):
 {ROLE_INSTRUCTIONS[AGENT_ROLE]}
 
 === CURRENT CONTEXT ===
-Run ID: {payload.run_id}
 GSA URL: {GSA_URL}
 Available Skills:
 {skills}
@@ -97,6 +97,8 @@ Available Skills:
 === RECENT HISTORY ===
 {memory_text}
 """
+        if instruction_text and instruction_text != "Wake up and check GSA":
+            prompt += f"\n=== ADDITIONAL CONTEXT/INSTRUCTION ===\n{instruction_text}\n"
 
         # 3. Run agent
         result = await agent.run(
@@ -107,8 +109,19 @@ Available Skills:
 
         # 4. Parse effects from agent's final text, append to store
         effects = parse_agent_text_multi(AGENT_ROLE, agent_text)
+        
+        # Calculate otio hash
+        import hashlib, json
+        try:
+            gsa_state = await query_gsa(GSA_URL)
+            slots = gsa_state.get("otio", {}).get("slots", {})
+            sorted_slots = sorted(slots.items())
+            otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+        except Exception:
+            otio_hash = "initial_hash"
+
         for effect in effects:
-            store.append(payload.run_id, effect)
+            store.append(effect, otio_hash)
 
         _agent_health["status"] = "idle"
         _agent_health["idle_since"] = time.time()

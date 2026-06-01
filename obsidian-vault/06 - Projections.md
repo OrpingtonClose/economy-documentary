@@ -24,7 +24,7 @@ Projections are **incremental read models** rebuilt from the event log. Each pro
 
 All projections inherit from `Projection`, an abstract base class that defines two operations:
 
-- `tick(run_id)`: fetch events newer than `last_sequence`, apply each, increment `last_sequence`.
+- `tick(store)`: fetch events newer than `last_sequence`, apply each, increment `last_sequence`.
 - `apply(event)`: mutate the projection's internal state in response to a single event.
 
 ```python
@@ -48,13 +48,13 @@ class Projection(ABC):
     def __init__(self) -> None:
         self.last_sequence: int = 0
 
-    async def tick(self, run_id: str, store: EventStore) -> int:
+    def tick(self, store: EventStore) -> int:
         """Fetch events since ``last_sequence`` and apply each.
 
         V7.1 fix: Uses SQLite EventStore API (store.read_since) instead of
         the V7 ESDB bare function. Returns the number of events processed.
         """
-        records = store.read_since(run_id, self.last_sequence)
+        records = store.read_since(self.last_sequence)
         processed = 0
         for record in records:
             self.apply(record.effect)
@@ -80,7 +80,7 @@ class Projection(ABC):
 
 #### 6.1.2 last_sequence tracking for incremental updates
 
-`last_sequence` is the waterline. On each `tick`, the projection calls `read_since(run_id, self.last_sequence)`, which returns all events with `sequence > last_sequence` ordered by `sequence`. After applying each event, `last_sequence` advances to that event's sequence number. If `tick` processes zero events, `last_sequence` is unchanged and no state mutation occurs.
+`last_sequence` is the waterline. On each `tick`, the projection calls `read_since(self.last_sequence)`, which returns all events with `sequence > last_sequence` ordered by `sequence`. After applying each event, `last_sequence` advances to that event's sequence number. If `tick` processes zero events, `last_sequence` is unchanged and no state mutation occurs.
 
 This design guarantees idempotent `tick` calls: calling `tick` twice with no new events is a no-op. It also makes projections deterministic and replay-safe: reconstructing a projection from an empty state by calling `tick` in a loop until no events remain produces the same state as a projection that has been incrementally updated since run start.
 
@@ -1013,7 +1013,6 @@ class StateProjection(Projection):
         super().__init__()
         self.current_phase: str = "init"
         self.phase_history: list[PhaseChangeRecord] = []
-        self.run_id: Optional[str] = None
         # Ring buffer: last N effects per agent (agent_name -> deque[Effect])
         self.recent_effects: dict[str, deque] = defaultdict(
             lambda: deque(maxlen=loop_buffer_size)
@@ -1028,7 +1027,6 @@ class StateProjection(Projection):
 
         match event.kind:
             case "pipeline_started":
-                self.run_id = getattr(event, "run_id", None)
                 self.current_phase = "init"
                 self.phase_history.clear()
                 self.recent_effects.clear()
@@ -1224,7 +1222,6 @@ class BudgetResponse(BaseModel):
 ```python
 class GlobalStateResponse(BaseModel):
     """Response from GET / on the Global State Agent."""
-    run_id: str
     timestamp: float
     otio: OTIOResponse          # §6.7.1
     jobs: JobResponse           # §6.7.2

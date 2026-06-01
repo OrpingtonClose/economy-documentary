@@ -39,6 +39,21 @@ In V7.1, the test suite consists exclusively of three real-world BDD integration
   - **Stimulus**: Provisioner Agent is woken up via POST request.
   - **Assertion**: Provisioner queries Vast.ai GPU offers (VRAM >= 24GB, under $2.00/hour), allocates the instance, and logs `VMAllocated`. Once the instance is running, the Provisioner dispatches the video job. The worker generates the clip, producing a non-zero size video file. The Provisioner downloads the clip, logs `JobCompleted`, and deallocates the VM.
 
+* **Audio Agent Narration & Measurement BDD Test (UA-8-Real)**
+  - **Pre-conditions**: GSA has a written script block needing audio narration, the budget has remaining funds, and the Audio Agent is running on the host.
+  - **Stimulus**: Audio Agent is woken up via POST request.
+  - **Assertion**: Audio Agent detects the narration block and appends a `QueueJob` effect for a TTS job. When the Provisioner completes the TTS job with a generated WAV file, a second wakeup stimulus triggers the Audio Agent to download the WAV file, call measurement tools to record physical properties, compare the duration against target tolerance, and append `ReconciliationComplete`.
+
+* **Early/Incremental Assembly Timeline Validation BDD Test (UA-9-Real)**
+  - **Pre-conditions**: GSA contains partially completed audio and video jobs for slots, and the Assembly Agent is running on the host.
+  - **Stimulus**: Assembly Agent is woken up via POST request as slots progress.
+  - **Assertion**: Assembly Agent performs incremental dual-threshold validation on completed slots. If a slot's audio/video durations mismatch, it appends a `ReconciliationFailed` or `SuggestedFix` effect to trigger early corrections. If slots pass validation, it merges the media tracks and appends `PipelineComplete` once all slots are verified.
+
+* **Collaborative Cross-Agent Self-Correction BDD Test (UA-12-Real)**
+  - **Pre-conditions**: Audio Agent has failed narration reconciliation for a slot and has logged `ReconciliationFailed` in the GSA event store. The Scenario Agent is running on the host.
+  - **Stimulus**: Scenario Agent is woken up via POST request.
+  - **Assertion**: Scenario Agent scans the event store, detects the `ReconciliationFailed` feedback, automatically rewrites/shortens the narration text to fit the target slot window, and appends `UpdateScript`. The subsequent Audio Agent activation generates the new audio conforming to the constraint, closing the self-correction loop.
+
 ---
 
-*V7.1 Architecture — pydantic-deep, agent HTTP endpoints, JSONL event store (EventStoreDB for distributed deployments), prompt-based rules, agentic Provisioner with bash/research/memory tools, no watcher.*
+*V7.1 Architecture — pydantic-deep, agent HTTP endpoints, SQLite event store (EventStoreDB for distributed deployments), prompt-based rules, agentic Provisioner with bash/research/memory tools, no watcher.*

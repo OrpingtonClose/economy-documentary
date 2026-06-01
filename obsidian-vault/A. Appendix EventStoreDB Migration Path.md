@@ -35,16 +35,16 @@ from esdbclient import EventStoreDBClient, NewEvent, StreamState
 client = EventStoreDBClient(uri="esdb://localhost:2113?tls=false")
 
 async def append_effect_esdb(
-    run_id: str, effect: Effect, causation_id: str = "", correlation_id: str = ""
+    effect: Effect, otio_hash_before: str, causation_id: str = "", correlation_id: str = ""
 ) -> int:
-    stream_name = f"run-{run_id}"
+    stream_name = "global-stream"
     event = NewEvent(
         type=effect.kind,
         data=effect.model_dump_json().encode(),
         metadata=json.dumps({
             "agent": effect.agent,
             "timestamp": effect.timestamp,
-            "run_id": run_id,
+            "otio_hash_before": otio_hash_before,
             "causation_id": causation_id or str(effect.effect_id),
             "correlation_id": correlation_id or str(effect.effect_id),
         }).encode(),
@@ -55,8 +55,8 @@ async def append_effect_esdb(
     )
     return recorded.next_expected_version
 
-async def read_since_esdb(run_id: str, from_revision: int = 0) -> list[dict[str, Any]]:
-    stream_name = f"run-{run_id}"
+async def read_since_esdb(from_revision: int = 0) -> list[dict[str, Any]]:
+    stream_name = "global-stream"
     events = await client.get_stream(stream_name, from_revision=from_revision)
     return [
         {"sequence": e.revision, "effect_id": e.event_id, "kind": e.type,
@@ -71,15 +71,15 @@ async def read_since_esdb(run_id: str, from_revision: int = 0) -> list[dict[str,
 class EventStoreBackend(Protocol):
     """V7.1: Protocol for swappable event store backends.
 
-    JSONL implementation uses sync I/O (fine for single-process).
+    SQLite implementation uses sync I/O.
     ESDB implementation would use async I/O.
     """
-    def append(self, run_id: str, effect: Effect, otio_hash_before: str) -> Any: ...
-    def read_all(self, run_id: str) -> list[Any]: ...
-    def read_since(self, run_id: str, from_seq: int) -> list[Any]: ...
+    def append(self, effect: Effect, otio_hash_before: str) -> Any: ...
+    def read_all(self) -> list[Any]: ...
+    def read_since(self, from_seq: int) -> list[Any]: ...
 
-# JSONL (current)
-store: EventStoreBackend = EventStore(log_dir="/tmp/events")
+# SQLite (current)
+store: EventStoreBackend = EventStore(log_dir="/tmp/documentary-pipeline")
 
 # EventStoreDB (future)
 # store: EventStoreBackend = ESDBEventStore(uri="esdb://localhost:2113?tls=false")

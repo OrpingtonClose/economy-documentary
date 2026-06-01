@@ -20,18 +20,17 @@ V7 does not adopt OpenTelemetry, W3C Trace Context, or structured metrics. Trace
 
 | Mechanism | Location | Purpose |
 |---|---|---|
-| `run_id` | Every effect, every SQLite record, every log line | Correlates all events and requests belonging to one pipeline run |
 | `effect_id` | Every effect (UUIDv7) | Idempotency key; also serves as exact event identifier |
 | `agent` field | Every effect | Identifies which component produced the text from which the effect was extracted |
-| `timestamp` | Every effect | Epoch seconds; monotonic within a run |
-| `sequence` | SQLite event sequence number | Total order of events within a run |
+| `timestamp` | Every effect | Epoch seconds; monotonic overall |
+| `sequence` | SQLite event sequence number | Total order of events within the event store |
 
 ### 16.2 Operator observability
 
-The operator traces a run by:
+The operator traces pipeline activity by:
 
-1. **Event inspection:** `GET /` on the **Global State Agent** (port 8000) returns the complete projection bundle including `latest_sequence`. The operator can also query the SQLite event store directly via `store.read_all(run_id)` to see the raw event history.
-2. **Log grep:** All components log with `run_id=` and `effect_id=` prefixes. A single `grep run_id=0192a3b4... /var/log/pipeline/*.log` yields the complete execution trace.
+1. **Event inspection:** `GET /` on the **Global State Agent** (port 8000) returns the complete projection bundle including `latest_sequence`. The operator can also query the SQLite event store directly via `store.read_all()` to see the raw event history.
+2. **Log grep:** Components write detailed logs to `/tmp/documentary-pipeline/agent_debug_{role}.log`. The operator can grep by `effect_id=` to yield the complete execution trace of a specific effect.
 3. **Projection state:** `GET /` on the Global State Agent returns `otio`, `jobs`, `vms`, `state`, and `budget` projections. `GET /` on individual agents returns agent-specific health status only.
 
 No dashboards, no metrics servers, no collectors. The event stream is the single source of truth; logs are secondary; projection state is available on demand via HTTP.
@@ -43,23 +42,23 @@ No dashboards, no metrics servers, no collectors. The event stream is the single
 All components log to **stdout** (captured by Docker or systemd). Logs are plain text, not structured JSON. The format is:
 
 ```
-YYYY-MM-DD HH:MM:SS.mmm | LEVEL | COMPONENT | run_id=... | effect_id=... | message
+YYYY-MM-DD HH:MM:SS.mmm | LEVEL | COMPONENT | effect_id=... | message
 ```
 
 **Log levels:**
 
 | Level | Used when | Example |
 |---|---|---|
-| `INFO` | Normal operation, effect appended, agent activated | `INFO scenario_agent run_id=abc effect_id=def UpdateScript appended for slot A1:3:2` |
-| `WARN` | Recoverable anomaly, retry, slow operation | `WARN provisioner run_id=abc VM 12345 health check failed, retrying` |
-| `ERROR` | Unrecoverable failure, crash, validation error | `ERROR audio_agent run_id=abc effect_id=def Parser ValidationError: voice must be V1/V2/V3` |
-| `DEBUG` | Detailed internals (disabled in production) | `DEBUG parser run_id=abc extracted 2 effects confidence=8` |
+| `INFO` | Normal operation, effect appended, agent activated | `INFO scenario_agent effect_id=def UpdateScript appended for slot A1:3:2` |
+| `WARN` | Recoverable anomaly, retry, slow operation | `WARN provisioner VM 12345 health check failed, retrying` |
+| `ERROR` | Unrecoverable failure, crash, validation error | `ERROR audio_agent effect_id=def Parser ValidationError: voice must be V1/V2/V3` |
+| `DEBUG` | Detailed internals (disabled in production) | `DEBUG parser extracted 2 effects confidence=8` |
 
 **What gets logged at each step:**
 
 | Step | Logged by | Content | Level |
 |---|---|---|---|
-| Agent receives POST / | Agent handler | `notification_type`, `run_id`, agent role | INFO |
+| Agent receives POST / | Agent handler | `notification_type`, agent role | INFO |
 | Agent queries GSA | Agent handler | `GET /` response time, projection counts | DEBUG |
 | Narrative built | Agent handler | Number of situations, total narrative tokens | DEBUG |
 | LLM call starts | pydantic-deep | Model name, token budget | DEBUG |
@@ -72,7 +71,7 @@ YYYY-MM-DD HH:MM:SS.mmm | LEVEL | COMPONENT | run_id=... | effect_id=... | messa
 | VM worker starts job | VM worker | `job_id`, `job_type`, GPU info | INFO |
 | VM worker completes | VM worker | `job_id`, duration_sec, artifact size | INFO |
 
-**Log retention:** 7 days via Docker log rotation (`max-size=100m`, `max-file=10`). Operators grep logs using `run_id=` and `effect_id=` as indexed prefixes.
+**Log retention:** 7 days via Docker log rotation (`max-size=100m`, `max-file=10`). Operators grep logs using `effect_id=` as indexed prefixes.
 
 ---
 
@@ -160,9 +159,9 @@ V7 does not use OpenTelemetry, Jaeger, or W3C Trace Context. Tracing is achieved
 **How to trace a causal chain:**
 
 ```python
-async def trace_chain(run_id: str, job_id: str, store: EventStore):
+async def trace_chain(job_id: str, store: EventStore):
     """Return all events related to a job, ordered by sequence."""
-    records = store.replay(run_id)
+    records = store.replay()
     chain = [
         r for r in records
         if getattr(r.effect, "job_id", None) == job_id
@@ -176,8 +175,8 @@ async def trace_chain(run_id: str, job_id: str, store: EventStore):
 $ python -c "
 from server.event_store import EventStore
 
-store = EventStore('/tmp/events')
-records = store.replay('run-abc')
+store = EventStore('/tmp/documentary-pipeline')
+records = store.replay()
 for r in records:
     if getattr(r.effect, 'job_id', None) == 'job-123':
         print(f'{r.seq}: {r.effect.kind} (job_id={r.effect.job_id})')

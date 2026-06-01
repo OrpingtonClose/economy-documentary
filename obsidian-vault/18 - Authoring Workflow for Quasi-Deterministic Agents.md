@@ -105,7 +105,7 @@ async def run_authorized_turn(agent, script_block, projections, store):
 
     # 5. Append to event store
     for effect in effects:
-        store.append(run_id, effect, otio_hash_before=hash_otio(projections["otio"]))
+        store.append(effect, otio_hash_before=hash_otio(projections["otio"]))
 
     return effects
 ```

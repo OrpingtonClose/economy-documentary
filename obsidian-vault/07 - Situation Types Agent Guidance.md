@@ -449,29 +449,28 @@ The agent's `message_history` carries the last 5 turns as memory. These are **no
 
 ```python
 def read_agent_events(
-    run_id: str,
     agent: str,
     store: EventStore,
     limit: int = 5,
 ) -> list[Effect]:
-    """Read the last N effects emitted by a specific agent from the JSONL event store.
+    """Read the last N effects emitted by a specific agent from the SQLite event store.
 
     V7.1 fix: Uses store.replay() which returns EventRecord objects with typed
-    .effect fields. No _parse_payload needed — JSONL stores typed effects.
+    .effect fields.
     O(N) scan; acceptable for documentary runs (500-2000 events).
     """
-    records = store.replay(run_id)
+    records = store.replay()
     agent_events = [r.effect for r in records if r.effect.agent == agent]
     return agent_events[-limit:]
 
 
 async def build_memory(
-    run_id: str,
     agent: str,
+    store: EventStore,
     limit: int = 5,
 ) -> list[UserMessage]:
     """Fetch the last N effects emitted by this agent and format as memory."""
-    events = await read_agent_events(run_id, agent, limit=limit)
+    events = read_agent_events(agent, store, limit=limit)
 
     memory: list[UserMessage] = []
     for evt in events:
@@ -491,21 +490,21 @@ async def build_memory(
 
 #### 7.4.5 Memory Persistence and Agent Restart
 
-**Does an agent restart lose its memory? No.** Memory is rebuilt from the JSONL event store on every turn. It is not stored in the agent process. When an agent restarts:
+**Does an agent restart lose its memory? No.** Memory is rebuilt from the SQLite event store on every turn. It is not stored in the agent process. When an agent restarts:
 
-1. The new process receives a `POST /` with `run_id`.
-2. The handler calls `build_memory(run_id, agent, limit=5)`.
-3. `build_memory` queries the JSONL event store for the last 5 effects emitted by this agent.
+1. The new process receives a `POST /`.
+2. The handler calls `build_memory(agent, store, limit=5)`.
+3. `build_memory` queries the SQLite event store for the last 5 effects emitted by this agent.
 4. It reconstructs the exact same memory that the previous process would have built.
 
 **Does behavior change post-restart? No.** The reconstruction is deterministic: same event stream → same 5 most recent effects → same memory messages → same LLM context. The agent's behavior is fully determined by:
-- The event stream (durable in JSONL files)
+- The event stream (durable in SQLite `events.db` file)
 - The GSA projections (rebuilt from the event stream)
 - The narrative builder (deterministic function of projections)
 - The memory builder (deterministic function of the event stream)
 - The system prompt (static per agent role)
 
-**What IS lost on restart:** The pydantic-deep internal `message_history` (the raw LLM request/response pairs from prior turns) is lost. But this is irrelevant — it is not used for decision-making. The agent's "memory" is the last 5 effects from the JSONL event store, not the internal LLM conversation history. pydantic-deep's context compaction operates on the current turn only; prior turns' raw responses are not needed because the agent's decisions are already captured as effects in the event stream.
+**What IS lost on restart:** The pydantic-deep internal `message_history` (the raw LLM request/response pairs from prior turns) is lost. But this is irrelevant — it is not used for decision-making. The agent's "memory" is the last 5 effects from the event store, not the internal LLM conversation history. pydantic-deep's context compaction operates on the current turn only; prior turns' raw responses are not needed because the agent's decisions are already captured as effects in the event stream.
 
 **Why not persist memory in the agent process:** Principle 8 ("Agent memory does not persist in process") keeps agents stateless. An agent process can be killed and restarted without losing context. This simplifies deployment, scaling, and recovery.
 

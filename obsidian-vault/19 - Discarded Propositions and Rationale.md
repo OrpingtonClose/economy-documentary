@@ -85,7 +85,7 @@ This section records design alternatives that were considered and rejected durin
 - No timeout parameters of any kind in the codebase
 - This is a non-negotiable guard rule enforced by DeepSeek v4-flash
 
-**What we kept instead:** No timeouts anywhere. Per-`run_id` serialization prevents concurrent handler hangs. Operator monitors via `GET /` and intervenes.
+**What we kept instead:** No timeouts anywhere. Global `LoopBoundLock` serialization prevents concurrent handler hangs. Operator monitors via `GET /` and intervenes.
 
 ### 19.7 Discarded: Mock-Based Testing
 

@@ -24,13 +24,13 @@ Every fact is an **Effect** — a typed Pydantic model — appended to an append
 
 #### 1.1.2 Event store is only persistent storage; all other state is ephemeral projection
 
-SQLite event files (e.g., `events_{run_id}.db`) are the sole durable storage. EventStoreDB streams are the future scalability path. Agents hold no session state. VM workers are ephemeral. Projections are in-memory folds rebuilt from the event log on every GSA activation.
+SQLite event store database (`events.db`) is the sole durable storage. EventStoreDB streams are the future scalability path. Agents hold no session state. VM workers are ephemeral. Projections are in-memory folds rebuilt from the event log on every GSA activation.
 
 ### 1.2 Effects as Only Legal Mutations
 
 #### 1.2.1 Typed Pydantic models; parser extracts from agent text
 
-A **category-conditioned parser** (§9.6) extracts Effects from agent text using `instructor` + `deepseek-v4-flash`. Every Effect carries `kind: Literal[...]`, `run_id: str`, `effect_id: UUID` (UUIDv7 — §3.1), `agent: str`, and `timestamp: datetime`. Invalid payloads are rejected before reaching the event store.
+A **category-conditioned parser** (§9.6) extracts Effects from agent text using `instructor` + `deepseek-v4-flash`. Every Effect carries `kind: Literal[...]`, `effect_id: UUID` (UUIDv7 — §3.1), `agent: str`, and `timestamp: float` (seconds since epoch). Invalid payloads are rejected before reaching the event store.
 
 #### 1.2.2 No direct state mutation outside event store append
 
@@ -90,7 +90,7 @@ Agents use **pydantic-deep** (built on pydantic-ai). Context compaction is imple
 
 ### 1.10 Prompt-Only HTTP Interface
 
-No fields from JSON request payloads or custom request headers/query parameters (such as `run_id`, `notification_type`, or `context`) may ever be consumed or processed by any agent or platform logic. The HTTP interface serves solely to trigger execution or transmit prompts. All context (such as the active `run_id`) must be dynamically resolved from the environment/filesystem (e.g., scanning the directory for the active events database).
+No fields from JSON request payloads or custom request headers/query parameters (such as `notification_type` or `context`) may ever be consumed or processed by any agent or platform logic. The HTTP interface serves solely to trigger execution or transmit prompts. All context must be dynamically resolved from the environment/filesystem (e.g., loading the events database).
 
 ### 1.11 Principles at a Glance
 
@@ -108,7 +108,7 @@ No fields from JSON request payloads or custom request headers/query parameters 
 | 8 | **Provisioner is an agent** | LLM agent with bash_command as its only tool. Provisions VMs, dispatches jobs, learns from failures. Most intelligence-requiring component. | Agent with tool use; reads GSA like all agents |
 | 9 | **Agent memory does not persist in process** | Each turn rebuilt from projection summaries + bounded message history (last 5 turns). No session state in the agent process between POSTs. | None |
 | 10 | **No automatic stale-state detection** | Operator monitors via `GET /` on agents and intervenes manually. No VM-side timers. | Removed TimeoutObserved; operator owns intervention |
-| 11 | **Serialized per run, concurrent across runs** | Agent handlers use per-run_id locks. DB file access is serialized per run_id by asyncio.Lock. | §5.6 |
+| 11 | **Serialized turn execution** | Agent handlers use a global `LoopBoundLock` to serialize turn execution. | §5.6 |
 | 12 | **Tick-driven** | Agents are HTTP services; they autonomous polling of GSA. EventStoreDB provides native push subscriptions for distributed deployments. No central watcher loop. | **Watcher removed** |
 | 13 | **Prompt-only HTTP interface** | No payload fields or query parameters are consumed. HTTP GET/POST serves only to transmit prompts. | **NEW** — ensures pure prompt-driven context |
 

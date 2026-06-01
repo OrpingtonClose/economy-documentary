@@ -28,7 +28,7 @@
 | **Emergent phase** | A descriptive pipeline label (SCRIPT, AUDIO_RECONCILE, etc.) that emerges from projection state, not enforced by any state machine. |
 | **Event** | An immutable, append-only record describing a state change. Stored in SQLite file with monotonic `sequence` and epoch `timestamp`. EventStoreDB is the future scalability path. |
 | **Event loop** | The agent's activation cycle: receive POST, build prompt from instructions + skills + memory, run LLM, explore via bash_command (curl GSA, read skills), produce natural language text from which effects are extracted, return. |
-| **Event store** | Append-only SQLite file (`events_{run_id}.db`). Source of truth for pipeline state; no in-memory mirrors. Swappable with EventStoreDB for distributed deployments. |
+| **Event store** | Append-only SQLite file (`events.db`). Source of truth for pipeline state; no in-memory mirrors. Swappable with EventStoreDB for distributed deployments. |
 | **Generation plan** | The JSON output of the ScenarioAgent containing shot list, speaker assignments, script, and duration targets per segment. |
 | **LTX-Video** | The diffusion-based video-generation model running on the Video VM. Requires 48 GB VRAM at full precision. |
 | **Projection** | A read-optimized Python dataclass built by folding (reducing) the event stream. Rebuilt incrementally on every activation. |

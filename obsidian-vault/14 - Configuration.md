@@ -72,7 +72,7 @@ class Config(BaseModel):
     )
 
     # 14.1.6 — Event store
-    log_dir: str = Field(default="/tmp/events", description="SQLite event store directory")
+    log_dir: str = Field(default="/tmp/documentary-pipeline", description="SQLite event store directory")
     # V7.1 fix: Added log_dir (used by EventStore §5.1.3)
 
     # 14.1.7 — Agent models

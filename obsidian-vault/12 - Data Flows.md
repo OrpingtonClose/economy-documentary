@@ -56,12 +56,12 @@ This chapter traces the four principal data flow patterns through the V7 pipelin
 
 | Step | Actor | Action | Specification |
 |---|---|---|---|
-| 1 | Human operator / Caller | POST / | HTTP POST to agent's port with `AgentPayload` containing `run_id` and optional `context` |
+| 1 | Human operator / Caller | POST / | HTTP POST to agent's port with raw text content representing instruction/prompt |
 | 2 | Agent Handler | Build prompt | Reads last 5 effects from SQLite store; lists skill filenames; constructs prompt |
 | 3 | Agent LLM | Execute | `agent.run(user_prompt=prompt, deps=PipelineDeps)` via pydantic-deep. No timeout (§1.4) |
 | 4 | Agent (internal) | Explore | Uses `bash_command` to curl GSA, read skills, run diagnostics as needed |
 | 5 | Agent Handler | Parse effects | `parse_agent_text_multi()` via instructor extracts typed effects from agent's final text (§9.5) |
-| 6 | Agent Handler | Append | Effects written to SQLite file `events_{run_id}.db` with `effect_id` deduplication |
+| 6 | Agent Handler | Append | Effects written to SQLite database `events.db` with `effect_id` deduplication |
 | 7 | Agent Handler | Return | Returns `200 OK` with extracted effect kinds; returns effects to caller |
 
 The cycle is **autonomous** — each agent polls the GSA independently. Agents run when:
@@ -602,7 +602,7 @@ This section specifies the exact order of process startup, the first HTTP reques
 
 | Order | Process | Port | Command | Dependency |
 |---|---|---|---|---|
-| 1 | SQLite Event Store | — | `EventStore(log_dir="/tmp/events")` | None |
+| 1 | SQLite Event Store | — | `EventStore(log_dir="/tmp/documentary-pipeline")` | None |
 | 2 | Global State Agent | 8000 | `python global_state_agent.py` | SQLite Event Store |
 | 3 | Scenario Agent | 8001 | `python -m agents.scenario` | Global State Agent |
 | 4 | Audio Agent | 8002 | `python -m agents.audio` | Global State Agent |
@@ -616,42 +616,22 @@ Each agent is an independent ASGI process. There is no central coordinator proce
 
 A run begins with a single HTTP POST from the human operator directly to the Scenario Agent:
 
+A run begins with direct append of startup events to the `events.db` store by the orchestrator/operator script, followed by a raw POST trigger to the Scenario Agent:
+
+1. The operator script appends a `PipelineStarted` effect (with the topic config details) and a `BudgetSet` effect to the `events.db` database.
+2. The operator script boots GSA and all agent servers.
+3. The operator script posts the raw plain text prompt trigger directly to the Scenario Agent:
+
 ```
 POST http://localhost:8001/
-Content-Type: application/json
+Content-Type: text/plain
 
-{
-  "run_id": "0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b",
-  "topic": "The collapse of the Bretton Woods system",
-  "target_duration_min": 8,
-  "target_duration_max": 10,
-  "narrator_voice": "qwen3-tts-en-default",
-  "style_tags": ["academic", "cautious"],
-  "budget_usd": 5.00
-}
+Generate a short 1-minute documentary about Lacan's notion of objet petit a (petit object a).
 ```
 
-```python
-class RunRequest(BaseModel):
-    """V7.1: Payload for initiating a new pipeline run."""
-    run_id: str = Field(default_factory=lambda: str(uuid7()))
-    topic: str = Field(..., min_length=1, description="Documentary subject")
-    target_duration_min: int = Field(default=8, ge=1, description="Minimum duration in minutes")
-    target_duration_max: int = Field(default=10, ge=1, description="Maximum duration in minutes")
-    narrator_voice: str = Field(default="qwen3-tts-en-default", description="TTS voice identifier")
-    style_tags: list[str] = Field(default_factory=list, description="Narrative style descriptors")
-    budget_usd: float = Field(default=10.0, gt=0.0)
-    output_path: str = Field(default="/tmp/final_documentary.mp4")
-```
+4. The Scenario Agent wakes up, loads the state, runs its model, and begins constructing the script.
 
-The Scenario Agent handler:
-1. Validates the payload against `RunRequest` Pydantic model.
-2. Appends `PipelineStarted` to SQLite file `events_{run_id}.db`.
-3. Appends `BudgetSet` with the requested budget.
-4. Proceeds to construct its narrative; the parser extracts `UpdateScript`.
-5. Returns `201 Created` with `{"run_id": "...", "status": "started", "effects_extracted": [...]}`.
-
-No polling. No waiting. If the Scenario Agent is not yet listening, the POST fails; the operator restarts the Scenario Agent and re-POSTs.
+No polling. No waiting. If Scenario Agent is not yet listening, the POST fails and is retried.
 
 #### 12.5.3 Initial autonomous execution sequence
 

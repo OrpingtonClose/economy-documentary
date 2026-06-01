@@ -91,7 +91,7 @@ cat server/skills/audio-production/SKILL.md
 If it needs to check the event store:
 
 ```bash
-sqlite3 /data/events/events_run_123.db "SELECT * FROM events WHERE agent='audio' ORDER BY seq DESC LIMIT 5;"
+sqlite3 /tmp/documentary-pipeline/events.db "SELECT * FROM events WHERE agent='audio' ORDER BY seq DESC LIMIT 5;"
 ```
 
 The agent uses bash like a human operator would.
@@ -137,7 +137,6 @@ The handler adds to the user prompt (not the system prompt):
 
 ```
 === CURRENT CONTEXT ===
-Run ID: {run_id}
 GSA URL: {gsa_url}
 Available Skills:
 {skill_filenames}
@@ -307,7 +306,7 @@ See §9 for the complete system prompts for each agent.
 | Parse GSA JSON | `curl -s http://gsa:8000/ | jq '.timeline.slots'` |
 | Read skill | `cat server/skills/audio-production/SKILL.md` |
 | List skills | `ls server/skills/` |
-| Check event store | `sqlite3 /data/events/events_{run_id}.db "SELECT ..."` |
+| Check event store | `sqlite3 /tmp/documentary-pipeline/events.db "SELECT ..."` |
 | Run Vast.ai | `vastai search offers --type on-demand --raw` |
 | Health check worker | `curl -s http://worker-ip:8880/` |
 | Dispatch job to worker | `curl -s -X POST http://worker-ip:8880/ -d '{payload}'` |

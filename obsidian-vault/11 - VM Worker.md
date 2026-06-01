@@ -493,7 +493,7 @@ The VM Worker then uploads directly:
 upload_cmd = (
     f"b2 upload-file doc-pipeline-prod "
     f"/tmp/output.wav "
-    f"runs/{run_id}/audio/A1_Narration-3-1.wav"
+    f"audio/A1_Narration-3-1.wav"
 )
 bash_command(upload_cmd)  # Agent tool, no wrapper
 ```

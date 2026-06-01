@@ -105,67 +105,15 @@ Every agent exposes exactly `GET /` (health) and `POST /` (primary endpoint) on 
 
 ### 2.2.2 HTTP Contract Specification
 
-Every HTTP surface in the pipeline uses **JSON** (`Content-Type: application/json`). There are no other content types, no binary protocols, and no streaming endpoints. Every request and response is a single JSON object.
+All HTTP responses in the pipeline use **JSON** (`Content-Type: application/json`). Interactive agent inputs are transmitted as plain text bodies to their `POST /` endpoint.
 
 #### POST / — Agent Wake / Instruction
 
 **Endpoint:** `POST /` on every agent port (8001–8005, 8081)  
-**Content-Type:** `application/json`  
+**Content-Type:** `text/plain`  
 
-**Body:** `AgentPayload` Pydantic model  
+**Body:** Raw UTF-8 text containing the prompt or directive (e.g. "Wake up and check GSA" or a specific operator instruction)  
 **Response:** `AgentResponse` Pydantic model  
-
-```python
-class AgentPayload(BaseModel):
-    """POST / request body sent to every agent."""
-    run_id: str = Field(..., description="UUIDv7 string identifying the pipeline run")
-    notification_type: Literal["instruction", "human"] = Field(
-        ...,
-        description=(
-            "
-            "instruction = directed task with specific context; "
-            "human = operator-sent HumanInstruction effect"
-        ),
-    )
-    context: dict = Field(
-        default_factory=dict,
-        description="Agent-specific context passed by caller. Contents vary by notification_type.",
-    )
-```
-
-**`context` field contents by `notification_type`:**
-
-| `notification_type` | `context` fields | Set by |
-|---|---|---|
-| `"poll"` | `{}` (empty) — agent reads all state from GSA | Autonomous loop |
-| `"instruction"` | `{"slot_id": "...", "task": "...", "params": {...}}` — directed task | Upstream agent or operator |
-| `"human"` | `{"instruction_text": "...", "action": "...", "action_params": {...}}` — human directive | Operator POST |
-
-**Examples:**
-
-```json
-// Wake notification (empty context)
-{
-  "run_id": "0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b",
-  "notification_type": "instruction",
-  "context": {}
-}
-```
-
-```json
-// Human instruction
-{
-  "run_id": "0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b",
-  "notification_type": "human",
-  "context": {
-    "instruction_text": "Increase budget to $25.00",
-    "action": "budget_override",
-    "action_params": {"new_limit": 25.0}
-  }
-}
-```
-
-**Response:**
 
 ```python
 class AgentResponse(BaseModel):
@@ -191,11 +139,11 @@ class AgentResponse(BaseModel):
 | HTTP Status | Condition | Response Body |
 |---|---|---|
 | `200 OK` | Agent ran successfully, effects extracted and appended | `AgentResponse(status="ok", ...)` |
-| `202 Accepted` | Agent received request but is already processing a prior request (idempotent) | `AgentResponse(status="ok", effects_extracted=[])` |
+| `202 Accepted` | Agent received request but is already processing a prior request | `AgentResponse(status="ok", effects_extracted=[])` |
 | `400 Bad Request` | Payload failed Pydantic validation | `AgentResponse(status="error", error_message="...")` |
 | `500 Internal Server Error` | Unhandled exception in agent handler | `AgentResponse(status="error", error_message="...")` |
 
-**Idempotency.** The `run_id` + `notification_type` combination is not inherently idempotent. If an agent receives two identical instruction POSTs, it processes both (the agent may produce text from which the parser extracts duplicate `NoOp` effects, which are harmless). True idempotency is enforced at the event store via `effect_id` (§3.1.2).
+**Idempotency.** If an agent receives two identical instruction POSTs, it processes both (the agent may produce text from which the parser extracts duplicate `NoOp` effects, which are harmless). True idempotency is enforced at the event store via `effect_id` (§3.1.2).
 
 ---
 
@@ -248,7 +196,6 @@ class PipelineErrorResponse(BaseModel):
     error: str = Field(..., description="Error category: validation, runtime, timeout, network, unknown")
     message: str = Field(..., description="Human-readable error message")
     component: str = Field(..., description="Which component produced the error")
-    run_id: str | None = None
     timestamp: float = Field(default_factory=time.time)
 ```
 
@@ -257,9 +204,8 @@ class PipelineErrorResponse(BaseModel):
 ```json
 {
   "error": "validation",
-  "message": "Field 'run_id' is required in AgentPayload",
+  "message": "Method Not Allowed: Only GET and POST permitted",
   "component": "scenario_agent",
-  "run_id": null,
   "timestamp": 1779012345.678
 }
 ```
@@ -315,7 +261,6 @@ The **Global State Agent** (GSA, port 8000) is the **sole read path** between th
 ```python
 class GlobalStateResponse(BaseModel):
     """Response from GET / on the Global State Agent."""
-    run_id: str
     timestamp: float
     otio: OTIOResponse        # §6.7.1 — serializable slot state
     jobs: JobResponse         # §6.7.2 — serializable job state
