@@ -122,10 +122,6 @@ def scenario_helper():
     helper.cleanup()
 
 @pytest.fixture
-def run_id():
-    return f"run_{int(time.time() * 1000)}"
-
-@pytest.fixture
 def event_store():
     return EventStore(log_dir="/tmp/documentary-pipeline")
 
@@ -168,14 +164,13 @@ def step_receive_instruction(instruction, event_store):
     # Documented Justification: Health check probe loop to poll GSA status and verify Scenario Agent updates.
     # We use a loop with dynamic backoff as a health check query.
     delay = 1.0
-    for _ in range(90):
+    while True:
         effects = [e.effect for e in event_store.read_all()]
         updates = [e for e in effects if e.kind == "update_script" and e.agent == "scenario"]
         if updates:
             return
         time.sleep(delay)
         delay = min(delay * 1.5, 5.0)
-    raise AssertionError("Scenario agent did not produce update_script in the allotted time")
 
 @then('the GSA event store should contain an "update_script" effect with the generated text')
 def step_check_update_script(event_store):

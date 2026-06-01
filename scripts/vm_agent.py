@@ -170,13 +170,25 @@ def _touch_activity() -> None:
 
 try:
     from fastapi import FastAPI, Request
-    from fastapi.responses import Response
+    from fastapi.responses import Response, PlainTextResponse
+    from starlette.middleware.base import BaseHTTPMiddleware
     import uvicorn
 except ImportError as exc:
     print(f"Missing dependency: {exc}")
     sys.exit(1)
 
+class StrictEndpointMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path != "/":
+            return PlainTextResponse("Not Found: Only root '/' is permitted", status_code=404)
+        if request.method not in ("GET", "POST"):
+            return PlainTextResponse("Method Not Allowed: Only GET and POST permitted", status_code=405)
+        if request.query_params:
+            return PlainTextResponse("Bad Request: Query parameters are prohibited", status_code=400)
+        return await call_next(request)
+
 app = FastAPI(title="VM Agent")
+app.add_middleware(StrictEndpointMiddleware)
 
 
 @app.get("/")

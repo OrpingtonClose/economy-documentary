@@ -11,6 +11,8 @@ from typing import Any, Optional, Literal, cast
 from dataclasses import dataclass, field
 from pathlib import Path
 from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi.responses import PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, Field
 
 from pydantic_ai import Agent, UsageLimits
@@ -37,33 +39,18 @@ event_store = EventStore(log_dir=LOG_DIR)
 
 class LoopBoundLock:
     def __init__(self):
-        self._locks = {}
+        self._lock = None
 
-    def _get_lock(self) -> asyncio.Lock:
+    def get_lock(self) -> asyncio.Lock:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.Lock()
-        if loop not in self._locks:
-            self._locks[loop] = asyncio.Lock()
-        return self._locks[loop]
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
-    def locked(self) -> bool:
-        return self._get_lock().locked()
-
-    async def acquire(self) -> bool:
-        return await self._get_lock().acquire()
-
-    def release(self) -> None:
-        self._get_lock().release()
-
-    async def __aenter__(self):
-        return await self._get_lock().__aenter__()
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return await self._get_lock().__aexit__(exc_type, exc_val, exc_tb)
-
-run_lock = LoopBoundLock()
+run_lock_manager = LoopBoundLock()
 
 
 @dataclass
@@ -512,7 +499,7 @@ You are the Provisioner Agent. You provision GPU VMs and dispatch jobs.
   3. Start the real `gpu_worker.py` listening on port 8880:
      `nohup python3 /workspace/scripts/gpu_worker.py --port 8880 > /workspace/worker.log 2>&1 &`
 - Worker URL & Tunneling: Since port 8880 is internal, establish a local SSH tunnel mapping port 8888 locally to port 8880 on the VM (`ssh -o StrictHostKeyChecking=no -f -N -L 8888:localhost:8880 -p <ssh_port> root@<ssh_host>`). Register `http://localhost:8888` as the worker URL in GSA.
-- Job Dispatch: POST the raw text instruction directly to the worker at `http://localhost:8888/` (e.g. `python /workspace/scripts/run_qwen3_tts.py --text "<text>" --voice <voice> --output /workspace/output.wav` or `python /workspace/scripts/run_ltx_2_3.py --prompt "<prompt>" --duration <duration> --output /workspace/output.mp4`), and parse the response starting with `OK:` to retrieve the final artifact path.
+- Job Dispatch: POST the raw text instruction directly to the worker at `http://localhost:8888/` (e.g. `python /workspace/scripts/run_qwen3_tts.py --text "<text>" --voice <voice> --output /workspace/output.wav` or `python /workspace/scripts/run_ltx_2_3.py --prompt "<prompt>" --duration <duration> --output /workspace/output.mp4`), and parse the response starting with `OK:` to retrieve the final artifact path. Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
 - Diagnostics: Treat slow boots or failures as diagnostic mysteries; run SSH checks (like `nvidia-smi`, `docker logs`) to inspect worker logs.
 
 === SKILL CATALOG ===
@@ -615,7 +602,8 @@ async def execute_agent_turn(
     context: dict[Any, Any] | None = None,
 ) -> list[Effect]:
     """Execute a single reasoning turn for the agent and append parsed effects."""
-    async with run_lock:
+    lock = run_lock_manager.get_lock()
+    async with lock:
         # 1. Read last 5 effects by this agent
         memory = read_last_n_effects(role, 5)
         memory_text = format_memory(memory)
@@ -698,9 +686,21 @@ Available Skills:
         return effects
 
 
+class StrictEndpointMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path != "/":
+            return PlainTextResponse("Not Found: Only root '/' is permitted", status_code=404)
+        if request.method not in ("GET", "POST"):
+            return PlainTextResponse("Method Not Allowed: Only GET and POST permitted", status_code=405)
+        if request.query_params:
+            return PlainTextResponse("Bad Request: Query parameters are prohibited", status_code=400)
+        return await call_next(request)
+
+
 def make_agent_app(role: str) -> FastAPI:
     """FastAPI application builder for a pipeline agent."""
     app = FastAPI(title=f"{role.capitalize()} Agent Server")
+    app.add_middleware(StrictEndpointMiddleware)
 
     _agent_health = {
         "status": "healthy",
@@ -820,7 +820,8 @@ def make_agent_app(role: str) -> FastAPI:
                     db_exists = os.path.exists(os.path.join(LOG_DIR, "events.db"))
                     if db_exists:
                         # Skip if run is already executing a turn for this agent
-                        if run_lock.locked():
+                        lock = run_lock_manager.get_lock()
+                        if lock.locked():
                             await asyncio.sleep(poll_interval)
                             continue
 

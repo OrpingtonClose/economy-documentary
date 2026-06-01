@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import time
 from typing import Optional, Literal, cast
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import FastAPI, HTTPException, Header, Query, Request
+from fastapi.responses import PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 
 from effects import Effect
@@ -26,7 +28,19 @@ from projections import (
     BudgetResponse,
 )
 
+class StrictEndpointMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path != "/":
+            return PlainTextResponse("Not Found: Only root '/' is permitted", status_code=404)
+        if request.method not in ("GET", "POST"):
+            return PlainTextResponse("Method Not Allowed: Only GET and POST permitted", status_code=405)
+        if request.query_params:
+            return PlainTextResponse("Bad Request: Query parameters are prohibited", status_code=400)
+        return await call_next(request)
+
+
 app = FastAPI(title="Global State Agent", description="Read-only projection server")
+app.add_middleware(StrictEndpointMiddleware)
 
 # Default logs directory matches DATA_DIR in config.py
 LOG_DIR = "/tmp/documentary-pipeline"

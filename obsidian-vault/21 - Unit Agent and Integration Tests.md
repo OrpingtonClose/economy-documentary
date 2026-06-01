@@ -29,7 +29,7 @@ In V7.1, the test suite consists exclusively of three real-world BDD integration
   - **Stimulus**: POST request to the Scenario Agent with instructions to write a 3-scene documentary script.
   - **Assertion**: Scenario Agent appends an `UpdateScript` effect containing valid script blocks (with dialog and visual prompts for all 3 slots) to the event store, and the OTIO timeline in the GSA updates automatically.
 
-* **Real Vast.ai TTS Provisioning BDD Test (UA-10-Real)**
+* **Real Vast.ai TTS Provisioning BDD Test (UA-10-Real) (VERY IMPORTANT DO NOT ALTER)**
   - **Pre-conditions**: GSA contains a queued TTS job, the budget has remaining funds, and the Provisioner Agent is configured for real Vast.ai cloud provisioning.
   - **Stimulus**: Provisioner Agent is woken up via POST request.
   - **Assertion**: Provisioner queries Vast.ai GPU offers, selects the cheapest suitable offer under $1.50/hour, allocates the VM, and logs `VMAllocated`. Once the VM is running and the worker agent is healthy, the Provisioner dispatches the TTS job. The worker processes the job, generating a non-zero size audio file. The Provisioner downloads the audio artifact, updates GSA with `JobCompleted`, and deallocates the VM (emitting `VMDeallocated` with reason `job_done`).

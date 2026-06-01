@@ -16,12 +16,25 @@ import wave
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("tts_worker")
 
+class StrictEndpointMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path != "/":
+            return PlainTextResponse("Not Found: Only root '/' is permitted", status_code=404)
+        if request.method not in ("GET", "POST"):
+            return PlainTextResponse("Method Not Allowed: Only GET and POST permitted", status_code=405)
+        if request.query_params:
+            return PlainTextResponse("Bad Request: Query parameters are prohibited", status_code=400)
+        return await call_next(request)
+
+
 app = FastAPI()
+app.add_middleware(StrictEndpointMiddleware)
 
 # ---------------------------------------------------------------------------
 # Model loading
