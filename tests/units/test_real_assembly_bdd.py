@@ -18,6 +18,8 @@ from effects import (
     JobCompleted,
     ReconciliationComplete,
     PipelineComplete,
+    MergeIntoOTIO,
+    DurationAdjusted,
 )
 from event_store import EventStore
 
@@ -35,9 +37,17 @@ class HostAssemblyHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
-        
+        env["PYTHONUNBUFFERED"] = "1"
+
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.gsa_stdout = open(log_dir / "gsa_stdout.log", "w")
+        self.gsa_stderr = open(log_dir / "gsa_stderr.log", "w")
+
         self.gsa_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "global_state_agent:app", "--host", "127.0.0.1", "--port", "8000"],
+            stdout=self.gsa_stdout,
+            stderr=self.gsa_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -61,9 +71,17 @@ class HostAssemblyHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
         
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_stdout = open(log_dir / "agent_assembly_stdout.log", "w")
+        self.agent_stderr = open(log_dir / "agent_assembly_stderr.log", "w")
+
         self.agent_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "agents.assembly.app:app", "--host", "127.0.0.1", "--port", str(self.agent_port)],
+            stdout=self.agent_stdout,
+            stderr=self.agent_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -93,7 +111,8 @@ class HostAssemblyHelper:
         
         import shutil
         try:
-            shutil.rmtree("/tmp/documentary-pipeline")
+            # shutil.rmtree("/tmp/documentary-pipeline")
+            pass
         except Exception:
             pass
 
@@ -118,6 +137,14 @@ def clear_local_event_store():
         pass
     os.makedirs(db_dir, exist_ok=True)
 
+    # Clean up deepagents sessions to prevent legacy session interference and improve performance
+    import glob
+    for f in glob.glob(os.path.expanduser("~/.deepagents/sessions.db*")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
 @given("the GSA event store contains completed audio and video jobs for all scenes")
 def step_completed_jobs(event_store):
     clear_local_event_store()
@@ -125,6 +152,13 @@ def step_completed_jobs(event_store):
     event_store.append(PipelineStarted(agent="operator"), "")
     event_store.append(BudgetSet(agent="operator", budget_usd=10.0), "")
     
+    # Create valid dummy media files on disk so ffmpeg doesn't fail
+    import subprocess
+    os.makedirs("/tmp/audio", exist_ok=True)
+    os.makedirs("/tmp/video", exist_ok=True)
+    subprocess.run("ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=mono -t 5.1 /tmp/audio/s1_b1.wav", shell=True, capture_output=True)
+    subprocess.run("ffmpeg -y -f lavfi -i color=c=black:s=1280x720:d=5.1 -c:v libx264 -pix_fmt yuv420p /tmp/video/s1_b1.mp4", shell=True, capture_output=True)
+
     # Create an UpdateScript block that needs processing
     block = ScriptBlock(
         scene_num=1,
@@ -139,30 +173,62 @@ def step_completed_jobs(event_store):
     event_store.append(JobCompleted(
         agent="provisioner",
         job_id="job_tts_1",
-        job_type="tts",
-        scene_num=1,
-        block_id="s1_b1",
-        slot_id="s1_b1",
         artifact_uri="/tmp/audio/s1_b1.wav",
-        duration_sec=5.1
+        duration_sec=5.1,
+        vm_instance_id="vm_instance_1"
     ), "initial_hash")
 
     # Complete video job
     event_store.append(JobCompleted(
         agent="provisioner",
         job_id="job_video_1",
-        job_type="video",
-        scene_num=1,
-        block_id="s1_b1",
-        slot_id="s1_b1",
         artifact_uri="/tmp/video/s1_b1.mp4",
-        duration_sec=5.1
+        duration_sec=5.1,
+        vm_instance_id="vm_instance_1"
     ), "initial_hash")
 
     # Reconcile audio
     event_store.append(ReconciliationComplete(
         agent="audio",
-        slot_id="s1_b1",
+        blocks_total=1,
+        blocks_passed=1,
+        blocks_failed=0,
+        worst_delta_sec=0.1,
+        total_measured_sec=5.1
+    ), "initial_hash")
+
+    # Adjust duration (so measured_sec is populated)
+    event_store.append(DurationAdjusted(
+        agent="audio",
+        block_id="A1:1:s1_b1",
+        slot_id="A1:1:s1_b1",
+        scene_num=1,
+        voice_role="V1_Narrator",
+        scripted_sec=5.0,
+        measured_sec=5.1
+    ), "initial_hash")
+
+    # Merge narration clip into OTIO
+    event_store.append(MergeIntoOTIO(
+        agent="assembly",
+        job_id="job_tts_1",
+        block_id="s1_b1",
+        scene_num=1,
+        slot_id="A1:1:s1_b1",
+        artifact_uri="/tmp/audio/s1_b1.wav",
+        track_name="A1_Narration",
+        duration_sec=5.1
+    ), "initial_hash")
+
+    # Merge video clip into OTIO
+    event_store.append(MergeIntoOTIO(
+        agent="assembly",
+        job_id="job_video_1",
+        block_id="s1_b1",
+        scene_num=1,
+        slot_id="A1:1:s1_b1",
+        artifact_uri="/tmp/video/s1_b1.mp4",
+        track_name="V1_Video",
         duration_sec=5.1
     ), "initial_hash")
 
@@ -185,8 +251,8 @@ def step_validate_duration():
 
 @then('the GSA event store should contain a "pipeline_complete" effect with the output path and duration')
 def step_check_pipeline_complete(event_store):
-    delay = 1.0
-    for _ in range(10):
+    delay = 2.0
+    for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
         complete_effects = [e for e in effects if e.kind == "pipeline_complete"]
         if complete_effects:

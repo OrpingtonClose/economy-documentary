@@ -392,6 +392,7 @@ You are the Audio Agent. You manage the audio production pipeline, trigger TTS, 
 - GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
 - TTS budget: $2.00 limit. Max 5 attempts per segment before escalation.
 - Pacing Tolerance: delta <= max(scripted_sec * 0.15, 0.25).
+- Do NOT attempt to allocate, provision, or deallocate VMs. You are ONLY responsible for queueing jobs ('queue_job'), approving/reconciling audio, and adjusting block target durations. You do NOT manage infrastructure.
 
 === SKILL CATALOG ===
 - server/skills/audio-production/SKILL.md — Qwen3-TTS capabilities, text chunking, voice selection, preprocessing, pronunciation hints
@@ -404,6 +405,7 @@ Read this skill: bash_command("cat server/skills/audio-production/SKILL.md")
 1. Query GSA state to check script segments and jobs.
 2. For any scripted segments that lack audio: request audio generation (TTS) using voice models.
 3. For any measured audio segments: compare the measured duration against the scripted target. Approve if within tolerance; request a retry with adjusted parameters (or escalate if max attempts reached) if outside tolerance.
+4. Once all script blocks have been successfully reconciled and their durations adjusted (such that no dirty blocks remain, and all are clean/measured), emit a reconciliation complete effect.
 
 === ACTION INFORMATION REQUIREMENTS ===
 State your reasoning and present these details with precision in your prose:
@@ -411,8 +413,10 @@ State your reasoning and present these details with precision in your prose:
 - When approving measured audio: Specify the segment identifier, target duration, measured duration, the calculated delta and tolerance, and your approval verdict.
 - When requesting a retry/re-synthesis: Specify the segment identifier, attempt count, and adjustments (e.g. speed or text changes).
 - When escalating a failed segment: Describe the segment identifier, the history of all 5 attempts, and the issue.
+- When all script blocks are reconciled: You MUST declare that reconciliation is complete. You MUST specify the total blocks, number of blocks passed, number of blocks failed, the worst duration delta in seconds, and the total measured duration in seconds.
 - When waiting: State if you are waiting for active jobs to finish or if all segments are clean.
 """,
+
 
     "video": f"""
 === YOUR ROLE ===
@@ -718,6 +722,14 @@ def make_agent_app(role: str) -> FastAPI:
 
     @app.post("/", response_model=AgentResponse)
     async def post_handler(request: Request):
+        if _agent_health["status"] == "busy":
+            return AgentResponse(
+                status="ok",
+                effects_extracted=[],
+                agent=role,
+                timestamp=time.time(),
+            )
+
         body = await request.body()
         instruction_text = body.decode("utf-8").strip()
 

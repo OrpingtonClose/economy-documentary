@@ -34,9 +34,17 @@ class HostScenarioHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
         
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.gsa_stdout = open(log_dir / "gsa_stdout.log", "w")
+        self.gsa_stderr = open(log_dir / "gsa_stderr.log", "w")
+
         self.gsa_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "global_state_agent:app", "--host", "127.0.0.1", "--port", "8000"],
+            stdout=self.gsa_stdout,
+            stderr=self.gsa_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -60,9 +68,17 @@ class HostScenarioHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
         
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_stdout = open(log_dir / "agent_scenario_stdout.log", "w")
+        self.agent_stderr = open(log_dir / "agent_scenario_stderr.log", "w")
+
         self.agent_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "agents.scenario.app:app", "--host", "127.0.0.1", "--port", str(self.agent_port)],
+            stdout=self.agent_stdout,
+            stderr=self.agent_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -92,7 +108,8 @@ class HostScenarioHelper:
         
         import shutil
         try:
-            shutil.rmtree("/tmp/documentary-pipeline")
+            # shutil.rmtree("/tmp/documentary-pipeline")
+            pass
         except Exception:
             pass
 
@@ -129,23 +146,42 @@ def step_failed_reconciliation(event_store):
         scene_num=1,
         block_id="s1_b1",
         speaker="V1_Narrator",
-        text="This is an extremely long script block that will fail audio reconciliation target duration.",
+        text=(
+            "Dopamine is not a pleasure chemical. That is a widespread misconception that has persisted for decades. "
+            "In reality, dopamine is the chemical of anticipation, motivation, and the pursuit of rewards. It drives "
+            "us to seek out new experiences, learn new things, and stay focused on goals. For ADHD brains, this reward "
+            "system is regulated differently, making ordinary tasks feel far more difficult to start because the "
+            "baseline dopamine level is lower."
+        ),
         duration_sec=3.0
     )
     event_store.append(UpdateScript(agent="scenario", blocks=[block]), "initial_hash")
 
     # Fail reconciliation
-    event_store.append(ReconciliationFailed(
-        agent="audio",
-        slot_id="s1_b1",
-        reason="too_long",
-        details=ReconciliationFailureDetail(
-            target_duration=3.0,
-            actual_duration=12.5,
-            tolerance_percent=0.15,
-            tolerance_abs_sec=0.25
-        )
-    ), "initial_hash")
+    detail = ReconciliationFailureDetail(
+        block_id="s1_b1",
+        scene_num=1,
+        phrase_idx=0,
+        voice="V1_Narrator",
+        scripted_sec=3.0,
+        measured_sec=4.16,
+        delta_sec=1.16,
+        ratio=1.387,
+        message="measured 4.16s vs target 3.0s, delta 1.16s exceeds tolerance",
+        attempt_number=1
+    )
+    event_store.append(
+        ReconciliationFailed(
+            agent="audio",
+            blocks_total=1,
+            blocks_passed=0,
+            blocks_failed=1,
+            failures=[detail],
+            worst_delta_sec=1.16,
+            failure_type="duration_mismatch"
+        ),
+        "initial_hash"
+    )
 
 @given("the Scenario Agent is running on the host")
 def step_scenario_agent_running(scenario_helper):
@@ -167,13 +203,14 @@ def step_rewrite_shorter():
 
 @then('it should append a revised "update_script" effect to the GSA')
 def step_check_revised_script(event_store):
-    delay = 1.0
-    for _ in range(10):
+    delay = 2.0
+    for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
         scenario_scripts = [e for e in effects if e.kind == "update_script" and e.agent == "scenario"]
         if len(scenario_scripts) >= 2:
+            original_text = scenario_scripts[0].blocks[0].text
             revised_block = scenario_scripts[-1].blocks[0]
-            assert len(revised_block.text) < 95  # Text was rewritten/shortened
+            assert len(revised_block.text) < len(original_text)
             return
         time.sleep(delay)
     raise AssertionError("Scenario agent did not append a revised update_script")

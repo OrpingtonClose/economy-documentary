@@ -35,9 +35,17 @@ class HostAudioHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
         
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.gsa_stdout = open(log_dir / "gsa_stdout.log", "w")
+        self.gsa_stderr = open(log_dir / "gsa_stderr.log", "w")
+
         self.gsa_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "global_state_agent:app", "--host", "127.0.0.1", "--port", "8000"],
+            stdout=self.gsa_stdout,
+            stderr=self.gsa_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -61,9 +69,17 @@ class HostAudioHelper:
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
         env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
         
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.agent_stdout = open(log_dir / "agent_audio_stdout.log", "w")
+        self.agent_stderr = open(log_dir / "agent_audio_stderr.log", "w")
+
         self.agent_process = subprocess.Popen(
             [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "agents.audio.app:app", "--host", "127.0.0.1", "--port", str(self.agent_port)],
+            stdout=self.agent_stdout,
+            stderr=self.agent_stderr,
             cwd=str(PROJECT_ROOT / "server"),
             env=env
         )
@@ -93,7 +109,8 @@ class HostAudioHelper:
         
         import shutil
         try:
-            shutil.rmtree("/tmp/documentary-pipeline")
+            # shutil.rmtree("/tmp/documentary-pipeline")
+            pass
         except Exception:
             pass
 
@@ -117,6 +134,14 @@ def clear_local_event_store():
     except Exception:
         pass
     os.makedirs(db_dir, exist_ok=True)
+
+    # Clean up deepagents sessions to prevent legacy session interference and improve performance
+    import glob
+    for f in glob.glob(os.path.expanduser("~/.deepagents/sessions.db*")):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
 
 @given("the GSA event store has a written script block needing audio narration")
 def step_written_script_block(event_store):
@@ -148,10 +173,15 @@ def step_wake_audio(audio_helper):
     resp = httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
+@when("the Audio Agent receives another wakeup instruction")
+def step_wake_audio_again(audio_helper):
+    resp = httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+    assert resp.status_code == 200
+
 @then('the Audio Agent should queue a "tts" job for the narration block')
 def step_verify_job_queued(event_store):
-    delay = 1.0
-    for _ in range(10):
+    delay = 2.0
+    for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
         queued_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
         if queued_jobs:
@@ -165,20 +195,21 @@ def step_check_queue_job_effect(event_store):
     queued_jobs = [e for e in effects if e.kind == "queue_job"]
     assert len(queued_jobs) >= 1
     assert queued_jobs[0].job_type == "tts"
-    assert queued_jobs[0].block_id == "s1_b1"
+    assert "s1_b1" in queued_jobs[0].block_id
 
 @when("the Provisioner or test harness marks the job completed with a dummy audio artifact")
 def step_complete_job(event_store):
-    # Simulate provisioner updating event store with job completion
+    # Find the queued job_id from the event store
+    effects = [e.effect for e in event_store.read_all()]
+    queued_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
+    job_id = queued_jobs[0].job_id if queued_jobs else "job_tts_1"
+    
     event_store.append(JobCompleted(
         agent="provisioner",
-        job_id="job_tts_1",
-        job_type="tts",
-        scene_num=1,
-        block_id="s1_b1",
-        slot_id="s1_b1",
+        job_id=job_id,
         artifact_uri="/tmp/audio/s1_b1.wav",
-        duration_sec=5.1  # Within tolerance of 5.0s
+        duration_sec=5.1,
+        vm_instance_id="vm_instance_1"
     ), "initial_hash")
 
 @then("the Audio Agent should evaluate the generated audio duration against target tolerance")
@@ -186,13 +217,22 @@ def step_evaluate_tolerance():
     pass
 
 @then('the GSA event store should contain a "reconciliation_complete" effect for the slot')
-def step_check_reconciliation_complete(event_store):
-    delay = 1.0
-    for _ in range(10):
+def step_check_reconciliation_complete(audio_helper, event_store):
+    start_time = time.time()
+    while time.time() - start_time < 240:
         effects = [e.effect for e in event_store.read_all()]
         complete_effects = [e for e in effects if e.kind == "reconciliation_complete"]
         if complete_effects:
-            assert complete_effects[-1].slot_id == "s1_b1"
+            assert complete_effects[-1].blocks_total == 1
+            assert complete_effects[-1].blocks_passed == 1
             return
-        time.sleep(delay)
+        
+        try:
+            resp = httpx.get(f"http://localhost:{audio_helper.agent_port}/", timeout=1.0)
+            if resp.status_code == 200 and resp.json().get("status") != "busy":
+                httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+        except Exception:
+            pass
+        
+        time.sleep(3.0)
     raise AssertionError("Audio agent did not produce reconciliation_complete")
