@@ -300,7 +300,7 @@ async def bash_command(ctx, command: str) -> str:
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
-    return stdout.decode() + stderr.decode()
+    return stdout.decode(errors="replace") + stderr.decode(errors="replace")
 
 
 # ===========================================================================
