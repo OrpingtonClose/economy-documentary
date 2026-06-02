@@ -200,10 +200,16 @@ The testing suite consists of real-world integration tests driven over active ne
     * **Context:** Multiple scene screenplay with narrative audio and video clips fully rendered and aligned.
     * **Workflow:** A duration adjustment (`DurationAdjusted`) is triggered on an early block (e.g. block 1 duration increases by 1.5s). GSA catches this event, and the `CoordinateTimeline` projection dynamically recalculates the start/end coordinates of all subsequent blocks on both narration and visual tracks. The Video Agent is woken up to render a new visual clip matching the new duration target, and the Assembly Agent dynamically compiles and renders the shifted timeline.
     * **Validation:** Verifies that the final compiled MP4 duration has shifted exactly by +1.5s and that all video and audio tracks are perfectly synchronized without audio gaps or visual black frames.
-13. **Parallel Multitrack Overlap Prevention and Muxing Test:**
-    * **Context:** Multi-track screenplay (e.g., narration `A1`, background music `A2`, video `V1`, overlay text `V2`).
-    * **Workflow:** GSA processes timeline updates, validating that clips on different tracks *are* allowed to overlap in time, but clips on the *same* track trigger overlap exclusion errors if their timespans collide.
-    * **Validation:** Asserts that track-isolated collision checks prevent writing overlapping narration, while allowing concurrent background music and visuals to merge seamlessly during FFmpeg muxing into the final MP4.
+     * **Validation:** Asserts that track-isolated collision checks prevent writing overlapping narration, while allowing concurrent background music and visuals to merge seamlessly during FFmpeg muxing into the final MP4.
+
+### 2.3 Heavy Standalone Test Launchers
+
+To maintain strict segregation of concerns and avoid polluting production agent logic with environment-based branching (e.g., `is_test` flags), complex integration scenarios are driven by dedicated, standalone launcher scripts.
+
+* **Architecture**: Rather than a single runner using global runtime configuration toggles, each complex test scenario has its own dedicated Python script under `tests/units/` (e.g., `run_test_12_dynamic_shift.py`).
+* **Process Lifecycle**: The test script launches GSA and the specific production agents as local background servers on their standard ports.
+* **Inline Simulation**: Any test-specific simulated/fake behaviors (such as VM allocation mock responses or custom test screenplay seeding) are implemented locally within the test launcher script, driving the production agents via database events and HTTP requests.
+* **Teardown**: The script ensures complete, clean background process termination on exit.
 
 ---
 
