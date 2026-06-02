@@ -54,8 +54,25 @@ def main():
     )
 
     # 3. Wait a moment for GSA and agents to start and verify health
-    print("Waiting for GSA and agents to warm up...")
-    time.sleep(3.0)
+    print("Waiting for Scenario Agent to warm up...")
+    scenario_healthy = False
+    delay = 0.2
+    for _ in range(30):
+        try:
+            resp = httpx.get("http://127.0.0.1:8001/", timeout=1.0)
+            if resp.status_code == 200:
+                scenario_healthy = True
+                break
+        except Exception:
+            pass
+        time.sleep(delay)
+        delay = min(delay * 1.5, 2.0)
+        
+    if not scenario_healthy:
+        print("Error: Scenario Agent did not become healthy in time.")
+        runner.terminate()
+        sys.exit(1)
+
 
     # 4. Initiate the run by posting the prompt to the Scenario Agent
     print(f"Sending prompt to Scenario Agent: {args.prompt}")
