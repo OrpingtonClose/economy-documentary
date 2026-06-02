@@ -183,10 +183,7 @@ text by reasoning in natural language, and picks the best offer. The agent may
 override its own reasoning based on memory (e.g., "I had a failure on host X last
 time, skip it even if it looks cheap").
 
-**Start with one VM, then escalate.** The agent provisions exactly one VM for
-the first job of each type. It confirms health (`GET /` responds) before
-provisioning additional VMs. The agent decides when to escalate based on queue
-depth, worker health, and cost projections — not a hardcoded threshold.
+**Start with one VM, then escalate via doubling.** The agent provisions exactly **1 VM** for the first job of each type. It confirms health (`GET /` responds) and verifies flawless execution before allocating additional VMs. If the queue backlog demands more capacity and the existing instances perform flawlessly, the Provisioner escalates by **doubling** the active fleet size to **2 VMs**, and doubles it again up to a **soft limit of 4 VMs**. This progressive doubling rollout scheme ensures operational health verification at each level of scale.
 
 | Criterion | TTS Job (`job_type="tts"`) | LTX Job (`job_type="ltx"`) |
 |---|---|---|
@@ -195,7 +192,8 @@ depth, worker health, and cost projections — not a hardcoded threshold.
 | Max price/hr | `$config.max_tts_cost_hr` (default $0.80) | `$config.max_ltx_cost_hr` (default $1.20) |
 | Disk | ≥ 100 GB | ≥ 200 GB |
 | Sort key | agent-ranked (cost × reliability) | agent-ranked (cost × reliability) |
-| Max concurrent | 3 (soft limit, agent decides) | 3 (soft limit, agent decides) |
+| Max concurrent | 4 (soft limit; escalated via doubling rollout 1 -> 2 -> 4) | 4 (soft limit; escalated via doubling rollout 1 -> 2 -> 4) |
+
 
 ```python
 # Agent calls bash_command, reads raw output, reasons in natural language

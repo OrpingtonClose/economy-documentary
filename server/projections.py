@@ -87,56 +87,68 @@ class Timeline(Projection):
             self._remove_clip(cast(DeleteFromOTIO, event))
 
     def _build_from_script(self, event: UpdateScript) -> None:
-        track_name = "A1_Narration"
-        if not self.timeline.tracks:
-            track = otio.schema.Track(name=track_name, kind=otio.schema.TrackKind.Audio)
-            self.timeline.tracks.append(track)
-        else:
-            track = self.timeline.tracks[0]
+        track_name_audio = "A1_Narration"
+        track_name_video = "V1_Video"
+
+        audio_track = None
+        video_track = None
+        for track in self.timeline.tracks:
+            if track.name == track_name_audio:
+                audio_track = track
+            elif track.name == track_name_video:
+                video_track = track
+
+        if audio_track is None:
+            audio_track = otio.schema.Track(name=track_name_audio, kind=otio.schema.TrackKind.Audio)
+            self.timeline.tracks.append(audio_track)
+        if video_track is None:
+            video_track = otio.schema.Track(name=track_name_video, kind=otio.schema.TrackKind.Video)
+            self.timeline.tracks.append(video_track)
 
         new_slot_addrs = set()
         for block in event.blocks:
-            slot_addr = f"A1:{block.scene_num}:{block.block_id}"
-            new_slot_addrs.add(slot_addr)
+            for track_prefix, track in [("A1", audio_track), ("V1", video_track)]:
+                slot_addr = f"{track_prefix}:{block.scene_num}:{block.block_id}"
+                new_slot_addrs.add(slot_addr)
 
-            existing = self.slots.get(slot_addr)
-            if existing is not None:
-                unchanged = (
-                    existing.get("text") == block.text
-                    and existing.get("speaker") == block.speaker
-                    and abs(existing.get("scripted_sec", 0.0) - block.duration_sec) < 0.001
-                )
-                if unchanged:
-                    continue
-                existing["text"] = block.text
-                existing["speaker"] = block.speaker
-                existing["scripted_sec"] = block.duration_sec
-                existing["measured_sec"] = None
-                existing["status"] = "scripted"
-                existing["artifact_uri"] = None
-                self._update_clip_duration(slot_addr, block.duration_sec)
-            else:
-                rate = 24
-                duration_rt = otio.opentime.RationalTime(block.duration_sec * rate, rate)
-                clip = otio.schema.Clip(
-                    name=slot_addr,
-                    source_range=otio.opentime.TimeRange(
-                        start_time=otio.opentime.RationalTime(0, rate),
-                        duration=duration_rt,
-                    ),
-                    media_reference=otio.schema.MissingReference(),
-                )
-                track.append(clip)
-                self.slots[slot_addr] = {
-                    "scene_num": block.scene_num,
-                    "block_id": block.block_id,
-                    "speaker": block.speaker,
-                    "text": block.text,
-                    "scripted_sec": block.duration_sec,
-                    "measured_sec": None,
-                    "status": "scripted",
-                    "artifact_uri": None,
-                }
+                existing = self.slots.get(slot_addr)
+                if existing is not None:
+                    unchanged = (
+                        existing.get("text") == block.text
+                        and existing.get("speaker") == block.speaker
+                        and abs(existing.get("scripted_sec", 0.0) - block.duration_sec) < 0.001
+                    )
+                    if unchanged:
+                        continue
+                    existing["text"] = block.text
+                    existing["speaker"] = block.speaker
+                    existing["scripted_sec"] = block.duration_sec
+                    existing["measured_sec"] = None
+                    existing["status"] = "scripted"
+                    existing["artifact_uri"] = None
+                    self._update_clip_duration(slot_addr, block.duration_sec)
+                else:
+                    rate = 24
+                    duration_rt = otio.opentime.RationalTime(block.duration_sec * rate, rate)
+                    clip = otio.schema.Clip(
+                        name=slot_addr,
+                        source_range=otio.opentime.TimeRange(
+                            start_time=otio.opentime.RationalTime(0, rate),
+                            duration=duration_rt,
+                        ),
+                        media_reference=otio.schema.MissingReference(),
+                    )
+                    track.append(clip)
+                    self.slots[slot_addr] = {
+                        "scene_num": block.scene_num,
+                        "block_id": block.block_id,
+                        "speaker": block.speaker,
+                        "text": block.text,
+                        "scripted_sec": block.duration_sec,
+                        "measured_sec": None,
+                        "status": "scripted",
+                        "artifact_uri": None,
+                    }
 
         updated_scenes = {block.scene_num for block in event.blocks}
         for addr in list(self.slots.keys()):
@@ -166,6 +178,12 @@ class Timeline(Projection):
         clip = self._find_clip_by_name(slot_addr)
         if clip is None:
             return
+        rate = 24
+        new_duration = otio.opentime.RationalTime(event.duration_sec * rate, rate)
+        clip.source_range = otio.opentime.TimeRange(
+            start_time=clip.source_range.start_time,
+            duration=new_duration,
+        )
         clip.media_reference = otio.schema.ExternalReference(
             target_url=event.artifact_uri,
             available_range=clip.source_range,
@@ -173,6 +191,7 @@ class Timeline(Projection):
         if slot_addr in self.slots:
             self.slots[slot_addr]["status"] = "delivered"
             self.slots[slot_addr]["artifact_uri"] = event.artifact_uri
+            self.slots[slot_addr]["measured_sec"] = event.duration_sec
 
     def _adjust_slot_duration(self, event: DurationAdjusted) -> None:
         slot_addr = event.block_id
@@ -206,33 +225,37 @@ class Timeline(Projection):
     def _reorder_scenes(self, event: ReorderScenes) -> None:
         if not self.timeline.tracks:
             return
-        track = self.timeline.tracks[0]
 
-        scene_to_clips: dict[int, list[otio.schema.Clip]] = defaultdict(list)
-        for child in list(track):
-            if isinstance(child, otio.schema.Clip):
-                parts = child.name.split(":")
-                if len(parts) >= 2:
-                    try:
-                        scene_num = int(parts[1])
-                        scene_to_clips[scene_num].append(child)
-                    except ValueError:
-                        pass
+        for track in self.timeline.tracks:
+            scene_to_clips: dict[int, list[otio.schema.Clip]] = defaultdict(list)
+            for child in list(track):
+                if isinstance(child, otio.schema.Clip):
+                    parts = child.name.split(":")
+                    if len(parts) >= 2:
+                        try:
+                            scene_num = int(parts[1])
+                            scene_to_clips[scene_num].append(child)
+                        except ValueError:
+                            pass
 
-        new_clips: list[otio.schema.Clip] = []
-        for scene_num in event.new_order:
-            clips = scene_to_clips.get(scene_num, [])
-            clips.sort(key=lambda c: c.name)
-            new_clips.extend(clips)
+            new_clips: list[otio.schema.Clip] = []
+            for scene_num in event.new_order:
+                clips = scene_to_clips.get(scene_num, [])
+                clips.sort(key=lambda c: c.name)
+                new_clips.extend(clips)
 
-        track.clear_children()
-        for clip in new_clips:
-            track.append(clip)
+            track.clear_children()
+            for clip in new_clips:
+                track.append(clip)
 
         new_slots: dict[str, dict] = {}
-        for clip in new_clips:
-            if clip.name in self.slots:
-                new_slots[clip.name] = self.slots[clip.name]
+        for track in self.timeline.tracks:
+            for child in track:
+                if isinstance(child, otio.schema.Clip) and child.name in self.slots:
+                    new_slots[child.name] = self.slots[child.name]
+        for name, val in self.slots.items():
+            if name not in new_slots:
+                new_slots[name] = val
         self.slots = new_slots
 
     def _remove_clip(self, event: DeleteFromOTIO) -> None:

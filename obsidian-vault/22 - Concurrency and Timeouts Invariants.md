@@ -34,6 +34,11 @@ Every agent app exposes a `GET /` health endpoint and a `POST /` trigger endpoin
 - If the agent's status is already `"busy"` (meaning it is currently running a turn in the background), the `POST /` handler immediately returns a safe, empty response, avoiding overlapping turn execution.
 - **Integration Test Synchronization**: Test harnesses must query the health endpoint (`GET /`) in a polling loop and wait until status is `"healthy"` before sending subsequent wakeup requests.
 
+### 1.5 Provisioner VM Scaling and Double-Rollout
+To manage infrastructure footprint safely and verify VM execution health incrementally:
+- **Doubling Rollout Scheme**: The Provisioner agent follows an exponential doubling rollout path rather than allocating maximum instances immediately. It begins by provisioning exactly **1 VM** for the first job of a stage. Only when that instance is confirmed healthy and completes its initial tasks flawlessly will the Provisioner double the fleet size to **2 VMs**, and double it again to **4 VMs** under high queue demands.
+- **Active Soft Limit**: The maximum parallel VM count is constrained to a **soft limit of 4 VMs** for concurrent processing. Scaling beyond this boundary requires deliberate operational override or increased backlog triggers.
+
 ---
 
 ## 2. Timeout Policy
