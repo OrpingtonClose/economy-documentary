@@ -41,3 +41,5 @@
 - [[19 - Discarded Propositions and Rationale|19. Discarded Propositions and Rationale]]
 - [[20 - Glossary|20. Glossary]]
 - [[21 - Unit Agent and Integration Tests|21. Unit Agent and Integration Tests]]
+- [[22 - Concurrency and Timeouts Invariants|22. Concurrency and Timeouts Invariants]]
+

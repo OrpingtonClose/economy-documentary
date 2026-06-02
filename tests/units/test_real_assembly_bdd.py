@@ -56,7 +56,7 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)
+                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -90,7 +90,7 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)
+                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:

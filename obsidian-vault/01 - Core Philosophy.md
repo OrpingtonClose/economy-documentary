@@ -46,9 +46,10 @@ This follows the principle: *whenever something can be done via prompt, do so â€
 
 ### 1.4 No Timeouts in Code
 
-#### 1.4.1 No setTimeout, threading.Timer, or asyncio.timeout anywhere in pipeline code
+No pipeline code calls `setTimeout`, `threading.Timer`, `asyncio.timeout`, or any timer primitive. HTTP requests and subprocess calls on primary execution paths run to completion. This is architecture policy.
 
-No pipeline code calls `setTimeout`, `threading.Timer`, `asyncio.timeout`, or any timer primitive. HTTP requests and subprocess calls run to completion. This is architecture policy.
+An explicit exception is granted for lightweight health and readiness checks (e.g. pinging a VM or agent status check) where setting a timeout is necessary to prevent the polling coordinator from blocking indefinitely on unreachable resources.
+
 
 ### 1.5 Real Engines Only
 

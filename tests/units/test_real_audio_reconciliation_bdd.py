@@ -54,7 +54,7 @@ class HostAudioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)
+                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -88,7 +88,7 @@ class HostAudioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)
+                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -228,7 +228,7 @@ def step_check_reconciliation_complete(audio_helper, event_store):
             return
         
         try:
-            resp = httpx.get(f"http://localhost:{audio_helper.agent_port}/", timeout=1.0)
+            resp = httpx.get(f"http://localhost:{audio_helper.agent_port}/", timeout=1.0)  # health probe
             if resp.status_code == 200 and resp.json().get("status") != "busy":
                 httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
         except Exception:
