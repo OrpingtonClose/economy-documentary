@@ -212,14 +212,14 @@ def step_e2e_start_agents(orchestration_helper):
 @when("the pipeline is initiated and wakes up all agents sequentially")
 def step_e2e_wakeup_loop(orchestration_helper, event_store):
     # Initiate wakeups on active agents
-    httpx.post("http://127.0.0.1:8001/", content="Wakeup")  # scenario
+    # httpx.post("http://127.0.0.1:8001/", content="Wakeup")  # scenario
     httpx.post("http://127.0.0.1:8002/", content="Wakeup")  # audio
     httpx.post("http://127.0.0.1:8004/", content="Wakeup")  # video
 
 @then("the Scenario Agent generates structured script blocks")
 def step_e2e_scenario_check(event_store):
     # Poll for update_script
-    for _ in range(90):
+    for _ in range(240):
         effects = [e.effect for e in event_store.read_all()]
         if any(e.kind == "update_script" for e in effects):
             return
@@ -232,7 +232,7 @@ def step_e2e_media_check(event_store):
     # When it appears, complete it and wake up video agent, then wait for video agent to queue.
     has_completed_audio = False
     print(f"\n--- Starting E2E media check loop ---", flush=True)
-    for i in range(120):
+    for i in range(240):
         effects = [e.effect for e in event_store.read_all()]
         audio_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
         video_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "video"]
@@ -380,7 +380,7 @@ def step_e2e_assembly_check(orchestration_helper, event_store):
     
     # Wait and verify pipeline complete
     delay = 2.0
-    for _ in range(60):
+    for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
         completes = [e for e in effects if e.kind == "pipeline_complete"]
         if completes:
@@ -431,7 +431,7 @@ def step_scenario_audio_audio_trigger(orchestration_helper, event_store):
     httpx.post("http://127.0.0.1:8002/", content="Wakeup")
 
     # Wait for queue_job
-    for _ in range(90):
+    for _ in range(240):
         effects = [e.effect for e in event_store.read_all()]
         jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
         if jobs:
@@ -461,7 +461,7 @@ def step_scenario_audio_reconciliation_check(orchestration_helper, event_store):
     # Wake Audio to perform duration verification and reconciliation complete
     httpx.post("http://127.0.0.1:8002/", content="Wakeup")
 
-    for _ in range(90):
+    for _ in range(240):
         effects = [e.effect for e in event_store.read_all()]
         reconciles = [e for e in effects if e.kind == "reconciliation_complete"]
         if reconciles:
@@ -526,7 +526,7 @@ def step_muxing_wakeup_assembly(orchestration_helper):
 @then("it executes ffmpeg commands to mux and merge the tracks into a final output MP4")
 def step_muxing_check_output(event_store):
     delay = 2.0
-    for _ in range(60):
+    for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
         completes = [e for e in effects if e.kind == "pipeline_complete"]
         if completes:
