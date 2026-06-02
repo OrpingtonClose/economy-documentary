@@ -1,45 +1,94 @@
 ---
-{"title": "Architecture V7.1 Index", "tags": ["architecture", "v7.1", "index"]}
+{
+  "title": "Architecture V7.1 Index",
+  "section": "Index",
+  "tags": [
+    "architecture",
+    "index",
+    "v7.1"
+  ]
+}
 ---
 
-# Architecture V7.1 — Documentary Pipeline
+# 🎥 Documentary Pipeline — Architecture & Topology (V7.1)
 
-
-> **Date:** 2026-05-27
-> **Status:** ACTIVE — Consolidates V7 canonical architecture + ecosystem audit corrections + authoring workflow + discarded propositions
-> **Replaces:** ARCHITECTURE_V7.md (V7 remains canonical base; V7.1 supersedes it for implementation)
-> **Location:** `server/`
->
-> This document is the canonical V7.1 architecture. It includes the full V7 content with corrections applied inline, plus new sections covering the pydantic ecosystem audit, authoring workflow, and discarded propositions. Pipeline phases are emergent, not enforced. Agents are HTTP services with `GET /` and `POST /`. The watcher has been removed; agents communicate via HTTP and SQLite event store. EventStoreDB is the future scalability path for distributed deployments. The Provisioner is an agent — the most intelligence-requiring part of the architecture — with bash_command as its only tool. There is no state machine, no `RulesEngine` Python class, and no `TransitionState` effect.
+Welcome to the canonical technical documentation vault for the **Autonomous Documentary Production Pipeline**. This suite is built for high-fidelity, long-form documentary generation (ranging from 1-minute prototypes to 60-minute feature films) leveraging multi-agent orchestration, event sourcing, and dynamic GPU allocation.
 
 ---
 
+## 🗺️ Architectural Module Directory
 
+The documentation is organized into **10 cohesive architectural modules** that define the invariants, schemas, data flows, and concurrency protections of the system.
 
-## Sections
+```mermaid
+graph TD
+    classDef doc fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef code fill:#bbf,stroke:#333,stroke-width:1px;
+    
+    Index["00 - Index.md"]
+    Philosophy["01 - Philosophy and Topology"]
+    EventStore["02 - Event Store and Effect Schemas"]
+    Timeline["03 - Timeline Projections"]
+    AgentArch["04 - Agent Architecture and Systems"]
+    Provisioning["05 - Provisioning and GPU Infrastructure"]
+    DataFlows["06 - Data Flows, Config, and Structure"]
+    Security["07 - Security, Traceability, and Auditing"]
+    Testing["08 - Testing, Concurrency, and Rollout"]
+    Glossary["09 - Glossary"]
+    
+    Index --> Philosophy
+    Philosophy --> EventStore
+    EventStore --> Timeline
+    Timeline --> AgentArch
+    AgentArch --> Provisioning
+    Provisioning --> DataFlows
+    DataFlows --> Security
+    Security --> Testing
+    Testing --> Glossary
+```
 
-- [[01 - Core Philosophy|1. Core Philosophy]]
-- [[02 - System Topology|2. System Topology]]
-- [[03 - Effect Type Family Complete Schemas|3. Effect Type Family — Complete Schemas]]
-- [[04 - Rules as Prompt No State Machine No Rules Engine Code|4. Rules as Prompt (No State Machine, No Rules Engine Code)]]
-- [[05 - Event Store|5. Event Store]]
-- [[A. Appendix EventStoreDB Migration Path|A. Appendix: EventStoreDB Migration Path]]
-- [[06 - Projections|6. Projections]]
-- [[07 - Agent Environment and Tools|7. Agent Environment & Tools]]
-- [[08 - Agent Architecture pydantic-deep|8. Agent Architecture — pydantic-deep]]
-- [[09 - Agents Per-Agent Implementations|9. Agents — Per-Agent Implementations]]
-- [[09.5 - Effect Parser Semantic Extraction Pipeline|9.5 Effect Parser — Semantic Extraction Pipeline]]
-- [[10 - Provisioner Agent|10. Provisioner Agent]]
-- [[11 - VM Worker|11. VM Worker]]
-- [[12 - Data Flows|12. Data Flows]]
-- [[13 - Security Model|13. Security Model]]
-- [[14 - Configuration|14. Configuration]]
-- [[15 - File Structure|15. File Structure]]
-- [[16 - Traceability and Observability|16. Traceability and Observability]]
-- [[17 - pydantic Ecosystem Deep Audit V7.1 Addendum|17. pydantic Ecosystem Deep Audit (V7.1 Addendum)]]
-- [[18 - Authoring Workflow for Quasi-Deterministic Agents|18. Authoring Workflow for Quasi-Deterministic Agents]]
-- [[19 - Discarded Propositions and Rationale|19. Discarded Propositions and Rationale]]
-- [[20 - Glossary|20. Glossary]]
-- [[21 - Unit Agent and Integration Tests|21. Unit Agent and Integration Tests]]
-- [[22 - Concurrency and Timeouts Invariants|22. Concurrency and Timeouts Invariants]]
+| Module | Core Purpose & Scope | Key Architecture Targets |
+| :--- | :--- | :--- |
+| 📖 **[[01 - Philosophy and Topology|01. Philosophy & Topology]]** | Foundational invariants, the ASGI topology layout, and discarded design propositions. | Hard principles, ASGI process architecture, HTTP boundary rules |
+| 🗄️ **[[02 - Event Store and Effect Schemas|02. Event Store & Effect Schemas]]** | Pydantic event definitions, SQLite WAL event log, deduplication, and ESDB migration path. | `EffectUnion`, UUIDv7 creation, `events.db` schema, transaction locks |
+| ⏱️ **[[03 - Timeline Projections|03. Timeline Projections]]** | In-memory read models, OpenTimelineIO (`.otio`) timeline validation, and retry attempts. | `Timeline`, `Jobs`, `VMs`, `Budget`, and `State` projections |
+| 🤖 **[[04 - Agent Architecture and Systems|04. Agent Architecture & Systems]]** | Agent structure (`pydantic-deep`), prompt layout, and semantic instructor parsing. | `create_pipeline_agent`, context compaction, semantic parser |
+| ☁️ **[[05 - Provisioning and GPU Infrastructure|05. Provisioning & GPU Infrastructure]]** | Vast.ai integration, GPU fleet allocation, VRAM matching, and remote VM agent setup. | Provisioner Agent tools, Vast.ai offer matching, `vm_agent.py` |
+| ⚙️ **[[06 - Data Flows, Config, and Structure|06. Data Flows, Config, and Structure]]** | Event-driven pipeline execution flows, central `.env` properties, and directory tree. | Startup sequence, config schema, project file tree |
+| 🔐 **[[07 - Security, Traceability, and Auditing|07. Security, Traceability, and Auditing]]** | Access controls, provenance DAG, execution audit trail, and dependency analysis. | Provenance capability, token budgeting, Pydantic ecosystems |
+| 🧪 **[[08 - Testing, Concurrency, and Rollout|08. Testing, Concurrency, and Rollout]]** | BDD integration tests, concurrency serialization via loop-bound lock, and progressive rollout. | BDD scenarios, `LoopBoundLock`, 1-to-60 minute scaling |
+| 📚 **[[09 - Glossary|09. Glossary]]** | Master vocabulary of terms and abbreviations used in the documentary pipeline codebase. | OTIO, GSA, WAL, LTX, Qwen-TTS, ESDB |
 
+---
+
+## ⚡ Global System Invariants (The "Non-Negotiables")
+
+Every developer or agent modifying the codebase must preserve these 6 fundamental system invariants:
+
+> [!IMPORTANT]
+> **1. Event Log as Sole Source of Truth**  
+> All pipeline state is derived passively by folding over the SQLite `events.db` log. Direct updates to databases or projections from agents are strictly banned.
+
+> [!IMPORTANT]
+> **2. Natural Language Only (No Structured Output from Agents)**  
+> Agents emit only free-form conversational prose. They do NOT know about schemas, JSON, or effect markers. All structured data extraction is performed post-hoc by the semantic parser.
+
+> [!IMPORTANT]
+> **3. Isolated Read Path via GSA**  
+> The Global State Agent (port 8000) is the sole component reading `events.db`. All other agents query the GSA via `GET /` to obtain the current timeline, jobs, and VM status.
+
+> [!IMPORTANT]
+> **4. Concurrency via LoopBoundLock**  
+> Within each agent process, reasoning turns are globally serialized using `LoopBoundLock` (`run_lock_manager`) to prevent concurrent event-store writes or state corruption.
+
+> [!IMPORTANT]
+> **5. No Timeouts in Production Code**  
+> Operations on primary paths wait indefinitely or run to completion. Timeouts are only permitted on lightweight health check probes.
+
+> [!IMPORTANT]
+> **6. Emerging Pipeline Phases**  
+> Pipeline execution phases (SCRIPT, AUDIO_RECONCILE, VIDEO_PRODUCTION, ASSEMBLY, DONE) are descriptive labels emerging from projection states, never hardcoded state machines.
+
+---
+
+*Documentary Pipeline Architecture Suite — V7.1. Last Updated: June 2026.*
