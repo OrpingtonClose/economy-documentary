@@ -91,8 +91,8 @@ class _QueueJobEffect(BaseModel):
     job_id: str
     job_type: Literal["tts", "ltx"]
     scene_num: int = Field(..., ge=1)
-    block_id: str
-    slot_id: str
+    block_id: str = Field(..., description="The block ID (e.g., 's1_b1' or 's2_b3'). Do NOT include the track prefix.")
+    slot_id: str = Field(..., description="The canonical slot address in GSA (e.g., 'A1:1:s1_b1' or 'V1:2:s2_b3').")
     params: dict = Field(default_factory=dict)
 
 
@@ -159,8 +159,8 @@ class _AudioMeasuredEffect(BaseModel):
 
 class _DurationAdjustedEffect(BaseModel):
     kind: Literal["duration_adjusted"] = "duration_adjusted"
-    block_id: str
-    slot_id: str
+    block_id: str = Field(..., description="The canonical slot address (e.g., 'A1:1:s1_b1').")
+    slot_id: str = Field(..., description="The canonical slot address (e.g., 'A1:1:s1_b1').")
     scene_num: int
     voice_role: str
     scripted_sec: float
@@ -227,9 +227,9 @@ class _VMObservedEffect(BaseModel):
 class _MergeIntoOTIOEffect(BaseModel):
     kind: Literal["merge_into_otio"] = "merge_into_otio"
     job_id: str
-    block_id: str
+    block_id: str = Field(..., description="The block ID (e.g., 's1_b1'). Do NOT include the track prefix.")
     scene_num: int
-    slot_id: str
+    slot_id: str = Field(..., description="The canonical slot address (e.g., 'A1:1:s1_b1' or 'V1:1:s1_b1').")
     artifact_uri: str
     track_name: Literal["A1_Narration", "V1_Video"]
     duration_sec: float
@@ -240,9 +240,9 @@ class _MergeIntoOTIOEffect(BaseModel):
 class _DeleteFromOTIOEffect(BaseModel):
     kind: Literal["delete_from_otio"] = "delete_from_otio"
     job_id: str
-    block_id: str
+    block_id: str = Field(..., description="The block ID (e.g., 's1_b1'). Do NOT include the track prefix.")
     scene_num: int
-    slot_id: str
+    slot_id: str = Field(..., description="The canonical slot address (e.g., 'A1:1:s1_b1').")
     track_name: Literal["A1_Narration", "V1_Video", "both"]
     reason: str
 

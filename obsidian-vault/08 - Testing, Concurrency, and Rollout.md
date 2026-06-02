@@ -184,6 +184,18 @@ The testing suite consists of real-world integration tests driven over active ne
    * **Context:** 60 narration blocks with varying recording gains and voice roles.
    * **Workflow:** Assembly Agent processes the final timeline mix using loudness filters.
    * **Validation:** Integrated loudness must measure **-16.0 LUFS +/- 1.0 LUFS** with a maximum true peak of **-1.0 dBTP**.
+9. **End-to-End Multi-Agent Orchestration Happy Path Test:**
+   * **Context:** A raw screenplay dialogue script is loaded in GSA, and all microservices are running.
+   * **Workflow:** The pipeline wakes up all agents sequentially. Scenario Agent splits scenes/blocks, Audio/Video agents queue jobs, Provisioner runs them, and Assembly Agent compiles the output.
+   * **Validation:** Event log records full sequential progress, culminating in a successfully validated `pipeline_complete` effect.
+10. **Scenario-to-Audio Production Pipeline Happy Path Test:**
+    * **Context:** Parsed SD-JSON screenplay loaded. Scenario and Audio agents are active.
+    * **Workflow:** Scenario Agent generates narration script blocks. Audio Agent immediately detects them, queues TTS jobs, and completes reconciliation.
+    * **Validation:** Checks that `reconciliation_complete` is achieved with all voice durations matched.
+11. **Muxing and Timeline Composition Happy Path Test:**
+    * **Context:** GSA event store contains completed rendering jobs. Assembly Agent active.
+    * **Workflow:** Assembly Agent is triggered, runs `ffmpeg` commands, and validates final output.
+    * **Validation:** Asserts output MP4 container and audio codecs match target web specifications.
 
 ---
 

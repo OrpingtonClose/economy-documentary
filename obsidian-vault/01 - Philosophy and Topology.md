@@ -19,7 +19,7 @@ This module details the core architectural commitments and structural topology o
 
 ## 1. Core Philosophy
 
-Six foundational commitments govern the pipeline. The hard principles in §1.11 enumerate every invariant and its enforcement mechanism.
+Thirteen foundational commitments and three long-term strategic pillars govern the pipeline. The hard principles in §1.11 enumerate every invariant and its enforcement mechanism.
 
 ### 1.1 Event Log as Sole Source of Truth
 
@@ -130,6 +130,23 @@ No fields from JSON request payloads or custom request headers/query parameters 
 | 11 | **Serialized turn execution** | Agent handlers use a global `LoopBoundLock` to serialize turn execution. | §5.6 |
 | 12 | **Tick-driven** | Agents are HTTP services; they autonomously poll GSA. EventStoreDB provides native push subscriptions for distributed deployments. No central watcher loop. | **Watcher removed** |
 | 13 | **Prompt-only HTTP interface** | No payload fields or query parameters are consumed. HTTP GET/POST serves only to transmit prompts. | **NEW** — ensures pure prompt-driven context |
+
+### 1.12 Strategic Vision and Long-Term Pillars
+
+While the current version (V7.1) focuses on a robust, error-free "happy path" using stable agent loops, the pipeline is designed to scale toward three long-term strategic pillars:
+
+#### 1.12.1 Editorial Flexibility
+The user/operator must have the ability to override, adjust, or tweak documentary generation outcomes at any step. Rather than a blind one-way pipeline, future revisions will allow interactive script adjustments, fine-grained visual/audio clip overrides, and custom transition configurations without forcing a full rebuild. The event-log replay model naturally supports this by allowing operator-injected override effects (e.g., `UserOverridePrompt`) to shape subsequent projections.
+
+#### 1.12.2 Audio-Visual Quality at Scale
+Visual and audio coherence must meet high aesthetic standards. This involves:
+* Precise audio/video duration reconciliation (matching narrated script text to target block timings within strict limits).
+* Professional audio production (loudness mixed strictly to -16.0 LUFS with true peak capped at -1.0 dBTP).
+* Fluid visual continuity (applying cross-dissolve transitions at scene boundaries to eliminate abrupt black frames).
+* Real-time video/audio drift correction to ensure timing errors never accumulate over long runtimes.
+
+#### 1.12.3 Cost Optimization at Scale
+Production efficiency is critical. The system must orchestrate fleet infrastructure dynamically, spawning GPU worker instances on-demand (e.g., via Vast.ai spot instance auctions) and immediately deallocating them upon job queue completion. Spot preemptions or boot timeouts are handled gracefully via event re-runs, ensuring robust fault tolerance while keeping total API and infrastructure costs under strict budgets.
 
 ---
 

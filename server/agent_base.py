@@ -56,7 +56,7 @@ run_lock_manager = LoopBoundLock()
 @dataclass
 class PipelineDeps(DeepAgentDeps):
     """Dependencies for pipeline agents."""
-    gsa_url: str = "http://localhost:8000"
+    gsa_url: str = "http://127.0.0.1:8000"
     agent_role: str = ""
     max_tokens: int = 128_000
     compaction_model: OpenAIChatModel = field(default_factory=lambda: get_agent_model())
@@ -393,6 +393,7 @@ You are the Audio Agent. You manage the audio production pipeline, trigger TTS, 
 - TTS budget: $2.00 limit. Max 5 attempts per segment before escalation.
 - Pacing Tolerance: delta <= max(scripted_sec * 0.15, 0.25).
 - Do NOT attempt to allocate, provision, or deallocate VMs. You are ONLY responsible for queueing jobs ('queue_job'), approving/reconciling audio, and adjusting block target durations. You do NOT manage infrastructure.
+- CRITICAL: You are ONLY responsible for the audio narration track (slots with the "A1:" prefix). Ignore all video slots (with the "V1:" prefix). Do NOT wait for a worker VM to be provisioned before queueing jobs. If there are any scripted audio slots (prefix "A1:") that lack audio, queue a TTS job for them immediately. The Provisioner agent is responsible for detecting your queued jobs and provisioning VMs to execute them.
 
 === SKILL CATALOG ===
 - server/skills/audio-production/SKILL.md — Qwen3-TTS capabilities, text chunking, voice selection, preprocessing, pronunciation hints
@@ -403,7 +404,7 @@ Read this skill: bash_command("cat server/skills/audio-production/SKILL.md")
 
 === WORKFLOW ===
 1. Query GSA state to check script segments and jobs.
-2. For any scripted segments that lack audio: request audio generation (TTS) using voice models.
+2. For any scripted audio segments (prefix "A1:") that lack audio: request audio generation (TTS) using voice models.
 3. For any measured audio segments: compare the measured duration against the scripted target. Approve if within tolerance; request a retry with adjusted parameters (or escalate if max attempts reached) if outside tolerance.
 4. Once all script blocks have been successfully reconciled and their durations adjusted (such that no dirty blocks remain, and all are clean/measured), emit a reconciliation complete effect.
 
@@ -426,6 +427,7 @@ You are the Video Agent. You generate visual clips using LTX-2.3.
 - Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
 - GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
 - Measured audio duration is LAW — every video must match its audio exactly.
+- CRITICAL: You are ONLY responsible for the video track (slots with the "V1:" prefix). Ignore all audio slots (with the "A1:" prefix). Do NOT wait for a worker VM to be provisioned before queueing jobs. If there are any approved narration slots (prefix "V1:") that lack video, queue a LTX job for them immediately. The Provisioner agent is responsible for detecting your queued jobs and provisioning VMs to execute them.
 
 === SKILL CATALOG ===
 - server/skills/video-generation/SKILL.md — LTX prompt engineering, visual coherence, audio sync verification
@@ -436,7 +438,7 @@ Read this skill: bash_command("cat server/skills/video-generation/SKILL.md")
 
 === WORKFLOW ===
 1. Query GSA state.
-2. For any approved narration audio segments that lack video: request video clip generation (LTX) matching the exact audio duration.
+2. For any approved narration audio segments (prefix "V1:") that lack video: request video clip generation (LTX) matching the exact audio duration.
 3. For any completed video clips: review their quality/coherence, and either approve and merge them into the timeline, or reject and request a retry.
 
 === ACTION INFORMATION REQUIREMENTS ===
@@ -710,7 +712,7 @@ def make_agent_app(role: str) -> FastAPI:
     @app.get("/", response_model=AgentHealthResponse)
     async def health():
         try:
-            gsa_url = "http://localhost:8000/"
+            gsa_url = "http://127.0.0.1:8000/"
             async with httpx.AsyncClient() as client:
                 resp = await client.get(gsa_url)
                 if resp.status_code == 200:
@@ -760,7 +762,7 @@ def make_agent_app(role: str) -> FastAPI:
                     otio_hash = "initial_hash"
                     try:
                         async with httpx.AsyncClient() as client:
-                            resp = await client.get("http://localhost:8000/")
+                            resp = await client.get("http://127.0.0.1:8000/")
                             if resp.status_code == 200:
                                 slots = resp.json().get("otio", {}).get("slots", {})
                                 sorted_slots = sorted(slots.items())
@@ -771,7 +773,7 @@ def make_agent_app(role: str) -> FastAPI:
 
                 await execute_agent_turn(
                     role=role,
-                    gsa_url="http://localhost:8000/",
+                    gsa_url="http://127.0.0.1:8000/",
                     notification_type="human" if is_human else "instruction",
                     context={"instruction": inst_text} if is_human else None,
                 )
@@ -829,7 +831,7 @@ def make_agent_app(role: str) -> FastAPI:
                             await asyncio.sleep(poll_interval)
                             continue
 
-                        gsa_url = "http://localhost:8000/"
+                        gsa_url = "http://127.0.0.1:8000/"
                         try:
                             async with httpx.AsyncClient() as client:
                                 resp = await client.get(gsa_url)
