@@ -616,6 +616,66 @@ class EventStore:
 
 ---
 
+## 3. Alternative Coordinate-Based Timeline Schema (Timespan Keys & Stable Anchors)
+
+For deployments requiring explicit range-conformance and strict duration checking directly in the database layer, the timeline can be modeled using track-specific coordinate ranges as natural keys, bound to stable screenplay blueprint identifiers.
+
+### 3.1 Relational Architecture
+
+The architecture separates the **logical screenplay blueprint** from the **physical media tracks**:
+
+* **Scenario (Logical Anchor):** Persisted using an immutable surrogate key (e.g. `block_id` or `scenario_id` UUID). It contains the script narration text and acts as the relational foreign key anchor.
+* **Media Tracks (Physical Occurrence):** Persisted using track-level coordinate ranges as natural keys (e.g. `[start_ms, end_ms]`). They store the actual generated media file URIs and durations, referencing the scenario table via a foreign key.
+
+```sql
+-- Scenario Blueprint Table (Stable Surrogate PK)
+CREATE TABLE scenario_blocks (
+    block_id VARCHAR(64) PRIMARY KEY,
+    scene_num INTEGER NOT NULL CHECK (scene_num >= 1),
+    speaker VARCHAR(50) NOT NULL,
+    narration_text TEXT NOT NULL,
+    target_duration_sec REAL NOT NULL
+);
+
+-- Media Track Table (Timespan Natural PK + Exclusion Constraint)
+CREATE TABLE timeline_clips (
+    track_name VARCHAR(50) NOT NULL,
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL CHECK (end_ms > start_ms),
+    scenario_block_id VARCHAR(64) NOT NULL REFERENCES scenario_blocks(block_id),
+    version_hash VARCHAR(64) NOT NULL,
+    artifact_uri TEXT,
+    PRIMARY KEY (track_name, start_ms),
+    
+    -- Conceptual Range Exclusion (prevent overlapping clips on same track)
+    -- In PostgreSQL, this uses: EXCLUDE USING gist (track_name WITH =, numrange(start_ms, end_ms) WITH &&)
+    -- In SQLite, this is enforced via CHECK triggers.
+    CONSTRAINT chk_positive_duration CHECK (end_ms > start_ms)
+);
+```
+
+### 3.2 High-Precision sqlean-time Extension
+
+To enforce microsecond or nanosecond interval math directly in SQLite without float-precision rounding issues, the SQL database utilizes the `sqlean-time` extension. This adds proper duration arithmetic and point-in-time checks natively in queries:
+
+```sql
+-- Load the sqlean-time extension in sqlite connection
+-- SELECT load_extension('time');
+
+-- Calculate precise duration between two high-precision timeline boundaries
+SELECT time_sub(
+    time_date(2026, 6, 2, 12, 0, 15, 230000000), -- 12:00:15.23
+    time_date(2026, 6, 2, 12, 0, 12, 0)         -- 12:00:12.0
+);
+-- Returns: 3230000000 (nanoseconds = 3.23s)
+
+-- Enforce exact boundary drift checks in a CHECK trigger using nanosecond constants:
+-- 300ms drift tolerance: 300 * dur_ms()
+SELECT time_add(time_now(), 300 * dur_ms());
+```
+
+---
+
 ## A. Appendix: EventStoreDB Migration Path
 
 For large scale distributed deployments, the SQLite backend can be seamlessly swapped with **EventStoreDB** using client-side streams.

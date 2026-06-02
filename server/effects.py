@@ -284,6 +284,7 @@ class MergeIntoOTIO(Effect):
     duration_sec: float = Field(..., gt=0.0)
     transition_type: Literal["cut", "dissolve", "none"] = "cut"
     transition_duration_sec: float = Field(default=0.0, ge=0.0)
+    start_sec: float = Field(default=0.0, description="Optional start time coordinate for coordinate-based schema")
 
 
 class DeleteFromOTIO(Effect):

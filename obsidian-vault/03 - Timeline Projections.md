@@ -538,6 +538,99 @@ class BudgetProjection(Projection):
 
 ---
 
+### 4.5 CoordinateTimeline Projection
+
+The `CoordinateTimeline` read model represents a grid-centric/timespan timeline. Instead of keying slots on logical IDs, it organizes clips by their physical track intervals, keeping a relational pointer to Scenario anchors.
+
+```python
+class IntervalSpan(BaseModel):
+    start_sec: float
+    end_sec: float
+
+    def overlaps_with(self, other: IntervalSpan) -> bool:
+        # Check if ranges overlap (standard interval inequality)
+        return not (self.end_sec <= other.start_sec or self.start_sec >= other.end_sec)
+
+class TimelineClip(BaseModel):
+    track_name: str
+    span: IntervalSpan
+    scenario_id: str
+    version_hash: str
+    artifact_uri: Optional[str] = None
+
+class CoordinateTimeline(Projection):
+    """Rebuilds a coordinate-based timeline of clips, enforcing overlap constraints."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        # track_name -> list of clips
+        self.clips: dict[str, list[TimelineClip]] = defaultdict(list)
+        # scenario_id -> target_duration
+        self.scenario_durations: dict[str, float] = {}
+        # Ordered list of scenario IDs representing script order
+        self.scenario_order: list[str] = []
+
+    def apply(self, event: Effect) -> None:
+        if event.kind == "update_script":
+            self._apply_script(event)
+        elif event.kind == "merge_into_otio":
+            self._apply_merge(event)
+        elif event.kind == "duration_adjusted":
+            self._apply_duration_adjust(event)
+
+    def _apply_script(self, event: UpdateScript) -> None:
+        # Re-build scenario logical order and base estimated coordinates
+        self.scenario_durations = {b.block_id: b.duration_sec for b in event.blocks}
+        self.scenario_order = [b.block_id for b in event.blocks]
+        
+        # Estimate version zero timespans on track A1_Narration
+        self._recalculate_offsets()
+
+    def _apply_merge(self, event: MergeIntoOTIO) -> None:
+        # Identify by timespan on track
+        new_span = IntervalSpan(start_sec=event.start_sec, end_sec=event.start_sec + event.duration_sec)
+        new_clip = TimelineClip(
+            track_name=event.track_name,
+            span=new_span,
+            scenario_id=event.block_id, # Foreign key link to Scenario
+            version_hash=event.job_id,
+            artifact_uri=event.artifact_uri
+        )
+        
+        # EXCLUSION CHECK (Strict Collision Prevention)
+        for clip in self.clips[event.track_name]:
+            if clip.scenario_id != new_clip.scenario_id and clip.span.overlaps_with(new_clip.span):
+                raise ValueError(
+                    f"Collision on {event.track_name}: "
+                    f"New clip {new_clip.scenario_id} at {new_span} "
+                    f"overlaps with {clip.scenario_id} at {clip.span}"
+                )
+        
+        # Update or insert
+        self._upsert_clip(new_clip)
+
+    def _apply_duration_adjust(self, event: DurationAdjusted) -> None:
+        # Modify duration of a specific scenario anchor
+        self.scenario_durations[event.block_id] = event.measured_sec
+        # Cascade recalculate all downstream offsets (Transactional Shift)
+        self._recalculate_offsets()
+
+    def _recalculate_offsets(self) -> None:
+        cursor = 0.0
+        for block_id in self.scenario_order:
+            dur = self.scenario_durations.get(block_id, 3.0)
+            span = IntervalSpan(start_sec=cursor, end_sec=cursor + dur)
+            
+            # Shift the active clip coordinates in memory
+            for track_clips in self.clips.values():
+                for clip in track_clips:
+                    if clip.scenario_id == block_id:
+                        clip.span = span
+            cursor += dur
+```
+
+---
+
 ## 5. Serialized Response Schemas (GSA)
 
 Projections are served as JSON-serialized Pydantic models by the GSA.
