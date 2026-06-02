@@ -196,6 +196,14 @@ The testing suite consists of real-world integration tests driven over active ne
     * **Context:** GSA event store contains completed rendering jobs. Assembly Agent active.
     * **Workflow:** Assembly Agent is triggered, runs `ffmpeg` commands, and validates final output.
     * **Validation:** Asserts output MP4 container and audio codecs match target web specifications.
+12. **Integrated Dynamic Offset and Shift Cascade Test:**
+    * **Context:** Multiple scene screenplay with narrative audio and video clips fully rendered and aligned.
+    * **Workflow:** A duration adjustment (`DurationAdjusted`) is triggered on an early block (e.g. block 1 duration increases by 1.5s). GSA catches this event, and the `CoordinateTimeline` projection dynamically recalculates the start/end coordinates of all subsequent blocks on both narration and visual tracks. The Video Agent is woken up to render a new visual clip matching the new duration target, and the Assembly Agent dynamically compiles and renders the shifted timeline.
+    * **Validation:** Verifies that the final compiled MP4 duration has shifted exactly by +1.5s and that all video and audio tracks are perfectly synchronized without audio gaps or visual black frames.
+13. **Parallel Multitrack Overlap Prevention and Muxing Test:**
+    * **Context:** Multi-track screenplay (e.g., narration `A1`, background music `A2`, video `V1`, overlay text `V2`).
+    * **Workflow:** GSA processes timeline updates, validating that clips on different tracks *are* allowed to overlap in time, but clips on the *same* track trigger overlap exclusion errors if their timespans collide.
+    * **Validation:** Asserts that track-isolated collision checks prevent writing overlapping narration, while allowing concurrent background music and visuals to merge seamlessly during FFmpeg muxing into the final MP4.
 
 ---
 
