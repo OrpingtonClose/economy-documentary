@@ -86,6 +86,8 @@ def build_global_state() -> GlobalStateResponse:
             measured_sec=s["measured_sec"],
             status=s["status"],
             artifact_uri=s["artifact_uri"],
+            visual_notes=s.get("visual_notes", ""),
+            visual_concepts=s.get("visual_concepts", ""),
         )
     otio_res = OTIOResponse(
         scenes=len(scenes),

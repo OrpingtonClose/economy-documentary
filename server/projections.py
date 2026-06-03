@@ -16,10 +16,20 @@ from effects import (
     DeleteScene,
     DeleteFromOTIO,
     QueueJob,
+    QueueAudioJob,
+    QueueVideoJob,
     JobStarted,
+    AudioJobStarted,
+    VideoJobStarted,
     JobCompleted,
+    AudioJobCompleted,
+    VideoJobCompleted,
     JobFailed,
+    AudioJobFailed,
+    VideoJobFailed,
     JobRequeued,
+    AudioJobRequeued,
+    VideoJobRequeued,
     VMAllocated,
     VMDeallocated,
     VMObserved,
@@ -27,6 +37,40 @@ from effects import (
     KIND_TO_MODEL,
 )
 from event_store import EventStore
+
+
+def parse_duration(val: Any) -> float:
+    """Parse standard durations (e.g., floats/integers) and time formats like "MM:SS" or "HH:MM:SS" to float.
+
+    Examples:
+        "2:30" -> 150.0
+        "1:02:30" -> 3750.0
+        15.5 -> 15.5
+        "15.5" -> 15.5
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        val = val.strip()
+        if ":" in val:
+            parts = val.split(":")
+            try:
+                if len(parts) == 2:
+                    m = int(parts[0])
+                    s = float(parts[1])
+                    return m * 60.0 + s
+                elif len(parts) == 3:
+                    h = int(parts[0])
+                    m = int(parts[1])
+                    s = float(parts[2])
+                    return h * 3600.0 + m * 60.0 + s
+            except ValueError:
+                pass
+        try:
+            return float(val)
+        except ValueError:
+            raise ValueError(f"Could not parse duration string: {val}")
+    raise ValueError(f"Invalid duration type: {type(val)}")
 
 
 class Projection(ABC):
@@ -111,12 +155,26 @@ class Timeline(Projection):
                 slot_addr = f"{track_prefix}:{block.scene_num}:{block.block_id}"
                 new_slot_addrs.add(slot_addr)
 
+                visual_notes = getattr(block, "visual_notes", "") or ""
+                visual_concepts = getattr(block, "visual_concepts", "") or ""
+                if not visual_concepts:
+                    import sys
+                    print(
+                        f"WARNING: [Visual Concepts Derivation Fallback] "
+                        f"visual_concepts is missing/empty for slot {slot_addr}. "
+                        f"Deriving dynamically from scene {block.scene_num} + visual_notes: '{visual_notes}'",
+                        file=sys.stderr
+                    )
+                    visual_concepts = f"Documentary scene {block.scene_num}: {visual_notes}"
+
                 existing = self.slots.get(slot_addr)
                 if existing is not None:
                     unchanged = (
                         existing.get("text") == block.text
                         and existing.get("speaker") == block.speaker
                         and abs(existing.get("scripted_sec", 0.0) - block.duration_sec) < 0.001
+                        and existing.get("visual_notes") == visual_notes
+                        and existing.get("visual_concepts") == visual_concepts
                     )
                     if unchanged:
                         continue
@@ -126,6 +184,8 @@ class Timeline(Projection):
                     existing["measured_sec"] = None
                     existing["status"] = "scripted"
                     existing["artifact_uri"] = None
+                    existing["visual_notes"] = visual_notes
+                    existing["visual_concepts"] = visual_concepts
                     self._update_clip_duration(slot_addr, block.duration_sec)
                 else:
                     rate = 24
@@ -148,6 +208,8 @@ class Timeline(Projection):
                         "measured_sec": None,
                         "status": "scripted",
                         "artifact_uri": None,
+                        "visual_notes": visual_notes,
+                        "visual_concepts": visual_concepts,
                     }
 
         updated_scenes = {block.scene_num for block in event.blocks}
@@ -391,15 +453,15 @@ class Jobs(Projection):
         self.production_failures: list[dict[str, Any]] = []
 
     def apply(self, event: Effect) -> None:
-        if event.kind == "queue_job":
+        if event.kind in ("queue_job", "queue_audio_job", "queue_video_job"):
             self._on_queue(cast(QueueJob, event))
-        elif event.kind == "job_started":
+        elif event.kind in ("job_started", "audio_job_started", "video_job_started"):
             self._on_start(cast(JobStarted, event))
-        elif event.kind == "job_completed":
+        elif event.kind in ("job_completed", "audio_job_completed", "video_job_completed"):
             self._on_complete(cast(JobCompleted, event))
-        elif event.kind == "job_failed":
+        elif event.kind in ("job_failed", "audio_job_failed", "video_job_failed"):
             self._on_fail(cast(JobFailed, event))
-        elif event.kind == "job_requeued":
+        elif event.kind in ("job_requeued", "audio_job_requeued", "video_job_requeued"):
             self._on_requeue(cast(JobRequeued, event))
         elif event.kind == "reconciliation_complete":
             self.reconciliation_complete = True
@@ -432,8 +494,11 @@ class Jobs(Projection):
             job.created_at = getattr(event, "timestamp", 0.0)
             self.jobs[job_id] = job
             block_id = getattr(event, "slot_id", None)
-            if block_id and event.job_type == "tts":
-                self.block_attempts[block_id] += 1
+            if block_id:
+                self.dirty_blocks.add(block_id)
+                self.clean_blocks.discard(block_id)
+                if event.job_type == "tts":
+                    self.block_attempts[block_id] += 1
 
     def _on_start(self, event: JobStarted) -> None:
         job = self.jobs.get(event.job_id)
@@ -728,6 +793,8 @@ class OTIOSlotState(BaseModel):
     measured_sec: float | None = None
     status: Literal["scripted", "measured", "delivered"] = "scripted"
     artifact_uri: str | None = None
+    visual_notes: str = ""
+    visual_concepts: str = ""
 
 
 class OTIOResponse(BaseModel):

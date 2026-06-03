@@ -204,7 +204,7 @@ Every agent exposes exactly `GET /` (health) and `POST /` (primary endpoint) on 
 
 ### 2.2.2 HTTP Contract Specification
 
-Every HTTP surface in the pipeline uses **JSON** (`Content-Type: application/json`). There are no other content types, no binary protocols, and no streaming endpoints. Every request and response is a single JSON object.
+Every HTTP surface in the pipeline uses **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats. All queries and instructions are processed as plain text.
 
 #### POST / — Agent Wake / Instruction
 
@@ -308,9 +308,9 @@ class AgentResponse(BaseModel):
 #### GET / — Health / State Read
 
 **Endpoint:** `GET /` on every agent port  
-**Content-Type:** `application/json`  
+**Content-Type:** `text/plain`  
 **Query params:** `?run_id={run_id}` (optional on agents, required on GSA)  
-**Response:** Varies by component
+**Response:** Varies by component. Endpoints return a conversational plain text description of agent status or GSA state.
 
 **Agent GET / (ports 8001–8005, 8081):**
 
@@ -453,7 +453,7 @@ There are **no exceptions**. The **Provisioner** (port 8081) reads state from th
 | 1 | **Only GSA reads ESDB** | The Global State Agent (port 8000) is the sole component that reads EventStoreDB. No agent, no Provisioner, no worker reads it directly. |
 | 2 | **No agent writes ESDB** | Agents reason and talk in natural language. The handler appends extracted effects to EventStoreDB after the parser processes agent text. Agents are barely aware of this process. |
 | 3 | **All agents read GSA frequently** | Every agent (including Provisioner) queries the GSA via `GET /` to receive projections. Not necessarily on every turn, but frequently enough to act on current state. |
-| 4 | **Only `GET /` and `POST /` everywhere** | Every HTTP surface exposes exactly these two endpoints. No `/health`, `/status`, `/data`, or structured sub-endpoints. |
+| 4 | **Only `GET /`, `POST /`, and `PUT /`** | Every HTTP surface exposes only these endpoints. No JSON, XML, or other structured formats are supported or returned from the endpoints. |
 | 5 | **Only agents have LLM** | Every LLM in the pipeline lives inside an agent (Scenario, Audio, Video, Assembly, Provisioner, Maintainer). The only non-agent LLM usage is VM Worker quality-check (`deepseek-v4-flash` for pass/fail classification). |
 | 6 | **Provisioner is an agent** | The Provisioner (port 8081) is the most intelligence-requiring component. It uses bash, research, and memory tools. Its natural language output is parsed for effects like any agent. It is not deterministic code. |
 

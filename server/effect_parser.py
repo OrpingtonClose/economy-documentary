@@ -1,3 +1,4 @@
+# pyright: reportIncompatibleVariableOverride=false
 from __future__ import annotations
 
 import time
@@ -14,11 +15,23 @@ from effects import (
     DeleteScene,
     ReorderScenes,
     QueueJob,
+    QueueAudioJob,
+    QueueVideoJob,
     JobStarted,
+    AudioJobStarted,
+    VideoJobStarted,
     JobCompleted,
+    AudioJobCompleted,
+    VideoJobCompleted,
     JobFailed,
+    AudioJobFailed,
+    VideoJobFailed,
     JobRequeued,
+    AudioJobRequeued,
+    VideoJobRequeued,
     JobApproved,
+    AudioJobApproved,
+    VideoJobApproved,
     AudioGenerated,
     AudioMeasured,
     DurationAdjusted,
@@ -47,6 +60,7 @@ from effects import (
     ReconciliationFailureDetail,
     SuggestedFix,
     KIND_TO_MODEL,
+    parse_duration,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,33 +101,64 @@ class _ReorderScenesEffect(BaseModel):
 
 
 class _QueueJobEffect(BaseModel):
-    kind: Literal["queue_job"] = "queue_job"
+    kind: str = "queue_job"
     job_id: str
-    job_type: Literal["tts", "ltx"]
+    job_type: str
     scene_num: int = Field(..., ge=1)
     block_id: str = Field(..., description="The block ID (e.g., 's1_b1' or 's2_b3'). Do NOT include the track prefix.")
     slot_id: str = Field(..., description="The canonical slot address in GSA (e.g., 'A1:1:s1_b1' or 'V1:2:s2_b3').")
     params: dict = Field(default_factory=dict)
 
 
+class _QueueAudioJobEffect(_QueueJobEffect):
+    kind: Literal["queue_audio_job"] = "queue_audio_job"
+    job_type: Literal["tts"] = "tts"
+
+
+class _QueueVideoJobEffect(_QueueJobEffect):
+    kind: Literal["queue_video_job"] = "queue_video_job"
+    job_type: Literal["ltx"] = "ltx"
+
+
 class _JobStartedEffect(BaseModel):
-    kind: Literal["job_started"] = "job_started"
+    kind: str = "job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
 
 
+class _AudioJobStartedEffect(_JobStartedEffect):
+    kind: Literal["audio_job_started"] = "audio_job_started"
+
+
+class _VideoJobStartedEffect(_JobStartedEffect):
+    kind: Literal["video_job_started"] = "video_job_started"
+
+
 class _JobCompletedEffect(BaseModel):
-    kind: Literal["job_completed"] = "job_completed"
+    kind: str = "job_completed"
     job_id: str
     artifact_uri: str
     duration_sec: float = Field(..., ge=0.0)
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     vm_instance_id: str
     measurements: list[float] = Field(default_factory=list)
 
 
+class _AudioJobCompletedEffect(_JobCompletedEffect):
+    kind: Literal["audio_job_completed"] = "audio_job_completed"
+
+
+class _VideoJobCompletedEffect(_JobCompletedEffect):
+    kind: Literal["video_job_completed"] = "video_job_completed"
+
+
 class _JobFailedEffect(BaseModel):
-    kind: Literal["job_failed"] = "job_failed"
+    kind: str = "job_failed"
     job_id: str
     error_message: str
     failure_category: Literal["oom", "bad_prompt", "model_load_error", "disk_full", "network", "cuda_error", "unknown"]
@@ -122,19 +167,43 @@ class _JobFailedEffect(BaseModel):
     retry_count: int = 0
 
 
+class _AudioJobFailedEffect(_JobFailedEffect):
+    kind: Literal["audio_job_failed"] = "audio_job_failed"
+
+
+class _VideoJobFailedEffect(_JobFailedEffect):
+    kind: Literal["video_job_failed"] = "video_job_failed"
+
+
 class _JobRequeuedEffect(BaseModel):
-    kind: Literal["job_requeued"] = "job_requeued"
+    kind: str = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1)
     new_params: dict | None = None
 
 
+class _AudioJobRequeuedEffect(_JobRequeuedEffect):
+    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
+
+
+class _VideoJobRequeuedEffect(_JobRequeuedEffect):
+    kind: Literal["video_job_requeued"] = "video_job_requeued"
+
+
 class _JobApprovedEffect(BaseModel):
-    kind: Literal["job_approved"] = "job_approved"
+    kind: str = "job_approved"
     job_id: str
     artifact_uri: str
     quality_notes: str = ""
     reviewed_by: str = "agent"
+
+
+class _AudioJobApprovedEffect(_JobApprovedEffect):
+    kind: Literal["audio_job_approved"] = "audio_job_approved"
+
+
+class _VideoJobApprovedEffect(_JobApprovedEffect):
+    kind: Literal["video_job_approved"] = "video_job_approved"
 
 
 class _AudioGeneratedEffect(BaseModel):
@@ -153,6 +222,11 @@ class _AudioMeasuredEffect(BaseModel):
     scene_num: int
     voice_role: str
     measured_sec: float
+
+    @field_validator("measured_sec", mode="before")
+    @classmethod
+    def _parse_measured_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     measurements: list[float] = Field(default_factory=list)
     whisperx_confidence: float = 0.0
 
@@ -165,6 +239,11 @@ class _DurationAdjustedEffect(BaseModel):
     voice_role: str
     scripted_sec: float
     measured_sec: float
+
+    @field_validator("scripted_sec", "measured_sec", mode="before")
+    @classmethod
+    def _parse_secs(cls, val: Any) -> float:
+        return parse_duration(val)
 
 
 class _ReconciliationFailedEffect(BaseModel):
@@ -236,6 +315,11 @@ class _MergeIntoOTIOEffect(BaseModel):
     transition_type: Literal["cut", "dissolve", "none"] = "cut"
     transition_duration_sec: float = 0.0
 
+    @field_validator("duration_sec", "transition_duration_sec", mode="before")
+    @classmethod
+    def _parse_secs(cls, val: Any) -> float:
+        return parse_duration(val)
+
 
 class _DeleteFromOTIOEffect(BaseModel):
     kind: Literal["delete_from_otio"] = "delete_from_otio"
@@ -260,6 +344,11 @@ class _PipelineCompleteEffect(BaseModel):
     kind: Literal["pipeline_complete"] = "pipeline_complete"
     output_path: str
     duration_sec: float
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     total_cost_usd: float = 0.0
     validation_passed: bool = True
 
@@ -348,6 +437,11 @@ class _VideoMeasuredEffect(BaseModel):
     block_id: str
     measured_sec: float
 
+    @field_validator("measured_sec", mode="before")
+    @classmethod
+    def _parse_measured_sec(cls, val: Any) -> float:
+        return parse_duration(val)
+
 
 _EffectUnion = Annotated[
     Union[
@@ -356,11 +450,23 @@ _EffectUnion = Annotated[
         _DeleteSceneEffect,
         _ReorderScenesEffect,
         _QueueJobEffect,
+        _QueueAudioJobEffect,
+        _QueueVideoJobEffect,
         _JobStartedEffect,
+        _AudioJobStartedEffect,
+        _VideoJobStartedEffect,
         _JobCompletedEffect,
+        _AudioJobCompletedEffect,
+        _VideoJobCompletedEffect,
         _JobFailedEffect,
+        _AudioJobFailedEffect,
+        _VideoJobFailedEffect,
         _JobRequeuedEffect,
+        _AudioJobRequeuedEffect,
+        _VideoJobRequeuedEffect,
         _JobApprovedEffect,
+        _AudioJobApprovedEffect,
+        _VideoJobApprovedEffect,
         _AudioGeneratedEffect,
         _AudioMeasuredEffect,
         _DurationAdjustedEffect,
@@ -399,6 +505,19 @@ class _SingleEffect(BaseModel):
     )
     confidence: int = Field(ge=0, le=10, description="Confidence 0=empty, 10=perfect")
 
+    @model_validator(mode="before")
+    @classmethod
+    def clean_fields(cls, data: Any) -> Any:
+        def clean_val(val: Any) -> Any:
+            if isinstance(val, str):
+                return val.strip().replace("*", "").replace("`", "")
+            elif isinstance(val, dict):
+                return {k: clean_val(v) for k, v in val.items()}
+            elif isinstance(val, list):
+                return [clean_val(x) for x in val]
+            return val
+        return clean_val(data)
+
 
 class _MultiEffect(BaseModel):
     """Batch/human parser schema: multiple effects allowed."""
@@ -409,6 +528,19 @@ class _MultiEffect(BaseModel):
         description="List of extracted effects. Empty if no actionable data. NEVER hallucinate."
     )
     confidence: int = Field(ge=0, le=10, description="Confidence 0=empty, 10=perfect")
+
+    @model_validator(mode="before")
+    @classmethod
+    def clean_fields(cls, data: Any) -> Any:
+        def clean_val(val: Any) -> Any:
+            if isinstance(val, str):
+                return val.strip().replace("*", "").replace("`", "")
+            elif isinstance(val, dict):
+                return {k: clean_val(v) for k, v in val.items()}
+            elif isinstance(val, list):
+                return [clean_val(x) for x in val]
+            return val
+        return clean_val(data)
 
 
 # ===========================================================================
@@ -455,13 +587,56 @@ def _ds_async_client() -> instructor.AsyncInstructor:
 
 # Permitted kinds mapping per role
 ROLE_PERMITTED_KINDS = {
-    "scenario": ["update_script", "delete_scene", "reorder_scenes", "noop", "clarification_request"],
-    "audio": ["queue_job", "job_approved", "job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "noop", "clarification_request"],
-    "video": ["queue_job", "job_approved", "job_requeued", "merge_into_otio", "noop", "clarification_request"],
-    "assembly": ["pipeline_complete", "production_failed", "noop", "clarification_request"],
-    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "job_failed", "job_started", "noop", "clarification_request"],
-    "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "noop", "clarification_request"],
+    "scenario": ["update_script", "delete_scene", "reorder_scenes", "clarification_request"],
+    "audio": ["queue_audio_job", "audio_job_approved", "audio_job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request"],
+    "video": ["queue_video_job", "video_job_approved", "video_job_requeued", "merge_into_otio", "clarification_request"],
+    "assembly": ["pipeline_complete", "production_failed", "clarification_request"],
+    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "audio_job_completed", "video_job_completed", "audio_job_failed", "video_job_failed", "audio_job_started", "video_job_started", "clarification_request"],
+    "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "clarification_request"],
 }
+
+
+async def validate_state_invariants(agent_id: str, effect: Any) -> list[Effect]:
+    try:
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://127.0.0.1:8000/", timeout=1.5)
+            if resp.status_code == 200:
+                gsa_state = resp.json()
+            else:
+                gsa_state = None
+    except Exception:
+        gsa_state = None
+
+    if not gsa_state:
+        return [effect]
+
+    if effect.kind in ("job_approved", "audio_job_approved", "video_job_approved"):
+        jobs = gsa_state.get("jobs", {}).get("jobs", {})
+        job = jobs.get(effect.job_id)
+        if not job:
+            return [
+                ClarificationRequest(
+                    agent=agent_id,
+                    target_agent="human",
+                    failure_reason=f"Job {effect.job_id} not found in GSA queue",
+                    question=f"Agent attempted to approve job {effect.job_id}, but it does not exist in GSA."
+                )
+            ]
+    elif effect.kind == "merge_into_otio":
+        slots = gsa_state.get("otio", {}).get("slots", {})
+        slot = slots.get(effect.slot_id)
+        if not slot:
+            return [
+                ClarificationRequest(
+                    agent=agent_id,
+                    target_agent="human",
+                    failure_reason=f"Slot {effect.slot_id} not found in GSA timeline",
+                    question=f"Agent attempted to merge clip into slot {effect.slot_id}, but it is missing from timeline."
+                )
+            ]
+
+    return [effect]
 
 
 async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
@@ -474,6 +649,9 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     sys_prompt = _SYSTEM_PROMPT.format(permitted_kinds=", ".join(permitted))
 
     client = _ds_async_client()
+    result = None
+    parsed = None
+    exc = None
     try:
         result = await client.chat.completions.create(
             model="deepseek-chat",
@@ -485,9 +663,51 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
             temperature=0.0,
             max_retries=3,
         )
-    except Exception as exc:
+    except Exception as e:
+        exc = e
         logger.error(f"Parser could not extract: {exc}")
-        return [NoOp(agent=agent_id, reason=f"Parser could not extract: {exc}")]
+
+    # Audit Logging
+    try:
+        import os
+        os.makedirs("/tmp/documentary-pipeline", exist_ok=True)
+        with open("/tmp/documentary-pipeline/parser_runs.log", "a", encoding="utf-8") as f:
+            f.write(f"\n\n--- PARSER RUN: {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            f.write(f"AGENT: {agent_id}\n")
+            f.write(f"INPUT PROSE:\n{text}\n")
+            if result:
+                f.write(f"PARSED EVENT: {result.effect.kind}\n")
+                f.write(f"CONFIDENCE: {result.confidence}\n")
+            if exc:
+                f.write(f"ERROR: {exc}\n")
+    except Exception:
+        pass
+
+    if exc or result is None:
+        err_msg = str(exc) if exc else "No result returned from extraction"
+        return [
+            ClarificationRequest(
+                agent=agent_id,
+                target_agent="human",
+                parser_category=agent_id,
+                raw_text=text,
+                failure_reason=err_msg,
+                question=f"An error occurred during semantic extraction: {err_msg}. Raw agent text: '{text}'"
+            )
+        ]
+
+    # Tier 2 check: Low confidence
+    if result.confidence < 7:
+        return [
+            ClarificationRequest(
+                agent=agent_id,
+                target_agent="human",
+                parser_category=agent_id,
+                raw_text=text,
+                failure_reason=f"Confidence score {result.confidence} is below threshold",
+                question=f"The parser could not extract a highly confident event from the text. Agent output: '{text}'"
+            )
+        ]
 
     parsed = result.effect
     if parsed.kind not in permitted:
@@ -504,9 +724,20 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
 
     try:
         effect = model_class.model_validate(data)
-        return [effect]
-    except Exception as exc:
-        return [NoOp(agent=agent_id, reason=f"Model validation failed: {exc}")]
+        # Tier 3 validation: State Invariants
+        return await validate_state_invariants(agent_id, effect)
+    except Exception as e:
+        exc = e
+        return [
+            ClarificationRequest(
+                agent=agent_id,
+                target_agent="human",
+                parser_category=agent_id,
+                raw_text=text,
+                failure_reason=f"Model validation failed: {exc}",
+                question=f"The parsed event model validation failed: {exc}. Raw agent text: '{text}'"
+            )
+        ]
 
 
 async def parse_human_text_multi(text: str) -> list[Effect]:

@@ -1,0 +1,5 @@
+{
+  "venvPath": "/Users/orpington/Documents/economy-documentary-work",
+  "venv": ".venv",
+  "extraPaths": ["server", "pipeline", "scripts"]
+}

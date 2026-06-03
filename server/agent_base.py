@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 # Base path for DB files
 LOG_DIR = "/tmp/documentary-pipeline"
 event_store = EventStore(log_dir=LOG_DIR)
+latest_monologues = {}
+active_tasks: dict[str, asyncio.Task[Any]] = {}
 
 class LoopBoundLock:
     def __init__(self):
@@ -278,6 +280,7 @@ def format_memory(effects: list[Effect]) -> str:
 async def bash_command(ctx, command: str) -> str:
     """Run a bash command locally with a fallback host resolution for gsa."""
     import socket
+    import signal
     if "gsa:8000" in command:
         try:
             socket.gethostbyname("gsa")
@@ -289,9 +292,19 @@ async def bash_command(ctx, command: str) -> str:
         command,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        preexec_fn=os.setsid,
     )
-    stdout, stderr = await proc.communicate()
-    return stdout.decode(errors="replace") + stderr.decode(errors="replace")
+    try:
+        stdout, stderr = await proc.communicate()
+        return stdout.decode(errors="replace") + stderr.decode(errors="replace")
+    except asyncio.CancelledError:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        raise
 
 
 # ===========================================================================
@@ -342,11 +355,11 @@ RULES FOR WRITING:
    no EFFECT: markers, no labeled sections. Write as if composing an email
    to a colleague who needs to understand exactly what you did and why.
 
-7. NO CLOCK TIMEOUTS / SLEEPS. Never run 'sleep' commands or introduce artificial blocking delays in your bash commands. If a resource or VM is still loading/provisioning, output a summary and return a NoOp or end your turn. The agent loop will automatically check progress on your next turn a few seconds later.
+7. NO CLOCK TIMEOUTS / SLEEPS. Never run 'sleep' commands or introduce artificial blocking delays in your bash commands. If a resource or VM is still loading/provisioning, output a summary and end your turn. The agent loop will automatically check progress on your next turn a few seconds later.
 
 8. DO NOT POLL OR WAIT WITHIN A TURN. In this event-driven architecture, any effects you decide to emit (such as queueing a job, allocating a VM, or updating the script) are ONLY committed to the database after your current turn completely finishes. Therefore, you can NEVER observe the results of your current turn's decisions by querying the GSA or running bash commands within the same turn.
    - Do not attempt to query GSA repeatedly to check if a job you just decided to queue has appeared or completed.
-   - Once you decide on an action (e.g., QueueJob, VMAllocated, JobApproved, NoOp), state your decision clearly and END YOUR TURN immediately.
+   - Once you decide on an action (e.g., QueueJob, VMAllocated, JobApproved), state your decision clearly and END YOUR TURN immediately.
    - Trust the asynchronous pipeline: the coordinator will trigger your next turn after other agents (like the Provisioner or VM workers) have acted on your decisions.
 
 9. MAXIMALLY INQUISITIVE ON OBSTACLES.
@@ -455,8 +468,9 @@ You are the Assembly Agent. You compose the final documentary from approved audi
 
 === BASE KNOWLEDGE (NEVER FORGET) ===
 - Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
+- Tool: `assemble_final_cut` (to assemble the final MP4 from the timeline).
 - GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- Rule: Validate that all slots are filled, durations match, and tracks align before rendering using `ffmpeg`.
+- Rule: Validate that all slots are filled, durations match, and tracks align before rendering using the `assemble_final_cut` tool.
 
 === SKILL CATALOG ===
 - server/skills/video-editing/SKILL.md — ffmpeg commands, OTIO timeline validation, output MP4 verification
@@ -479,40 +493,25 @@ State your reasoning and present these details with precision in your prose:
 
     "provisioner": f"""
 === YOUR ROLE ===
-You are the Provisioner Agent. You provision GPU VMs and dispatch jobs.
+You are the Provisioner Agent. You manage ML/GPU worker VMs on Vast.ai and coordinate job dispatches.
 
 === BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- GSA is read-only. DO NOT attempt to write to it or update VM/job states using HTTP POST or PUT requests (e.g. via curl). All state updates and effects (like VM allocation/adoption, job starts/completions, and deallocations) MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- Rule: Adopt existing active VMs if possible. Never double-rent. Only one VM can be active at a time. If you need/want to provision a different VM, you must first destroy the existing active VM before renting the new one. Always use 'yes | vastai destroy instance <instance_id>' or pipe 'y' to prevent the command from hanging on confirmation prompts.
-- Rule: STRICT SINGLE-EFFECT ORDER OF OPERATIONS. The parser can only extract one effect per turn. Therefore, you MUST transition through the provisioning lifecycle step-by-step across multiple turns. Never combine VM allocation/adoption, job dispatch, and job completion in a single turn response.
-  - Turn 1: If a VM needs to be created or adopted, output the VM details to trigger a 'vm_allocated' effect (specifying the actual worker URL if adopted and ready, or 'unknown' if booting) and end your turn.
-  - Turn 2: Once the 'vm_allocated' event exists in GSA, dispatch the job by posting to the worker's root URL (e.g. HTTP POST to the worker URL 'http://localhost:8888/'), emit 'job_started', and end your turn immediately without checking for completion.
-  - Turn 3: Only after 'job_started' exists in GSA, poll the worker for completion and emit 'job_completed' (or 'job_failed') when done.
-  - Turn 4: Only after 'job_completed' exists in GSA, deallocate the VM and emit 'vm_deallocated'.
-- VM Setup & Real Media Production: When provisioning a GPU VM on Vast.ai, you must configure the instance to run the real VM agent. Your onstart bootstrap command must:
-  1. Clone the public repository using the `strands-migration` branch:
-     `git clone --depth 1 --branch strands-migration https://github.com/OrpingtonClose/economy-documentary.git /workspace/repo`
-  2. Run the VM agent onstart script matching the VM's role (where <role> is 'tts' or 'ltx'):
-     `bash /workspace/repo/scripts/vm_onstart_<role>.sh "<deepseek_api_key>" "<vast_api_key>"`
-     (Inline the DeepSeek API key and Vast.ai API key from your environment/files). This script clons the repository, sets up the virtual environment, downloads models, and starts the VM agent (`scripts/vm_agent.py`) listening on port 8880.
-- Worker URL & Tunneling: Since port 8880 is internal, establish a local SSH tunnel mapping port 8888 locally to port 8880 on the VM (`ssh -o StrictHostKeyChecking=no -f -N -L 8888:localhost:8880 -p <ssh_port> root@<ssh_host>`). Register `http://localhost:8888` as the worker URL in GSA.
-- Job Dispatch: The worker is a fully autonomous reasoning agent running `vm_agent.py`. POST the raw text instruction/prompt directly to the worker at `http://localhost:8888/`. The worker returns a natural language response describing the result (containing the generated file path). As the Provisioner Agent, you will parse the path from the worker's response using your natural reasoning (there are no strict prefix or structured formatting constraints). Once the path on the VM is retrieved, you MUST download the file from the VM to the host machine via SSH/SCP (using the VM's SSH port and host, e.g. `scp -o StrictHostKeyChecking=no -P <ssh_port> root@<ssh_host>:<vm_path> /tmp/output.wav`). Record the local host path `/tmp/output.wav` (or `/tmp/video.mp4` for video) as the `artifact_uri` in the `job_completed` effect.
-- Diagnostics: Treat slow boots or failures as diagnostic mysteries; run SSH checks (like `nvidia-smi`, `docker logs`) to inspect worker logs.
-
-=== SKILL CATALOG ===
-- server/skills/gpu-provisioning/SKILL.md — Vast.ai operations, GPU matching decision tree for LTX-2.3, instance creation, health verification, cost optimization
-
-Read this skill: bash_command("cat server/skills/gpu-provisioning/SKILL.md")
+- Tool: `bash_command`
+- Read projections and jobs by querying the Global State Agent (GSA) at `GET http://localhost:8000/`. GSA is read-only.
+- All state changes (like VM allocations, job completions/starts, and deallocations) are declared as effects in your prose response. They are parsed and written automatically.
+- Ensure that you use direct public HTTPS endpoints mapped by Vast.ai to query workers. Local SSH loopback tunnels are prohibited.
+- Single-Effect per turn rule: Only declare one logical state transition (e.g. `vm_allocated`, `job_started`, `job_completed`, `vm_deallocated`) in your text response per turn. 
+- Diagnostics: Check worker status and logs via HTTP GET on the worker URL first and foremost. SSH commands are treated as accidental fallback mechanisms.
+- Key storage in `~/api_keys` must never be modified by you.
+- Always use `instances-v1` for Vast.ai CLI commands.
 
 {COMMUNICATION_STYLE}
 
 === WORKFLOW ===
-1. Query GSA state to see pending jobs and VM status.
-2. If there are pending jobs and no suitable active VM is available: search Vast.ai, rent a compatible GPU VM, and track its status.
-3. Dispatch queued jobs to the active VM worker's endpoint.
-4. If a worker fails, check logs/diagnostics via SSH (e.g. docker logs, nvidia-smi) to resolve the issue before deciding to release it.
-5. If all jobs are complete and VMs are idle, release the VMs.
+1. Check GSA for pending jobs.
+2. Ensure a compatible worker VM is active. If none are, search Vast.ai offers and rent one.
+3. Wait for the worker HTTP status to confirm it is fully ready and the required models (the Qwen3-TTS audio model for TTS/audio jobs, or the LTX-2.3 video model for video/LTX jobs) are reported as loaded and ready in the status description text before dispatching jobs.
+4. Dispatch jobs to the worker, download completed media artifacts, and deallocate the VM when all jobs are done.
 
 === ACTION INFORMATION REQUIREMENTS ===
 State your reasoning and present these details with precision in your prose:
@@ -593,6 +592,42 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
     return agent
 
 
+async def update_agentic_memory(agent_role: str, agent_output: str, model_instance: OpenAIChatModel) -> None:
+    """Extract and update atomic facts (long-term memories) for the specified agent using DeepSeek."""
+    memories = event_store.get_memories(agent_role)
+    
+    system_prompt = (
+        f"You are the Memory Manager for the {agent_role} agent in a media rendering pipeline.\n"
+        "Your job is to maintain a list of active, atomic facts (long-term memories) for this agent based on its latest actions and outputs.\n\n"
+        "Instructions:\n"
+        "1. Read the current memories (if any) and the latest agent output.\n"
+        "2. Update the memories list: add new facts, modify outdated details, and remove facts that are no longer true (e.g. if a VM is destroyed, remove 'Active VM: ID').\n"
+        "3. Keep the list concise (maximum 15 key facts total).\n"
+        "4. Do NOT include formatting, headers, or pleasantries. Output ONLY the updated facts, one per line starting with a hyphen.\n"
+        "5. Focus on infrastructure state (active VM IDs, IPs, ports, active/completed jobs) or critical timeline/audio/video states."
+    )
+    
+    user_content = "=== CURRENT MEMORIES ===\n"
+    if memories:
+        user_content += "\n".join(f"- {m}" for m in memories) + "\n"
+    else:
+        user_content += "(No current memories)\n"
+        
+    user_content += f"\n=== LATEST AGENT OUTPUT ===\n{agent_output}\n"
+    
+    response = await llm_complete(system=system_prompt, user=user_content, model=model_instance)
+    
+    updated_memories = []
+    for line in response.splitlines():
+        line = line.strip()
+        if line.startswith("-"):
+            fact = line.lstrip("-").strip()
+            if fact:
+                updated_memories.append(fact)
+                
+    event_store.save_memories(agent_role, updated_memories)
+
+
 async def execute_agent_turn(
     role: str,
     gsa_url: str,
@@ -606,6 +641,12 @@ async def execute_agent_turn(
         memory = read_last_n_effects(role, 5)
         memory_text = format_memory(memory)
 
+        # 1.5. Read long-term agentic memories
+        lt_memories = event_store.get_memories(role)
+        lt_memories_text = ""
+        if lt_memories:
+            lt_memories_text = "\n=== LONG-TERM MEMORY (ATOMIC FACTS) ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
+
         # 2. Build prompt
         skills = list_skills()
         prompt = f"""\
@@ -613,7 +654,7 @@ async def execute_agent_turn(
 GSA URL: {gsa_url}
 Available Skills:
 {skills}
-
+{lt_memories_text}
 === RECENT HISTORY ===
 {memory_text}
 """
@@ -630,11 +671,195 @@ Available Skills:
             """Run an arbitrary bash command on the local machine."""
             return await bash_command(ctx, command)
 
+        if role == "assembly":
+            @agent.tool
+            async def assemble_final_cut(
+                ctx,
+                output_path: str,
+                timeline_path: str,
+                include_placeholders: bool,
+                target_duration: float,
+                run_id: str,
+            ) -> str:
+                """Assemble the final documentary cut.
+
+                Args:
+                    output_path: Path to the output mp4 file.
+                    timeline_path: Path to the input OTIO timeline file.
+                    include_placeholders: Whether to generate placeholders for missing clips.
+                    target_duration: Target duration in seconds.
+                    run_id: Unique execution run identifier.
+                """
+                import sys
+                import os
+                import json
+                import subprocess
+                import opentimelineio as otio
+                from effects import PipelineComplete
+
+                def generate_audio_placeholder(dur: float, out_path: str) -> None:
+                    print(f"CRITICAL: Generating silent audio placeholder of duration {dur}s at {out_path}", file=sys.stderr)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono", "-t", str(dur), out_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                    )
+
+                def generate_video_placeholder(dur: float, out_path: str) -> None:
+                    print(f"CRITICAL: Generating black video placeholder of duration {dur}s at {out_path}", file=sys.stderr)
+                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1280x720:d={dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                    )
+
+                def probe_duration(filepath: str) -> float:
+                    try:
+                        res = subprocess.run(
+                            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
+                            capture_output=True, text=True, check=True
+                        )
+                        return float(res.stdout.strip())
+                    except Exception:
+                        return 0.0
+
+                try:
+                    # Load timeline
+                    if not os.path.exists(timeline_path):
+                        # Try to resolve relative to LOG_DIR/timelines
+                        alt_path = os.path.join(LOG_DIR, "timelines", os.path.basename(timeline_path))
+                        if os.path.exists(alt_path):
+                            timeline_path = alt_path
+
+                    timeline = otio.adapters.read_from_file(timeline_path)
+                    video_track = None
+                    audio_track = None
+                    for track in timeline.tracks:
+                        if track.name == "V1_Video":
+                            video_track = track
+                        elif track.name == "A1_Narration":
+                            audio_track = track
+
+                    video_clips = []
+                    if video_track:
+                        for item in video_track:
+                            if isinstance(item, otio.schema.Clip):
+                                path = ""
+                                if isinstance(item.media_reference, otio.schema.ExternalReference):
+                                    path = item.media_reference.target_url
+                                elif isinstance(item.media_reference, otio.schema.MissingReference):
+                                    path = ""
+
+                                if not path or not os.path.exists(path):
+                                    if include_placeholders:
+                                        dur = item.source_range.duration.to_seconds()
+                                        placeholder_path = f"/tmp/placeholders/{item.name}.mp4"
+                                        generate_video_placeholder(dur, placeholder_path)
+                                        path = placeholder_path
+                                    else:
+                                        raise RuntimeError(f"Missing video media file: {path} for clip {item.name}")
+                                video_clips.append(path)
+
+                    audio_clips = []
+                    if audio_track:
+                        for item in audio_track:
+                            if isinstance(item, otio.schema.Clip):
+                                path = ""
+                                if isinstance(item.media_reference, otio.schema.ExternalReference):
+                                    path = item.media_reference.target_url
+                                elif isinstance(item.media_reference, otio.schema.MissingReference):
+                                    path = ""
+
+                                if not path or not os.path.exists(path):
+                                    if include_placeholders:
+                                        dur = item.source_range.duration.to_seconds()
+                                        placeholder_path = f"/tmp/placeholders/{item.name}.wav"
+                                        generate_audio_placeholder(dur, placeholder_path)
+                                        path = placeholder_path
+                                    else:
+                                        raise RuntimeError(f"Missing audio media file: {path} for clip {item.name}")
+                                audio_clips.append(path)
+
+                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+                    # 1. Render final video track
+                    final_video_path = "/tmp/final_video.mp4"
+                    if len(video_clips) == 1:
+                        final_video_path = video_clips[0]
+                    elif len(video_clips) > 1:
+                        concat_file = "/tmp/concat_video.txt"
+                        with open(concat_file, "w") as f:
+                            for c in video_clips:
+                                f.write(f"file '{c}'\n")
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_video_path],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                        )
+                    else:
+                        generate_video_placeholder(target_duration, final_video_path)
+
+                    # 2. Render final audio track
+                    final_audio_path = "/tmp/final_audio.wav"
+                    if len(audio_clips) == 1:
+                        final_audio_path = audio_clips[0]
+                    elif len(audio_clips) > 1:
+                        concat_file = "/tmp/concat_audio.txt"
+                        with open(concat_file, "w") as f:
+                            for c in audio_clips:
+                                f.write(f"file '{c}'\n")
+                        subprocess.run(
+                            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_audio_path],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                        )
+                    else:
+                        generate_audio_placeholder(target_duration, final_audio_path)
+
+                    # 3. Mux them together
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", final_video_path, "-i", final_audio_path, "-c:v", "copy", "-c:a", "aac", "-shortest", output_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                    )
+
+                    actual_dur = probe_duration(output_path) or target_duration
+
+                    # Emit PipelineComplete effect
+                    otio_hash = "initial_hash"
+                    try:
+                        slots_dict = {}
+                        for addr, s in timeline.slots.items():
+                            slots_dict[addr] = s
+                        import hashlib
+                        sorted_slots = sorted(slots_dict.items())
+                        otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+                    except Exception:
+                        pass
+
+                    event_store.append(
+                        PipelineComplete(
+                            agent="assembly",
+                            output_path=output_path,
+                            duration_sec=actual_dur,
+                        ),
+                        otio_hash
+                    )
+
+                    return f"SUCCESS: Final documentary assembled at {output_path}. Duration: {actual_dur}s."
+
+                except Exception as e:
+                    return f"ERROR: Assembly failed: {e}"
+
         # 5. Run the agent
         deps = PipelineDeps(gsa_url=gsa_url, agent_role=role, compaction_model=model_instance)
         from pydantic_ai import UsageLimits
         result = await agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=300))
         agent_text = result.output
+        latest_monologues[role] = agent_text
+
+        # Update long-term memories
+        try:
+            await update_agentic_memory(role, agent_text, model_instance)
+        except Exception as exc:
+            logger.error(f"Failed to update agentic memory for {role}: {exc}")
 
         try:
             with open(f"/tmp/documentary-pipeline/agent_debug_{role}.log", "a", encoding="utf-8") as f:
@@ -665,6 +890,8 @@ Available Skills:
 
         # Append effects
         for effect in effects:
+            if effect.kind == "noop":
+                continue
             event_store.append(effect, otio_hash)
 
         # Post-turn budget checks
@@ -688,8 +915,8 @@ class StrictEndpointMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path != "/":
             return PlainTextResponse("Not Found: Only root '/' is permitted", status_code=404)
-        if request.method not in ("GET", "POST"):
-            return PlainTextResponse("Method Not Allowed: Only GET and POST permitted", status_code=405)
+        if request.method not in ("GET", "POST", "PUT"):
+            return PlainTextResponse("Method Not Allowed: Only GET, POST and PUT permitted", status_code=405)
         if request.query_params:
             return PlainTextResponse("Bad Request: Query parameters are prohibited", status_code=400)
         return await call_next(request)
@@ -709,29 +936,31 @@ def make_agent_app(role: str) -> FastAPI:
         "idle_since": time.time(),
     }
 
-    @app.get("/", response_model=AgentHealthResponse)
-    async def health():
-        try:
-            gsa_url = "http://127.0.0.1:8000/"
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url)
-                if resp.status_code == 200:
-                    state = resp.json()
-                    _agent_health["current_task"] = _determine_focus(role, state)
-        except Exception:
-            pass
-        return _agent_health
+    @app.get("/")
+    async def health(request: Request):
+        lock = run_lock_manager.get_lock()
+        async with lock:
+            try:
+                gsa_url = "http://127.0.0.1:8000/"
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(gsa_url)
+                    if resp.status_code == 200:
+                        state = resp.json()
+                        _agent_health["current_task"] = _determine_focus(role, state)
+            except Exception:
+                pass
 
-    @app.post("/", response_model=AgentResponse)
+            accept = request.headers.get("accept", "")
+            if "application/json" in accept:
+                return _agent_health
+
+            status = _agent_health.get("status", "healthy")
+            task = _agent_health.get("current_task") or "no active task"
+            message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
+            return PlainTextResponse(message, media_type="text/plain")
+
+    @app.post("/")
     async def post_handler(request: Request):
-        if _agent_health["status"] == "busy":
-            return AgentResponse(
-                status="ok",
-                effects_extracted=[],
-                agent=role,
-                timestamp=time.time(),
-            )
-
         body = await request.body()
         instruction_text = body.decode("utf-8").strip()
 
@@ -740,7 +969,75 @@ def make_agent_app(role: str) -> FastAPI:
 
         is_human = False
         inst_text = ""
-        if instruction_text and instruction_text != "Wake up and check GSA":
+        if instruction_text and instruction_text not in ("Wake up and check GSA", "Wakeup"):
+            is_human = True
+            inst_text = instruction_text
+
+        lock = run_lock_manager.get_lock()
+        async with lock:
+            if is_human:
+                from effects import HumanInstruction
+                inst_effect = HumanInstruction(
+                    agent="operator",
+                    target_agent=role,
+                    instruction=inst_text,
+                    from_human="operator",
+                )
+                import hashlib
+                otio_hash = "initial_hash"
+                try:
+                    async with httpx.AsyncClient() as client:
+                        resp = await client.get("http://127.0.0.1:8000/")
+                        if resp.status_code == 200:
+                            slots = resp.json().get("otio", {}).get("slots", {})
+                            sorted_slots = sorted(slots.items())
+                            otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+                except Exception:
+                    pass
+                event_store.append(inst_effect, otio_hash)
+
+            try:
+                gsa_url = "http://127.0.0.1:8000/"
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(gsa_url)
+                    if resp.status_code == 200:
+                        state = resp.json()
+                        _agent_health["current_task"] = _determine_focus(role, state)
+            except Exception:
+                pass
+
+            resp_text = latest_monologues.get(role) or f"I am the {role} agent. I have registered your instruction. Currently my status is healthy."
+            accept = request.headers.get("accept", "")
+            if "application/json" in accept:
+                return AgentResponse(
+                    status="ok",
+                    effects_extracted=[],
+                    agent=role,
+                    timestamp=time.time(),
+                )
+            return PlainTextResponse(resp_text, media_type="text/plain")
+
+    @app.put("/")
+    async def put_handler(request: Request):
+        body = await request.body()
+        instruction_text = body.decode("utf-8").strip()
+
+        if not os.path.exists(os.path.join(LOG_DIR, "events.db")):
+            raise HTTPException(status_code=400, detail="No active runs found")
+
+        # Cancel existing task if running
+        global active_tasks
+        existing_task = active_tasks.get(role)
+        if existing_task and not existing_task.done():
+            existing_task.cancel()
+            try:
+                await existing_task
+            except asyncio.CancelledError:
+                pass
+
+        is_human = False
+        inst_text = ""
+        if instruction_text and instruction_text != "Wake up and check GSA" and instruction_text != "Wakeup":
             is_human = True
             inst_text = instruction_text
 
@@ -786,24 +1083,26 @@ def make_agent_app(role: str) -> FastAPI:
                 _agent_health["last_error"] = str(exc)
                 _agent_health["idle_since"] = time.time()
 
-        asyncio.create_task(run_turn_in_background())
+        task = asyncio.create_task(run_turn_in_background())
+        active_tasks[role] = task
 
-        return AgentResponse(
-            status="ok",
-            effects_extracted=[],
-            agent=role,
-            timestamp=time.time(),
-        )
+        return PlainTextResponse("", status_code=204)
 
     @app.on_event("startup")
     async def start_autonomous_loop():
         async def run_loop():
             if role == "provisioner":
-                vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
-                if os.path.exists(vast_key_path):
+                key = os.environ.get("VAST_AI_KEY") or os.environ.get("VAST_KEY")
+                if not key:
+                    vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
+                    if os.path.exists(vast_key_path):
+                        try:
+                            with open(vast_key_path) as f:
+                                key = f.read().strip()
+                        except Exception:
+                            pass
+                if key:
                     try:
-                        with open(vast_key_path) as f:
-                            key = f.read().strip()
                         import subprocess
                         subprocess.run(f"vastai login {key}", shell=True, capture_output=True)
                     except Exception:

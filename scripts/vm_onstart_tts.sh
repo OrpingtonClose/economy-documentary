@@ -12,11 +12,11 @@ pip install -q --break-system-packages \
     torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu121
 
-# Install Qwen3-TTS package (PyPI distribution name: qwen-tts)
-pip install -q --break-system-packages qwen-tts transformers accelerate
+# Install Qwen3-TTS package (PyPI distribution name: qwen-tts) and whisperx
+pip install -q --break-system-packages qwen-tts transformers accelerate whisperx
 
-# Best-effort flash-attention for faster inference
-pip install --no-build-isolation flash-attn || true
+# Best-effort flash-attention for faster inference - only pre-compiled wheels to avoid compilation timeouts
+pip install -q --break-system-packages --only-binary :all: flash-attn || true
 
 # Pre-download Qwen3-TTS model weights from HuggingFace
 mkdir -p /workspace/models
@@ -42,6 +42,7 @@ echo "$2" > /workspace/.vast_api_key
 
 # Start the VM agent
 nohup python repo/scripts/vm_agent.py --port 8880 \
-    > /workspace/agent.log 2>&1 &
+    > /workspace/worker.log 2>&1 &
 
 echo "started"
+

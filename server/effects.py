@@ -1,8 +1,9 @@
+# pyright: reportIncompatibleVariableOverride=false
 from __future__ import annotations
 
 import time
 from datetime import datetime
-from typing import Annotated, Literal, Union, List, Dict
+from typing import Any, Annotated, Literal, Union, List, Dict
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
 import uuid
@@ -10,6 +11,40 @@ from uuid_utils import uuid7 as _uuid7
 
 def uuid7() -> uuid.UUID:
     return uuid.UUID(bytes=_uuid7().bytes)
+
+
+def parse_duration(val: Any) -> float:
+    """Parse standard durations (e.g., floats/integers) and time formats like "MM:SS" or "HH:MM:SS" to float.
+
+    Examples:
+        "2:30" -> 150.0
+        "1:02:30" -> 3750.0
+        15.5 -> 15.5
+        "15.5" -> 15.5
+    """
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        val = val.strip()
+        if ":" in val:
+            parts = val.split(":")
+            try:
+                if len(parts) == 2:
+                    m = int(parts[0])
+                    s = float(parts[1])
+                    return m * 60.0 + s
+                elif len(parts) == 3:
+                    h = int(parts[0])
+                    m = int(parts[1])
+                    s = float(parts[2])
+                    return h * 3600.0 + m * 60.0 + s
+            except ValueError:
+                pass
+        try:
+            return float(val)
+        except ValueError:
+            raise ValueError(f"Could not parse duration string: {val}")
+    raise ValueError(f"Invalid duration type: {type(val)}")
 
 
 class Effect(BaseModel):
@@ -42,6 +77,11 @@ class ScriptBlock(BaseModel):
     dopamine_hook: str = ""
     duration_sec: float = Field(..., gt=0.0, description="target duration in seconds")
 
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
+
 
 class UpdateScript(Effect):
     """Write or revise one or more scene narration blocks."""
@@ -68,29 +108,52 @@ class ReorderScenes(Effect):
 
 class QueueJob(Effect):
     """Demand creation of a media artifact by a VM worker."""
-    kind: Literal["queue_job"] = "queue_job"
+    kind: str = "queue_job"
     job_id: str = Field(..., description="stable unique job identifier")
-    job_type: Literal["tts", "ltx"]
+    job_type: str = Field(..., description="tts or ltx")
     scene_num: int = Field(..., ge=1)
     block_id: str
     slot_id: str = Field(..., description="OTIO slot where the result belongs")
     params: dict = Field(default_factory=dict, description="type-specific generation params")
 
 
+class QueueAudioJob(QueueJob):
+    kind: Literal["queue_audio_job"] = "queue_audio_job"
+    job_type: Literal["tts"] = "tts"
+
+
+class QueueVideoJob(QueueJob):
+    kind: Literal["queue_video_job"] = "queue_video_job"
+    job_type: Literal["ltx"] = "ltx"
+
+
 class JobStarted(Effect):
     """VM worker accepted the job. Job is now running."""
-    kind: Literal["job_started"] = "job_started"
+    kind: str = "job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
 
 
+class AudioJobStarted(JobStarted):
+    kind: Literal["audio_job_started"] = "audio_job_started"
+
+
+class VideoJobStarted(JobStarted):
+    kind: Literal["video_job_started"] = "video_job_started"
+
+
 class JobCompleted(Effect):
     """VM worker finished successfully; artifact is ready for quality review."""
-    kind: Literal["job_completed"] = "job_completed"
+    kind: str = "job_completed"
     job_id: str
     artifact_uri: str = Field(..., description="URI to generated file")
     duration_sec: float = Field(..., ge=0.0, description="actual media duration")
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     vm_instance_id: str
     measurements: list[float] = Field(
         default_factory=list,
@@ -98,9 +161,17 @@ class JobCompleted(Effect):
     )
 
 
+class AudioJobCompleted(JobCompleted):
+    kind: Literal["audio_job_completed"] = "audio_job_completed"
+
+
+class VideoJobCompleted(JobCompleted):
+    kind: Literal["video_job_completed"] = "video_job_completed"
+
+
 class JobFailed(Effect):
     """VM worker failed."""
-    kind: Literal["job_failed"] = "job_failed"
+    kind: str = "job_failed"
     job_id: str
     error_message: str
     failure_category: Literal[
@@ -117,21 +188,45 @@ class JobFailed(Effect):
     retry_count: int = Field(default=0, ge=0, description="how many times this job has been retried")
 
 
+class AudioJobFailed(JobFailed):
+    kind: Literal["audio_job_failed"] = "audio_job_failed"
+
+
+class VideoJobFailed(JobFailed):
+    kind: Literal["video_job_failed"] = "video_job_failed"
+
+
 class JobRequeued(Effect):
     """Artistry rejection: previous output did not meet quality bar."""
-    kind: Literal["job_requeued"] = "job_requeued"
+    kind: str = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1, description="why the previous attempt was rejected")
     new_params: dict | None = None
 
 
+class AudioJobRequeued(JobRequeued):
+    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
+
+
+class VideoJobRequeued(JobRequeued):
+    kind: Literal["video_job_requeued"] = "video_job_requeued"
+
+
 class JobApproved(Effect):
     """Artistry approval: artifact passes quality review, ready for OTIO merge."""
-    kind: Literal["job_approved"] = "job_approved"
+    kind: str = "job_approved"
     job_id: str
     artifact_uri: str
     quality_notes: str = ""
     reviewed_by: str = Field(default="agent", description="'agent' or human name")
+
+
+class AudioJobApproved(JobApproved):
+    kind: Literal["audio_job_approved"] = "audio_job_approved"
+
+
+class VideoJobApproved(JobApproved):
+    kind: Literal["video_job_approved"] = "video_job_approved"
 
 
 # ===========================================================================
@@ -146,6 +241,11 @@ class ReconciliationFailureDetail(BaseModel):
     voice: str
     scripted_sec: float
     measured_sec: float
+
+    @field_validator("scripted_sec", "measured_sec", mode="before")
+    @classmethod
+    def _parse_secs(cls, val: Any) -> float:
+        return parse_duration(val)
     delta_sec: float
     ratio: float = Field(..., description="measured / scripted")
     message: str = Field(..., description="human-readable diagnostic")
@@ -170,6 +270,11 @@ class AudioMeasured(Effect):
     scene_num: int
     voice_role: str
     measured_sec: float = Field(..., description="median of measurements")
+
+    @field_validator("measured_sec", mode="before")
+    @classmethod
+    def _parse_measured_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     measurements: list[float] = Field(
         default_factory=list,
         description="all three WhisperX measurements, unsorted",
@@ -186,6 +291,11 @@ class DurationAdjusted(Effect):
     voice_role: str
     scripted_sec: float
     measured_sec: float
+
+    @field_validator("scripted_sec", "measured_sec", mode="before")
+    @classmethod
+    def _parse_secs(cls, val: Any) -> float:
+        return parse_duration(val)
 
 
 class ReconciliationFailed(Effect):
@@ -282,6 +392,11 @@ class MergeIntoOTIO(Effect):
     artifact_uri: str = Field(..., description="URI to the approved media file")
     track_name: Literal["A1_Narration", "V1_Video"] = Field(..., description="Target track")
     duration_sec: float = Field(..., gt=0.0)
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     transition_type: Literal["cut", "dissolve", "none"] = "cut"
     transition_duration_sec: float = Field(default=0.0, ge=0.0)
     start_sec: float = Field(default=0.0, description="Optional start time coordinate for coordinate-based schema")
@@ -317,6 +432,11 @@ class PipelineComplete(Effect):
     kind: Literal["pipeline_complete"] = "pipeline_complete"
     output_path: str
     duration_sec: float = Field(..., ge=0.0)
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
     total_cost_usd: float = Field(default=0.0, ge=0.0)
     validation_passed: bool = True
 
@@ -458,6 +578,11 @@ class VideoMeasured(Effect):
     block_id: str
     measured_sec: float
 
+    @field_validator("measured_sec", mode="before")
+    @classmethod
+    def _parse_measured_sec(cls, val: Any) -> float:
+        return parse_duration(val)
+
 
 # ===========================================================================
 # 3.10 EffectUnion and KIND_TO_MODEL
@@ -469,11 +594,23 @@ EffectUnion = Annotated[
         DeleteScene,
         ReorderScenes,
         QueueJob,
+        QueueAudioJob,
+        QueueVideoJob,
         JobStarted,
+        AudioJobStarted,
+        VideoJobStarted,
         JobCompleted,
+        AudioJobCompleted,
+        VideoJobCompleted,
         JobFailed,
+        AudioJobFailed,
+        VideoJobFailed,
         JobRequeued,
+        AudioJobRequeued,
+        VideoJobRequeued,
         JobApproved,
+        AudioJobApproved,
+        VideoJobApproved,
         AudioGenerated,
         AudioMeasured,
         DurationAdjusted,
@@ -507,11 +644,23 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "delete_scene":       DeleteScene,
     "reorder_scenes":     ReorderScenes,
     "queue_job":          QueueJob,
+    "queue_audio_job":    QueueAudioJob,
+    "queue_video_job":    QueueVideoJob,
     "job_started":        JobStarted,
+    "audio_job_started":  AudioJobStarted,
+    "video_job_started":  VideoJobStarted,
     "job_completed":      JobCompleted,
+    "audio_job_completed": AudioJobCompleted,
+    "video_job_completed": VideoJobCompleted,
     "job_failed":         JobFailed,
+    "audio_job_failed":   AudioJobFailed,
+    "video_job_failed":   VideoJobFailed,
     "job_requeued":       JobRequeued,
+    "audio_job_requeued": AudioJobRequeued,
+    "video_job_requeued": VideoJobRequeued,
     "job_approved":       JobApproved,
+    "audio_job_approved": AudioJobApproved,
+    "video_job_approved": VideoJobApproved,
     "audio_generated":    AudioGenerated,
     "audio_measured":     AudioMeasured,
     "duration_adjusted":  DurationAdjusted,

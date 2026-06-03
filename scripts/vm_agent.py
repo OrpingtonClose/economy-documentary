@@ -194,7 +194,54 @@ app.add_middleware(StrictEndpointMiddleware)
 @app.get("/")
 def health() -> Response:
     _touch_activity()
-    return Response(content="ok", media_type="text/plain")
+    gpu_info = "Unknown GPU"
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=gpu_name,memory.total,memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2.0
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = res.stdout.strip().split(",")
+            if len(parts) >= 3:
+                name = parts[0].strip()
+                total = float(parts[1].strip()) / 1024.0
+                used = float(parts[2].strip()) / 1024.0
+                gpu_info = f"{name} (VRAM: {used:.1f}/{total:.1f}GB)"
+    except Exception:
+        pass
+
+    gpu_desc = f"The active GPU is {gpu_info}." if gpu_info else "No active GPU was detected."
+    boot_desc = "The bootstrap process is fully complete." if os.path.exists("/workspace/.bootstrap_complete") else "The bootstrap process is still in progress."
+    
+    # Check model files
+    ready_status = []
+    if os.path.exists("/workspace/models/qwen3-tts-voicedesign"):
+        ready_status.append("the Qwen3-TTS audio model is loaded and ready")
+    else:
+        ready_status.append("the Qwen3-TTS audio model is not loaded yet")
+        
+    if os.path.exists("/workspace/models/ltx23/ltx-2.3-22b-dev.safetensors"):
+        ready_status.append("the LTX-2.3 video model is loaded and ready")
+    else:
+        ready_status.append("the LTX-2.3 video model is not loaded yet")
+    model_desc = "Regarding models, " + " and ".join(ready_status) + "."
+
+    # Read latest log snippet
+    log_snippet = "No logs found."
+    log_paths = ["/workspace/worker.log", "/workspace/agent.log", "/workspace/self_destruct.log"]
+    for path in log_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                    log_snippet = "".join(lines[-10:])
+                break
+            except Exception:
+                pass
+
+    content = f"The GPU worker is currently healthy and active. {gpu_desc} {boot_desc} {model_desc}\n\nHere is the latest snippet from the system logs:\n{log_snippet}"
+    
+    return Response(content=content, media_type="text/plain")
 
 
 @app.post("/")

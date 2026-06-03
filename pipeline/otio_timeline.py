@@ -78,15 +78,45 @@ def create_timeline(
     return filepath
 
 
+def clean_otio_metadata(obj):
+    """Recursively convert AnyDictionary and AnyVector types into standard python dict and list."""
+    try:
+        import opentimelineio as otio
+        type_name = type(obj).__name__
+        if type_name in ("AnyDictionary", "dict") or isinstance(obj, dict):
+            return {k: clean_otio_metadata(v) for k, v in obj.items()}
+        elif type_name in ("AnyVector", "list", "tuple") or isinstance(obj, (list, tuple)):
+            return [clean_otio_metadata(x) for x in obj]
+    except Exception:
+        pass
+    return obj
+
+
+def clean_timeline_structures(timeline: otio.schema.Timeline) -> None:
+    """Clean all metadata structures across the timeline to ensure JSON-safety."""
+    if hasattr(timeline, "metadata") and timeline.metadata is not None:
+        timeline.metadata = clean_otio_metadata(timeline.metadata)
+    if hasattr(timeline, "tracks") and timeline.tracks is not None:
+        for track in timeline.tracks:
+            if hasattr(track, "metadata") and track.metadata is not None:
+                track.metadata = clean_otio_metadata(track.metadata)
+            for item in track:
+                if hasattr(item, "metadata") and item.metadata is not None:
+                    item.metadata = clean_otio_metadata(item.metadata)
+
+
 def load_timeline(filepath: str) -> otio.schema.Timeline:
-    """Load an OTIO timeline from file."""
-    return otio.adapters.read_from_file(filepath)
+    """Load an OTIO timeline from file after resolving path robustly."""
+    abs_path = os.path.abspath(filepath)
+    return otio.adapters.read_from_file(abs_path)
 
 
 def save_timeline(timeline: otio.schema.Timeline, filepath: str) -> None:
-    """Save an OTIO timeline to file."""
-    os.makedirs(os.path.dirname(filepath) or ".", exist_ok=True)
-    otio.adapters.write_to_file(timeline, filepath)
+    """Save an OTIO timeline to file with JSON-safe cleaning."""
+    abs_path = os.path.abspath(filepath)
+    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+    clean_timeline_structures(timeline)
+    otio.adapters.write_to_file(timeline, abs_path)
 
 
 def add_clip(

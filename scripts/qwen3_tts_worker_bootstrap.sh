@@ -68,7 +68,7 @@ apt-get install -y --no-install-recommends \
     ca-certificates
 rm -rf /var/lib/apt/lists/*
 
-mkdir -p "$STATE_DIR" "$LOG_DIR"
+mkdir -p "$STATE_DIR" "$LOG_DIR" "/workspace"
 
 # ---------------------------------------------------------------------------
 # Checkout repo
@@ -109,8 +109,8 @@ pip install fastapi uvicorn requests soundfile numpy opentimelineio
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu121}"
 pip install --index-url "$TORCH_INDEX_URL" torch torchvision torchaudio || \
     pip install torch torchvision torchaudio
-pip install qwen-tts transformers accelerate
-pip install --no-build-isolation flash-attn || \
+pip install qwen-tts transformers accelerate whisperx
+pip install --only-binary :all: flash-attn || \
     echo "warning: flash-attn install failed, falling back to eager attention"
 
 # ---------------------------------------------------------------------------
@@ -242,8 +242,8 @@ WorkingDirectory=$WORK_DIR
 ${worker_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.qwen3_tts_worker.runner
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:$LOG_DIR/qwen3-tts-worker.log
-StandardError=append:$LOG_DIR/qwen3-tts-worker.log
+StandardOutput=append:/workspace/worker.log
+StandardError=append:/workspace/worker.log
 
 [Install]
 WantedBy=multi-user.target
@@ -301,7 +301,7 @@ start_infra() {
 start_worker() {
     cd "\$WORK_DIR"
     nohup bash -c '$WORKER_CMD' \\
-        >> "\$LOG_DIR/qwen3-tts-worker.log" 2>&1 &
+        >> "/workspace/worker.log" 2>&1 &
     echo \$! > "\$WORKER_PID"
     echo "[\$(date -u +%FT%TZ)] started qwen3-tts-worker pid=\$(cat \$WORKER_PID)" \\
         >> "$SUPERVISOR_LOG"

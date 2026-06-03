@@ -1,0 +1,8 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /Users/orpington/Documents/economy-documentary-work/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/orpington/Documents/economy-documentary-work
+plugins: logfire-4.33.0, bdd-8.1.0, anyio-4.13.0, langsmith-0.8.8
+collecting ... collected 3 items
+
+tests/units/test_hour_movie_scaffolding_bdd.py::test_successfully_scaffold_and_compile_an_hourlong_timeline 

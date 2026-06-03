@@ -259,7 +259,7 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 ### 3.2 Timeout Policy
 
 * **Production Execution Paths:** **Timeouts are strictly prohibited.** In accordance with Core Principle 4, operations such as LLM inference, video rendering, and database inserts must run to completion or wait indefinitely. If an operation hangs, the system waits for manual operator intervention.
-* **Health / Diagnostic Probes Exception:** Timeouts **are allowed** on lightweight network check requests (e.g., pinging an endpoint to determine if a worker VM is active).
+* **Health / Diagnostic Probes Exception:** Timeouts **are allowed** on lightweight network check requests (e.g., pinging an endpoint to determine if a worker VM is active). Timeouts on agent wakeup POST triggers are strictly forbidden.
 * **Enforcement:** The compliance scanner (`cheat_check.py`) scans code for `timeout=` properties on HTTP requests. Probing exceptions must be marked with a `# health probe` comment or contain the word `health` / `probe` to pass verification.
 
 ---

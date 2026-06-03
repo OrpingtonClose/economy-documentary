@@ -91,7 +91,7 @@ apt-get install -y --no-install-recommends \
     ca-certificates
 rm -rf /var/lib/apt/lists/*
 
-mkdir -p "$STATE_DIR" "$LOG_DIR"
+mkdir -p "$STATE_DIR" "$LOG_DIR" "/workspace"
 
 # ---------------------------------------------------------------------------
 # Checkout repo
@@ -118,7 +118,9 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip setuptools wheel
-pip install fastapi uvicorn requests numpy "huggingface_hub>=0.24"
+pip install --index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio || \
+    pip install torch torchvision torchaudio
+pip install fastapi uvicorn requests numpy "huggingface_hub>=0.24" whisperx opentimelineio
 
 # ---------------------------------------------------------------------------
 # uv (Python package manager) + Lightricks/LTX-2 monorepo
@@ -393,8 +395,8 @@ WorkingDirectory=$WORK_DIR
 ${worker_env_lines}ExecStart=$VENV_DIR/bin/python -m strands_agents.ltx_video_worker.runner
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:$LOG_DIR/ltx-video-worker.log
-StandardError=append:$LOG_DIR/ltx-video-worker.log
+StandardOutput=append:/workspace/worker.log
+StandardError=append:/workspace/worker.log
 
 [Install]
 WantedBy=multi-user.target
@@ -452,7 +454,7 @@ start_infra() {
 start_worker() {
     cd "\$WORK_DIR"
     nohup bash -c '$WORKER_CMD' \\
-        >> "\$LOG_DIR/ltx-video-worker.log" 2>&1 &
+        >> "/workspace/worker.log" 2>&1 &
     echo \$! > "\$WORKER_PID"
     echo "[\$(date -u +%FT%TZ)] started ltx-video-worker pid=\$(cat \$WORKER_PID)" \\
         >> "$SUPERVISOR_LOG"

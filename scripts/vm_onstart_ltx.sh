@@ -57,6 +57,12 @@ if [ ! -d /workspace/repo/.git ]; then
         https://github.com/OrpingtonClose/economy-documentary.git repo
 fi
 
+# Install system python packages required for agent diagnostics (torch, whisperx, opentimelineio)
+pip install -q --break-system-packages \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+pip install -q --break-system-packages whisperx opentimelineio
+
 # Write DeepSeek API key for the VM agent
 echo "$1" > /workspace/.deepseek_key
 
@@ -65,6 +71,6 @@ echo "$2" > /workspace/.vast_api_key
 
 # Start the VM agent
 nohup python repo/scripts/vm_agent.py --port 8880 \
-    > /workspace/agent.log 2>&1 &
+    > /workspace/worker.log 2>&1 &
 
 echo "started"

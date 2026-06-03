@@ -57,7 +57,7 @@ Prioritization, filtering, and response selection happen **inside the agent via 
 No pipeline code calls `setTimeout`, `threading.Timer`, `asyncio.timeout`, or any timer primitive. HTTP requests and subprocess calls on primary execution paths run to completion. This is architecture policy.
 
 > [!WARNING]
-> An explicit exception is granted for lightweight health and readiness checks (e.g. pinging a VM or agent status check) where setting a timeout is necessary to prevent the polling coordinator from blocking indefinitely on unreachable resources.
+> An explicit exception is granted for lightweight health and readiness checks (e.g. pinging a VM or agent status check) where setting a timeout is necessary to prevent the polling coordinator from blocking indefinitely on unreachable resources. Setting a timeout on wakeup POST triggers is strictly forbidden.
 
 ---
 
@@ -107,9 +107,14 @@ Agents use **pydantic-deep** (built on `pydantic-ai`). Context compaction is imp
 
 ---
 
-### 1.10 Prompt-Only HTTP Interface
+### 1.10 Prompt-Only Narrative HTTP Interface
 
-No fields from JSON request payloads or custom request headers/query parameters (such as `notification_type` or `context`) may ever be consumed or processed by any agent or platform logic. The HTTP interface serves solely to trigger execution or transmit prompts. All context must be dynamically resolved from the environment/filesystem (e.g., loading the events database).
+The HTTP boundary uses natural-language narrative text for all inputs and outputs. No JSON is consumed or returned in production. 
+
+The HTTP contract is split into three specific behaviors:
+1. **GET (`GET /` or `GET /{prompt}`)**: Always available, read-only status query. Root `/` calls return a conversational description of the agent's busy/idle status and current task. Does not pollute the database.
+2. **POST (`POST /` or `POST /{prompt}`)**: Non-interrupting standard/scheduled execution run. If the agent is already busy executing a turn, it immediately returns `409 Conflict` (agent busy) instead of interrupting it. Otherwise, it starts the turn in the background and returns a conversational confirmation message.
+3. **PUT (`PUT /` or `PUT /{prompt}`)**: Interrupting external operator intervention (electric bolt to the system). If the agent is busy, it immediately cancels the running task, terminates active subprocesses (ssh/curl), and executes the new human prompt in the background, returning `204 No Content` with an empty response body.
 
 ---
 
@@ -129,7 +134,7 @@ No fields from JSON request payloads or custom request headers/query parameters 
 | 10 | **No automatic stale-state detection** | Operator monitors via `GET /` on agents and intervenes manually. No VM-side timers. | Removed TimeoutObserved; operator owns intervention |
 | 11 | **Serialized turn execution** | Agent handlers use a global `LoopBoundLock` to serialize turn execution. | §5.6 |
 | 12 | **Tick-driven** | Agents are HTTP services; they autonomously poll GSA. EventStoreDB provides native push subscriptions for distributed deployments. No central watcher loop. | **Watcher removed** |
-| 13 | **Prompt-only HTTP interface** | No payload fields or query parameters are consumed. HTTP GET/POST serves only to transmit prompts. | **NEW** — ensures pure prompt-driven context |
+| 13 | **Prompt-only HTTP interface** | Plain-text narrative HTTP GET (status), POST (scheduled non-interrupting runs), and PUT (interrupting interventions). | **NEW** — ensures pure prompt-driven context |
 
 ### 1.12 Strategic Vision and Long-Term Pillars
 
@@ -217,20 +222,18 @@ Agents query the GSA frequently to receive the complete projection bundle. The a
 
 The Global State Agent polls DB files and updates its projections. The **Provisioner** (port 8081) is an agent like all others — it reads state from the GSA, reasons about VM provisioning, executes Vast.ai commands via bash tool calls, and its natural language output is parsed for effects (`VMAllocated`, `VMDeallocated`, `JobCompleted`, etc.). VM Workers execute inference and report results back to the Provisioner via HTTP POST. The human operator interacts directly with agent endpoints; there is no intermediary HTTP service.
 
----
-
 ### 2.2 Component Inventory
 
-Every agent exposes exactly `GET /` (health) and `POST /` (primary endpoint) on its own port.
+Every agent exposes exactly `GET /` (status), `POST /` (scheduled run), and `PUT /` (operator intervention) on its own port, supporting arbitrary prompt paths (e.g. `GET /hello there`).
 
 | Component | Port | Type | Endpoints | Effects Produced | Effects Consumed |
 |---|---|---|---|---|---|
-| **Global State Agent** | 8000 | HTTP service | `GET /` only | — | all effects (from SQLite event store) |
-| **Scenario Agent** | 8001 | HTTP agent | `GET /`, `POST /` | `UpdateScript`, `DeleteScene`, `ReorderScenes` | state from GSA |
-| **Audio Agent** | 8002 | HTTP agent | `GET /`, `POST /` | `QueueJob`, `JobApproved`, `JobRequeued`, `DurationAdjusted`, `ReconciliationFailed`, `ReconciliationComplete` | state from GSA |
-| **Video Agent** | 8003 | HTTP agent | `GET /`, `POST /` | `QueueJob`, `JobApproved`, `JobRequeued`, `MergeIntoOTIO` | state from GSA |
-| **Assembly Agent** | 8005 | HTTP agent | `GET /`, `POST /` | `PipelineComplete`, `ProductionFailed` | state from GSA |
-| **Provisioner** | 8081 | HTTP agent | `GET /`, `POST /` | `VMAllocated`, `VMDeallocated`, `VMProvisionFailed`, `VMObserved`, `JobCompleted`, `JobFailed`, `JobStarted` | state from GSA |
+| **Global State Agent** | 8000 | HTTP service | `GET /` | — | all effects (from SQLite event store) |
+| **Scenario Agent** | 8001 | HTTP agent | `GET /`, `POST /`, `PUT /` | `UpdateScript`, `DeleteScene`, `ReorderScenes` | state from GSA |
+| **Audio Agent** | 8002 | HTTP agent | `GET /`, `POST /`, `PUT /` | `QueueJob`, `JobApproved`, `JobRequeued`, `DurationAdjusted`, `ReconciliationFailed`, `ReconciliationComplete` | state from GSA |
+| **Video Agent** | 8003 | HTTP agent | `GET /`, `POST /`, `PUT /` | `QueueJob`, `JobApproved`, `JobRequeued`, `MergeIntoOTIO` | state from GSA |
+| **Assembly Agent** | 8005 | HTTP agent | `GET /`, `POST /`, `PUT /` | `PipelineComplete`, `ProductionFailed` | state from GSA |
+| **Provisioner** | 8081 | HTTP agent | `GET /`, `POST /`, `PUT /` | `VMAllocated`, `VMDeallocated`, `VMProvisionFailed`, `VMObserved`, `JobCompleted`, `JobFailed`, `JobStarted` | state from GSA |
 | **SQLite Event Store** | — | file (per run) | — | — | all effects |
 | **Projections (5)** | in-memory | read models | — | — | all effects |
 | **VM Workers** | 9000+ | HTTP service | `GET /`, `POST /` | `JobResult` (to Provisioner) | `JobRequest` |
@@ -239,58 +242,44 @@ Every agent exposes exactly `GET /` (health) and `POST /` (primary endpoint) on 
 
 ### 2.3 HTTP Contract Specification
 
-All HTTP responses in the pipeline use **JSON** (`Content-Type: application/json`). Interactive agent inputs are transmitted as plain text bodies to their `POST /` endpoint.
+All HTTP inputs and responses in the production pipeline use **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats.
 
-#### POST / — Agent Wake / Instruction
-* **Endpoint:** `POST /` on every agent port (8001–8005, 8081)
+#### 2.3.1 GET / & GET /{prompt:path} — Conversational Status / Queries
+* **Endpoint:** `GET /` and `GET /{prompt:path}` on every agent and GSA port.
 * **Content-Type:** `text/plain`
-* **Body:** Raw UTF-8 text containing the prompt or directive (e.g. "Wake up and check GSA" or a specific operator instruction)
-* **Response:** `AgentResponse` Pydantic model
-
-```python
-class AgentResponse(BaseModel):
-    """POST / response returned by every agent handler."""
-    status: Literal["ok", "error", "halted"] = Field(
-        ...,
-        description="ok = effects extracted; error = exception caught; halted = ClarificationRequest extracted",
-    )
-    effects_extracted: list[str] = Field(
-        default_factory=list,
-        description="List of effect kind strings extracted by parser (e.g., ['UpdateScript', 'QueueJob'])",
-    )
-    error_message: str = Field(
-        default="",
-        description="Non-empty only when status='error'. Human-readable error.",
-    )
-    agent: str = Field(..., description="Agent role that produced this response")
-    timestamp: float = Field(default_factory=time.time)
-```
-
-| HTTP Status | Condition | Response Body |
-|---|---|---|
-| `200 OK` | Agent ran successfully, effects extracted and appended | `AgentResponse(status="ok", ...)` |
-| `202 Accepted` | Agent is already processing a prior request | `AgentResponse(status="ok", effects_extracted=[])` |
-| `400 Bad Request` | Payload failed Pydantic validation | `AgentResponse(status="error", error_message="...")` |
-| `500 Internal Server Error` | Unhandled exception in agent handler | `AgentResponse(status="error", error_message="...")` |
+* **Query Behavior:**
+  - **With Prompt (e.g., `/does scenario agent need to take action`)**: The LLM queries the current state database context (and GSA narrative summary) to generate a free-flowing, conversational natural language response.
+  - **Without Prompt (root `/` path)**:
+    - **Global State Agent**: Returns a conversational description of the global documentary pipeline state and what needs to be done next.
+    - **Pipeline Agents**: Blocks to wait for any active heavy turn/lock to release, then returns a conversational description of whether the agent is busy or idle, and exactly what focus or task it is currently working on.
 
 ---
 
-#### GET / — Health / State Read
-* **Endpoint:** `GET /` on every agent port
-* **Content-Type:** `application/json`
-* **Response:** Varies by component
+#### 2.3.2 POST / & POST /{prompt:path} — Conversational Light Commands (Blocking)
+* **Endpoint:** `POST /` and `POST /{prompt:path}` on every agent port.
+* **Content-Type:** `text/plain`
+* **Trigger Behavior**: Blocks to wait for any active heavy turn/lock to release. Performs only lightweight operations inline (such as appending instruction events and querying status). Does NOT attempt any heavy LLM or SSH execution.
+* **Context Pollution**: Appends a `HumanInstruction` event directly to the event store database if a custom instruction is passed.
+* **Response**: Returns a plain-text conversational response containing the agent's monologue, thoughts, or health/action status once the lock is acquired.
 
-**Agent GET / (ports 8001–8005, 8081):**
-```python
-class AgentHealthResponse(BaseModel):
-    """GET / response from any agent (not the GSA)."""
-    status: Literal["healthy", "busy", "error"] = "healthy"
-    agent: str                          # e.g., "scenario", "audio"
-    last_run: float | None = None       # timestamp of last POST / handling
-    current_task: str | None = None     # what the agent is working on (from _determine_focus)
-    last_error: str | None = None       # last error message if status="error"
-    idle_since: float | None = None     # timestamp when agent became idle
-```
+---
+
+#### 2.3.3 PUT / & PUT /{prompt:path} — Interrupting Interventions (Electric Bolt)
+* **Endpoint:** `PUT /` and `PUT /{prompt:path}` on every agent port.
+* **Content-Type:** `text/plain`
+* **Trigger Behavior**: Starts a heavy execution turn in the background immediately, acting as an electric bolt to the system.
+* **Context Pollution**: Appends a `HumanInstruction` event directly to the event store database if a custom instruction is passed.
+* **Concurrency Handling (Interrupting)**: If the agent is busy running a turn, PUT immediately cancels the active asyncio task, terminates all spawned OS subprocesses (ssh, curl, ffmpeg, etc.), and launches the new heavy turn execution in the background.
+* **Response**: Returns `204 No Content` with an empty body, indicating immediate processing has been forced.
+
+---
+
+#### 2.3.4 VM Port Mapping and State Consistency Guardrails
+To prevent routing collisions and maintain GSA state projection accuracy, the pipeline enforces three architectural rules:
+
+1. **Unique VM Worker Ports (Port Overlap Guard)**: Active VM workers must be provisioned with distinct local tunnel ports. Multiple concurrent VMs (e.g., TTS and LTX) are strictly forbidden from sharing `localhost:8888`. Sharing endpoints causes job routing mixups where video requests are sent to audio workers and vice versa.
+2. **Re-Queued Blocks Must Transition to Dirty**: If a block has a completed job (and was therefore marked clean), queueing a new job ID for that block must instantly transition the block back to the `dirty_blocks` set and discard it from `clean_blocks` in the GSA read models. This prevents GSA from reporting a block as "clean" when work is pending.
+3. **No Unreachable "Ghost" VMs**: VMs in an `active` status must have a confirmed, healthy `worker_url`. If a VM remains `unknown` or fails to bind its port during its bootstrap grace period, it is treated as a ghost VM and must be destroyed/reallocated.
 
 **GSA GET / (port 8000):**
 The GSA returns the `GlobalStateResponse` (§2.4.2 / §6.7.6). This is the only component whose `GET /` returns full state rather than just health.

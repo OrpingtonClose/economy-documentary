@@ -133,43 +133,71 @@ def create_pipeline_agent(role: str, config: Config):
 
 ---
 
-## 4. FastAPI Handler & Autonomous Loops
+## 4. FastAPI Handlers & Autonomous Loops
 
-Agents are autonomous loops running in independent ASGI processes. They do not send wake triggers to each other. They poll the GSA and write to the event store via their POST handler.
+Agents run inside independent ASGI server processes. They do not send wake triggers to each other. Instead, they expose an HTTP API using natural language text, running all heavy execution turns in background tasks to avoid endpoint hanging.
 
 ```python
+# GET Endpoint: Conversational query or JSON health status (Blocks on lock if turn is running)
+@app.get("/")
+async def health(request: Request):
+    lock = run_lock_manager.get_lock()
+    async with lock:
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return _agent_health
+        
+        status = _agent_health.get("status", "healthy")
+        task = _agent_health.get("current_task") or "no active task"
+        message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
+        return PlainTextResponse(message, media_type="text/plain")
+
+# POST Endpoint: Conversational light commands (Blocks on lock, lightweight tasks only)
 @app.post("/")
-async def handle(request: Request, store: EventStore, config: Config):
+async def post_handler(request: Request):
     body = await request.body()
     instruction_text = body.decode("utf-8").strip()
 
-    try:
-        # 1. Reconstruct historical memory (last 5 turns)
-        memory = read_last_n_effects(AGENT_ROLE, 5)
-        memory_text = format_memory(memory)
+    lock = run_lock_manager.get_lock()
+    async with lock:
+        # Performs lightweight tasks (e.g. appends HumanInstruction event if custom text passed)
+        if instruction_text and instruction_text not in ("Wake up and check GSA", "Wakeup"):
+            await append_human_instruction_event(instruction_text)
 
-        # 2. Build prompt
-        skills = list_skills()
-        prompt = f"{ROLE_INSTRUCTIONS[AGENT_ROLE]}\n\n=== CONTEXT ===\nGSA URL: {GSA_URL}\n\n=== RECENT HISTORY ===\n{memory_text}"
-        if instruction_text and instruction_text != "Wake up and check GSA":
-            prompt += f"\n=== ADDITIONAL INSTRUCTIONS ===\n{instruction_text}\n"
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return AgentResponse(status="ok", effects_extracted=[], agent=role, timestamp=time.time())
 
-        # 3. Execute reasoning turn
-        result = await agent.run(
-            user_prompt=prompt,
-            deps=PipelineDeps(gsa_url=GSA_URL, agent_role=AGENT_ROLE)
-        )
+        resp_text = latest_monologues.get(role) or f"I am the {role} agent. I have registered your instruction. Currently my status is healthy."
+        return PlainTextResponse(resp_text, media_type="text/plain")
 
-        # 4. Extract effects and append to store
-        effects = parse_agent_text_multi(AGENT_ROLE, result.output)
-        otio_hash = await get_gsa_otio_hash(GSA_URL)
-        
-        for effect in effects:
-            store.append(effect, otio_hash)
+# PUT Endpoint: Interrupting operator intervention (Electric Bolt)
+@app.put("/")
+async def put_handler(request: Request):
+    body = await request.body()
+    instruction_text = body.decode("utf-8").strip()
 
-        return {"status": "ok", "effects_extracted": [e.kind for e in effects]}
-    except Exception as exc:
-        return {"status": "error", "error_message": str(exc)}
+    # Cancel existing task if running
+    existing_task = globals()["active_tasks"].get(role)
+    if existing_task and not existing_task.done():
+        existing_task.cancel()
+        try:
+            await existing_task
+        except asyncio.CancelledError:
+            pass
+
+    async def run_turn_in_background():
+        _agent_health["status"] = "busy"
+        try:
+            await execute_agent_turn(role=role, ...)
+            _agent_health["status"] = "healthy"
+        except Exception as exc:
+            _agent_health["status"] = "error"
+
+    task = asyncio.create_task(run_turn_in_background())
+    globals()["active_tasks"][role] = task
+
+    return PlainTextResponse("", status_code=204)
 ```
 
 ---

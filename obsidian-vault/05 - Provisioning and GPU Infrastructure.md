@@ -135,5 +135,5 @@ Workers implement the standard agent base endpoint contract:
 
 | Method / Path | Payload | Expected Response | Rationale |
 | :--- | :--- | :--- | :--- |
-| `GET /` | None | `VMHealthResponse` JSON | Polls status and current task of worker |
+| `GET /` | None | Natural language status text | Polls status and current task of worker |
 | `POST /` | Plain text prompt | Natural language result description | Wake/Dispatch job to worker agent |

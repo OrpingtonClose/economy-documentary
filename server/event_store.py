@@ -43,6 +43,12 @@ class EventStore:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent)")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS agent_memories (
+                    agent TEXT PRIMARY KEY,
+                    memories_json TEXT NOT NULL
+                )
+            """)
             conn.commit()
 
     @contextmanager
@@ -62,6 +68,13 @@ class EventStore:
         SQLite BEGIN IMMEDIATE acquires the write lock at the OS level,
         serializing all writers across processes.
         """
+        if effect.kind == "noop":
+            return EventRecord(
+                seq=-1,
+                effect=cast(EffectUnion, effect),
+                otio_hash_before=otio_hash_before
+            )
+
         effect_id = str(effect.effect_id)
         kind = effect.kind
         effect_json = effect.model_dump_json()
@@ -167,3 +180,32 @@ class EventStore:
         with open(out_path, "w", encoding="utf-8") as f:
             for rec in records:
                 f.write(rec.model_dump_json() + "\n")
+
+    def save_memories(self, agent: str, memories: list[str]) -> None:
+        """Save list of atomic memories for the specified agent."""
+        import json
+        memories_json = json.dumps(memories)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO agent_memories (agent, memories_json) VALUES (?, ?)",
+                    (agent, memories_json),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def get_memories(self, agent: str) -> list[str]:
+        """Get list of atomic memories for the specified agent."""
+        import json
+        with self._connect() as conn:
+            cur = conn.execute(
+                "SELECT memories_json FROM agent_memories WHERE agent = ?",
+                (agent,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return []
+            return json.loads(row[0])

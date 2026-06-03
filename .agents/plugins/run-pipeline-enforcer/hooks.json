@@ -1,0 +1,42 @@
+{
+  "run-pipeline-enforcer": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agents/plugins/run-pipeline-enforcer/run_pipeline_plugin.py --tool run_command --command \"${CommandLine}\""
+          }
+        ]
+      },
+      {
+        "matcher": "write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agents/plugins/run-pipeline-enforcer/run_pipeline_plugin.py --tool write_to_file --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agents/plugins/run-pipeline-enforcer/run_pipeline_plugin.py --tool replace_file_content --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .agents/plugins/run-pipeline-enforcer/run_pipeline_plugin.py --tool multi_replace_file_content --file \"${TargetFile}\""
+          }
+        ]
+      }
+    ]
+  }
+}

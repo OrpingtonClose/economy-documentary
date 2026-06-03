@@ -1,0 +1,5 @@
+{
+  "name": "run-pipeline-enforcer",
+  "description": "Enforces strict endpoints-only execution (only curl commands allowed, and only edits to failures.md permitted)",
+  "version": "1.0.0"
+}

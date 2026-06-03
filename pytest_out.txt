@@ -1,0 +1,213 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0
+rootdir: /Users/orpington/Documents/economy-documentary-work
+plugins: logfire-4.33.0, bdd-8.1.0, anyio-4.13.0, langsmith-0.8.8
+collected 3 items
+
+tests/units/test_hour_movie_scaffolding_bdd.py F.F                       [100%]
+
+=================================== FAILURES ===================================
+_________ test_successfully_scaffold_and_compile_an_hourlong_timeline __________
+
+self = <FixtureRequest for <Function test_successfully_scaffold_and_compile_an_hourlong_timeline>>
+argname = 'scaffold_helper'
+
+    def getfixturevalue(self, argname: str) -> Any:
+        """Dynamically run a named fixture function.
+    
+        Declaring fixtures via function argument is recommended where possible.
+        But if you can only decide whether to use another fixture at test
+        setup time, you may use this function to retrieve it inside a fixture
+        or test function body.
+    
+        This method can be used during the test setup phase or the test run
+        phase, but during the test teardown phase a fixture's value may not
+        be available.
+    
+        :param argname:
+            The fixture name.
+        :raises pytest.FixtureLookupError:
+            If the given fixture could not be found.
+        """
+        # Note that in addition to the use case described in the docstring,
+        # getfixturevalue() is also called by pytest itself during item and fixture
+        # setup to evaluate the fixtures that are requested statically
+        # (using function parameters, autouse, etc).
+    
+>       fixturedef = self._get_active_fixturedef(argname)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:539: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:627: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:1110: in execute
+    result: FixtureValue = ihook.pytest_fixture_setup(
+.venv/lib/python3.12/site-packages/pluggy/_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_callers.py:53: in run_old_style_hookwrapper
+    return result.get_result()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_callers.py:38: in run_old_style_hookwrapper
+    res = yield
+          ^^^^^
+.venv/lib/python3.12/site-packages/_pytest/setuponly.py:36: in pytest_fixture_setup
+    return (yield)
+            ^^^^^
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:1202: in pytest_fixture_setup
+    result = call_fixture_func(fixturefunc, request, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:908: in call_fixture_func
+    fixture_result = next(generator)
+                     ^^^^^^^^^^^^^^^
+tests/units/test_hour_movie_scaffolding_bdd.py:213: in scaffold_helper
+    helper.start_assembly_agent()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_hour_movie_scaffolding_bdd.HostScaffoldingHelper object at 0x10aac4f20>
+
+    def start_assembly_agent(self):
+        subprocess.run(f"kill -9 $(lsof -t -i:{self.assembly_port}) 2>/dev/null || true", shell=True)
+        time.sleep(0.5)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
+        env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
+        # Prepend mock bin to PATH so Assembly Agent uses our fake ffmpeg/ffprobe
+        env["PATH"] = f"{self.mock_bin_dir}:{env.get('PATH', '')}"
+    
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.assembly_stdout = open(log_dir / "scaffold_assembly_stdout.log", "w")
+        self.assembly_stderr = open(log_dir / "scaffold_assembly_stderr.log", "w")
+    
+        self.assembly_process = subprocess.Popen(
+            [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "agents.assembly.app:app", "--host", "127.0.0.1", "--port", str(self.assembly_port)],
+            stdout=self.assembly_stdout,
+            stderr=self.assembly_stderr,
+            cwd=str(PROJECT_ROOT / "server"),
+            env=env
+        )
+    
+        delay = 0.2
+        for _ in range(15):
+            try:
+                resp = httpx.get(f"http://127.0.0.1:{self.assembly_port}/", timeout=1.0)  # health probe
+                if resp.status_code == 200:
+                    return
+            except Exception:
+                pass
+            time.sleep(delay)
+            delay = min(delay * 1.5, 2.0)
+>       raise RuntimeError("Assembly agent failed to start on host")
+E       RuntimeError: Assembly agent failed to start on host
+
+tests/units/test_hour_movie_scaffolding_bdd.py:189: RuntimeError
+_ test_pipeline_recovers_from_localized_job_failures_without_repeating_completed_tasks _
+
+self = <FixtureRequest for <Function test_pipeline_recovers_from_localized_job_failures_without_repeating_completed_tasks>>
+argname = 'scaffold_helper'
+
+    def getfixturevalue(self, argname: str) -> Any:
+        """Dynamically run a named fixture function.
+    
+        Declaring fixtures via function argument is recommended where possible.
+        But if you can only decide whether to use another fixture at test
+        setup time, you may use this function to retrieve it inside a fixture
+        or test function body.
+    
+        This method can be used during the test setup phase or the test run
+        phase, but during the test teardown phase a fixture's value may not
+        be available.
+    
+        :param argname:
+            The fixture name.
+        :raises pytest.FixtureLookupError:
+            If the given fixture could not be found.
+        """
+        # Note that in addition to the use case described in the docstring,
+        # getfixturevalue() is also called by pytest itself during item and fixture
+        # setup to evaluate the fixtures that are requested statically
+        # (using function parameters, autouse, etc).
+    
+>       fixturedef = self._get_active_fixturedef(argname)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:539: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:627: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:1110: in execute
+    result: FixtureValue = ihook.pytest_fixture_setup(
+.venv/lib/python3.12/site-packages/pluggy/_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_callers.py:53: in run_old_style_hookwrapper
+    return result.get_result()
+           ^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/pluggy/_callers.py:38: in run_old_style_hookwrapper
+    res = yield
+          ^^^^^
+.venv/lib/python3.12/site-packages/_pytest/setuponly.py:36: in pytest_fixture_setup
+    return (yield)
+            ^^^^^
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:1202: in pytest_fixture_setup
+    result = call_fixture_func(fixturefunc, request, kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.12/site-packages/_pytest/fixtures.py:908: in call_fixture_func
+    fixture_result = next(generator)
+                     ^^^^^^^^^^^^^^^
+tests/units/test_hour_movie_scaffolding_bdd.py:213: in scaffold_helper
+    helper.start_assembly_agent()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <test_hour_movie_scaffolding_bdd.HostScaffoldingHelper object at 0x10ab7b230>
+
+    def start_assembly_agent(self):
+        subprocess.run(f"kill -9 $(lsof -t -i:{self.assembly_port}) 2>/dev/null || true", shell=True)
+        time.sleep(0.5)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
+        env["DOCUMENTARY_LOG_DIR"] = "/tmp/documentary-pipeline"
+        env["PYTHONUNBUFFERED"] = "1"
+        # Prepend mock bin to PATH so Assembly Agent uses our fake ffmpeg/ffprobe
+        env["PATH"] = f"{self.mock_bin_dir}:{env.get('PATH', '')}"
+    
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.assembly_stdout = open(log_dir / "scaffold_assembly_stdout.log", "w")
+        self.assembly_stderr = open(log_dir / "scaffold_assembly_stderr.log", "w")
+    
+        self.assembly_process = subprocess.Popen(
+            [str(PROJECT_ROOT / ".venv/bin/uvicorn"), "agents.assembly.app:app", "--host", "127.0.0.1", "--port", str(self.assembly_port)],
+            stdout=self.assembly_stdout,
+            stderr=self.assembly_stderr,
+            cwd=str(PROJECT_ROOT / "server"),
+            env=env
+        )
+    
+        delay = 0.2
+        for _ in range(15):
+            try:
+                resp = httpx.get(f"http://127.0.0.1:{self.assembly_port}/", timeout=1.0)  # health probe
+                if resp.status_code == 200:
+                    return
+            except Exception:
+                pass
+            time.sleep(delay)
+            delay = min(delay * 1.5, 2.0)
+>       raise RuntimeError("Assembly agent failed to start on host")
+E       RuntimeError: Assembly agent failed to start on host
+
+tests/units/test_hour_movie_scaffolding_bdd.py:189: RuntimeError
+=========================== short test summary info ============================
+FAILED tests/units/test_hour_movie_scaffolding_bdd.py::test_successfully_scaffold_and_compile_an_hourlong_timeline
+FAILED tests/units/test_hour_movie_scaffolding_bdd.py::test_pipeline_recovers_from_localized_job_failures_without_repeating_completed_tasks
+==================== 2 failed, 1 passed in 69.78s (0:01:09) ====================
