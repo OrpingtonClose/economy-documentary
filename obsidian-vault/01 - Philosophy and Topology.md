@@ -273,12 +273,18 @@ Direct manipulation of files or databases, running independent shell scripts, or
 
 ---
 
-#### 2.3.4 VM Port Mapping and State Consistency Guardrails
+#### VM Port Mapping and State Consistency Guardrails
+
 To prevent routing collisions and maintain GSA state projection accuracy, the pipeline enforces three architectural rules:
 
-1. **Unique VM Worker Ports (Port Overlap Guard)**: Active VM workers must be provisioned with distinct local tunnel ports. Multiple concurrent VMs (e.g., TTS and LTX) are strictly forbidden from sharing `localhost:8888`. Sharing endpoints causes job routing mixups where video requests are sent to audio workers and vice versa.
-2. **Re-Queued Blocks Must Transition to Dirty**: If a block has a completed job (and was therefore marked clean), queueing a new job ID for that block must instantly transition the block back to the `dirty_blocks` set and discard it from `clean_blocks` in the GSA read models. This prevents GSA from reporting a block as "clean" when work is pending.
-3. **No Unreachable "Ghost" VMs**: VMs in an `active` status must have a confirmed, healthy `worker_url`. If a VM remains `unknown` or fails to bind its port during its bootstrap grace period, it is treated as a ghost VM and must be destroyed/reallocated.
+#### Unique VM Worker Ports (Port Overlap Guard)
+Active VM workers must be provisioned with distinct local tunnel ports. Multiple concurrent VMs (e.g., TTS and LTX) are strictly forbidden from sharing `localhost:8888`. Sharing endpoints causes job routing mixups where video requests are sent to audio workers and vice versa.
+
+#### Re-queued blocks must transition to dirty in read models
+If a block has a completed job (and was therefore marked clean), queueing a new job ID for that block must instantly transition the block back to the `dirty_blocks` set and discard it from `clean_blocks` in the GSA read models. This prevents GSA from reporting a block as "clean" when work is pending.
+
+#### No unreachable ghost VMs allowed
+VMs in an `active` status must have a confirmed, healthy `worker_url`. If a VM remains `unknown` or fails to bind its port during its bootstrap grace period, it is treated as a ghost VM and must be destroyed/reallocated.
 
 **GSA GET / (port 8000):**
 The GSA returns the `GlobalStateResponse` (§2.4.2 / §6.7.6). This is the only component whose `GET /` returns full state rather than just health.

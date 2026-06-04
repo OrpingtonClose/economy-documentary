@@ -92,10 +92,13 @@ graph TD
     Double2 --> Double4[Double fleet to 4 VMs max]
 ```
 
-* **Fleet Escalation Policy:** The Provisioner escalates fleet size via progressive doubling (1 VM → 2 VMs → 4 VMs max soft limit).
-* **VRAM Matching Decision Tree:**
-  * **TTS Jobs (`job_type="tts"`):** Match RTX 4090 or RTX A6000 (VRAM ≥ 24 GB). Cost target < \$0.80/hr.
-  * **Video Jobs (`job_type="ltx"`):** Match RTX A6000 (VRAM ≥ 48 GB). Cost target < \$1.20/hr.
+#### Fleet escalation policy via progressive doubling
+The Provisioner must escalate the VM fleet size using a progressive doubling pattern (1 VM → 2 VMs → 4 VMs max soft limit per run). The fleet must start with a single instance to verify happy-path functionality before scaling.
+
+#### GPU VRAM matching constraints per job type
+The Provisioner must target specific GPU VRAM requirements and hourly cost limits depending on the job type:
+- **TTS Jobs (`job_type="tts"`):** Match RTX 4090 or RTX A6000 GPUs with VRAM ≥ 24 GB and a cost target < \$0.80/hr.
+- **Video Jobs (`job_type="ltx"`):** Match RTX A6000 GPUs with VRAM ≥ 48 GB and a cost target < \$1.20/hr.
 
 ---
 

@@ -247,12 +247,23 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
       └──────────────────────────────────┘
 ```
 
-1. **Single-Run Isolation:** Only one pipeline run executes at a time. The database `/tmp/documentary-pipeline/events.db` is dedicated to the active run, ensuring trace clarity.
-2. **Parallel Agent Execution:** Within a run, all agents run concurrently. They submit jobs and process tasks in parallel.
-3. **Turn Serialization (`LoopBoundLock`):** Within each agent process, overlapping wakeups or background loops are blocked by an in-process lock (`run_lock_manager = LoopBoundLock()`). Turns are executed inside an `async with lock:` block.
-4. **Database Serialization:** Across independent agent processes, database write conflicts are prevented by executing SQLite writes within `BEGIN IMMEDIATE` transactions. This serializes OS-level writes with a 30-second busy timeout.
-5. **Agent Busy Safeguards:** If an agent is processing a turn, its HTTP endpoints return a safe, immediate response (no double-processing). Integration tests wait until an agent's `GET /` health state returns `"healthy"` before waking it again.
-6. **VM Scaling Limit:** VM allocation follows an exponential doubling pattern: 1 VM -> 2 VMs -> 4 VMs. The maximum active GPU fleet is capped at a **soft limit of 4 VMs** per run.
+#### Single-run isolation constraints
+Only one pipeline run may execute at any given time. The database `/tmp/documentary-pipeline/events.db` is dedicated entirely to the active run to guarantee trace clarity and prevent cross-run database corruption.
+
+#### Parallel agent execution boundaries
+Within a run, all agents execute concurrently in their respective ASGI processes, submitting media jobs and processing pipeline tasks in parallel to maximize performance.
+
+#### Turn serialization via LoopBoundLock
+Within each agent process, overlapping wakeups or concurrent background execution turns are strictly serialized using an in-process `LoopBoundLock` (`run_lock_manager`). Turns must be executed inside the lock boundary to prevent concurrent state corruption.
+
+#### Database transaction serialization via BEGIN IMMEDIATE
+Across independent agent processes, database write conflicts are prevented by executing all SQLite writes within `BEGIN IMMEDIATE` transactions. This serializes OS-level writes with a 30-second busy timeout.
+
+#### Non-blocking agent busy safeguards
+If an agent is currently processing a turn, its HTTP endpoints must return an immediate response without blocking (e.g. 409 Conflict for POST, or busy status for GET). Integration test runners must wait passively until the agent's `GET /` health state returns `"healthy"` before issuing new wakeup requests.
+
+#### Exponential VM scaling limits
+VM allocation must follow an exponential doubling pattern (1 VM -> 2 VMs -> 4 VMs). The maximum active GPU worker fleet is capped at a soft limit of 4 VMs per run.
 
 ---
 

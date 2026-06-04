@@ -88,9 +88,10 @@ gantt
     Threshold Gate ($10)   :crit, 9, 10
 ```
 
-* **Accumulator Tracking:** Every active run tracks LLM token counts, GPU lease durations (calculated per-second), and network egress bandwidth.
-* **Default Cap:** $10.00 USD per run (configurable via `budget_usd` with boundaries: min $0.01, max $1000.00).
-* **Action on Overrun:** If a projected tool charge violates the remaining budget, the agent extracts a `PipelineAborted` effect with `reason="budget_exceeded"`. The Provisioner immediately issues API commands to destroy all running VMs.
+#### Unbounded cost prevention and budget limits
+Every active run must track LLM token counts, GPU lease durations (calculated per-second), and network egress bandwidth against a per-run budget ceiling:
+- The default budget is capped at $10.00 USD per run (configurable via `budget_usd` with boundaries: min $0.01, max $1000.00).
+- If a projected tool charge or execution step violates the remaining budget, the agent must extract a `PipelineAborted` effect with `reason="budget_exceeded"`. The Provisioner must immediately issue API commands to terminate and destroy all running worker VMs.
 
 ```python
 class BudgetLedger(BaseModel):
@@ -115,6 +116,11 @@ class BudgetLedger(BaseModel):
 ### 1.3 Agent Loop Detection
 
 Agents are protected against infinite execution cycles (e.g., repeating identical tool arguments or failing to make progress on checklists).
+
+#### Loop detection thresholds and resolution actions
+To protect against infinite execution cycles (e.g. repeating identical tool arguments or failing to make progress on checklists), the pipeline enforces two detection mechanisms:
+- **Duplicate-Effects Detection:** If hashes of observable side-effects (files written, VMs created, jobs queued) produce 2 identical hashes within a window of 10 turns, the agent turn is paused and a `ClarificationRequest` is emitted.
+- **No-Progress Detection:** If there is zero progress (delta change of completed task checklist items) over 5 consecutive turns, the agent turn is paused and control is surfaced to the operator.
 
 | Detection Mechanism | Evaluation Criterion | Trigger Threshold | Resolution Action |
 | :--- | :--- | :--- | :--- |
