@@ -27,32 +27,11 @@ There is no state machine or rules engine in Python code. Instead, prioritizatio
 
 Every agent system prompt contains a standardized rules block. Pick the highest priority rule that applies (only one action per turn):
 
-```text
-=== RULES ===
-1. Prioritize safety situations (budget critical, loop detected) above all else.
-2. Prioritize blocked situations (stale VM, job queued long) next.
-3. Prioritize work situations (dirty block, measurement needed) last.
-4. If multiple work situations apply, pick the one with the lowest slot_id.
-5. If no situations apply, the parser extracts NoOp.
-```
-
 ---
 
 ## 2. Situation Narratives
 
 Projections are converted into natural language narratives by the handler and injected into the user prompt on every turn.
-
-```text
-=== SITE: A1:3:2 ===
-Federal Reserve Scene narration.
-TARGET: 45.00s | MEASURED: 46.20s | DELTA: 1.20s
-ATTEMPTS: 2/5 | VERDICT: PASS (within tolerance)
-
-WHAT'S HAPPENING:
-The narration block has been recorded and measured. It falls within the calculated duration tolerance.
-WHAT TO DO:
-Emit DurationAdjusted to update the OTIO timeline.
-```
 
 ---
 
@@ -60,76 +39,7 @@ Emit DurationAdjusted to update the OTIO timeline.
 
 Context token limits (128,000 max tokens) are protected by a layered capability stack in `pydantic-deep`.
 
-```
-         Message History (Narrative + Memory)
-                        │
-                        ▼
-         ┌─────────────────────────────┐
-         │     ProvenanceCapability    │  pydantic-ai-provenance
-         ├─────────────────────────────┤
-         │      EvictionCapability     │  Paves large bash outputs
-         ├─────────────────────────────┤
-         │    SlidingWindowProcessor   │  Hard fallback trim (95%)
-         ├─────────────────────────────┤
-         │  on_before_compress callback│  OTIO-aware compaction LLM
-         ├─────────────────────────────┤
-         │  ContextManagerCapability   │  Auto-trigger at 90%
-         ├─────────────────────────────┤
-         │        CostTracking         │  Enforces $10.00 run budget
-         └─────────────────────────────┘
-                        │
-                        ▼
-                  Model Request
-```
-
 ### 3.1 Factory Function: create_pipeline_agent
-
-```python
-from pydantic_ai_provenance.capability import ProvenanceCapability
-from pydantic_ai_summarization import ContextManagerCapability, create_sliding_window_processor
-from pydantic_ai_shields import CostTracking
-from pydantic_deep import create_deep_agent
-
-def create_pipeline_agent(role: str, config: Config):
-    """Factory: create pydantic-deep agent with pipeline configuration."""
-    provenance = ProvenanceCapability(
-        agent_name=role,
-        source_tools=["bash_command"]
-    )
-
-    agent = create_deep_agent(
-        model=config.agent_models[role],
-        instructions=ROLE_INSTRUCTIONS[role],
-        on_before_compress=otio_aware_compress,
-        history_processors=[
-            create_sliding_window_processor(
-                trigger=("messages", 100),
-                keep=("messages", 50),
-                max_input_tokens=config.max_tokens
-            )
-        ],
-        eviction_token_limit=None,
-        context_manager=True,
-        context_manager_max_tokens=config.context_manager_max_tokens,
-        include_todo=False,
-        include_filesystem=False,
-        include_plan=False,
-        include_memory=False,
-        include_checkpoints=False,
-        web_search=False,
-        thinking=True,
-        cost_tracking=True,
-        cost_budget_usd=config.max_run_budget_usd,
-        periodic_reminder=PeriodicReminderConfig(every_n_turns=10, first_after=5),
-        capabilities=[
-            provenance,
-            ContextManagerCapability(max_tokens=config.context_manager_max_tokens),
-            CostTracking(budget_usd=config.max_run_budget_usd)
-        ],
-        deps_type=PipelineDeps
-    )
-    return agent
-```
 
 ---
 
@@ -156,75 +66,6 @@ Production agents and HTTP endpoints are strictly prohibited from exchanging or 
 #### PUT requests to control endpoints must cancel the active turn and start a background run returning no response
 The PUT endpoint acts as an operator electric bolt that cancels the active asyncio task and any running subprocess groups immediately, forces background execution of the new payload, and returns 204 No Content with no payload.
 
-```python
-# GET Endpoint: Conversational query or health status (Non-blocking status check)
-@app.get("/")
-async def health(request: Request) -> PlainTextOnly:
-    lock = run_lock_manager.get_lock()
-    if lock.locked():
-        _agent_health["status"] = "busy"
-    else:
-        _agent_health["status"] = "healthy"
-    
-    # Non-blocking query of current task focus from GSA
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)
-            if resp.status_code == 200:
-                _agent_health["current_task"] = _determine_focus(role, resp.json())
-    except Exception:
-        pass
-
-    status = _agent_health.get("status", "healthy")
-    task = _agent_health.get("current_task") or "no active task"
-    message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
-    return PlainTextResponse(message, media_type="text/plain")
-
-# POST Endpoint: Conversational light commands (Non-blocking conflict rejection)
-@app.post("/")
-async def post_handler(request: Request) -> PlainTextOnly:
-    body = await request.body()
-    instruction_text = body.decode("utf-8").strip()
-
-    lock = run_lock_manager.get_lock()
-    if lock.locked():
-        return PlainTextResponse("Conflict: Agent is busy", status_code=409)
-
-    # Perform turn execution synchronously within the handler task
-    await execute_agent_turn(role=role, gsa_url="http://127.0.0.1:8000/")
-    resp_text = latest_monologues.get(role) or f"I am the {role} agent. Turn completed."
-    return PlainTextResponse(resp_text, media_type="text/plain")
-
-# PUT Endpoint: Interrupting operator intervention (Electric Bolt)
-@app.put("/")
-async def put_handler(request: Request) -> PlainTextOnly:
-    body = await request.body()
-    instruction_text = body.decode("utf-8").strip()
-
-    # Cancel active background execution task immediately
-    global active_tasks
-    existing_task = active_tasks.get(role)
-    if existing_task and not existing_task.done():
-        existing_task.cancel()
-        try:
-            await existing_task
-        except asyncio.CancelledError:
-            pass
-
-    async def run_turn_in_background():
-        _agent_health["status"] = "busy"
-        try:
-            await execute_agent_turn(role=role, gsa_url="http://127.0.0.1:8000/")
-            _agent_health["status"] = "healthy"
-        except Exception:
-            _agent_health["status"] = "error"
-
-    # Spawn new turn task in background and return 204 instantly
-    task = asyncio.create_task(run_turn_in_background())
-    active_tasks[role] = task
-    return PlainTextResponse("", status_code=204)
-```
-
 ---
 
 ## 5. Semantic Extraction Pipeline (The Parser)
@@ -232,6 +73,12 @@ async def put_handler(request: Request) -> PlainTextOnly:
 The parser extracts typed effects from the agent's prose post-turn. The post-turn extraction parser runs the agent's natural language prose to validate and extract output effects, preventing competing transitions.
 
 #### Agents are prohibited from inline polling or blocking sleeps
+⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
+
+⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
+
+⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
+
 Agents must never execute `time.sleep` or loop-bound sleeps, nor run inline polling commands. If a resource or VM status is still initializing, the agent must output its current observations and end its turn immediately, relying on the platform's autonomous loop scheduler to trigger the next turn.
 
 #### Narration text and screenplay scripts must not be subject to arbitrary length heuristics or trimming
@@ -250,20 +97,6 @@ graph TD
 ### 5.1 Container Models
 
 To enforce single actions per turn, the agent parser uses `_SingleEffect`.
-
-```python
-class _SingleEffect(BaseModel):
-    """Exactly one effect extracted per turn."""
-    chain_of_thought: str = Field(description="Reasoning steps")
-    effect: _EffectUnion = Field(description="The single extracted effect")
-    confidence: int = Field(ge=0, le=10)
-
-class _MultiEffect(BaseModel):
-    """Batch parser schema (used for human/operator inputs only)."""
-    chain_of_thought: str = Field(description="Reasoning steps")
-    effects: list[_EffectUnion] = Field(description="Extracted list of effects")
-    confidence: int = Field(ge=0, le=10)
-```
 
 ---
 
@@ -306,4 +139,3 @@ Direct manipulation of files or databases, running independent shell scripts, or
 
 #### Production execution paths must not use mock implementations
 Mocks, facades, and simulated worker endpoints are strictly forbidden in production runs. All VM provisioning, audio generation, and video generation steps must perform genuine system calls or API queries. Mocks are reserved exclusively for the offline test suites.
-```

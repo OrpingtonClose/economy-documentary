@@ -55,18 +55,6 @@ graph TD
 3. **Control Plane Sandboxing:** Control plane services (Scenario, Audio, Video, Assembly, Provisioner) run under unprivileged Unix accounts with restricted filesystem write boundaries. They cannot access host credentials or system configurations.
 4. **No Secrets on Workers:** Worker VMs do not have access to API keys, JWTs, or cloud credentials. Work descriptions are received via HTTP POST, and results are returned directly in the response payload.
 
-```python
-class VMIsolationConfig(BaseModel):
-    """Security parameters for ephemeral GPU worker VMs.
-
-    V7.1: No JWT, no credentials, no disk checkpointing.
-    VM lifecycle is strictly operator-driven or Provisioner-managed.
-    """
-    allowed_egress_hosts: list[str] = Field(
-        default_factory=lambda: ["coordinator.internal"]
-    )
-```
-
 > [!TIP]
 > **Operator Escape Hatch:** The human operator can POST a `HumanInstruction` to any agent at any time. This allows forcing VM teardowns or aborting runaway agents via immediate manual override.
 
@@ -89,27 +77,15 @@ gantt
 ```
 
 #### Unbounded cost prevention and budget limits
+⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
+
+⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
+
+⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
+
 Every active run must track LLM token counts, GPU lease durations (calculated per-second), and network egress bandwidth against a per-run budget ceiling:
 - The default budget is capped at $10.00 USD per run (configurable via `budget_usd` with boundaries: min $0.01, max $1000.00).
 - If a projected tool charge or execution step violates the remaining budget, the agent must extract a `PipelineAborted` effect with `reason="budget_exceeded"`. The Provisioner must immediately issue API commands to terminate and destroy all running worker VMs.
-
-```python
-class BudgetLedger(BaseModel):
-    """Cumulative spend against a per-run budget ceiling."""
-    budget_usd: float = Field(default=10.0, ge=0.01, le=1000.0)
-    spent_llm_usd: float = Field(default=0.0)
-    spent_gpu_usd: float = Field(default=0.0)
-    spent_egress_usd: float = Field(default=0.0)
-
-    @property
-    def remaining_usd(self) -> float:
-        return self.budget_usd - (
-            self.spent_llm_usd + self.spent_gpu_usd + self.spent_egress_usd
-        )
-
-    def check(self, next_charge_usd: float) -> bool:
-        return (self.remaining_usd - next_charge_usd) >= 0.0
-```
 
 ---
 
@@ -126,16 +102,6 @@ To protect against infinite execution cycles (e.g. repeating identical tool argu
 | :--- | :--- | :--- | :--- |
 | **Duplicate-Effects** | Hashes of observable side-effects (files written, VMs created, jobs queued) | 2 identical hashes within window | Agent turn paused; emits `ClarificationRequest` |
 | **No-Progress** | Delta change of completed task checklist items | 0 progress over `N` turns (default: 5) | Agent turn paused; surfaces context to Operator |
-
-```python
-class LoopDetectorConfig(BaseModel):
-    """Per-agent loop detection parameters."""
-    progress_threshold_turns: int = Field(default=5, ge=2, le=20)
-    effect_dedup_window: int = Field(default=10, ge=2, le=50)
-    enabled_detectors: list[Literal["duplicate_effects", "no_progress"]] = Field(
-        default_factory=lambda: ["duplicate_effects", "no_progress"]
-    )
-```
 
 ---
 
@@ -168,10 +134,6 @@ Operators monitor and debug the pipeline using direct access points:
 
 Logs are printed to `stdout` in a unified, non-structured format:
 
-```text
-YYYY-MM-DD HH:MM:SS.mmm | LEVEL | COMPONENT | effect_id=... | message
-```
-
 #### Log Levels
 * `INFO`: Applied during normal workflows, turn boundary completions, or event store appends.
 * `WARN`: Emitted during recoverable faults (e.g., worker VM timeout, API rate limit retry).
@@ -193,33 +155,6 @@ No external scrapers (Prometheus, StatsD) are run. System metrics are calculated
 | **Job Backlog** | `len(jobs.jobs)` (grouped by status) | Dispatcher load tracking |
 
 #### External Rate Collector Example
-```python
-import time
-import httpx
-
-class PipelineMonitor:
-    def __init__(self, gsa_url: str):
-        self.gsa_url = gsa_url
-        self.last_seq = 0
-        self.last_ts = 0.0
-
-    async def poll(self):
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(f"{self.gsa_url}/")
-            data = resp.json()
-            
-            seq = data["latest_sequence"]
-            now = time.time()
-            
-            if self.last_ts > 0:
-                delta_seq = seq - self.last_seq
-                delta_t = now - self.last_ts
-                rate = delta_seq / delta_t if delta_t > 0 else 0
-                print(f"{rate:.2f} effects/sec | Phase: {data['state']['current_phase']}")
-                
-            self.last_seq = seq
-            self.last_ts = now
-```
 
 ---
 
@@ -241,24 +176,8 @@ Since there is no automated notification service (e.g., PagerDuty), the operator
 Causation and correlation are established by tracing parent identifiers down the event store.
 
 #### Trace Query Utility
-```python
-def trace_causal_chain(job_id: str, store: EventStore) -> list[EventRecord]:
-    """Retrieve all event records tied to a specific job execution."""
-    records = store.read_all()
-    chain = [
-        r for r in records 
-        if getattr(r.effect, "job_id", None) == job_id
-    ]
-    return sorted(chain, key=lambda r: r.sequence)
-```
 
 #### Sample Tracing Output
-```text
-3: QueueJob (job_id=job-901, target=video)
-4: VMAllocated (job_id=job-901, instance_id=vast-776)
-5: JobStarted (job_id=job-901)
-6: JobCompleted (job_id=job-901, artifact_path="/tmp/video_901.mp4")
-```
 
 The `X-Effect-ID` header is appended to HTTP responses when writing effects, allowing external agents to match API calls directly to database sequence states.
 

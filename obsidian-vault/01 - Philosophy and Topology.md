@@ -23,21 +23,28 @@ Thirteen foundational commitments and three long-term strategic pillars govern t
 
 ### 1.1 Event Log as Sole Source of Truth
 
-#### Event log is the sole source of truth
-All pipeline state must be derived passively by folding over the SQLite `events.db` event log. Direct updates to databases or projections from agents are strictly banned. Replay from sequence `0` reconstructs the entire state exactly. The event store is the only persistent storage; all other state projections are ephemeral. EventStoreDB streams are the future scalability path. Agents hold no session state and VM workers are ephemeral.
+#### Event Log is the sole source of truth of global state
+⚡ All global state must be derived by folding over the SQLite events.db event log; no direct database or projection updates from any agent or process
+⚡ Agents must hold no local session state, process-level memory, or in-memory caches between turns; each turn must rebuild context from the GSA projection bundle
+
+All global pipeline state must be derived passively by folding over the SQLite `events.db` event log. Direct updates to databases or projections from agents are strictly banned. Replay from sequence `0` reconstructs the entire state exactly. The event store is the only persistent storage; all other state projections are ephemeral. EventStoreDB streams are the future scalability path. Agents hold no session state and VM workers are ephemeral.
 
 ---
 
 ### 1.2 Effects as Only Legal Mutations
 
-#### Effects are the only legal mutations
-All state changes must enter through SQLite event store appends. Direct state mutation of projections is prohibited. Projections are read-only consumers. Every mutation must be represented by a typed Pydantic model (`Effect`) containing metadata for validation, tracking, and idempotency (UUIDv7), extracted from agent prose using a category-conditioned semantic parser. Invalid payloads are rejected before reaching the event store.
+#### Mutations of global state only via typed Effect models appended to EventStore
+⚡ Every state mutation must enter through a typed Pydantic Effect model appended to the EventStore; direct mutation of projections is strictly prohibited
+
+All mutations of the global pipeline state must enter through SQLite event store appends. Direct state mutation of projections is prohibited. Projections are read-only consumers. Every mutation must be represented by a typed Pydantic model (`Effect`) containing metadata for validation, tracking, and idempotency (UUIDv7), extracted from agent prose using a category-conditioned semantic parser. Invalid payloads are rejected before reaching the event store.
 
 ---
 
 ### 1.3 No State Machine — Prompt-Based Rules
 
 #### Prompt-driven state execution (No state machines)
+⚡ The pipeline must contain no hardcoded state machine, transition table, or phase-enforcing switch statement; all prioritization lives in agent system prompts
+
 The pipeline has no hardcoded state machine. Prioritization, control rules, and action selection must be governed inside the agent's system prompt rather than hardcoded in the execution code. Prioritization, filtering, and response selection occur inside the agent via prompt instructions.
 
 > [!TIP]
@@ -48,6 +55,9 @@ The pipeline has no hardcoded state machine. Prioritization, control rules, and 
 ### 1.4 No Timeouts in Code
 
 #### Time-based timeouts are strictly forbidden across all execution and test code
+⚡ Time-based timeouts are strictly forbidden in all execution code, test code, HTTP requests, and subprocess launches; operations must run to completion or wait indefinitely
+⚡ Shell subprocesses such as ffmpeg or vastai must never be launched with timeout arguments; they must execute asynchronously and be observed externally
+
 All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
 
 ---
@@ -55,6 +65,9 @@ All processes, tests, loop checks, agent tasks, HTTP queries (including lightwei
 ### 1.5 Real Engines Only
 
 #### Production execution paths must not use mock implementations
+⚡ Production execution paths must not use mock implementations, facades, stubs, or simulated worker endpoints; mocks are reserved for offline unit tests only
+⚡ Production media generation must use real engines only: Qwen3-TTS for audio, LTX-2.3 for video, and DeepSeek API for agent inference
+
 Mocks, facades, and simulated worker endpoints are strictly forbidden in production runs. All VM provisioning, audio generation, and video generation steps must perform genuine system calls or API queries. Mocks are reserved exclusively for the offline test suites. TTS uses **Qwen3-TTS** on GPU VMs. Video uses **LTX-2.3**. Agent LLM inference uses **DeepSeek API** (`deepseek-v4-flash`). Unavailable engines trigger `ClarificationRequest`.
 
 ---
@@ -62,6 +75,8 @@ Mocks, facades, and simulated worker endpoints are strictly forbidden in product
 ### 1.6 Never Regex
 
 #### Category-conditioned extraction via instructor (Never Regex)
+⚡ No regular expressions may be used to extract structured data from agent LLM outputs; extraction must use instructor with category-conditioned semantic parsing
+
 No regular expressions may be used to extract structured data from agent outputs. The parser must use the agent's current role to determine valid `Effect` subtypes and constrain the LLM to schema-compliant JSON via `instructor` + `deepseek-v4-flash`. If extraction fails, the prompt is adjusted — the schema is not weakened.
 
 ---
@@ -69,6 +84,10 @@ No regular expressions may be used to extract structured data from agent outputs
 ### 1.7 Natural Language Only — Agents Never Emit Structured Output
 
 #### Production agents must communicate strictly in PlainTextResponse
+⚡ Agents must communicate strictly in natural language plain text; no JSON, XML, EFFECT: markers, section labels, or structured output formats
+⚡ Agent system prompts must never mention effect types, JSON schemas, parsing instructions, or the existence of the semantic parser
+⚡ All complexity for structured data extraction must live in the semantic parser; agent prompts must never be modified to make parsing easier
+
 Production agents and HTTP endpoints are strictly prohibited from exchanging or exposing structured JSON payloads, key-value metadata strings (such as `ltx=yes`, `tts=yes`), or accepting JSON content headers for core agent state checks. All communication between agents must flow as conversational, natural-language plain text responses. The only exception is the GSA endpoint which exposes projections for fold functions. Agents produce natural language text and nothing else. They do not emit `EFFECT:` markers, JSON, XML, labeled sections, or any structured format. They do not know the parser exists. The parser is a post-processing step that extracts structured effects from genuinely free-form prose.
 
 **Complexity belongs in the parser.** The parser is expected to be very complex — semantic understanding, context awareness, category-conditioned extraction, discriminated unions, field validators, reasking logic. This complexity is deliberate and welcome. What is forbidden is pushing any of this complexity onto the agent by requiring structured output.
@@ -86,6 +105,8 @@ Production agents and HTTP endpoints are strictly prohibited from exchanging or 
 ### 1.8 Situation-Driven Agent Tasking
 
 #### Situation-driven agent tasking via GSA
+⚡ The Global State Agent on port 8000 is the sole component permitted to read the SQLite event store; all other agents must read state exclusively via GET / from the GSA
+
 Agents must never read the SQLite database directly. They query the read-only GSA status endpoint to receive the folded projection bundle, scanning this state to determine their next action based on instructions in their system prompts.
 
 ---
@@ -93,6 +114,8 @@ Agents must never read the SQLite database directly. They query the read-only GS
 ### 1.9 pydantic-deep
 
 #### Pre-processing context compaction
+⚡ Agent message history compaction must use pydantic-deep ContextManagerCapability with on_before_compress hooks, not external scripts or database watchers
+
 Agent message history compaction must be executed as a pre-processing step using the `on_before_compress` hooks of the context capability, rather than run as an external database or watcher-side compaction script. Token management is handled by the pydantic-deep `ContextManagerCapability`.
 
 ---
@@ -233,15 +256,23 @@ Every agent exposes exactly `GET /` (status), `POST /` (scheduled run), and `PUT
 ### 2.3 HTTP Contract Specification
 
 #### Pipeline state and agent actions must be controlled strictly via HTTP endpoints
+⚡ All production HTTP endpoints must use Content-Type text/plain with natural language narrative text; JSON is forbidden at HTTP boundaries except for the GSA internal projection endpoint
+
 Direct manipulation of files or databases, running independent shell scripts, or mutably bypassing control endpoints is strictly prohibited. All execution, monitoring, and human intervention must flow through the ASGI HTTP endpoints (GET, POST, PUT). Silent process restarts are banned. All HTTP inputs and responses in the production pipeline use **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats.
 
 #### Non-blocking GET queries and health status
+⚡ GET / must return conversational status text immediately without blocking on a running turn
+
 The GET endpoint (`GET /` and `GET /{prompt:path}`) is non-blocking. It queries the GSA to describe the current focus task in a plain-text conversational format. If no prompt is passed, it returns a conversational description of the agent's busy/idle status.
 
 #### POST queries for scheduled executions
+⚡ POST / must return 409 Conflict immediately if the agent is busy; it must not interrupt, queue, or block until idle
+
 The POST endpoint (`POST /` and `POST /{prompt:path}`) triggers a conversational turn. If the agent is already busy executing a turn, it must return a `409 Conflict` (or plain text indicating busy) immediately instead of blocking or interrupting. Otherwise, it executes the turn and returns the monologue. Custom instruction text is appended to the event store as a `HumanInstruction` event.
 
 #### PUT queries for interrupting operator intervention
+⚡ PUT / must cancel the active asyncio task and any spawned subprocesses immediately, then schedule the new turn in the background and return 204 No Content with no body
+
 The PUT endpoint (`PUT /` and `PUT /{prompt:path}`) acts as an operator intervention tool. It cancels any active turn task and spawned subprocesses immediately, schedules a new turn in the background, and returns `204 No Content` immediately. Custom instruction text is appended to the event store as a `HumanInstruction` event.
 
 ---
@@ -250,13 +281,19 @@ The PUT endpoint (`PUT /` and `PUT /{prompt:path}`) acts as an operator interven
 
 To prevent routing collisions and maintain GSA state projection accuracy, the pipeline enforces three architectural rules:
 
-#### Unique VM Worker Ports (Port Overlap Guard)
+#### Unique HTTPS endpoints per VM (Endpoint Overlap Guard)
+⚡ VM workers must be provisioned with distinct HTTPS URLs and ports; concurrent VMs must never share a hostname, port, or endpoint
+
 Active VM workers must be provisioned with distinct local tunnel ports. Multiple concurrent VMs (e.g., TTS and LTX) are strictly forbidden from sharing `localhost:8888`. Sharing endpoints causes job routing mixups where video requests are sent to audio workers and vice versa.
 
 #### Re-queued blocks must transition to dirty in read models
+⚡ Re-queuing a new job for a block that was previously marked clean must instantly move that block back to dirty_blocks and remove it from clean_blocks
+
 If a block has a completed job (and was therefore marked clean), queueing a new job ID for that block must instantly transition the block back to the `dirty_blocks` set and discard it from `clean_blocks` in the GSA read models. This prevents GSA from reporting a block as "clean" when work is pending.
 
 #### No unreachable ghost VMs allowed
+⚡ Active VMs must have a confirmed healthy worker_url; any VM without a reachable endpoint during its bootstrap grace period is a ghost VM and must be destroyed
+
 VMs in an `active` status must have a confirmed, healthy `worker_url`. If a VM remains `unknown` or fails to bind its port during its bootstrap grace period, it is treated as a ghost VM and must be destroyed/reallocated.
 
 **GSA GET / (port 8000):**
@@ -298,6 +335,8 @@ If the final audio speaker role does not match the scenario voice tag, a `voice_
 The **Global State Agent** (GSA, port 8000) is the **sole read path** between the SQLite event store and all other agents. It polls DB files, maintains all five projections in memory, and serves them via `GET /`.
 
 #### GSA GET / only
+⚡ The GSA must not persist folded projection states on disk; on restart it must replay the event log from sequence 0 to reconstruct all projections
+
 The GSA exposes exactly one endpoint: `GET /`. It does not accept `POST /` or `PUT /` requests.
 
 #### Read-only GSA status from agent perspective

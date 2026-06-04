@@ -45,86 +45,9 @@ graph LR
 
 ### 1.2 Authoring Format (YAML)
 
-```yaml
-# scripts/documentary_scene_3.yaml
-scene_num: 3
-blocks:
-  - block_id: "A1:3:1"
-    role: scenario
-    instructions: |
-      Write narration for the Federal Reserve scene.
-      Duration target: 45s. Speaker: V1_Narrator.
-    permitted_effects: 
-      - update_script
-      - noop
-      - clarification_request
-    escape_conditions:
-      - condition: "agent_loop_detected"
-        action: "request_clarification"
-      - condition: "budget_critical"
-        action: "abort_pipeline"
-
-  - block_id: "A1:3:2"
-    role: audio
-    instructions: |
-      Reconcile narration duration to script target (45s ±15%).
-      Max attempts: 5. Voice: V1_Narrator.
-    permitted_effects:
-      - queue_job
-      - job_requeued
-      - duration_adjusted
-      - reconciliation_failed
-      - reconciliation_complete
-      - noop
-    prerequisites:
-      - block_id: "A1:3:1"
-        required_effect: "update_script"
-```
-
 ---
 
 ### 1.3 Runtime Turn Enforcement Example
-
-```python
-async def run_authorized_turn(agent, script_block, projections, store):
-    """Run an agent turn constrained by an authored script block."""
-    # 1. Verify prerequisites
-    for prereq in script_block.prerequisites:
-        if not has_effect(projections, prereq.block_id, prereq.required_effect):
-            raise PrerequisitesNotMet(prereq)
-
-    # 2. Inject script context into prompt
-    instructions = f"""
-{ROLE_INSTRUCTIONS[script_block.role]}
-
-=== AUTHORIZED SCRIPT ===
-{script_block.instructions}
-
-=== PERMITTED EFFECTS ===
-{', '.join(script_block.permitted_effects)}
-
-=== ESCAPE CONDITIONS ===
-{yaml.dump(script_block.escape_conditions)}
-"""
-
-    # 3. Run Agent (per-turn prompts override default instructions)
-    result = await agent.run(
-        user_prompt=instructions + "\n\n" + build_narrative(projections, script_block.role),
-        deps=PipelineDeps(gsa_url="http://gsa:8000", agent_role=script_block.role),
-    )
-
-    # 4. Extract and validate effects
-    effects = await parse_agent_text_multi(script_block.role, result.output)
-    
-    # Filter to permitted kinds after extraction
-    permitted = [e for e in effects if e.kind in script_block.permitted_effects]
-
-    # 5. Append validated effects to the event store
-    for effect in permitted:
-        store.append(effect, otio_hash_before=hash_otio(projections["otio"]))
-
-    return permitted
-```
 
 ---
 
@@ -219,41 +142,31 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 
 ### 3.1 Concurrency Model
 
-```text
-[Pipeline Orchestration Layer]
-            │
-            ▼
-┌───────────────────────┐
-│     One Run Active    │ (Single events.db write boundary)
-└───────────┬───────────┘
-            │
-            ▼
-┌──────────────────────────────────────────────┐
-│  Concurrent Agent Execution (Within the Run) │
-│  - Scenario Agent  - Audio Agent             │
-│  - Video Agent     - Assembly Agent          │
-└───────────┬───────────────────────┬──────────┘
-            │                       │
-            ▼                       ▼
-┌───────────────────────┐ ┌───────────────────────┐
-│   LoopBoundLock       │ │   LoopBoundLock       │ (Serializes turns in-process)
-│   (Scenario Agent)    │ │    (Audio Agent)      │
-└───────────┬───────────┘ └─────────┬─────────────┘
-            │                       │
-            ▼                       ▼
-      ┌──────────────────────────────────┐
-      │      sqlite3 BEGIN IMMEDIATE     │ (OS-level database lock)
-      │      (Writes serialized to WAL)  │
-      └──────────────────────────────────┘
-```
-
 #### No runlevel concurrency
+⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
+
+⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
+
+⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
+
 The pipeline is strictly self-contained from start to finish. Runlevel concurrency is completely prohibited; there are no concurrent pipeline runs or parallel instances of the pipeline executing at the same time. The database `/tmp/documentary-pipeline/events.db` is strictly dedicated to the single, active, self-contained run to prevent data corruption and trace pollution.
 
 #### Concurrent agent execution within a run
+⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
+
+⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
+
+⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
+
 Within a single active run, all agents (Scenario, Audio, Video, Assembly, and the Provisioner) can and should execute concurrently in their respective ASGI processes. They act concurrently by polling the GSA, submitting media jobs, managing VMs, processing tasks in parallel to maximize runtime efficiency, and performing inquisitive proactive investigation into the run for general checks.
 
 #### Turn serialization via LoopBoundLock
+⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
+
+⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
+
+⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
+
 Within each agent process, overlapping wakeups or concurrent background execution turns are strictly serialized using an in-process `LoopBoundLock` (`run_lock_manager`). Turns must be executed inside the lock boundary to prevent concurrent state corruption.
 
 #### Database transaction serialization via BEGIN IMMEDIATE
