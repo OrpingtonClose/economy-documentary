@@ -61,7 +61,7 @@ class HostTestHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health check
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health check
                 if resp.status_code in (200, 400, 404, 500):
                     return
             except Exception:
@@ -95,7 +95,7 @@ class HostTestHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health check
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health check
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -187,7 +187,7 @@ def step_configured_real_provisioning(host_helper):
 
 @when('the Provisioner Agent is woken up')
 def step_wake_provisioner(host_helper):
-    resp = httpx.post(f"http://localhost:{host_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{host_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 
@@ -258,7 +258,7 @@ def step_verify_worker_healthy(host_helper, event_store):
             allocated_effects = [e for e in effects if e.kind == "vm_allocated"]
             if allocated_effects:
                 worker_url = allocated_effects[-1].worker_url
-            probe_url = "http://localhost:8888" if (not worker_url or worker_url == "unknown") else worker_url
+            probe_url = "http://127.0.0.1:8888" if (not worker_url or worker_url == "unknown") else worker_url
             if probe_url:
                 resp = httpx.get(f"{probe_url}/", timeout=2.0)  # health check probe
                 if resp.status_code == 200:
@@ -309,7 +309,7 @@ def step_download_and_verify_artifact(event_store):
 @then('the Provisioner Agent should deallocate the active VM after job completion')
 def step_trigger_deallocation(host_helper):
     # Remove timeout for architectural compliance on agent POST call
-    resp = httpx.post(f"http://localhost:{host_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{host_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 

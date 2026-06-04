@@ -50,7 +50,7 @@ class HostScenarioHelper:
         delay = 0.2
         for _ in range(30):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400, 500):
                     return
             except Exception:
@@ -87,7 +87,7 @@ class HostScenarioHelper:
         delay = 0.2
         for _ in range(30):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -157,7 +157,7 @@ def step_receive_instruction(instruction, event_store):
     event_store.append(BudgetSet(agent="operator", budget_usd=10.0), "")
     
     # Remove timeout from POST to Scenario Agent for architectural compliance
-    resp = httpx.post("http://localhost:8001/", content=instruction)
+    resp = httpx.post("http://127.0.0.1:8001/", content=instruction)
     assert resp.status_code == 200
 
     
@@ -191,7 +191,7 @@ def step_check_slots(event_store):
 
 @then("the OTIO timeline in the GSA should be updated with the script blocks")
 def step_check_otio():
-    resp = httpx.get("http://localhost:8000/")
+    resp = httpx.get("http://127.0.0.1:8000/")
     assert resp.status_code == 200
     state = resp.json()
     assert state.get("otio")

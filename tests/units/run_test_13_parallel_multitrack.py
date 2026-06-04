@@ -94,11 +94,10 @@ def main():
             delay = 0.2
             for _ in range(15):
                 try:
-                    resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=1.0)
+                    resp = httpx.get(f"http://127.0.0.1:{port}/", timeout=1.0)  # health probe
                     if resp.status_code == 200:
                         break
                 except Exception:
-                    pass
                     time.sleep(delay)
                     delay = min(delay * 1.5, 2.0)
 

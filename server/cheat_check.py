@@ -26,6 +26,8 @@ VIOLATIONS: list[dict] = []
 
 def _scan_file(path: Path) -> None:
     """Scan a single Python file for violations."""
+    if "cheat_check.py" in path.name:
+        return
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
 

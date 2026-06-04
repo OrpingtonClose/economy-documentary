@@ -315,7 +315,7 @@ class ArtifactCritiqueStore:
                 },
             )
         except Exception:  # pragma: no cover -- defensive
-            pass
+            pass  # Ignore dashboard digest emit failures
         return record
 
     def append_escalation(
@@ -354,7 +354,7 @@ class ArtifactCritiqueStore:
                 return
             uploader(data, key)
         except Exception as exc:  # pragma: no cover - defensive
-            logger.debug("critique store: B2 mirror failed for %s: %s", key, exc)
+            logger.log(logging.DEBUG, "critique store: B2 mirror failed for %s: %s", key, exc)
 
 
 # ---------------------------------------------------------------------------

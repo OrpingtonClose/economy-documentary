@@ -150,7 +150,7 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
     create_args = [
         "create", "instance",
         str(offer_id),
-        "--image", "ubuntu:22.04",
+        "--image", "vastai/worker:tts",
         "--disk", str(disk_gb),
         "--ssh",
         "--direct",

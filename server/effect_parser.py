@@ -15,23 +15,11 @@ from effects import (
     DeleteScene,
     ReorderScenes,
     QueueJob,
-    QueueAudioJob,
-    QueueVideoJob,
     JobStarted,
-    AudioJobStarted,
-    VideoJobStarted,
     JobCompleted,
-    AudioJobCompleted,
-    VideoJobCompleted,
     JobFailed,
-    AudioJobFailed,
-    VideoJobFailed,
     JobRequeued,
-    AudioJobRequeued,
-    VideoJobRequeued,
     JobApproved,
-    AudioJobApproved,
-    VideoJobApproved,
     AudioGenerated,
     AudioMeasured,
     DurationAdjusted,
@@ -103,21 +91,11 @@ class _ReorderScenesEffect(BaseModel):
 class _QueueJobEffect(BaseModel):
     kind: Literal["queue_job"] = "queue_job"
     job_id: str
-    job_type: str
+    job_type: Literal["tts", "ltx"]
     scene_num: int = Field(..., ge=1)
     block_id: str = Field(..., description="The block ID (e.g., 's1_b1' or 's2_b3'). Do NOT include the track prefix.")
     slot_id: str = Field(..., description="The canonical slot address in GSA (e.g., 'A1:1:s1_b1' or 'V1:2:s2_b3').")
     params: dict = Field(default_factory=dict)
-
-
-class _QueueAudioJobEffect(_QueueJobEffect):
-    kind: Literal["queue_audio_job"] = "queue_audio_job"
-    job_type: Literal["tts"] = "tts"
-
-
-class _QueueVideoJobEffect(_QueueJobEffect):
-    kind: Literal["queue_video_job"] = "queue_video_job"
-    job_type: Literal["ltx"] = "ltx"
 
 
 class _JobStartedEffect(BaseModel):
@@ -125,14 +103,6 @@ class _JobStartedEffect(BaseModel):
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
-
-
-class _AudioJobStartedEffect(_JobStartedEffect):
-    kind: Literal["audio_job_started"] = "audio_job_started"
-
-
-class _VideoJobStartedEffect(_JobStartedEffect):
-    kind: Literal["video_job_started"] = "video_job_started"
 
 
 class _JobCompletedEffect(BaseModel):
@@ -149,14 +119,6 @@ class _JobCompletedEffect(BaseModel):
     measurements: list[float] = Field(default_factory=list)
 
 
-class _AudioJobCompletedEffect(_JobCompletedEffect):
-    kind: Literal["audio_job_completed"] = "audio_job_completed"
-
-
-class _VideoJobCompletedEffect(_JobCompletedEffect):
-    kind: Literal["video_job_completed"] = "video_job_completed"
-
-
 class _JobFailedEffect(BaseModel):
     kind: Literal["job_failed"] = "job_failed"
     job_id: str
@@ -167,27 +129,11 @@ class _JobFailedEffect(BaseModel):
     retry_count: int = 0
 
 
-class _AudioJobFailedEffect(_JobFailedEffect):
-    kind: Literal["audio_job_failed"] = "audio_job_failed"
-
-
-class _VideoJobFailedEffect(_JobFailedEffect):
-    kind: Literal["video_job_failed"] = "video_job_failed"
-
-
 class _JobRequeuedEffect(BaseModel):
     kind: Literal["job_requeued"] = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1)
     new_params: dict | None = None
-
-
-class _AudioJobRequeuedEffect(_JobRequeuedEffect):
-    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
-
-
-class _VideoJobRequeuedEffect(_JobRequeuedEffect):
-    kind: Literal["video_job_requeued"] = "video_job_requeued"
 
 
 class _JobApprovedEffect(BaseModel):
@@ -196,14 +142,6 @@ class _JobApprovedEffect(BaseModel):
     artifact_uri: str
     quality_notes: str = ""
     reviewed_by: str = "agent"
-
-
-class _AudioJobApprovedEffect(_JobApprovedEffect):
-    kind: Literal["audio_job_approved"] = "audio_job_approved"
-
-
-class _VideoJobApprovedEffect(_JobApprovedEffect):
-    kind: Literal["video_job_approved"] = "video_job_approved"
 
 
 class _AudioGeneratedEffect(BaseModel):
@@ -450,23 +388,11 @@ _EffectUnion = Annotated[
         _DeleteSceneEffect,
         _ReorderScenesEffect,
         _QueueJobEffect,
-        _QueueAudioJobEffect,
-        _QueueVideoJobEffect,
         _JobStartedEffect,
-        _AudioJobStartedEffect,
-        _VideoJobStartedEffect,
         _JobCompletedEffect,
-        _AudioJobCompletedEffect,
-        _VideoJobCompletedEffect,
         _JobFailedEffect,
-        _AudioJobFailedEffect,
-        _VideoJobFailedEffect,
         _JobRequeuedEffect,
-        _AudioJobRequeuedEffect,
-        _VideoJobRequeuedEffect,
         _JobApprovedEffect,
-        _AudioJobApprovedEffect,
-        _VideoJobApprovedEffect,
         _AudioGeneratedEffect,
         _AudioMeasuredEffect,
         _DurationAdjustedEffect,
@@ -588,10 +514,10 @@ def _ds_async_client() -> instructor.AsyncInstructor:
 # Permitted kinds mapping per role
 ROLE_PERMITTED_KINDS = {
     "scenario": ["update_script", "delete_scene", "reorder_scenes", "clarification_request"],
-    "audio": ["queue_audio_job", "audio_job_approved", "audio_job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request"],
-    "video": ["queue_video_job", "video_job_approved", "video_job_requeued", "merge_into_otio", "clarification_request"],
+    "audio": ["queue_job", "job_approved", "job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request"],
+    "video": ["queue_job", "job_approved", "job_requeued", "merge_into_otio", "clarification_request"],
     "assembly": ["pipeline_complete", "production_failed", "clarification_request"],
-    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "audio_job_completed", "video_job_completed", "audio_job_failed", "video_job_failed", "audio_job_started", "video_job_started", "clarification_request"],
+    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "job_failed", "job_started", "clarification_request"],
     "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "clarification_request"],
 }
 
@@ -611,7 +537,7 @@ async def validate_state_invariants(agent_id: str, effect: Any) -> list[Effect]:
     if not gsa_state:
         return [effect]
 
-    if effect.kind in ("job_approved", "audio_job_approved", "video_job_approved"):
+    if effect.kind == "job_approved":
         jobs = gsa_state.get("jobs", {}).get("jobs", {})
         job = jobs.get(effect.job_id)
         if not job:
@@ -681,7 +607,7 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
             if exc:
                 f.write(f"ERROR: {exc}\n")
     except Exception:
-        pass
+        pass  # Debug log write failures are non-critical and ignored
 
     if exc or result is None:
         err_msg = str(exc) if exc else "No result returned from extraction"

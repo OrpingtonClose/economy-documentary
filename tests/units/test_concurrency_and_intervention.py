@@ -17,7 +17,7 @@ async def test_post_handler_rejects_with_409_when_busy():
     try:
         shutil.rmtree("/tmp/documentary-pipeline")
     except Exception:
-        pass
+        pass  # directory deletion error ignored
     os.makedirs("/tmp/documentary-pipeline", exist_ok=True)
 
     from agent_base import event_store
@@ -83,4 +83,4 @@ async def test_bash_command_cancels_process_group():
             assert False, "Process group still exists, but it should have been killed"
         except ProcessLookupError:
             # This is expected since the process group was killed
-            pass
+            pass  # Process group was killed successfully

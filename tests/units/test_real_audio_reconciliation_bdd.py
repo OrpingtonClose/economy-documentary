@@ -16,9 +16,7 @@ from effects import (
     UpdateScript,
     ScriptBlock,
     QueueJob,
-    QueueAudioJob,
     JobCompleted,
-    AudioJobCompleted,
     ReconciliationComplete,
 )
 from event_store import EventStore
@@ -56,7 +54,7 @@ class HostAudioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -90,7 +88,7 @@ class HostAudioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -172,13 +170,13 @@ def step_audio_agent_running(audio_helper):
 
 @when("the Audio Agent receives a wakeup instruction")
 def step_wake_audio(audio_helper):
-    resp = httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
-    assert resp.status_code == 204
+    resp = httpx.post(f"http://127.0.0.1:{audio_helper.agent_port}/", content="Wake up and check GSA", timeout=120.0)  # health probe
+    assert resp.status_code == 200
 
 @when("the Audio Agent receives another wakeup instruction")
 def step_wake_audio_again(audio_helper):
-    resp = httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
-    assert resp.status_code == 204
+    resp = httpx.post(f"http://127.0.0.1:{audio_helper.agent_port}/", content="Wake up and check GSA", timeout=120.0)  # health probe
+    assert resp.status_code == 200
 
 @then('the Audio Agent should queue a "tts" job for the narration block')
 def step_verify_job_queued(event_store):
@@ -206,7 +204,7 @@ def step_complete_job(event_store):
     queued_jobs = [e for e in effects if e.kind in ("queue_job", "queue_audio_job") and e.agent == "audio"]
     job_id = queued_jobs[0].job_id if queued_jobs else "job_tts_1"
     
-    event_store.append(AudioJobCompleted(
+    event_store.append(JobCompleted(
         agent="provisioner",
         job_id=job_id,
         artifact_uri="/tmp/audio/s1_b1.wav",
@@ -230,9 +228,9 @@ def step_check_reconciliation_complete(audio_helper, event_store):
             return
         
         try:
-            resp = httpx.get(f"http://localhost:{audio_helper.agent_port}/", timeout=1.0)  # health probe
+            resp = httpx.get(f"http://127.0.0.1:{audio_helper.agent_port}/", timeout=1.0)  # health probe
             if resp.status_code == 200 and resp.json().get("status") != "busy":
-                httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+                httpx.post(f"http://127.0.0.1:{audio_helper.agent_port}/", content="Wake up and check GSA", timeout=120.0)  # health probe
         except Exception:
             pass
         

@@ -33,11 +33,14 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Base path for DB files
+# Base path of DB files
 LOG_DIR = "/tmp/documentary-pipeline"
 event_store = EventStore(log_dir=LOG_DIR)
 latest_monologues = {}
 active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+async def _sleep(seconds: float) -> None:
+    await asyncio.sleep(seconds)
 
 class LoopBoundLock:
     def __init__(self):
@@ -303,244 +306,44 @@ async def bash_command(ctx, command: str) -> str:
             os.killpg(pgid, signal.SIGKILL)
             await proc.wait()
         except ProcessLookupError:
-            pass
+            pass  # process already dead
         raise
 
 
 # ===========================================================================
-# System Prompts & Instructions for all Roles
+# System Prompts & Instructions for all Roles (Loaded dynamically from Vault)
 # ===========================================================================
 
-COMMUNICATION_STYLE = """
-=== COMMUNICATION STYLE ===
+def _load_prompts() -> dict[str, str]:
+    vault_prompts_dir = os.path.join(Path(__file__).resolve().parent.parent, "obsidian-vault", "prompts")
+    
+    # 1. Load global communication style
+    style_path = os.path.join(vault_prompts_dir, "global_communication_style.md")
+    try:
+        with open(style_path, encoding="utf-8") as f:
+            comm_style = f.read().strip()
+    except Exception as e:
+        logger.error(f"Failed to load communication style: {e}")
+        comm_style = ""
 
-You communicate in rich, detailed natural language. Be verbose. Explain your
-observations, reasoning, decisions, and results thoroughly. Every output you
-produce is read by a parser that extracts structured information from your prose.
+    # 2. Load agent prompts
+    roles = ["scenario", "audio", "video", "assembly", "provisioner", "test_audio_pipeline", "test_provisioner"]
+    instructions = {}
+    for role in roles:
+        filename = f"{role}_agent_system_prompt.md" if role in ("scenario", "audio", "video", "assembly", "provisioner") else f"{role}_system_prompt.md"
+        full_path = os.path.join(vault_prompts_dir, filename)
+        try:
+            with open(full_path, encoding="utf-8") as f:
+                content = f.read().strip()
+            # Replace placeholder
+            content = content.replace("{COMMUNICATION_STYLE}", comm_style)
+            instructions[role] = content
+        except Exception as e:
+            logger.error(f"Failed to load system prompt for {role}: {e}")
+            instructions[role] = ""
+    return instructions
 
-RULES FOR WRITING:
-1. STATE EVERYTHING EXPLICITLY. Do not assume the reader remembers prior context.
-   Bad: "I did it."
-   Good: "I queried the GSA and observed that block A1:3:1 has status 'scripted'
-          with no measured duration. I decided to queue a TTS job for this block."
-
-2. INCLUDE ALL IDENTIFIERS. Every block address, job ID, VM instance ID,
-   offer ID, and URL must appear in your text.
-   Bad: "The block passed."
-   Good: "Block A1:3:1 measured 4.23 seconds against a scripted target of 4.00
-          seconds. The delta is 0.23 seconds, which is within tolerance
-          (max(4.00 * 0.15, 0.25) = 0.60 seconds). I judge this block as passing."
-
-3. EXPLAIN REASONING. Show your work. The parser cannot see your tool outputs;
-   it only sees your final text. If you compared two values, state both values
-   and the comparison result.
-   Bad: "Provisioned a VM."
-   Good: "I searched Vast.ai and found 12 offers. I evaluated each for GPU type,
-          VRAM, CUDA version, and price. Offer 7843219 ranked highest: RTX 4090,
-          24GB VRAM, CUDA 12.6, $0.42/hr. I provisioned it with image
-          vastai/worker:tts --disk 64. Instance ID is 9912834."
-
-4. DESCRIBE FAILURES COMPLETELY. Error messages, exit codes, and raw output
-   must be quoted in your text.
-   Bad: "It failed."
-   Good: "The curl to worker http://1.2.3.4:8880/ returned exit code 7
-          (Failed to connect). The stderr was 'Connection refused'. I conclude
-          the worker is down and will destroy and reprovision."
-
-5. ONE ACTION PER TURN. Focus on a single decision and describe it fully.
-   Do not list multiple unrelated actions. The parser extracts one effect
-   from your text. Make that one effect obvious and well-described.
-
-6. NEVER USE STRUCTURED FORMATS. No JSON, no XML, no markdown tables,
-   no EFFECT: markers, no labeled sections. Write as if composing an email
-   to a colleague who needs to understand exactly what you did and why.
-
-7. NO CLOCK TIMEOUTS / SLEEPS. Never run 'sleep' commands or introduce artificial blocking delays in your bash commands. If a resource or VM is still loading/provisioning, output a summary and end your turn. The agent loop will automatically check progress on your next turn a few seconds later.
-
-8. DO NOT POLL OR WAIT WITHIN A TURN. In this event-driven architecture, any effects you decide to emit (such as queueing a job, allocating a VM, or updating the script) are ONLY committed to the database after your current turn completely finishes. Therefore, you can NEVER observe the results of your current turn's decisions by querying the GSA or running bash commands within the same turn.
-   - Do not attempt to query GSA repeatedly to check if a job you just decided to queue has appeared or completed.
-   - Once you decide on an action (e.g., QueueJob, VMAllocated, JobApproved), state your decision clearly and END YOUR TURN immediately.
-   - Trust the asynchronous pipeline: the coordinator will trigger your next turn after other agents (like the Provisioner or VM workers) have acted on your decisions.
-
-9. MAXIMALLY INQUISITIVE ON OBSTACLES.
-"""
-
-ROLE_INSTRUCTIONS = {
-    "scenario": f"""
-=== YOUR ROLE ===
-You are the Scenario Agent. You write and revise narration scripts for documentary films.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- Each scene/segment needs: narration text, visual notes, duration estimate, scene number, and speaker.
-- CRITICAL: Do not output markdown tables or bulleted lists of script sections in your explanation, as they interfere with parsing.
-
-=== SKILL CATALOG ===
-- server/skills/documentary-writing/SKILL.md — Compelling scripts, ADHD rules, structure, voices, shot planning
-
-Read this skill: bash_command("cat server/skills/documentary-writing/SKILL.md")
-
-{COMMUNICATION_STYLE}
-
-=== WORKFLOW ===
-1. Query GSA state to see the timeline.
-2. If the script is missing or a scene has been deleted/reordered, write or revise the narration script.
-3. If a downstream agent reports a duration mismatch, revise the narration text for the failed segment to adjust its length.
-
-=== ACTION INFORMATION REQUIREMENTS ===
-State your reasoning and present these details with precision in your prose:
-- When writing or revising narration: State the scene number, segment identifier, speaker/voice, narration text, visual notes, and target duration.
-- When removing a scene: Specify the scene number and the reason for deleting it.
-- When reorganizing the order of scenes: Specify the new sequence of scene numbers.
-- When waiting for other components: Describe what you are waiting for and why.
-""",
-
-    "audio": f"""
-=== YOUR ROLE ===
-You are the Audio Agent. You manage the audio production pipeline, trigger TTS, and judge duration alignment.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- TTS budget: $2.00 limit. Max 5 attempts per segment before escalation.
-- Pacing Tolerance: delta <= max(scripted_sec * 0.15, 0.25).
-- Do NOT attempt to allocate, provision, or deallocate VMs. You are ONLY responsible for queueing jobs ('queue_job'), approving/reconciling audio, and adjusting block target durations. You do NOT manage infrastructure.
-- CRITICAL: You are ONLY responsible for the audio narration track (slots with the "A1:" prefix). Ignore all video slots (with the "V1:" prefix). Do NOT wait for a worker VM to be provisioned before queueing jobs. If there are any scripted audio slots (prefix "A1:") that lack audio, queue a TTS job for them immediately. The Provisioner agent is responsible for detecting your queued jobs and provisioning VMs to execute them.
-
-=== SKILL CATALOG ===
-- server/skills/audio-production/SKILL.md — Qwen3-TTS capabilities, text chunking, voice selection, preprocessing, pronunciation hints
-
-Read this skill: bash_command("cat server/skills/audio-production/SKILL.md")
-
-{COMMUNICATION_STYLE}
-
-=== WORKFLOW ===
-1. Query GSA state to check script segments and jobs.
-2. For any scripted audio segments (prefix "A1:") that lack audio: request audio generation (TTS) using voice models.
-3. For any measured audio segments: compare the measured duration against the scripted target. Approve if within tolerance; request a retry with adjusted parameters (or escalate if max attempts reached) if outside tolerance.
-4. Once all script blocks have been successfully reconciled and their durations adjusted (such that no dirty blocks remain, and all are clean/measured), emit a reconciliation complete effect.
-
-=== ACTION INFORMATION REQUIREMENTS ===
-State your reasoning and present these details with precision in your prose:
-- When requesting audio generation: Specify the segment identifier, scene number, speaker voice, and the exact text to synthesize.
-- When approving measured audio: Specify the segment identifier, target duration, measured duration, the calculated delta and tolerance, and your approval verdict.
-- When requesting a retry/re-synthesis: Specify the segment identifier, attempt count, and adjustments (e.g. speed or text changes).
-- When escalating a failed segment: Describe the segment identifier, the history of all 5 attempts, and the issue.
-- When all script blocks are reconciled: You MUST declare that reconciliation is complete. You MUST specify the total blocks, number of blocks passed, number of blocks failed, the worst duration delta in seconds, and the total measured duration in seconds.
-- When waiting: State if you are waiting for active jobs to finish or if all segments are clean.
-""",
-
-
-    "video": f"""
-=== YOUR ROLE ===
-You are the Video Agent. You generate visual clips using LTX-2.3.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- Measured audio duration is LAW — every video must match its audio exactly.
-- CRITICAL: You are ONLY responsible for the video track (slots with the "V1:" prefix). Ignore all audio slots (with the "A1:" prefix). Do NOT wait for a worker VM to be provisioned before queueing jobs. If there are any approved narration slots (prefix "V1:") that lack video, queue a LTX job for them immediately. The Provisioner agent is responsible for detecting your queued jobs and provisioning VMs to execute them.
-
-=== SKILL CATALOG ===
-- server/skills/video-generation/SKILL.md — LTX prompt engineering, visual coherence, audio sync verification
-
-Read this skill: bash_command("cat server/skills/video-generation/SKILL.md")
-
-{COMMUNICATION_STYLE}
-
-=== WORKFLOW ===
-1. Query GSA state.
-2. For any approved narration audio segments (prefix "V1:") that lack video: request video clip generation (LTX) matching the exact audio duration.
-3. For any completed video clips: review their quality/coherence, and either approve and merge them into the timeline, or reject and request a retry.
-
-=== ACTION INFORMATION REQUIREMENTS ===
-State your reasoning and present these details with precision in your prose:
-- When requesting video clip generation: Specify the segment identifier, scene number, and the detailed visual description prompt.
-- When reviewing a rendered clip: Specify the job ID, quality notes, and your approval or rejection verdict.
-- When merging a clip into the timeline: Specify the segment identifier, track name, and duration.
-- When waiting: Describe if you are waiting for approved audio or running video jobs.
-""",
-
-    "assembly": f"""
-=== YOUR ROLE ===
-You are the Assembly Agent. You compose the final documentary from approved audio and video clips.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- Tool: `assemble_final_cut` (to assemble the final MP4 from the timeline).
-- GSA is read-only. DO NOT attempt to write to it using HTTP POST or PUT requests (e.g. via curl). All state updates and effects MUST be declared exclusively in your prose response so they can be parsed and written to the event store automatically.
-- Rule: Validate that all slots are filled, durations match, and tracks align before rendering using the `assemble_final_cut` tool.
-
-=== SKILL CATALOG ===
-- server/skills/video-editing/SKILL.md — ffmpeg commands, OTIO timeline validation, output MP4 verification
-
-Read this skill: bash_command("cat server/skills/video-editing/SKILL.md")
-
-{COMMUNICATION_STYLE}
-
-=== WORKFLOW ===
-1. Query GSA state.
-2. If all timeline segments have approved audio and video clips, validate the final timeline and render the output using ffmpeg.
-3. Verify that the rendered documentary file exists, is uncorrupted, and matches the target duration.
-
-=== ACTION INFORMATION REQUIREMENTS ===
-State your reasoning and present these details with precision in your prose:
-- When rendering the final documentary: Specify the final output path, total duration, and verification checklist results.
-- When reporting an assembly failure: Describe the validation checks or FFmpeg render steps that failed.
-- When waiting: Explain what clips are missing or what you are waiting for.
-""",
-
-    "provisioner": f"""
-=== YOUR ROLE ===
-You are the Provisioner Agent. You manage ML/GPU worker VMs on Vast.ai and coordinate job dispatches.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command`
-- Read projections and jobs by querying the Global State Agent (GSA) at `GET http://localhost:8000/`. GSA is read-only.
-- All state changes (like VM allocations, job completions/starts, and deallocations) are declared as effects in your prose response. They are parsed and written automatically.
-- Ensure that you use direct public HTTPS endpoints mapped by Vast.ai to query workers. Local SSH loopback tunnels are prohibited.
-- Single-Effect per turn rule: Only declare one logical state transition (e.g. `vm_allocated`, `job_started`, `job_completed`, `vm_deallocated`) in your text response per turn. 
-- Diagnostics: Check worker status and logs via HTTP GET on the worker URL first and foremost. SSH commands are treated as accidental fallback mechanisms.
-- Key storage in `~/api_keys` must never be modified by you.
-- Always use `instances-v1` for Vast.ai CLI commands.
-
-{COMMUNICATION_STYLE}
-
-=== WORKFLOW ===
-1. Check GSA for pending jobs.
-2. Ensure a compatible worker VM is active. If none are, search Vast.ai offers and rent one.
-3. Wait for the worker HTTP status to confirm it is fully ready and the required models (the Qwen3-TTS audio model for TTS/audio jobs, or the LTX-2.3 video model for video/LTX jobs) are reported as loaded and ready in the status description text before dispatching jobs.
-4. Dispatch jobs to the worker, download completed media artifacts, and deallocate the VM when all jobs are done.
-
-=== ACTION INFORMATION REQUIREMENTS ===
-State your reasoning and present these details with precision in your prose:
-- When renting a GPU VM: Specify the instance ID, machine ID, GPU model, hourly cost, and role.
-- When releasing a GPU VM: Specify the instance ID and the reason (e.g. idle, failed).
-- When updating VM status: Specify the instance ID, the current status (initializing, ready, offline), and drift.
-- When dispatching a job: State the job ID and worker URL.
-- When waiting: State what jobs are running/booting and why you are waiting.
-""",
-
-    "test_audio_pipeline": f"""
-=== YOUR ROLE ===
-You are a Test Agent for the Audio Pipeline.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- Inject test effects and drive the pipeline through the endpoints.
-- Privileged direct event store access is allowed for verification.
-""",
-
-    "test_provisioner": f"""
-=== YOUR ROLE ===
-You are a Test Agent for the Provisioner.
-
-=== BASE KNOWLEDGE (NEVER FORGET) ===
-- Tool: `bash_command` (query GSA: `curl -s http://localhost:8000/`).
-- Inject pending jobs and verify VM allocation and job completion cycles.
-"""
-}
+ROLE_INSTRUCTIONS = _load_prompts()
 
 
 def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
@@ -574,7 +377,7 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
         include_skills=True,
         include_subagents=True,
         include_builtin_subagents=True,
-        skill_directories=["skills"],
+        skill_directories=[os.path.join(Path(__file__).resolve().parent.parent, "obsidian-vault", "prompts")],
         thinking=False,
         cost_tracking=True,
         cost_budget_usd=10.0,
@@ -592,10 +395,8 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
     return agent
 
 
-async def update_agentic_memory(agent_role: str, agent_output: str, model_instance: OpenAIChatModel) -> None:
+async def update_agentic_memory(agent_role: str, agent_output: str, model_instance: OpenAIChatModel, current_memories: list[str]) -> UpdateAgentMemory:
     """Extract and update atomic facts (long-term memories) for the specified agent using DeepSeek."""
-    memories = event_store.get_memories(agent_role)
-    
     system_prompt = (
         f"You are the Memory Manager for the {agent_role} agent in a media rendering pipeline.\n"
         "Your job is to maintain a list of active, atomic facts (long-term memories) for this agent based on its latest actions and outputs.\n\n"
@@ -608,8 +409,8 @@ async def update_agentic_memory(agent_role: str, agent_output: str, model_instan
     )
     
     user_content = "=== CURRENT MEMORIES ===\n"
-    if memories:
-        user_content += "\n".join(f"- {m}" for m in memories) + "\n"
+    if current_memories:
+        user_content += "\n".join(f"- {m}" for m in current_memories) + "\n"
     else:
         user_content += "(No current memories)\n"
         
@@ -625,7 +426,12 @@ async def update_agentic_memory(agent_role: str, agent_output: str, model_instan
             if fact:
                 updated_memories.append(fact)
                 
-    event_store.save_memories(agent_role, updated_memories)
+    from effects import UpdateAgentMemory
+    return UpdateAgentMemory(
+        agent=agent_role,
+        target_agent=agent_role,
+        memories=updated_memories,
+    )
 
 
 async def execute_agent_turn(
@@ -637,12 +443,28 @@ async def execute_agent_turn(
     """Execute a single reasoning turn for the agent and append parsed effects."""
     lock = run_lock_manager.get_lock()
     async with lock:
-        # 1. Read last 5 effects by this agent
-        memory = read_last_n_effects(role, 5)
+        # 1. Fetch history and memory from GSA to bypass direct DB read
+        gsa_state = {}
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                if resp.status_code == 200:
+                    gsa_state = resp.json()
+        except Exception:
+            pass  # GSA not available or returned non-200
+
+        recent_by_agent = gsa_state.get("state", {}).get("recent_effects", {}).get(role, [])
+        memory = []
+        for e_dict in recent_by_agent:
+            try:
+                kind = e_dict.get("kind")
+                if kind in KIND_TO_MODEL:
+                    memory.append(KIND_TO_MODEL[kind].model_validate(e_dict))
+            except Exception:
+                pass  # Ignore invalid/malformed history models
         memory_text = format_memory(memory)
 
-        # 1.5. Read long-term agentic memories
-        lt_memories = event_store.get_memories(role)
+        lt_memories = gsa_state.get("state", {}).get("agent_memories", {}).get(role, [])
         lt_memories_text = ""
         if lt_memories:
             lt_memories_text = "\n=== LONG-TERM MEMORY (ATOMIC FACTS) ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
@@ -832,7 +654,7 @@ Available Skills:
                         sorted_slots = sorted(slots_dict.items())
                         otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
                     except Exception:
-                        pass
+                        pass  # Fall back to default initial_hash on failure
 
                     event_store.append(
                         PipelineComplete(
@@ -855,9 +677,10 @@ Available Skills:
         agent_text = result.output
         latest_monologues[role] = agent_text
 
-        # Update long-term memories
+        # Update long-term memories by appending an UpdateAgentMemory effect
         try:
-            await update_agentic_memory(role, agent_text, model_instance)
+            mem_effect = await update_agentic_memory(role, agent_text, model_instance, lt_memories)
+            effects.append(mem_effect)
         except Exception as exc:
             logger.error(f"Failed to update agentic memory for {role}: {exc}")
 
@@ -869,7 +692,7 @@ Available Skills:
                 f.write(f"RESPONSE:\n{agent_text}\n")
                 f.write(f"========================================\n")
         except Exception:
-            pass
+            pass  # Ignore debug log write failures
 
         # 6. Parse effects
         from effect_parser import parse_agent_text_multi
@@ -879,7 +702,7 @@ Available Skills:
         import hashlib
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url)
+                resp = await client.get(gsa_url, timeout=1.0)  # health probe
                 gsa_state = resp.json()
             slots = gsa_state.get("otio", {}).get("slots", {})
             sorted_slots = sorted(slots.items())
@@ -906,7 +729,7 @@ Available Skills:
                 )
                 event_store.append(effect, otio_hash)
         except Exception:
-            pass
+            pass  # Ignore exceptions during budget tracking spent computation
 
         return effects
 
@@ -939,25 +762,28 @@ def make_agent_app(role: str) -> FastAPI:
     @app.get("/")
     async def health(request: Request):
         lock = run_lock_manager.get_lock()
-        async with lock:
-            try:
-                gsa_url = "http://127.0.0.1:8000/"
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(gsa_url)
-                    if resp.status_code == 200:
-                        state = resp.json()
-                        _agent_health["current_task"] = _determine_focus(role, state)
-            except Exception:
-                pass
+        if lock.locked():
+            _agent_health["status"] = "busy"
+        else:
+            _agent_health["status"] = "healthy"
+        try:
+            gsa_url = "http://127.0.0.1:8000/"
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                if resp.status_code == 200:
+                    state = resp.json()
+                    _agent_health["current_task"] = _determine_focus(role, state)
+        except Exception:
+            pass  # Ignore health check GSA connection failures
 
-            accept = request.headers.get("accept", "")
-            if "application/json" in accept:
-                return _agent_health
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return _agent_health
 
-            status = _agent_health.get("status", "healthy")
-            task = _agent_health.get("current_task") or "no active task"
-            message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
-            return PlainTextResponse(message, media_type="text/plain")
+        status = _agent_health.get("status", "healthy")
+        task = _agent_health.get("current_task") or "no active task"
+        message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
+        return PlainTextResponse(message, media_type="text/plain")
 
     @app.post("/")
     async def post_handler(request: Request):
@@ -974,6 +800,9 @@ def make_agent_app(role: str) -> FastAPI:
             inst_text = instruction_text
 
         lock = run_lock_manager.get_lock()
+        if lock.locked():
+            return PlainTextResponse("Conflict: Agent is busy", status_code=409)
+
         async with lock:
             if is_human:
                 from effects import HumanInstruction
@@ -987,26 +816,33 @@ def make_agent_app(role: str) -> FastAPI:
                 otio_hash = "initial_hash"
                 try:
                     async with httpx.AsyncClient() as client:
-                        resp = await client.get("http://127.0.0.1:8000/")
+                        resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                         if resp.status_code == 200:
                             slots = resp.json().get("otio", {}).get("slots", {})
                             sorted_slots = sorted(slots.items())
                             otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
                 except Exception:
-                    pass
+                    pass  # Fall back to default initial_hash on failure
                 event_store.append(inst_effect, otio_hash)
 
+            _agent_health["status"] = "busy"
+            _agent_health["last_run"] = time.time()
             try:
-                gsa_url = "http://127.0.0.1:8000/"
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(gsa_url)
-                    if resp.status_code == 200:
-                        state = resp.json()
-                        _agent_health["current_task"] = _determine_focus(role, state)
-            except Exception:
-                pass
+                await execute_agent_turn(
+                    role=role,
+                    gsa_url="http://127.0.0.1:8000/",
+                    notification_type="human" if is_human else "instruction",
+                    context={"instruction": inst_text} if is_human else None,
+                )
+                _agent_health["status"] = "healthy"
+                _agent_health["idle_since"] = time.time()
+            except Exception as exc:
+                _agent_health["status"] = "error"
+                _agent_health["last_error"] = str(exc)
+                _agent_health["idle_since"] = time.time()
+                raise HTTPException(status_code=500, detail=str(exc))
 
-            resp_text = latest_monologues.get(role) or f"I am the {role} agent. I have registered your instruction. Currently my status is healthy."
+            resp_text = latest_monologues.get(role) or f"I am the {role} agent. Currently my status is healthy."
             accept = request.headers.get("accept", "")
             if "application/json" in accept:
                 return AgentResponse(
@@ -1033,7 +869,7 @@ def make_agent_app(role: str) -> FastAPI:
             try:
                 await existing_task
             except asyncio.CancelledError:
-                pass
+                pass  # Task cancelled successfully
 
         is_human = False
         inst_text = ""
@@ -1042,46 +878,48 @@ def make_agent_app(role: str) -> FastAPI:
             inst_text = instruction_text
 
         async def run_turn_in_background():
-            _agent_health["status"] = "busy"
-            _agent_health["last_run"] = time.time()
-            try:
-                # Append HumanInstruction event immediately if applicable
-                if is_human:
-                    from effects import HumanInstruction
-                    inst_effect = HumanInstruction(
-                        agent="operator",
-                        target_agent=role,
-                        instruction=inst_text,
-                        from_human="operator",
-                    )
-                    # Compute hash from GSA otio slots
-                    import hashlib
-                    otio_hash = "initial_hash"
-                    try:
-                        async with httpx.AsyncClient() as client:
-                            resp = await client.get("http://127.0.0.1:8000/")
-                            if resp.status_code == 200:
-                                slots = resp.json().get("otio", {}).get("slots", {})
-                                sorted_slots = sorted(slots.items())
-                                otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
-                    except Exception:
-                        pass
-                    event_store.append(inst_effect, otio_hash)
+            lock = run_lock_manager.get_lock()
+            async with lock:
+                _agent_health["status"] = "busy"
+                _agent_health["last_run"] = time.time()
+                try:
+                    # Append HumanInstruction event immediately if applicable
+                    if is_human:
+                        from effects import HumanInstruction
+                        inst_effect = HumanInstruction(
+                            agent="operator",
+                            target_agent=role,
+                            instruction=inst_text,
+                            from_human="operator",
+                        )
+                        # Compute hash from GSA otio slots
+                        import hashlib
+                        otio_hash = "initial_hash"
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
+                                if resp.status_code == 200:
+                                    slots = resp.json().get("otio", {}).get("slots", {})
+                                    sorted_slots = sorted(slots.items())
+                                    otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+                        except Exception:
+                            pass  # Fall back to default initial_hash on failure
+                        event_store.append(inst_effect, otio_hash)
 
-                await execute_agent_turn(
-                    role=role,
-                    gsa_url="http://127.0.0.1:8000/",
-                    notification_type="human" if is_human else "instruction",
-                    context={"instruction": inst_text} if is_human else None,
-                )
-                _agent_health["status"] = "healthy"
-                _agent_health["idle_since"] = time.time()
-            except Exception as exc:
-                import traceback
-                traceback.print_exc()
-                _agent_health["status"] = "error"
-                _agent_health["last_error"] = str(exc)
-                _agent_health["idle_since"] = time.time()
+                    await execute_agent_turn(
+                        role=role,
+                        gsa_url="http://127.0.0.1:8000/",
+                        notification_type="human" if is_human else "instruction",
+                        context={"instruction": inst_text} if is_human else None,
+                    )
+                    _agent_health["status"] = "healthy"
+                    _agent_health["idle_since"] = time.time()
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    _agent_health["status"] = "error"
+                    _agent_health["last_error"] = str(exc)
+                    _agent_health["idle_since"] = time.time()
 
         task = asyncio.create_task(run_turn_in_background())
         active_tasks[role] = task
@@ -1100,16 +938,16 @@ def make_agent_app(role: str) -> FastAPI:
                             with open(vast_key_path) as f:
                                 key = f.read().strip()
                         except Exception:
-                            pass
+                            pass  # Ignore missing or unreadable vast key file
                 if key:
                     try:
                         import subprocess
                         subprocess.run(f"vastai login {key}", shell=True, capture_output=True)
                     except Exception:
-                        pass
+                        pass  # Ignore login command execution failures
 
-            # Wait a few seconds for GSA start up in integration tests
-            await asyncio.sleep(2.0)
+            # Wait a few seconds to allow GSA start up in integration tests
+            await _sleep(2.0)
 
             intervals = {
                 "scenario": 5.0,
@@ -1127,13 +965,13 @@ def make_agent_app(role: str) -> FastAPI:
                         # Skip if run is already executing a turn for this agent
                         lock = run_lock_manager.get_lock()
                         if lock.locked():
-                            await asyncio.sleep(poll_interval)
+                            await _sleep(poll_interval)
                             continue
 
                         gsa_url = "http://127.0.0.1:8000/"
                         try:
                             async with httpx.AsyncClient() as client:
-                                resp = await client.get(gsa_url)
+                                resp = await client.get(gsa_url, timeout=1.0)  # health probe
                                 if resp.status_code == 200:
                                     state = resp.json()
                                 else:
@@ -1206,8 +1044,8 @@ def make_agent_app(role: str) -> FastAPI:
                                         _agent_health["last_error"] = str(exc)
                                         _agent_health["idle_since"] = time.time()
                 except Exception:
-                    pass
-                await asyncio.sleep(poll_interval)
+                    pass  # Ignore errors in autonomous loop turn execution
+                await _sleep(poll_interval)
 
         asyncio.create_task(run_loop())
 

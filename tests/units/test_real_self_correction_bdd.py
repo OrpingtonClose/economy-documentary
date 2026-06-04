@@ -53,7 +53,7 @@ class HostScenarioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -87,7 +87,7 @@ class HostScenarioHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -190,7 +190,7 @@ def step_scenario_agent_running(scenario_helper):
 @when("the Scenario Agent receives a wakeup instruction")
 def step_wake_scenario(scenario_helper):
     # Remove timeout from POST to Scenario Agent for architectural compliance
-    resp = httpx.post(f"http://localhost:{scenario_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{scenario_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("the Scenario Agent should read the event log and detect the duration failure")

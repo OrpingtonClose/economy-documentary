@@ -21,7 +21,7 @@ async def test_agent_search_tool_execution():
     
     async def mock_get(self, url, *args, **kwargs):
         url_str = str(url)
-        if "localhost:8000" in url_str or "127.0.0.1:8000" in url_str:
+        if "127.0.0.1:8000" in url_str or "127.0.0.1:8000" in url_str:
             return httpx.Response(
                 200,
                 json={
@@ -38,7 +38,7 @@ async def test_agent_search_tool_execution():
         # Trigger turn for scenario agent
         effects = await execute_agent_turn(
             role="scenario",
-            gsa_url="http://localhost:8000/",
+            gsa_url="http://127.0.0.1:8000/",
             context={"instruction": "Please search the web using search_web_brave for the capital of France and explain your findings in detail."}
         )
 

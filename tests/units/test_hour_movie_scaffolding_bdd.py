@@ -144,7 +144,7 @@ class HostScaffoldingHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -179,7 +179,7 @@ class HostScaffoldingHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.assembly_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.assembly_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -359,7 +359,7 @@ def step_completes_rendering_jobs(event_store):
 @then("the Assembly Agent compiles the entire 120-slot OpenTimelineIO sequence")
 def step_compiles_sequence_assembly(scaffold_helper):
     # Wake up Assembly Agent
-    resp = httpx.post(f"http://localhost:{scaffold_helper.assembly_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{scaffold_helper.assembly_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("the compiled sequence has zero gaps or overlaps and matches the 3600s target duration")
@@ -419,7 +419,7 @@ def step_register_multiple_vms(event_store):
             instance_id=f"vm_instance_{idx + 1}",
             role="tts" if idx % 2 == 0 else "ltx",
             offer_id="offer_123",
-            worker_url=f"http://localhost:888{idx + 1}",
+            worker_url=f"http://127.0.0.1:888{idx + 1}",
             gpu_type="RTX 4090",
             cost_per_hour=0.5
         ), "")
@@ -675,7 +675,7 @@ def step_retry_failed_jobs(event_store):
 @then("the Assembly Agent holds compilation until the retried segments are completed")
 def step_verify_assembly_holds(scaffold_helper, event_store):
     # Wake up Assembly Agent
-    resp = httpx.post(f"http://localhost:{scaffold_helper.assembly_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{scaffold_helper.assembly_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("the final movie timeline compiles successfully with all 100 media slots present")

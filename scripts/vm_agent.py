@@ -274,7 +274,7 @@ async def handle(request: Request) -> Response:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="VM Agent")
-    parser.add_argument("--port", type=int, default=8880)
+    parser.add_argument("--port", type=int, default=9001)
     parser.add_argument("--host", type=str, default="0.0.0.0")
     args = parser.parse_args()
 

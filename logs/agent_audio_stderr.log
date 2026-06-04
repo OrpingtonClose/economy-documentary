@@ -1,8 +1,4 @@
-INFO:     Started server process [89607]
+INFO:     Started server process [6983]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8002 (Press CTRL+C to quit)
-/Users/orpington/Documents/economy-documentary-work/.venv/lib/python3.12/site-packages/pydantic_deep/agent.py:1050: PydanticAIDeprecationWarning: WebFetch will stop auto-selecting the markdownify-based fetch tool based on package availability in v2. To keep this fallback, pass `local=True`. To disable the fallback, pass `local=False`.
-  all_capabilities.append(WebFetch())
-/Users/orpington/Documents/economy-documentary-work/.venv/lib/python3.12/site-packages/pydantic_deep/agent.py:1072: PydanticAIDeprecationWarning: `Agent(history_processors=[fn, ...])` is deprecated and will be removed in v2.0. Replace with `Agent(capabilities=[ProcessHistory(fn), ...])`, or hook the `before_model_request` lifecycle event directly via `Hooks(before_model_request=fn)`.
-  agent: Agent[DeepAgentDeps, Any] = Agent(

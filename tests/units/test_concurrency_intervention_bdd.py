@@ -180,12 +180,9 @@ def test_context():
 @pytest.fixture
 def mock_agent_turn(test_context):
     async def dynamic_mock(*args, **kwargs):
-        from agent_base import run_lock_manager
-        lock = run_lock_manager.get_lock()
-        async with lock:
-            if "execute_turn_handler" in test_context:
-                return await test_context["execute_turn_handler"](*args, **kwargs)
-            return [], "default mock response"
+        if "execute_turn_handler" in test_context:
+            return await test_context["execute_turn_handler"](*args, **kwargs)
+        return [], "default mock response"
     
     with patch("agent_base.execute_agent_turn", side_effect=dynamic_mock) as mock:
         yield mock
@@ -205,12 +202,12 @@ def patch_subprocess(test_context):
 
 # Scenario Declarations
 @pytest.mark.anyio
-@scenario('features/concurrency_intervention.feature', 'POST requests block to wait for active turns to finish')
+@scenario('features/concurrency_intervention.feature', 'POST requests return 409 Conflict if active turns are running')
 async def test_post_requests_block(mock_agent_turn):
     pass
 
 @pytest.mark.anyio
-@scenario('features/concurrency_intervention.feature', 'GET health queries block to wait for active turns to finish')
+@scenario('features/concurrency_intervention.feature', 'GET health queries return immediately and do not block')
 async def test_get_health_block(mock_agent_turn):
     pass
 
@@ -254,29 +251,28 @@ async def heavy_turn_running_background(agent_name, test_context):
     await test_context["turn_entered_event"].wait()
     await asyncio.sleep(0.05)
 
-@when(parsers.parse('a concurrent POST request is sent to "{agent_name}" in a separate task'))
-async def concurrent_post_in_separate_task(agent_name, test_context):
-    async def send_post():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-            return await client.post("/", content="Wake up and check GSA")
-            
-    test_context["concurrent_task"] = asyncio.create_task(send_post())
-    await asyncio.sleep(0.1)
-    
-    # Verify that the concurrent task is blocked and not done yet
-    assert not test_context["concurrent_task"].done()
+@when(parsers.parse('a concurrent POST request is sent to "{agent_name}"'))
+async def concurrent_post_sent(agent_name, test_context):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+        resp = await client.post("/", content="Wake up and check GSA")
+        test_context["concurrent_response"] = resp
 
-@when(parsers.parse('a concurrent GET health query is sent to "{agent_name}" in a separate task'))
-async def concurrent_get_in_separate_task(agent_name, test_context):
-    async def send_get():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-            return await client.get("/")
-            
-    test_context["concurrent_task"] = asyncio.create_task(send_get())
-    await asyncio.sleep(0.1)
-    
-    # Verify that the concurrent task is blocked and not done yet
-    assert not test_context["concurrent_task"].done()
+@then('the concurrent POST request should fail with 409 Conflict')
+async def verify_post_fails_409(test_context):
+    resp = test_context["concurrent_response"]
+    assert resp.status_code == 409
+
+@when(parsers.parse('a concurrent GET health query is sent to "{agent_name}"'))
+async def concurrent_get_sent(agent_name, test_context):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+        resp = await client.get("/")
+        test_context["concurrent_response"] = resp
+
+@then('the GET health query should complete immediately with busy status')
+async def verify_get_completes_busy(test_context):
+    resp = test_context["concurrent_response"]
+    assert resp.status_code == 200
+    assert "busy" in resp.text
 
 @then('the active background turn is allowed to finish')
 async def allow_background_turn_to_finish(test_context):
@@ -285,18 +281,6 @@ async def allow_background_turn_to_finish(test_context):
     task = active_tasks.get(test_context["agent_name"])
     if task:
         await task
-
-@then('the concurrent POST request should then complete successfully')
-async def verify_concurrent_post_completes(test_context):
-    resp = await test_context["concurrent_task"]
-    assert resp.status_code == 200
-    assert "healthy" in resp.text or "registered" in resp.text or "status" in resp.text
-
-@then('the GET health query should then complete successfully')
-async def verify_concurrent_get_completes(test_context):
-    resp = await test_context["concurrent_task"]
-    assert resp.status_code == 200
-    assert "healthy" in resp.text or "I am the" in resp.text or "status" in resp.text
 
 @when(parsers.parse('a turn running a long bash subprocess is triggered on "{agent_name}" via PUT'))
 async def trigger_bash_put(agent_name, test_context):

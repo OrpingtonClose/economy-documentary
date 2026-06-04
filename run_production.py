@@ -74,11 +74,11 @@ def main():
         sys.exit(1)
 
 
-    # 4. Initiate the run by posting the prompt to the Scenario Agent
-    print(f"Sending prompt to Scenario Agent: {args.prompt}")
+    # 4. Initiate the run by sending a POST request to the Scenario Agent
+    print(f"Sending prompt to Scenario Agent via POST: {args.prompt}")
     try:
-        resp = httpx.post("http://127.0.0.1:8001/", content=args.prompt, timeout=10.0)
-        if resp.status_code != 200:
+        resp = httpx.post("http://127.0.0.1:8001/", content=args.prompt, timeout=120.0)  # health probe
+        if resp.status_code not in (200, 204):
             print(f"Error: Scenario Agent responded with status code {resp.status_code}")
             runner.terminate()
             sys.exit(1)

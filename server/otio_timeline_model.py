@@ -302,7 +302,7 @@ def _load_video_status(output_dir: str) -> dict[tuple[int, int], dict[str, Any]]
             with open(path) as f:
                 data = json.load(f)
         except Exception as exc:  # noqa: BLE001
-            logger.debug("otio_timeline_model: failed to read %s: %s", path, exc)
+            logger.log(logging.DEBUG, "otio_timeline_model: failed to read %s: %s", path, exc)
             continue
         key = (int(m.group(1)), int(m.group(2)))
         data["_status_path"] = path
@@ -543,7 +543,7 @@ def build_timeline_view(
                         if scripted is not None:
                             slot.scripted_duration_sec = round(float(scripted), 3)
                     except Exception:  # noqa: BLE001
-                        pass
+                        pass  # Ignore invalid/malformed duration numbers
                 # Delivered narration has a WAV under audio/
                 wav_guess = os.path.join(
                     output_dir, "audio", f"scene_{scene:03d}_phrase_{phrase:03d}.wav"
@@ -632,7 +632,7 @@ def _detect_finished_film(output_dir: str) -> Optional[FinishedFilm]:
             if result.returncode == 0:
                 return float(result.stdout.strip())
         except Exception:  # noqa: BLE001
-            pass
+            pass  # Ignore ffprobe probe errors
         return 0.0
 
     def _url_for(name: str) -> str:

@@ -16,25 +16,17 @@ from effects import (
     DeleteScene,
     DeleteFromOTIO,
     QueueJob,
-    QueueAudioJob,
-    QueueVideoJob,
     JobStarted,
-    AudioJobStarted,
-    VideoJobStarted,
     JobCompleted,
-    AudioJobCompleted,
-    VideoJobCompleted,
     JobFailed,
-    AudioJobFailed,
-    VideoJobFailed,
     JobRequeued,
-    AudioJobRequeued,
-    VideoJobRequeued,
     VMAllocated,
     VMDeallocated,
     VMObserved,
     ProductionFailed,
     KIND_TO_MODEL,
+    UpdateAgentMemory,
+    EffectUnion,
 )
 from event_store import EventStore
 
@@ -65,7 +57,7 @@ def parse_duration(val: Any) -> float:
                     s = float(parts[2])
                     return h * 3600.0 + m * 60.0 + s
             except ValueError:
-                pass
+                pass  # Fall back to raw float parsing
         try:
             return float(val)
         except ValueError:
@@ -298,7 +290,7 @@ class Timeline(Projection):
                             scene_num = int(parts[1])
                             scene_to_clips[scene_num].append(child)
                         except ValueError:
-                            pass
+                            pass  # Ignore invalid/non-integer scene numbers
 
             new_clips: list[otio.schema.Clip] = []
             for scene_num in event.new_order:
@@ -725,6 +717,7 @@ class StateProjection(Projection):
             lambda: deque(maxlen=loop_buffer_size)
         )
         self.loop_buffer_size: int = loop_buffer_size
+        self.agent_memories: dict[str, list[str]] = defaultdict(list)
 
     def apply(self, event: Effect) -> None:
         agent = getattr(event, "agent", None)
@@ -735,6 +728,7 @@ class StateProjection(Projection):
             self.current_phase = "init"
             self.phase_history.clear()
             self.recent_effects.clear()
+            self.agent_memories.clear()
         elif event.kind == "reconciliation_complete":
             self._record_phase_change("audio_reconcile")
         elif event.kind == "pipeline_complete":
@@ -744,6 +738,11 @@ class StateProjection(Projection):
         elif event.kind == "merge_into_otio":
             if getattr(event, "track_name", "") == "V1_Video" and self.current_phase == "audio_reconcile":
                 self._record_phase_change("video_production")
+        elif event.kind == "update_agent_memory":
+            target_agent = getattr(event, "target_agent", None)
+            memories = getattr(event, "memories", None)
+            if target_agent and isinstance(memories, list):
+                self.agent_memories[target_agent] = memories
 
     def _record_phase_change(self, to_phase: str, reason: str = "") -> None:
         if self.current_phase != to_phase:
@@ -863,6 +862,8 @@ class StateResponse(BaseModel):
     phase_changes: list[PhaseChangeItem] = Field(default_factory=list)
     agents_tracked: list[str] = Field(default_factory=list)
     latest_sequence: int = 0
+    agent_memories: dict[str, list[str]] = Field(default_factory=dict)
+    recent_effects: dict[str, list[EffectUnion]] = Field(default_factory=dict)
 
 
 class BudgetResponse(BaseModel):

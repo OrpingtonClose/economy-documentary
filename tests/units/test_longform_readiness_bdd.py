@@ -61,12 +61,11 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
-                pass
-            time.sleep(delay)
+                time.sleep(delay)
             delay = min(delay * 1.5, 2.0)
         raise RuntimeError("GSA failed to start on host")
 
@@ -104,12 +103,11 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
-                pass
-            time.sleep(delay)
+                time.sleep(delay)
             delay = min(delay * 1.5, 2.0)
         raise RuntimeError("Assembly agent failed to start on host")
 
@@ -141,7 +139,7 @@ def clear_local_event_store():
     try:
         shutil.rmtree(db_dir)
     except Exception:
-        pass
+        pass  # clear local event store error ignored
     os.makedirs(db_dir, exist_ok=True)
 
     # Clear sessions db
@@ -150,7 +148,7 @@ def clear_local_event_store():
         try:
             os.remove(f)
         except Exception:
-            pass
+            pass  # clear sessions error ignored
 
 # ===========================================================================
 # Scenario 1 Steps: Multi-Scene Transitions
@@ -278,7 +276,7 @@ def step_transition_apply_merges(event_store):
 @then("the compiled timeline has transition effects at scene changes with zero track misalignment")
 def step_transition_verify_pipeline(assembly_helper, event_store):
     # Wake up Assembly Agent
-    resp = httpx.post(f"http://localhost:{assembly_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{assembly_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
     # Poll event store for pipeline_complete event written by the Assembly Agent
@@ -400,7 +398,7 @@ def step_drift_wake(assembly_helper, event_store):
     ), "initial_hash")
 
     # Wake up Assembly Agent
-    resp = httpx.post(f"http://localhost:{assembly_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{assembly_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("it applies duration-stretching or trim effects to sync the video and audio tracks")
@@ -529,7 +527,7 @@ def step_loudness_segments_setup(event_store):
 
 @when("the Assembly Agent processes the final timeline mix using loudness filters")
 def step_loudness_wake_agent(assembly_helper):
-    resp = httpx.post(f"http://localhost:{assembly_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{assembly_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("the final output audio is checked using loudness analysis tools")

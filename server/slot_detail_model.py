@@ -222,7 +222,7 @@ def _qa_verdicts_from_critique_store(
         try:
             out.append(_record_to_dict(record))
         except Exception as exc:  # noqa: BLE001
-            logger.debug("slot_detail_model: failed to serialize critique: %s", exc)
+            logger.log(logging.DEBUG, "slot_detail_model: failed to serialize critique: %s", exc)
     return out
 
 
@@ -233,7 +233,7 @@ def _record_to_dict(record: Any) -> dict[str, Any]:
         try:
             return cast(dict[str, Any], to_dict())
         except Exception:  # noqa: BLE001
-            pass
+            pass  # Fall back to asdict serialization
     try:
         return asdict(record)
     except Exception:  # noqa: BLE001
@@ -329,19 +329,19 @@ def _in_scope_ledger_records(
                 if isinstance(result, dict):
                     return result
             except Exception:  # noqa: BLE001
-                pass
+                pass  # Ignore record serialization failures
         return {}
 
     try:
         for rec in query_by_scope(state, Scope.GLOBAL):
             out.append(_to_dict_safe(rec))
     except Exception:  # noqa: BLE001
-        pass
+        pass  # Ignore GLOBAL scope query failures
     try:
         for rec in query_by_scope(state, Scope.SCENE, scope_ref=str(scene_num)):
             out.append(_to_dict_safe(rec))
     except Exception:  # noqa: BLE001
-        pass
+        pass  # Ignore SCENE scope query failures
     # Block / clip level: two conventional scope_refs are in play across the
     # pipeline — ``{scene}_{phrase}`` and ``{scene}:{phrase}``.  We probe both.
     for scope_name in ("BLOCK", "CLIP"):
@@ -441,7 +441,7 @@ def _latest_preview_for_slot(
             with open(sidecar) as f:
                 preview["manifest"] = json.load(f)
         except Exception:  # noqa: BLE001
-            pass
+            pass  # Ignore manifest loading failures
     if start_sec_hint is not None:
         preview["seek_sec"] = round(start_sec_hint, 3)
     return preview

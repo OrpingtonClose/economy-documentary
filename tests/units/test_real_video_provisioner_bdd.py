@@ -60,7 +60,7 @@ class HostVideoHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health check
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health check
                 if resp.status_code in (200, 400, 404, 500):
                     return
             except Exception:
@@ -94,7 +94,7 @@ class HostVideoHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health check
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health check
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -186,7 +186,7 @@ def step_configured_real_provisioning(video_helper):
 
 @when('the Provisioner Agent is woken up')
 def step_wake_provisioner(video_helper):
-    resp = httpx.post(f"http://localhost:{video_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{video_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 
@@ -284,7 +284,7 @@ def step_download_and_verify_artifact(event_store):
 @then('the Provisioner Agent should deallocate the video VM')
 def step_trigger_deallocation(video_helper):
     # Remove timeout for architectural compliance on agent POST call
-    resp = httpx.post(f"http://localhost:{video_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{video_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 

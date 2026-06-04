@@ -434,6 +434,13 @@ class NoOp(Effect):
     agent_context: str = ""
 
 
+class UpdateAgentMemory(Effect):
+    """Update long-term memory for a specific agent."""
+    kind: Literal["update_agent_memory"] = "update_agent_memory"
+    target_agent: str = Field(..., description="Agent whose memory is being updated")
+    memories: list[str] = Field(..., description="List of memories")
+
+
 class SuggestedFix(BaseModel):
     """Structured fix proposal."""
     fix_type: Literal[
@@ -504,7 +511,7 @@ EffectUnion = Annotated[
         VMAllocated, VMDeallocated, VMProvisionFailed, VMObserved,
         MergeIntoOTIO, DeleteFromOTIO,
         PipelineStarted, PipelineComplete, PipelineAborted, VASTGlobalStateObserved, BudgetSet, BudgetExceeded,
-        HumanInstruction, ClarificationRequest, AgentLoopDetected, NoOp,
+        HumanInstruction, ClarificationRequest, AgentLoopDetected, NoOp, UpdateAgentMemory,
         ProductionFailed, MeasurementRequested, VideoMeasured
     ],
     Field(discriminator="kind"),

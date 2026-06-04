@@ -56,7 +56,7 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -90,7 +90,7 @@ class HostAssemblyHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.agent_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.agent_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -238,7 +238,7 @@ def step_assembly_agent_running(assembly_helper):
 
 @when("the Assembly Agent receives a wakeup instruction")
 def step_wake_assembly(assembly_helper):
-    resp = httpx.post(f"http://localhost:{assembly_helper.agent_port}/", content="Wake up and check GSA")
+    resp = httpx.post(f"http://127.0.0.1:{assembly_helper.agent_port}/", content="Wake up and check GSA")
     assert resp.status_code == 200
 
 @then("the Assembly Agent should merge the media tracks using the assembly tool")

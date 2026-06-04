@@ -50,7 +50,7 @@ class HostProvisioningHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://localhost:8000/", timeout=1.0)  # health probe
+                resp = httpx.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
@@ -76,7 +76,7 @@ class HostProvisioningHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get(f"http://localhost:{self.provisioner_port}/", timeout=1.0)  # health probe
+                resp = httpx.get(f"http://127.0.0.1:{self.provisioner_port}/", timeout=1.0)  # health probe
                 if resp.status_code == 200:
                     return
             except Exception:
@@ -155,7 +155,7 @@ def step_initiates_exactly_1_vm(event_store):
         instance_id="vm_instance_1",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8881",
+        worker_url="http://127.0.0.1:8881",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")
@@ -184,7 +184,7 @@ def step_double_to_2_vms(event_store):
         instance_id="vm_instance_2",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8882",
+        worker_url="http://127.0.0.1:8882",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")
@@ -226,7 +226,7 @@ def step_escalates_to_4_vms(event_store):
         instance_id="vm_instance_3",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8883",
+        worker_url="http://127.0.0.1:8883",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")
@@ -235,7 +235,7 @@ def step_escalates_to_4_vms(event_store):
         instance_id="vm_instance_4",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8884",
+        worker_url="http://127.0.0.1:8884",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")
@@ -307,7 +307,7 @@ def step_condemns_and_reprovisions(event_store):
         instance_id="vm_instance_healthy",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8882",
+        worker_url="http://127.0.0.1:8882",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")
@@ -342,7 +342,7 @@ def step_recovery_reschedules_job(event_store):
         instance_id="vm_instance_replacement",
         role="tts",
         offer_id="offer_123",
-        worker_url="http://localhost:8883",
+        worker_url="http://127.0.0.1:8883",
         gpu_type="RTX 4090",
         cost_per_hour=0.5
     ), "")

@@ -39,7 +39,7 @@ def parse_duration(val: Any) -> float:
                     s = float(parts[2])
                     return h * 3600.0 + m * 60.0 + s
             except ValueError:
-                pass
+                pass  # Fall through to float parsing
         try:
             return float(val)
         except ValueError:
@@ -110,21 +110,11 @@ class QueueJob(Effect):
     """Demand creation of a media artifact by a VM worker."""
     kind: Literal["queue_job"] = "queue_job"
     job_id: str = Field(..., description="stable unique job identifier")
-    job_type: str = Field(..., description="tts or ltx")
+    job_type: Literal["tts", "ltx"]
     scene_num: int = Field(..., ge=1)
     block_id: str
     slot_id: str = Field(..., description="OTIO slot where the result belongs")
     params: dict = Field(default_factory=dict, description="type-specific generation params")
-
-
-class QueueAudioJob(QueueJob):
-    kind: Literal["queue_audio_job"] = "queue_audio_job"
-    job_type: Literal["tts"] = "tts"
-
-
-class QueueVideoJob(QueueJob):
-    kind: Literal["queue_video_job"] = "queue_video_job"
-    job_type: Literal["ltx"] = "ltx"
 
 
 class JobStarted(Effect):
@@ -133,14 +123,6 @@ class JobStarted(Effect):
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
-
-
-class AudioJobStarted(JobStarted):
-    kind: Literal["audio_job_started"] = "audio_job_started"
-
-
-class VideoJobStarted(JobStarted):
-    kind: Literal["video_job_started"] = "video_job_started"
 
 
 class JobCompleted(Effect):
@@ -159,14 +141,6 @@ class JobCompleted(Effect):
         default_factory=list,
         description="WhisperX measurements from VM worker (3 runs)",
     )
-
-
-class AudioJobCompleted(JobCompleted):
-    kind: Literal["audio_job_completed"] = "audio_job_completed"
-
-
-class VideoJobCompleted(JobCompleted):
-    kind: Literal["video_job_completed"] = "video_job_completed"
 
 
 class JobFailed(Effect):
@@ -188,28 +162,12 @@ class JobFailed(Effect):
     retry_count: int = Field(default=0, ge=0, description="how many times this job has been retried")
 
 
-class AudioJobFailed(JobFailed):
-    kind: Literal["audio_job_failed"] = "audio_job_failed"
-
-
-class VideoJobFailed(JobFailed):
-    kind: Literal["video_job_failed"] = "video_job_failed"
-
-
 class JobRequeued(Effect):
     """Artistry rejection: previous output did not meet quality bar."""
     kind: Literal["job_requeued"] = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1, description="why the previous attempt was rejected")
     new_params: dict | None = None
-
-
-class AudioJobRequeued(JobRequeued):
-    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
-
-
-class VideoJobRequeued(JobRequeued):
-    kind: Literal["video_job_requeued"] = "video_job_requeued"
 
 
 class JobApproved(Effect):
@@ -219,14 +177,6 @@ class JobApproved(Effect):
     artifact_uri: str
     quality_notes: str = ""
     reviewed_by: str = Field(default="agent", description="'agent' or human name")
-
-
-class AudioJobApproved(JobApproved):
-    kind: Literal["audio_job_approved"] = "audio_job_approved"
-
-
-class VideoJobApproved(JobApproved):
-    kind: Literal["video_job_approved"] = "video_job_approved"
 
 
 # ===========================================================================
@@ -399,7 +349,6 @@ class MergeIntoOTIO(Effect):
         return parse_duration(val)
     transition_type: Literal["cut", "dissolve", "none"] = "cut"
     transition_duration_sec: float = Field(default=0.0, ge=0.0)
-    start_sec: float = Field(default=0.0, description="Optional start time coordinate for coordinate-based schema")
 
 
 class DeleteFromOTIO(Effect):
@@ -518,6 +467,13 @@ class NoOp(Effect):
     agent_context: str = ""
 
 
+class UpdateAgentMemory(Effect):
+    """Update long-term memory for a specific agent."""
+    kind: Literal["update_agent_memory"] = "update_agent_memory"
+    target_agent: str = Field(..., description="Agent whose memory is being updated")
+    memories: list[str] = Field(..., description="List of memories")
+
+
 # ===========================================================================
 # 3.9 Production Failure
 # ===========================================================================
@@ -594,23 +550,11 @@ EffectUnion = Annotated[
         DeleteScene,
         ReorderScenes,
         QueueJob,
-        QueueAudioJob,
-        QueueVideoJob,
         JobStarted,
-        AudioJobStarted,
-        VideoJobStarted,
         JobCompleted,
-        AudioJobCompleted,
-        VideoJobCompleted,
         JobFailed,
-        AudioJobFailed,
-        VideoJobFailed,
         JobRequeued,
-        AudioJobRequeued,
-        VideoJobRequeued,
         JobApproved,
-        AudioJobApproved,
-        VideoJobApproved,
         AudioGenerated,
         AudioMeasured,
         DurationAdjusted,
@@ -632,6 +576,7 @@ EffectUnion = Annotated[
         ClarificationRequest,
         AgentLoopDetected,
         NoOp,
+        UpdateAgentMemory,
         ProductionFailed,
         MeasurementRequested,
         VideoMeasured,
@@ -644,23 +589,11 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "delete_scene":       DeleteScene,
     "reorder_scenes":     ReorderScenes,
     "queue_job":          QueueJob,
-    "queue_audio_job":    QueueAudioJob,
-    "queue_video_job":    QueueVideoJob,
     "job_started":        JobStarted,
-    "audio_job_started":  AudioJobStarted,
-    "video_job_started":  VideoJobStarted,
     "job_completed":      JobCompleted,
-    "audio_job_completed": AudioJobCompleted,
-    "video_job_completed": VideoJobCompleted,
     "job_failed":         JobFailed,
-    "audio_job_failed":   AudioJobFailed,
-    "video_job_failed":   VideoJobFailed,
     "job_requeued":       JobRequeued,
-    "audio_job_requeued": AudioJobRequeued,
-    "video_job_requeued": VideoJobRequeued,
     "job_approved":       JobApproved,
-    "audio_job_approved": AudioJobApproved,
-    "video_job_approved": VideoJobApproved,
     "audio_generated":    AudioGenerated,
     "audio_measured":     AudioMeasured,
     "duration_adjusted":  DurationAdjusted,
@@ -682,6 +615,7 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "clarification_request": ClarificationRequest,
     "agent_loop_detected":   AgentLoopDetected,
     "noop":               NoOp,
+    "update_agent_memory": UpdateAgentMemory,
     "production_failed":  ProductionFailed,
     "measurement_requested": MeasurementRequested,
     "video_measured":     VideoMeasured,

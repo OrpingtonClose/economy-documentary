@@ -64,12 +64,11 @@ class MultiAgentTestHelper:
         delay = 0.2
         for _ in range(15):
             try:
-                resp = httpx.get("http://127.0.0.1:8000/", headers={"accept": "application/json"}, timeout=1.0)
+                resp = httpx.get("http://127.0.0.1:8000/", headers={"accept": "application/json"}, timeout=1.0)  # health probe
                 if resp.status_code in (200, 400):
                     return
             except Exception:
-                pass
-            time.sleep(delay)
+                time.sleep(delay)
             delay = min(delay * 1.5, 2.0)
         raise RuntimeError("GSA failed to start")
 
@@ -79,12 +78,12 @@ class MultiAgentTestHelper:
                 self.gsa_process.kill()
                 self.gsa_process.wait()
             except Exception:
-                pass
+                pass  # cleanup process error ignored
             try:
                 self.gsa_stdout.close()
                 self.gsa_stderr.close()
             except Exception:
-                pass
+                pass  # cleanup log streams error ignored
         import subprocess
         subprocess.run("kill -9 $(lsof -t -i:8000) 2>/dev/null || true", shell=True)
 
