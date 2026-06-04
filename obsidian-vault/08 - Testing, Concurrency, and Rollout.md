@@ -229,7 +229,7 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
             │
             ▼
 ┌──────────────────────────────────────────────┐
-│  Parallel Agent Execution (Within the Run)   │
+│ Sequential Agent Execution (Within the Run)  │
 │  - Scenario Agent  - Audio Agent             │
 │  - Video Agent     - Assembly Agent          │
 └───────────┬───────────────────────┬──────────┘
@@ -250,8 +250,8 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 #### Single-run isolation constraints
 Only one pipeline run may execute at any given time. The database `/tmp/documentary-pipeline/events.db` is dedicated entirely to the active run to guarantee trace clarity and prevent cross-run database corruption.
 
-#### Parallel agent execution boundaries
-Within a run, all agents execute concurrently in their respective ASGI processes, submitting media jobs and processing pipeline tasks in parallel to maximize performance.
+#### Sequential agent execution boundaries
+Within a run, agents execute sequentially based on their active pipeline phase, querying the GSA to ensure only the agent responsible for the current phase runs its execution turn, avoiding concurrent state conflicts.
 
 #### Turn serialization via LoopBoundLock
 Within each agent process, overlapping wakeups or concurrent background execution turns are strictly serialized using an in-process `LoopBoundLock` (`run_lock_manager`). Turns must be executed inside the lock boundary to prevent concurrent state corruption.
