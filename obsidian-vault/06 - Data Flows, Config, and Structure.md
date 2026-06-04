@@ -61,6 +61,9 @@ graph TD
 
 The `Config` Pydantic model is the single source of truth for all parameters.
 
+#### No environment variable fallbacks in media tools
+Media generation and rendering tools must not fall back to `os.environ` or read global settings. Directories and configuration parameters must be explicitly passed as inputs to keep tools modular and deterministic.
+
 ```python
 from pydantic import BaseModel, Field
 from typing import Literal

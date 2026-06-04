@@ -82,8 +82,8 @@ Every developer or agent modifying the codebase must preserve these 6 fundamenta
 > Within each agent process, reasoning turns are globally serialized using `LoopBoundLock` (`run_lock_manager`) to prevent concurrent event-store writes or state corruption.
 
 > [!IMPORTANT]
-> **5. No Timeouts in Production Code**  
-> Operations on primary paths wait indefinitely or run to completion. Timeouts are only permitted on lightweight health check probes.
+> **5. Time-based timeouts are strictly forbidden across all execution and test code**  
+> Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
 
 > [!IMPORTANT]
 > **6. Emerging Pipeline Phases**  

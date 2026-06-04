@@ -258,9 +258,17 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 
 ### 3.2 Timeout Policy
 
-* **Production Execution Paths:** **Timeouts are strictly prohibited.** In accordance with Core Principle 4, operations such as LLM inference, video rendering, and database inserts must run to completion or wait indefinitely. If an operation hangs, the system waits for manual operator intervention.
-* **Health / Diagnostic Probes Exception:** Timeouts **are allowed** on lightweight network check requests (e.g., pinging an endpoint to determine if a worker VM is active). Timeouts on agent wakeup POST triggers are strictly forbidden.
-* **Enforcement:** The compliance scanner (`cheat_check.py`) scans code for `timeout=` properties on HTTP requests. Probing exceptions must be marked with a `# health probe` comment or contain the word `health` / `probe` to pass verification.
+#### Time-based timeouts are strictly forbidden across all execution and test code
+Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
+
+#### Production execution paths must not use mock implementations
+Tests validating production pipeline scenarios must run against real agents querying active endpoints. Mocks are restricted to isolated, offline unit test files.
+
+#### Health / Diagnostic Probes Exception
+Timeouts are allowed on lightweight network check requests (e.g., pinging an endpoint to determine if a worker VM is active) to prevent the polling coordinator from blocking indefinitely on unreachable resources. Timeouts on agent wakeup POST triggers are strictly forbidden.
+
+#### Compliance Enforcement
+The compliance scanner (`cheat_check.py`) scans code for `timeout=` properties on HTTP requests. Probing exceptions must be marked with a `# health probe` comment or contain the word `health` / `probe` to pass verification.
 
 ---
 

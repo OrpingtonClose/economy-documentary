@@ -85,6 +85,9 @@ class Projection(ABC):
 
 The pipeline uses **OpenTimelineIO (OTIO) 0.16+** as the canonical timeline representation.
 
+#### Narration text and screenplay scripts must not be subject to arbitrary length heuristics or trimming
+Screenplay scripts and narration blocks must not be forced to fit fixed duration intervals using crude character length limits or string trimming rules. Narration length evaluation must rely on semantic, model-based judgment or speech-rate duration heuristics. Additionally, narration text must not be repeatedly changed or edited once downstream execution has commenced.
+
 ### 3.1 Track Layout
 
 | Index | Track Name | Content | Producer |

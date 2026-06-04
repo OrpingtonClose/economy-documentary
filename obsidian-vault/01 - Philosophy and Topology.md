@@ -54,17 +54,15 @@ Prioritization, filtering, and response selection happen **inside the agent via 
 
 ### 1.4 No Timeouts in Code
 
-No pipeline code calls `setTimeout`, `threading.Timer`, `asyncio.timeout`, or any timer primitive. HTTP requests and subprocess calls on primary execution paths run to completion. This is architecture policy.
-
-> [!WARNING]
-> An explicit exception is granted for lightweight health and readiness checks (e.g. pinging a VM or agent status check) where setting a timeout is necessary to prevent the polling coordinator from blocking indefinitely on unreachable resources. Setting a timeout on wakeup POST triggers is strictly forbidden.
+#### Time-based timeouts are strictly forbidden across all execution and test code
+All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
 
 ---
 
 ### 1.5 Real Engines Only
 
-#### 1.5.1 Qwen3-TTS, LTX-2.3, DeepSeek API; no simulation layers
-TTS uses **Qwen3-TTS** on GPU VMs. Video uses **LTX-2.3**. Agent LLM inference uses **DeepSeek API** (`deepseek-v4-flash`). No mocks, no stubs. Unavailable engines trigger `ClarificationRequest`.
+#### Production execution paths must not use mock implementations
+Mocks, facades, and simulated worker endpoints are strictly forbidden in production runs. All VM provisioning, audio generation, and video generation steps must perform genuine system calls or API queries. Mocks are reserved exclusively for the offline test suites. TTS uses **Qwen3-TTS** on GPU VMs. Video uses **LTX-2.3**. Agent LLM inference uses **DeepSeek API** (`deepseek-v4-flash`). Unavailable engines trigger `ClarificationRequest`.
 
 ---
 
@@ -77,8 +75,8 @@ No regex extracts structured data from agent output. The parser uses the agent's
 
 ### 1.7 Natural Language Only — Agents Never Emit Structured Output
 
-#### 1.7.1 Agents write free-form prose; ALL extraction complexity lives in the parser
-**This is an absolute, non-negotiable principle.** Agents produce natural language text and nothing else. They do not emit `EFFECT:` markers, JSON, XML, labeled sections, or any structured format. They do not know the parser exists. The parser is a post-processing step that extracts structured effects from genuinely free-form prose.
+#### Production agents must communicate strictly in PlainTextResponse
+Production agents and HTTP endpoints are strictly prohibited from exchanging or exposing structured JSON payloads, key-value metadata strings (such as `ltx=yes`, `tts=yes`), or accepting JSON content headers for core agent state checks. All communication between agents must flow as conversational, natural-language plain text responses. The only exception is the GSA endpoint which exposes projections for fold functions. Agents produce natural language text and nothing else. They do not emit `EFFECT:` markers, JSON, XML, labeled sections, or any structured format. They do not know the parser exists. The parser is a post-processing step that extracts structured effects from genuinely free-form prose.
 
 **Complexity belongs in the parser.** The parser is expected to be very complex — semantic understanding, context awareness, category-conditioned extraction, discriminated unions, field validators, reasking logic. This complexity is deliberate and welcome. What is forbidden is pushing any of this complexity onto the agent by requiring structured output.
 
@@ -242,7 +240,8 @@ Every agent exposes exactly `GET /` (status), `POST /` (scheduled run), and `PUT
 
 ### 2.3 HTTP Contract Specification
 
-All HTTP inputs and responses in the production pipeline use **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats.
+#### Pipeline state and agent actions must be controlled strictly via HTTP endpoints
+Direct manipulation of files or databases, running independent shell scripts, or mutably bypassing control endpoints is strictly prohibited. All execution, monitoring, and human intervention must flow through the ASGI HTTP endpoints (GET, POST, PUT). Silent process restarts are banned. All HTTP inputs and responses in the production pipeline use **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats.
 
 #### 2.3.1 GET / & GET /{prompt:path} — Conversational Status / Queries
 * **Endpoint:** `GET /` and `GET /{prompt:path}` on every agent and GSA port.
