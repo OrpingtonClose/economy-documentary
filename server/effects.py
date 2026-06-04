@@ -467,11 +467,6 @@ class NoOp(Effect):
     agent_context: str = ""
 
 
-class UpdateAgentMemory(Effect):
-    """Update long-term memory for a specific agent."""
-    kind: Literal["update_agent_memory"] = "update_agent_memory"
-    target_agent: str = Field(..., description="Agent whose memory is being updated")
-    memories: list[str] = Field(..., description="List of memories")
 
 
 # ===========================================================================
@@ -576,7 +571,7 @@ EffectUnion = Annotated[
         ClarificationRequest,
         AgentLoopDetected,
         NoOp,
-        UpdateAgentMemory,
+
         ProductionFailed,
         MeasurementRequested,
         VideoMeasured,
@@ -615,7 +610,7 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "clarification_request": ClarificationRequest,
     "agent_loop_detected":   AgentLoopDetected,
     "noop":               NoOp,
-    "update_agent_memory": UpdateAgentMemory,
+
     "production_failed":  ProductionFailed,
     "measurement_requested": MeasurementRequested,
     "video_measured":     VideoMeasured,

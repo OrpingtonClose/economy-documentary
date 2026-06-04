@@ -23,29 +23,22 @@ Thirteen foundational commitments and three long-term strategic pillars govern t
 
 ### 1.1 Event Log as Sole Source of Truth
 
-#### 1.1.1 All state derived from events; replay reconstructs everything
-Every fact is an **Effect** — a typed Pydantic model — appended to an append-only SQLite event log. EventStoreDB is the future scalability path for distributed deployments. The OTIO timeline, job queue, VM inventory, and pipeline phase are **projections**: read models rebuilt by pure fold functions. Replay from sequence `0` reconstructs everything exactly.
-
-#### 1.1.2 Event store is only persistent storage; all other state is ephemeral projection
-The SQLite event store database (`events.db`) is the sole durable storage. EventStoreDB streams are the future scalability path. Agents hold no session state. VM workers are ephemeral. Projections are in-memory folds rebuilt from the event log on every Global State Agent (GSA) activation.
+#### Event log is the sole source of truth
+All pipeline state must be derived passively by folding over the SQLite `events.db` event log. Direct updates to databases or projections from agents are strictly banned. Replay from sequence `0` reconstructs the entire state exactly. The event store is the only persistent storage; all other state projections are ephemeral. EventStoreDB streams are the future scalability path. Agents hold no session state and VM workers are ephemeral.
 
 ---
 
 ### 1.2 Effects as Only Legal Mutations
 
-#### 1.2.1 Typed Pydantic models; parser extracts from agent text
-A **category-conditioned parser** (§9.6) extracts Effects from agent text using `instructor` + `deepseek-v4-flash`. Every Effect carries `kind: Literal[...]`, `effect_id: UUID` (UUIDv7), `agent: str`, and `timestamp: float` (seconds since epoch). Invalid payloads are rejected before reaching the event store.
-
-#### 1.2.2 No direct state mutation outside event store append
-All state changes enter through SQLite event store append. Agents do not call projection methods. Projections are read-only consumers.
+#### Effects are the only legal mutations
+All state changes must enter through SQLite event store appends. Direct state mutation of projections is prohibited. Projections are read-only consumers. Every mutation must be represented by a typed Pydantic model (`Effect`) containing metadata for validation, tracking, and idempotency (UUIDv7), extracted from agent prose using a category-conditioned semantic parser. Invalid payloads are rejected before reaching the event store.
 
 ---
 
 ### 1.3 No State Machine — Prompt-Based Rules
 
-**No state machine.** Pipeline "state" is emergent from projection state (e.g., "all audio blocks clean" emerges from Timeline, not from a state variable). Agents read projection-derived narratives and decide what to do. Rules live in the agent's system prompt, not in code.
-
-Prioritization, filtering, and response selection happen **inside the agent via prompt instruction**. The agent's system prompt contains the rules for what to prioritize and how to respond.
+#### Prompt-driven state execution (No state machines)
+The pipeline has no hardcoded state machine. Prioritization, control rules, and action selection must be governed inside the agent's system prompt rather than hardcoded in the execution code. Prioritization, filtering, and response selection occur inside the agent via prompt instructions.
 
 > [!TIP]
 > **Core Principle:** Whenever something can be done via prompt, do so — cut code complexity.
@@ -68,8 +61,8 @@ Mocks, facades, and simulated worker endpoints are strictly forbidden in product
 
 ### 1.6 Never Regex
 
-#### 1.6.1 Category-conditioned extraction via instructor + deepseek-v4-flash
-No regex extracts structured data from agent output. The parser uses the agent's current role to determine valid Effect subtypes and constrains the LLM to schema-compliant JSON via `instructor`. If extraction fails, the prompt is adjusted — the schema is not weakened.
+#### Category-conditioned extraction via instructor (Never Regex)
+No regular expressions may be used to extract structured data from agent outputs. The parser must use the agent's current role to determine valid `Effect` subtypes and constrain the LLM to schema-compliant JSON via `instructor` + `deepseek-v4-flash`. If extraction fails, the prompt is adjusted — the schema is not weakened.
 
 ---
 
@@ -92,16 +85,15 @@ Production agents and HTTP endpoints are strictly prohibited from exchanging or 
 
 ### 1.8 Situation-Driven Agent Tasking
 
-Agents query the **Global State Agent** via `GET /` frequently. They receive the complete projection bundle (OTIO, Job, VM, State, Budget) as a Pydantic model. They scan this state and decide what to do. Their system prompt contains situation-type guidance and prioritization rules. Agents do not read the event store directly.
+#### Situation-driven agent tasking via GSA
+Agents must never read the SQLite database directly. They query the read-only GSA status endpoint to receive the folded projection bundle, scanning this state to determine their next action based on instructions in their system prompts.
 
 ---
 
 ### 1.9 pydantic-deep
 
-Agents use **pydantic-deep** (built on `pydantic-ai`). Context compaction is implemented as a **pre-processing step** before `agent.run()`. The agent's `message_history` is compacted by querying the OTIO projection to determine the agent's current task/focus, then calling a compaction LLM that preserves task-relevant details. Token management is handled by the pydantic-deep `ContextManagerCapability`.
-
-> [!NOTE]
-> **Why pre-processing, not watcher-side compaction:** Token management is an agent-internal concern. pydantic-deep provides the hook infrastructure via `on_before_compress`; we provide the OTIO-aware compaction logic.
+#### Pre-processing context compaction
+Agent message history compaction must be executed as a pre-processing step using the `on_before_compress` hooks of the context capability, rather than run as an external database or watcher-side compaction script. Token management is handled by the pydantic-deep `ContextManagerCapability`.
 
 ---
 
@@ -243,33 +235,14 @@ Every agent exposes exactly `GET /` (status), `POST /` (scheduled run), and `PUT
 #### Pipeline state and agent actions must be controlled strictly via HTTP endpoints
 Direct manipulation of files or databases, running independent shell scripts, or mutably bypassing control endpoints is strictly prohibited. All execution, monitoring, and human intervention must flow through the ASGI HTTP endpoints (GET, POST, PUT). Silent process restarts are banned. All HTTP inputs and responses in the production pipeline use **plain narrative text** (`Content-Type: text/plain`). JSON has been completely eliminated from the external communication boundaries of production components, and endpoints do not support structured output formats.
 
-#### 2.3.1 GET / & GET /{prompt:path} — Conversational Status / Queries
-* **Endpoint:** `GET /` and `GET /{prompt:path}` on every agent and GSA port.
-* **Content-Type:** `text/plain`
-* **Query Behavior:**
-  - **With Prompt (e.g., `/does scenario agent need to take action`)**: The LLM queries the current state database context (and GSA narrative summary) to generate a free-flowing, conversational natural language response.
-  - **Without Prompt (root `/` path)**:
-    - **Global State Agent**: Returns a conversational description of the global documentary pipeline state and what needs to be done next.
-    - **Pipeline Agents**: Blocks to wait for any active heavy turn/lock to release, then returns a conversational description of whether the agent is busy or idle, and exactly what focus or task it is currently working on.
+#### Non-blocking GET queries and health status
+The GET endpoint (`GET /` and `GET /{prompt:path}`) is non-blocking. It queries the GSA to describe the current focus task in a plain-text conversational format. If no prompt is passed, it returns a conversational description of the agent's busy/idle status.
 
----
+#### POST queries for scheduled executions
+The POST endpoint (`POST /` and `POST /{prompt:path}`) triggers a conversational turn. If the agent is already busy executing a turn, it must return a `409 Conflict` (or plain text indicating busy) immediately instead of blocking or interrupting. Otherwise, it executes the turn and returns the monologue. Custom instruction text is appended to the event store as a `HumanInstruction` event.
 
-#### 2.3.2 POST / & POST /{prompt:path} — Conversational Light Commands (Blocking)
-* **Endpoint:** `POST /` and `POST /{prompt:path}` on every agent port.
-* **Content-Type:** `text/plain`
-* **Trigger Behavior**: Blocks to wait for any active heavy turn/lock to release. Performs only lightweight operations inline (such as appending instruction events and querying status). Does NOT attempt any heavy LLM or SSH execution.
-* **Context Pollution**: Appends a `HumanInstruction` event directly to the event store database if a custom instruction is passed.
-* **Response**: Returns a plain-text conversational response containing the agent's monologue, thoughts, or health/action status once the lock is acquired.
-
----
-
-#### 2.3.3 PUT / & PUT /{prompt:path} — Interrupting Interventions (Electric Bolt)
-* **Endpoint:** `PUT /` and `PUT /{prompt:path}` on every agent port.
-* **Content-Type:** `text/plain`
-* **Trigger Behavior**: Starts a heavy execution turn in the background immediately, acting as an electric bolt to the system.
-* **Context Pollution**: Appends a `HumanInstruction` event directly to the event store database if a custom instruction is passed.
-* **Concurrency Handling (Interrupting)**: If the agent is busy running a turn, PUT immediately cancels the active asyncio task, terminates all spawned OS subprocesses (ssh, curl, ffmpeg, etc.), and launches the new heavy turn execution in the background.
-* **Response**: Returns `204 No Content` with an empty body, indicating immediate processing has been forced.
+#### PUT queries for interrupting operator intervention
+The PUT endpoint (`PUT /` and `PUT /{prompt:path}`) acts as an operator intervention tool. It cancels any active turn task and spawned subprocesses immediately, schedules a new turn in the background, and returns `204 No Content` immediately. Custom instruction text is appended to the event store as a `HumanInstruction` event.
 
 ---
 
@@ -312,9 +285,11 @@ These are not states. They are descriptive labels for human observation. No code
 | **DONE** | Final MP4 exists and validates | None |
 | **ABORTED** | `PipelineAborted` effect exists in store | None |
 
-#### 2.4.1 Back-edges
-* **`gap_unexpected`**: Narration scene count ≠ scene list. Triggers back-edge from `AUDIO_RECONCILE` or later back to `SCRIPT`.
-* **`voice_mismatch`**: Final audio speaker ≠ scenario voice tag. Triggers back-edge from `VIDEO_PRODUCTION` back to `SCRIPT`.
+#### Unexpected gap back-edge trigger
+If narration scene count does not match the scene list, a `gap_unexpected` condition must trigger a back-edge from `AUDIO_RECONCILE` or later phases back to `SCRIPT`.
+
+#### Voice mismatch back-edge trigger
+If the final audio speaker role does not match the scenario voice tag, a `voice_mismatch` condition must trigger a back-edge from `VIDEO_PRODUCTION` back to `SCRIPT`.
 
 ---
 
@@ -322,12 +297,20 @@ These are not states. They are descriptive labels for human observation. No code
 
 The **Global State Agent** (GSA, port 8000) is the **sole read path** between the SQLite event store and all other agents. It polls DB files, maintains all five projections in memory, and serves them via `GET /`.
 
-#### 2.5.1 GSA Invariants:
-1. **GET / only:** The GSA exposes exactly one endpoint: `GET /`. It does not accept `POST /`.
-2. **Read-only from agent perspective:** Agents treat the GSA as a state cache.
-3. **The SQLite event store is the GSA's only input:** The GSA polls SQLite file changes and rebuilds projections.
-4. **Ephemeral, no checkpointing:** The GSA holds no persistent state. It replays the event log from sequence 0 on every restart.
-5. **No exceptions:** The Provisioner (port 8081) reads state from the GSA via `GET /` like all other agents.
+#### GSA GET / only
+The GSA exposes exactly one endpoint: `GET /`. It does not accept `POST /` or `PUT /` requests.
+
+#### Read-only GSA status from agent perspective
+Agents must treat the GSA as a read-only state cache. Direct writes to GSA state or projections are prohibited.
+
+#### SQLite event store is the GSA's only input
+The GSA must derive its state solely by polling the SQLite events database (`events.db`) and rebuilding projections in-memory.
+
+#### Ephemeral GSA state with no checkpointing
+The GSA must not persist folded projection states on disk. On restart, the GSA must replay the event log from sequence 0 to reconstruct projections.
+
+#### Consistent GSA interface across all components
+All components, including the deterministic Provisioner, must read system state from the GSA via `GET /` using the same HTTP interface.
 
 ---
 

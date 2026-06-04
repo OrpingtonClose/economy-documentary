@@ -251,7 +251,7 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 The pipeline is strictly self-contained from start to finish. Runlevel concurrency is completely prohibited; there are no concurrent pipeline runs or parallel instances of the pipeline executing at the same time. The database `/tmp/documentary-pipeline/events.db` is strictly dedicated to the single, active, self-contained run to prevent data corruption and trace pollution.
 
 #### Concurrent agent execution within a run
-Within a single active run, all agents (Scenario, Audio, Video, Assembly, and the Provisioner) can and should execute concurrently in their respective ASGI processes. They act concurrently by polling the GSA, submitting media jobs, managing VMs, and processing tasks in parallel to maximize runtime efficiency.
+Within a single active run, all agents (Scenario, Audio, Video, Assembly, and the Provisioner) can and should execute concurrently in their respective ASGI processes. They act concurrently by polling the GSA, submitting media jobs, managing VMs, processing tasks in parallel to maximize runtime efficiency, and performing inquisitive proactive investigation into the run for general checks.
 
 #### Turn serialization via LoopBoundLock
 Within each agent process, overlapping wakeups or concurrent background execution turns are strictly serialized using an in-process `LoopBoundLock` (`run_lock_manager`). Turns must be executed inside the lock boundary to prevent concurrent state corruption.

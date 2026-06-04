@@ -21,11 +21,8 @@ This module defines the complete family of **Pydantic Effect Schemas** and the i
 
 ## 1. Pydantic Effect Schemas
 
-All mutations in the system are represented by typed Pydantic models derived from a common `Effect` base class.
-
-### 1.1 Base Effect Model
-
-Every event appended to the event store inherits from `Effect`. It contains metadata for validation, tracking, and idempotency.
+#### Strict Pydantic schemas derived from base Effect
+All mutations in the system must be represented by typed Pydantic models derived from a common `Effect` base class. Every event appended to the event store inherits from `Effect`, containing metadata fields including `effect_id` (a UUIDv7 generated client-side for idempotent retries), `kind` (the literal discriminant string), `agent` (the component that produced the effect), and `timestamp` (the epoch time at creation). Never instantiate the base `Effect` class directly.
 
 ```python
 class Effect(BaseModel):
@@ -522,7 +519,11 @@ EffectUnion = Annotated[
 
 ## 2. Event Store
 
-The event store uses **SQLite** (single file, WAL mode) to guarantee cross-process atomicity, global sequence allocation, and idempotent writes via `UNIQUE(effect_id)` constraints.
+#### Cross-process safety via SQLite WAL mode and BEGIN IMMEDIATE
+The event store must use a single SQLite database file configured in Write-Ahead Logging (WAL) mode. To prevent database locking errors and guarantee cross-process transaction atomicity, all writes must open transactions using `BEGIN IMMEDIATE`.
+
+#### Idempotent event writes via unique effect identifiers
+Every event must possess a client-side generated UUIDv7 (`effect_id`). The SQLite table must enforce a `UNIQUE(effect_id)` constraint on this field to guarantee idempotency and silently reject or handle duplicate inserts on retries.
 
 ### 2.1 Schema
 
@@ -627,12 +628,8 @@ class EventStore:
 
 For deployments requiring explicit range-conformance and strict duration checking directly in the database layer, the timeline can be modeled using track-specific coordinate ranges as natural keys, bound to stable screenplay blueprint identifiers.
 
-### 3.1 Relational Architecture
-
-The architecture separates the **logical screenplay blueprint** from the **physical media tracks**:
-
-* **Scenario (Logical Anchor):** Persisted using an immutable surrogate key (e.g. `block_id` or `scenario_id` UUID). It contains the script narration text and acts as the relational foreign key anchor.
-* **Media Tracks (Physical Occurrence):** Persisted using track-level coordinate ranges as natural keys (e.g. `[start_ms, end_ms]`). They store the actual generated media file URIs and durations, referencing the scenario table via a foreign key.
+#### Separation of logical screenplay blueprint from physical media tracks
+The coordinate-based timeline must separate the logical screenplay blueprint (representing the stable narration script blocks using surrogate keys such as `block_id` or `scenario_id`) from the physical media tracks (which represent media placement using track-level coordinate ranges `[start_ms, end_ms]` as natural keys and check constraints to prevent overlapping clips).
 
 ```sql
 -- Scenario Blueprint Table (Stable Surrogate PK)
@@ -661,9 +658,8 @@ CREATE TABLE timeline_clips (
 );
 ```
 
-### 3.2 High-Precision sqlean-time Extension
-
-To enforce microsecond or nanosecond interval math directly in SQLite without float-precision rounding issues, the SQL database utilizes the `sqlean-time` extension. This adds proper duration arithmetic and point-in-time checks natively in queries:
+#### Nanosecond precision timeline arithmetic via sqlean-time
+To prevent floating-point precision issues and rounding errors during duration calculation, timeline queries and constraints must use the SQLite `sqlean-time` extension to perform high-precision nanosecond date-time duration arithmetic.
 
 ```sql
 -- Load the sqlean-time extension in sqlite connection

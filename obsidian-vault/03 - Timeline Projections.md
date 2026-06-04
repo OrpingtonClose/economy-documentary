@@ -15,7 +15,8 @@
 
 # ⏱️ Timeline Projections
 
-Projections are **incremental read models** rebuilt from the event log. Each projection tracks `last_sequence` and processes only new events on every `tick`.
+#### Incremental read model updates from event log
+Projections must be designed as incremental read models that rebuild state passively by tracking the `last_sequence` and processing only new events on each `tick`. Direct modification of projection state is prohibited.
 
 ---
 
@@ -83,7 +84,8 @@ class Projection(ABC):
 
 ## 3. OpenTimelineIO (OTIO) Core Specifications
 
-The pipeline uses **OpenTimelineIO (OTIO) 0.16+** as the canonical timeline representation.
+#### OpenTimelineIO as canonical timeline representation
+The pipeline must use OpenTimelineIO (OTIO) 0.16+ as the canonical timeline representation. All timelines, tracks, and clips must be modeled using OTIO schema sequences and clip structures.
 
 #### Narration text and screenplay scripts must not be subject to arbitrary length heuristics or trimming
 Screenplay scripts and narration blocks must not be forced to fit fixed duration intervals using crude character length limits or string trimming rules. Narration length evaluation must rely on semantic, model-based judgment or speech-rate duration heuristics. Additionally, narration text must not be repeatedly changed or edited once downstream execution has commenced.
@@ -544,6 +546,9 @@ class BudgetProjection(Projection):
 ### 4.5 CoordinateTimeline Projection
 
 The `CoordinateTimeline` read model represents a grid-centric/timespan timeline. Instead of keying slots on logical IDs, it organizes clips by their physical track intervals, keeping a relational pointer to Scenario anchors.
+
+#### Strict clip collision prevention on physical media tracks
+Clips mapped to physical media tracks must not overlap in their coordinate timespans. If a newly merged clip overlaps with any existing clip on the same track, a collision error must be raised to prevent timeline corruption.
 
 ```python
 class IntervalSpan(BaseModel):

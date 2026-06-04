@@ -395,43 +395,51 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
     return agent
 
 
-async def update_agentic_memory(agent_role: str, agent_output: str, model_instance: OpenAIChatModel, current_memories: list[str]) -> UpdateAgentMemory:
-    """Extract and update atomic facts (long-term memories) for the specified agent using DeepSeek."""
-    system_prompt = (
-        f"You are the Memory Manager for the {agent_role} agent in a media rendering pipeline.\n"
-        "Your job is to maintain a list of active, atomic facts (long-term memories) for this agent based on its latest actions and outputs.\n\n"
-        "Instructions:\n"
-        "1. Read the current memories (if any) and the latest agent output.\n"
-        "2. Update the memories list: add new facts, modify outdated details, and remove facts that are no longer true (e.g. if a VM is destroyed, remove 'Active VM: ID').\n"
-        "3. Keep the list concise (maximum 15 key facts total).\n"
-        "4. Do NOT include formatting, headers, or pleasantries. Output ONLY the updated facts, one per line starting with a hyphen.\n"
-        "5. Focus on infrastructure state (active VM IDs, IPs, ports, active/completed jobs) or critical timeline/audio/video states."
-    )
-    
-    user_content = "=== CURRENT MEMORIES ===\n"
-    if current_memories:
-        user_content += "\n".join(f"- {m}" for m in current_memories) + "\n"
-    else:
-        user_content += "(No current memories)\n"
-        
-    user_content += f"\n=== LATEST AGENT OUTPUT ===\n{agent_output}\n"
-    
-    response = await llm_complete(system=system_prompt, user=user_content, model=model_instance)
-    
-    updated_memories = []
-    for line in response.splitlines():
-        line = line.strip()
-        if line.startswith("-"):
-            fact = line.lstrip("-").strip()
-            if fact:
-                updated_memories.append(fact)
-                
-    from effects import UpdateAgentMemory
-    return UpdateAgentMemory(
-        agent=agent_role,
-        target_agent=agent_role,
-        memories=updated_memories,
-    )
+def get_local_mem0():
+    """Initialize local Mem0 Memory instance using Gemini embeddings and DeepSeek LLM."""
+    try:
+        from mem0 import Memory
+        import os
+        gemini_key_path = "/Users/orpington/api_keys/LLMS/gemini_api_key.txt"
+        deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+        if not os.path.exists(gemini_key_path) or not os.path.exists(deepseek_key_path):
+            logger.error("Required API keys for local Mem0 configuration are missing.")
+            return None
+            
+        with open(gemini_key_path) as f:
+            gemini_api_key = f.read().strip()
+        with open(deepseek_key_path) as f:
+            deepseek_api_key = f.read().strip()
+            
+        config = {
+            "embedder": {
+                "provider": "gemini",
+                "config": {
+                    "model": "models/gemini-embedding-001",
+                    "api_key": gemini_api_key
+                }
+            },
+            "llm": {
+                "provider": "openai",
+                "config": {
+                    "model": "deepseek-chat",
+                    "api_key": deepseek_api_key,
+                    "openai_base_url": "https://api.deepseek.com/v1"
+                }
+            },
+            "vector_store": {
+                "provider": "qdrant",
+                "config": {
+                    "collection_name": "agent_memories",
+                    "path": "/tmp/documentary-pipeline/mem0_qdrant",
+                    "embedding_model_dims": 768
+                }
+            }
+        }
+        return Memory.from_config(config)
+    except Exception as exc:
+        logger.error(f"Failed to initialize local Mem0 instance: {exc}")
+        return None
 
 
 async def execute_agent_turn(
@@ -464,10 +472,18 @@ async def execute_agent_turn(
                 pass  # Ignore invalid/malformed history models
         memory_text = format_memory(memory)
 
-        lt_memories = gsa_state.get("state", {}).get("agent_memories", {}).get(role, [])
+        lt_memories = []
+        mem0_instance = get_local_mem0()
+        if mem0_instance:
+            try:
+                mem_res = mem0_instance.get_all(filters={"user_id": role})
+                lt_memories = [m["memory"] for m in mem_res.get("results", []) if "memory" in m]
+            except Exception as exc:
+                logger.error(f"Failed to fetch long-term memories from local Mem0 for {role}: {exc}")
+
         lt_memories_text = ""
         if lt_memories:
-            lt_memories_text = "\n=== LONG-TERM MEMORY (ATOMIC FACTS) ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
+            lt_memories_text = "\n=== LONG-TERM MEMORY ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
 
         # 2. Build prompt
         skills = list_skills()
@@ -677,12 +693,12 @@ Available Skills:
         agent_text = result.output
         latest_monologues[role] = agent_text
 
-        # Update long-term memories by appending an UpdateAgentMemory effect
-        try:
-            mem_effect = await update_agentic_memory(role, agent_text, model_instance, lt_memories)
-            effects.append(mem_effect)
-        except Exception as exc:
-            logger.error(f"Failed to update agentic memory for {role}: {exc}")
+        # Update long-term memories using local Mem0 Memory client
+        if mem0_instance:
+            try:
+                await asyncio.to_thread(mem0_instance.add, agent_text, user_id=role)
+            except Exception as exc:
+                logger.error(f"Failed to update agentic memory for {role}: {exc}")
 
         try:
             with open(f"/tmp/documentary-pipeline/agent_debug_{role}.log", "a", encoding="utf-8") as f:
@@ -803,55 +819,54 @@ def make_agent_app(role: str) -> FastAPI:
         if lock.locked():
             return PlainTextResponse("Conflict: Agent is busy", status_code=409)
 
-        async with lock:
-            if is_human:
-                from effects import HumanInstruction
-                inst_effect = HumanInstruction(
-                    agent="operator",
-                    target_agent=role,
-                    instruction=inst_text,
-                    from_human="operator",
-                )
-                import hashlib
-                otio_hash = "initial_hash"
-                try:
-                    async with httpx.AsyncClient() as client:
-                        resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
-                        if resp.status_code == 200:
-                            slots = resp.json().get("otio", {}).get("slots", {})
-                            sorted_slots = sorted(slots.items())
-                            otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
-                except Exception:
-                    pass  # Fall back to default initial_hash on failure
-                event_store.append(inst_effect, otio_hash)
-
-            _agent_health["status"] = "busy"
-            _agent_health["last_run"] = time.time()
+        if is_human:
+            from effects import HumanInstruction
+            inst_effect = HumanInstruction(
+                agent="operator",
+                target_agent=role,
+                instruction=inst_text,
+                from_human="operator",
+            )
+            import hashlib
+            otio_hash = "initial_hash"
             try:
-                await execute_agent_turn(
-                    role=role,
-                    gsa_url="http://127.0.0.1:8000/",
-                    notification_type="human" if is_human else "instruction",
-                    context={"instruction": inst_text} if is_human else None,
-                )
-                _agent_health["status"] = "healthy"
-                _agent_health["idle_since"] = time.time()
-            except Exception as exc:
-                _agent_health["status"] = "error"
-                _agent_health["last_error"] = str(exc)
-                _agent_health["idle_since"] = time.time()
-                raise HTTPException(status_code=500, detail=str(exc))
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
+                    if resp.status_code == 200:
+                        slots = resp.json().get("otio", {}).get("slots", {})
+                        sorted_slots = sorted(slots.items())
+                        otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+            except Exception:
+                pass  # Fall back to default initial_hash on failure
+            event_store.append(inst_effect, otio_hash)
 
-            resp_text = latest_monologues.get(role) or f"I am the {role} agent. Currently my status is healthy."
-            accept = request.headers.get("accept", "")
-            if "application/json" in accept:
-                return AgentResponse(
-                    status="ok",
-                    effects_extracted=[],
-                    agent=role,
-                    timestamp=time.time(),
-                )
-            return PlainTextResponse(resp_text, media_type="text/plain")
+        _agent_health["status"] = "busy"
+        _agent_health["last_run"] = time.time()
+        try:
+            await execute_agent_turn(
+                role=role,
+                gsa_url="http://127.0.0.1:8000/",
+                notification_type="human" if is_human else "instruction",
+                context={"instruction": inst_text} if is_human else None,
+            )
+            _agent_health["status"] = "healthy"
+            _agent_health["idle_since"] = time.time()
+        except Exception as exc:
+            _agent_health["status"] = "error"
+            _agent_health["last_error"] = str(exc)
+            _agent_health["idle_since"] = time.time()
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        resp_text = latest_monologues.get(role) or f"I am the {role} agent. Currently my status is healthy."
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept:
+            return AgentResponse(
+                status="ok",
+                effects_extracted=[],
+                agent=role,
+                timestamp=time.time(),
+            )
+        return PlainTextResponse(resp_text, media_type="text/plain")
 
     @app.put("/")
     async def put_handler(request: Request):
@@ -878,48 +893,46 @@ def make_agent_app(role: str) -> FastAPI:
             inst_text = instruction_text
 
         async def run_turn_in_background():
-            lock = run_lock_manager.get_lock()
-            async with lock:
-                _agent_health["status"] = "busy"
-                _agent_health["last_run"] = time.time()
-                try:
-                    # Append HumanInstruction event immediately if applicable
-                    if is_human:
-                        from effects import HumanInstruction
-                        inst_effect = HumanInstruction(
-                            agent="operator",
-                            target_agent=role,
-                            instruction=inst_text,
-                            from_human="operator",
-                        )
-                        # Compute hash from GSA otio slots
-                        import hashlib
-                        otio_hash = "initial_hash"
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
-                                if resp.status_code == 200:
-                                    slots = resp.json().get("otio", {}).get("slots", {})
-                                    sorted_slots = sorted(slots.items())
-                                    otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
-                        except Exception:
-                            pass  # Fall back to default initial_hash on failure
-                        event_store.append(inst_effect, otio_hash)
-
-                    await execute_agent_turn(
-                        role=role,
-                        gsa_url="http://127.0.0.1:8000/",
-                        notification_type="human" if is_human else "instruction",
-                        context={"instruction": inst_text} if is_human else None,
+            _agent_health["status"] = "busy"
+            _agent_health["last_run"] = time.time()
+            try:
+                # Append HumanInstruction event immediately if applicable
+                if is_human:
+                    from effects import HumanInstruction
+                    inst_effect = HumanInstruction(
+                        agent="operator",
+                        target_agent=role,
+                        instruction=inst_text,
+                        from_human="operator",
                     )
-                    _agent_health["status"] = "healthy"
-                    _agent_health["idle_since"] = time.time()
-                except Exception as exc:
-                    import traceback
-                    traceback.print_exc()
-                    _agent_health["status"] = "error"
-                    _agent_health["last_error"] = str(exc)
-                    _agent_health["idle_since"] = time.time()
+                    # Compute hash from GSA otio slots
+                    import hashlib
+                    otio_hash = "initial_hash"
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
+                            if resp.status_code == 200:
+                                slots = resp.json().get("otio", {}).get("slots", {})
+                                sorted_slots = sorted(slots.items())
+                                otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+                    except Exception:
+                        pass  # Fall back to default initial_hash on failure
+                    event_store.append(inst_effect, otio_hash)
+
+                await execute_agent_turn(
+                    role=role,
+                    gsa_url="http://127.0.0.1:8000/",
+                    notification_type="human" if is_human else "instruction",
+                    context={"instruction": inst_text} if is_human else None,
+                )
+                _agent_health["status"] = "healthy"
+                _agent_health["idle_since"] = time.time()
+            except Exception as exc:
+                import traceback
+                traceback.print_exc()
+                _agent_health["status"] = "error"
+                _agent_health["last_error"] = str(exc)
+                _agent_health["idle_since"] = time.time()
 
         task = asyncio.create_task(run_turn_in_background())
         active_tasks[role] = task

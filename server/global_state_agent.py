@@ -168,7 +168,6 @@ def build_global_state() -> GlobalStateResponse:
         phase_changes=phase_changes,
         agents_tracked=list(state.recent_effects.keys()),
         latest_sequence=state.last_sequence,
-        agent_memories=state.agent_memories,
         recent_effects={agent: list(events) for agent, events in state.recent_effects.items()},
     )
 

@@ -139,22 +139,16 @@ Each pipeline agent runs within its own ASGI process powered by FastAPI. Instead
 
 ### 4.1 Endpoint Architecture
 
-The endpoint topology follows a non-blocking, asynchronous execution design to prevent thread starvation and coordinate concurrent operations safely:
+The endpoint topology follows a non-blocking, asynchronous execution design to prevent thread starvation and coordinate concurrent operations safely.
 
-1. **Non-Blocking Query & Health Checks (`GET /`)**:
-   - The `GET /` endpoint does not block on the running agent turn. Instead, it inspects the lock's state (`lock.locked()`) to return the status (`"busy"` or `"healthy"`), and queries the GSA to determine the current focus task.
-   - It returns a human-readable conversational plain-text greeting or health report.
+#### Non-blocking query and health checks via GET
+The `GET /` endpoint must not block on the running agent turn. Instead, it inspects the lock's state (`lock.locked()`) to return the status (`"busy"` or `"healthy"`), and queries the GSA to determine the current focus task. It returns a human-readable conversational plain-text greeting or health report.
 
-2. **Immediate Rejection on Conflict (`POST /`)**:
-   - The `POST /` endpoint triggers a conversational turn.
-   - To avoid multiple overlapping executions, it checks the lock status. If the agent is currently executing a turn (`lock.locked()`), the endpoint returns a `409 Conflict` (or plain-text message indicating the agent is busy) immediately without blocking.
-   - If the agent is idle, the endpoint executes `execute_agent_turn` (blocking the handler's task until completion) and returns the conversational monologue response.
-   - Any custom instruction body is appended to the event store as a `HumanInstruction` event.
+#### Immediate rejection on conflict via POST
+The `POST /` endpoint triggers a conversational turn. To avoid multiple overlapping executions, it checks the lock status. If the agent is currently executing a turn (`lock.locked()`), the endpoint must return a `409 Conflict` (or plain-text message indicating the agent is busy) immediately without blocking. If the agent is idle, it executes the turn synchronously and returns the conversational monologue response. Any custom instruction body is appended to the event store as a `HumanInstruction` event.
 
-3. **Electric Bolt Interruption & Cancellation (`PUT /`)**:
-   - The `PUT /` endpoint provides immediate operator intervention.
-   - If the agent is currently running a background turn, sending a `PUT /` request instantly cancels the active asyncio task.
-   - It schedules the new execution turn to run asynchronously in the background. Once scheduled, it immediately responds with `204 No Content` to avoid blocking the caller.
+#### Electric bolt interruption and cancellation via PUT
+The `PUT /` endpoint provides immediate operator intervention. If the agent is currently running a background turn, sending a `PUT /` request instantly cancels the active asyncio task. It schedules the new execution turn to run asynchronously in the background and responds immediately with `204 No Content` to avoid blocking the caller.
 
 #### Production agents must communicate strictly in PlainTextResponse
 Production agents and HTTP endpoints are strictly prohibited from exchanging or exposing structured JSON payloads, key-value metadata strings (such as `ltx=yes`, `tts=yes`), or accepting JSON content headers for core agent state checks. All communication between agents must flow as conversational, natural-language plain text responses. The only exception is the GSA endpoint which exposes projections for fold functions.
