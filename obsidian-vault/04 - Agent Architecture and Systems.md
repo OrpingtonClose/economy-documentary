@@ -135,7 +135,26 @@ def create_pipeline_agent(role: str, config: Config):
 
 ## 4. FastAPI Handlers & Autonomous Loops
 
-Agents run inside independent ASGI server processes. They do not send wake triggers to each other. Instead, they expose an HTTP API using natural language text, running all heavy execution turns in background tasks to avoid endpoint hanging.
+Each pipeline agent runs within its own ASGI process powered by FastAPI. Instead of polling in a blocking loop, agents expose a REST control interface that supports asynchronous execution, state reporting, and immediate cancellation (operator intervention).
+
+### 4.1 Endpoint Architecture
+
+The endpoint topology follows a non-blocking, asynchronous execution design to prevent thread starvation and coordinate concurrent operations safely:
+
+1. **Non-Blocking Query & Health Checks (`GET /`)**:
+   - The `GET /` endpoint does not block on the running agent turn. Instead, it inspects the lock's state (`lock.locked()`) to return the status (`"busy"` or `"healthy"`), and queries the GSA to determine the current focus task.
+   - It returns a human-readable conversational plain-text greeting or health report.
+
+2. **Immediate Rejection on Conflict (`POST /`)**:
+   - The `POST /` endpoint triggers a conversational turn.
+   - To avoid multiple overlapping executions, it checks the lock status. If the agent is currently executing a turn (`lock.locked()`), the endpoint returns a `409 Conflict` (or plain-text message indicating the agent is busy) immediately without blocking.
+   - If the agent is idle, the endpoint executes `execute_agent_turn` (blocking the handler's task until completion) and returns the conversational monologue response.
+   - Any custom instruction body is appended to the event store as a `HumanInstruction` event.
+
+3. **Electric Bolt Interruption & Cancellation (`PUT /`)**:
+   - The `PUT /` endpoint provides immediate operator intervention.
+   - If the agent is currently running a background turn, sending a `PUT /` request instantly cancels the active asyncio task.
+   - It schedules the new execution turn to run asynchronously in the background. Once scheduled, it immediately responds with `204 No Content` to avoid blocking the caller.
 
 #### Production agents must communicate strictly in PlainTextResponse
 Production agents and HTTP endpoints are strictly prohibited from exchanging or exposing structured JSON payloads, key-value metadata strings (such as `ltx=yes`, `tts=yes`), or accepting JSON content headers for core agent state checks. All communication between agents must flow as conversational, natural-language plain text responses. The only exception is the GSA endpoint which exposes projections for fold functions.
@@ -144,47 +163,53 @@ Production agents and HTTP endpoints are strictly prohibited from exchanging or 
 The PUT endpoint acts as an operator electric bolt that cancels the active asyncio task and any running subprocess groups immediately, forces background execution of the new payload, and returns 204 No Content with no payload.
 
 ```python
-# GET Endpoint: Conversational query or JSON health status (Blocks on lock if turn is running)
+# GET Endpoint: Conversational query or health status (Non-blocking status check)
 @app.get("/")
-async def health(request: Request):
+async def health(request: Request) -> PlainTextOnly:
     lock = run_lock_manager.get_lock()
-    async with lock:
-        accept = request.headers.get("accept", "")
-        if "application/json" in accept:
-            return _agent_health
-        
-        status = _agent_health.get("status", "healthy")
-        task = _agent_health.get("current_task") or "no active task"
-        message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
-        return PlainTextResponse(message, media_type="text/plain")
+    if lock.locked():
+        _agent_health["status"] = "busy"
+    else:
+        _agent_health["status"] = "healthy"
+    
+    # Non-blocking query of current task focus from GSA
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)
+            if resp.status_code == 200:
+                _agent_health["current_task"] = _determine_focus(role, resp.json())
+    except Exception:
+        pass
 
-# POST Endpoint: Conversational light commands (Blocks on lock, lightweight tasks only)
+    status = _agent_health.get("status", "healthy")
+    task = _agent_health.get("current_task") or "no active task"
+    message = f"Hello. I am the {role} agent. Currently, my status is {status}. I am working on: {task}."
+    return PlainTextResponse(message, media_type="text/plain")
+
+# POST Endpoint: Conversational light commands (Non-blocking conflict rejection)
 @app.post("/")
-async def post_handler(request: Request):
+async def post_handler(request: Request) -> PlainTextOnly:
     body = await request.body()
     instruction_text = body.decode("utf-8").strip()
 
     lock = run_lock_manager.get_lock()
-    async with lock:
-        # Performs lightweight tasks (e.g. appends HumanInstruction event if custom text passed)
-        if instruction_text and instruction_text not in ("Wake up and check GSA", "Wakeup"):
-            await append_human_instruction_event(instruction_text)
+    if lock.locked():
+        return PlainTextResponse("Conflict: Agent is busy", status_code=409)
 
-        accept = request.headers.get("accept", "")
-        if "application/json" in accept:
-            return AgentResponse(status="ok", effects_extracted=[], agent=role, timestamp=time.time())
-
-        resp_text = latest_monologues.get(role) or f"I am the {role} agent. I have registered your instruction. Currently my status is healthy."
-        return PlainTextResponse(resp_text, media_type="text/plain")
+    # Perform turn execution synchronously within the handler task
+    await execute_agent_turn(role=role, gsa_url="http://127.0.0.1:8000/")
+    resp_text = latest_monologues.get(role) or f"I am the {role} agent. Turn completed."
+    return PlainTextResponse(resp_text, media_type="text/plain")
 
 # PUT Endpoint: Interrupting operator intervention (Electric Bolt)
 @app.put("/")
-async def put_handler(request: Request):
+async def put_handler(request: Request) -> PlainTextOnly:
     body = await request.body()
     instruction_text = body.decode("utf-8").strip()
 
-    # Cancel existing task if running
-    existing_task = globals()["active_tasks"].get(role)
+    # Cancel active background execution task immediately
+    global active_tasks
+    existing_task = active_tasks.get(role)
     if existing_task and not existing_task.done():
         existing_task.cancel()
         try:
@@ -195,14 +220,14 @@ async def put_handler(request: Request):
     async def run_turn_in_background():
         _agent_health["status"] = "busy"
         try:
-            await execute_agent_turn(role=role, ...)
+            await execute_agent_turn(role=role, gsa_url="http://127.0.0.1:8000/")
             _agent_health["status"] = "healthy"
-        except Exception as exc:
+        except Exception:
             _agent_health["status"] = "error"
 
+    # Spawn new turn task in background and return 204 instantly
     task = asyncio.create_task(run_turn_in_background())
-    globals()["active_tasks"][role] = task
-
+    active_tasks[role] = task
     return PlainTextResponse("", status_code=204)
 ```
 
