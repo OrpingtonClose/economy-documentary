@@ -108,7 +108,7 @@ class ReorderScenes(Effect):
 
 class QueueJob(Effect):
     """Demand creation of a media artifact by a VM worker."""
-    kind: str = "queue_job"
+    kind: Literal["queue_job"] = "queue_job"
     job_id: str = Field(..., description="stable unique job identifier")
     job_type: str = Field(..., description="tts or ltx")
     scene_num: int = Field(..., ge=1)
@@ -129,7 +129,7 @@ class QueueVideoJob(QueueJob):
 
 class JobStarted(Effect):
     """VM worker accepted the job. Job is now running."""
-    kind: str = "job_started"
+    kind: Literal["job_started"] = "job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
@@ -145,7 +145,7 @@ class VideoJobStarted(JobStarted):
 
 class JobCompleted(Effect):
     """VM worker finished successfully; artifact is ready for quality review."""
-    kind: str = "job_completed"
+    kind: Literal["job_completed"] = "job_completed"
     job_id: str
     artifact_uri: str = Field(..., description="URI to generated file")
     duration_sec: float = Field(..., ge=0.0, description="actual media duration")
@@ -171,7 +171,7 @@ class VideoJobCompleted(JobCompleted):
 
 class JobFailed(Effect):
     """VM worker failed."""
-    kind: str = "job_failed"
+    kind: Literal["job_failed"] = "job_failed"
     job_id: str
     error_message: str
     failure_category: Literal[
@@ -198,7 +198,7 @@ class VideoJobFailed(JobFailed):
 
 class JobRequeued(Effect):
     """Artistry rejection: previous output did not meet quality bar."""
-    kind: str = "job_requeued"
+    kind: Literal["job_requeued"] = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1, description="why the previous attempt was rejected")
     new_params: dict | None = None
@@ -214,7 +214,7 @@ class VideoJobRequeued(JobRequeued):
 
 class JobApproved(Effect):
     """Artistry approval: artifact passes quality review, ready for OTIO merge."""
-    kind: str = "job_approved"
+    kind: Literal["job_approved"] = "job_approved"
     job_id: str
     artifact_uri: str
     quality_notes: str = ""

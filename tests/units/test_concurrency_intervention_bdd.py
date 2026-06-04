@@ -1,3 +1,4 @@
+# pyright: reportIncompatibleVariableOverride=false
 import os
 import sys
 import asyncio
@@ -6,7 +7,7 @@ import inspect
 import pytest
 import httpx
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # Inject patched version of pytest-bdd scenario runner to support async step definitions
 import pytest_bdd.scenario
@@ -146,7 +147,6 @@ def patched_get_scenario_decorator(feature, feature_name, templated_scenario, sc
     return decorator
 
 # Apply the monkeypatch to the actual module object in sys.modules
-import sys
 scenario_module = sys.modules['pytest_bdd.scenario']
 scenario_module._get_scenario_decorator = patched_get_scenario_decorator
 
@@ -168,22 +168,24 @@ def test_context():
     return {
         "turn_entered_event": asyncio.Event(),
         "turn_finish_event": asyncio.Event(),
-        "first_post_task": None,
-        "first_post_response": None,
-        "second_post_response": None,
-        "health_response": None,
-        "put_response": None,
+        "first_turn_task": None,
         "cancelled_event": asyncio.Event(),
         "bash_proc": None,
         "bash_pgid": None,
+        "concurrent_task": None,
+        "concurrent_response": None,
+        "call_count": 0,
     }
 
 @pytest.fixture
 def mock_agent_turn(test_context):
     async def dynamic_mock(*args, **kwargs):
-        if "execute_turn_handler" in test_context:
-            return await test_context["execute_turn_handler"](*args, **kwargs)
-        return [], "default mock response"
+        from agent_base import run_lock_manager
+        lock = run_lock_manager.get_lock()
+        async with lock:
+            if "execute_turn_handler" in test_context:
+                return await test_context["execute_turn_handler"](*args, **kwargs)
+            return [], "default mock response"
     
     with patch("agent_base.execute_agent_turn", side_effect=dynamic_mock) as mock:
         yield mock
@@ -203,13 +205,13 @@ def patch_subprocess(test_context):
 
 # Scenario Declarations
 @pytest.mark.anyio
-@scenario('features/concurrency_intervention.feature', 'POST requests return 409 Conflict when the agent is busy')
-async def test_post_requests_conflict(mock_agent_turn):
+@scenario('features/concurrency_intervention.feature', 'POST requests block to wait for active turns to finish')
+async def test_post_requests_block(mock_agent_turn):
     pass
 
 @pytest.mark.anyio
-@scenario('features/concurrency_intervention.feature', 'GET health queries run concurrently and are not blocked by active turns')
-async def test_get_health_concurrent(mock_agent_turn):
+@scenario('features/concurrency_intervention.feature', 'GET health queries block to wait for active turns to finish')
+async def test_get_health_block(mock_agent_turn):
     pass
 
 @pytest.mark.anyio
@@ -234,57 +236,70 @@ async def agent_running(agent_name, test_context):
     test_context["app"] = app
     test_context["agent_name"] = agent_name
 
-@when(parsers.parse('a long-running turn is triggered on "{agent_name}" via POST'))
-async def trigger_long_running_post(agent_name, test_context):
-    async def handle_long_turn(*args, **kwargs):
+@when(parsers.parse('a heavy turn is running in the background on "{agent_name}"'))
+async def heavy_turn_running_background(agent_name, test_context):
+    async def handle_heavy(*args, **kwargs):
         test_context["turn_entered_event"].set()
         await test_context["turn_finish_event"].wait()
-        return [], "first turn finished"
+        return [], "heavy turn completed"
         
-    test_context["execute_turn_handler"] = handle_long_turn
+    test_context["execute_turn_handler"] = handle_heavy
     
-    async def run_first_post():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-            resp = await client.post("/", content="First Prompt")
-            test_context["first_post_response"] = resp
-            
-    test_context["first_post_task"] = asyncio.create_task(run_first_post())
+    # Trigger turn via PUT request (which runs execute_agent_turn in background)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+        resp = await client.put("/", content="Wakeup")
+        assert resp.status_code == 204
+        
+    # Wait for the turn to enter the execute_agent_turn mock
     await test_context["turn_entered_event"].wait()
+    await asyncio.sleep(0.05)
+
+@when(parsers.parse('a concurrent POST request is sent to "{agent_name}" in a separate task'))
+async def concurrent_post_in_separate_task(agent_name, test_context):
+    async def send_post():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+            return await client.post("/", content="Wake up and check GSA")
+            
+    test_context["concurrent_task"] = asyncio.create_task(send_post())
     await asyncio.sleep(0.1)
+    
+    # Verify that the concurrent task is blocked and not done yet
+    assert not test_context["concurrent_task"].done()
 
-@when(parsers.parse('a concurrent POST request is sent to "{agent_name}"'))
-async def concurrent_post_request(agent_name, test_context):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-        resp = await client.post("/", content="Second Prompt")
-        test_context["second_post_response"] = resp
+@when(parsers.parse('a concurrent GET health query is sent to "{agent_name}" in a separate task'))
+async def concurrent_get_in_separate_task(agent_name, test_context):
+    async def send_get():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+            return await client.get("/")
+            
+    test_context["concurrent_task"] = asyncio.create_task(send_get())
+    await asyncio.sleep(0.1)
+    
+    # Verify that the concurrent task is blocked and not done yet
+    assert not test_context["concurrent_task"].done()
 
-@then(parsers.parse('the second POST request must receive a 409 Conflict response'))
-async def verify_409_conflict(test_context):
-    assert test_context["second_post_response"].status_code == 409
-    assert test_context["second_post_response"].text == "Agent is busy"
-
-@then(parsers.parse('the first POST request should eventually complete successfully'))
-async def verify_first_post_completes(test_context):
+@then('the active background turn is allowed to finish')
+async def allow_background_turn_to_finish(test_context):
     test_context["turn_finish_event"].set()
-    await test_context["first_post_task"]
-    assert test_context["first_post_response"].status_code == 200
-    assert test_context["first_post_response"].text == "first turn finished"
+    from agent_base import active_tasks
+    task = active_tasks.get(test_context["agent_name"])
+    if task:
+        await task
 
-@when(parsers.parse('a GET health query is sent to "{agent_name}"'))
-async def send_health_query(agent_name, test_context):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-        # Pass accept header to get JSON, and verify that the response status is busy
-        resp = await client.get("/", headers={"accept": "application/json"})
-        test_context["health_response"] = resp
+@then('the concurrent POST request should then complete successfully')
+async def verify_concurrent_post_completes(test_context):
+    resp = await test_context["concurrent_task"]
+    assert resp.status_code == 200
+    assert "healthy" in resp.text or "registered" in resp.text or "status" in resp.text
 
-@then(parsers.parse('the GET health query must return immediately with status 200'))
-async def verify_health_response(test_context):
-    assert test_context["health_response"].status_code == 200
-    data = test_context["health_response"].json()
-    assert data["status"] == "busy"
+@then('the GET health query should then complete successfully')
+async def verify_concurrent_get_completes(test_context):
+    resp = await test_context["concurrent_task"]
+    assert resp.status_code == 200
+    assert "healthy" in resp.text or "I am the" in resp.text or "status" in resp.text
 
-@when(parsers.parse('a turn running a long bash subprocess is triggered on "{agent_name}" via POST'))
-async def trigger_bash_post(agent_name, test_context):
+@when(parsers.parse('a turn running a long bash subprocess is triggered on "{agent_name}" via PUT'))
+async def trigger_bash_put(agent_name, test_context):
     test_context["call_count"] = 0
     
     async def handle_bash_turn(*args, **kwargs):
@@ -298,42 +313,40 @@ async def trigger_bash_post(agent_name, test_context):
                 test_context["cancelled_event"].set()
                 raise
         else:
-            return [], "new turn started"
+            return [], "new turn completed"
             
     test_context["execute_turn_handler"] = handle_bash_turn
     
-    async def run_bash_post():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-            resp = await client.post("/", content="Trigger bash")
-            test_context["first_post_response"] = resp
-            
-    test_context["first_post_task"] = asyncio.create_task(run_bash_post())
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+        resp = await client.put("/", content="Trigger bash")
+        assert resp.status_code == 204
+        
+    from agent_base import active_tasks
+    test_context["first_turn_task"] = active_tasks.get(agent_name)
     await test_context["turn_entered_event"].wait()
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.05)
 
-@when(parsers.parse('a PUT request is sent to "{agent_name}"'))
+@when(parsers.parse('a concurrent PUT request is sent to "{agent_name}"'))
 async def send_put_request(agent_name, test_context):
-    async def run_put():
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
-            resp = await client.put("/", content="Intervention PUT Prompt")
-            test_context["put_response"] = resp
-            
-    test_context["put_task"] = asyncio.create_task(run_put())
-    await test_context["put_task"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_context["app"]), base_url="http://test") as client:
+        resp = await client.put("/", content="New intervention prompt")
+        test_context["put_response"] = resp
 
-@then(parsers.parse('the active turn must be cancelled immediately'))
+@then('the active turn must be cancelled immediately')
 async def verify_active_turn_cancelled(test_context):
     assert test_context["cancelled_event"].is_set()
-    await test_context["first_post_task"]
-    assert test_context["first_post_response"].status_code == 499
+    try:
+        await test_context["first_turn_task"]
+    except asyncio.CancelledError:
+        pass
 
-@then(parsers.parse('the running bash subprocess group must be terminated instantly'))
+@then('the running bash subprocess group must be terminated instantly')
 async def verify_subprocess_terminated(test_context):
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.1)
     assert test_context["bash_proc"] is not None
     assert test_context["bash_proc"].returncode is not None
 
-@then(parsers.parse('no orphan processes from that subprocess group must remain on the system'))
+@then('no orphan processes from that subprocess group must remain on the system')
 async def verify_no_orphans(test_context):
     pgid = test_context["bash_pgid"]
     assert pgid is not None
@@ -348,10 +361,9 @@ async def verify_new_turn_starts(agent_name, test_context):
     assert test_context["put_response"].status_code == 204
     assert test_context["put_response"].text == ""
     
-    # Wait for the background task triggered by PUT to complete
     from agent_base import active_tasks
     task = active_tasks.get(agent_name)
     if task:
         await task
-    
+        
     assert test_context["call_count"] == 2

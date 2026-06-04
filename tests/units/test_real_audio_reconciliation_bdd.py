@@ -16,7 +16,9 @@ from effects import (
     UpdateScript,
     ScriptBlock,
     QueueJob,
+    QueueAudioJob,
     JobCompleted,
+    AudioJobCompleted,
     ReconciliationComplete,
 )
 from event_store import EventStore
@@ -170,20 +172,20 @@ def step_audio_agent_running(audio_helper):
 
 @when("the Audio Agent receives a wakeup instruction")
 def step_wake_audio(audio_helper):
-    resp = httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
-    assert resp.status_code == 200
+    resp = httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+    assert resp.status_code == 204
 
 @when("the Audio Agent receives another wakeup instruction")
 def step_wake_audio_again(audio_helper):
-    resp = httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
-    assert resp.status_code == 200
+    resp = httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+    assert resp.status_code == 204
 
 @then('the Audio Agent should queue a "tts" job for the narration block')
 def step_verify_job_queued(event_store):
     delay = 2.0
     for _ in range(120):
         effects = [e.effect for e in event_store.read_all()]
-        queued_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
+        queued_jobs = [e for e in effects if e.kind in ("queue_job", "queue_audio_job") and e.agent == "audio"]
         if queued_jobs:
             return
         time.sleep(delay)
@@ -192,7 +194,7 @@ def step_verify_job_queued(event_store):
 @then('the GSA event store should contain a "queue_job" effect for the block')
 def step_check_queue_job_effect(event_store):
     effects = [e.effect for e in event_store.read_all()]
-    queued_jobs = [e for e in effects if e.kind == "queue_job"]
+    queued_jobs = [e for e in effects if e.kind in ("queue_job", "queue_audio_job")]
     assert len(queued_jobs) >= 1
     assert queued_jobs[0].job_type == "tts"
     assert "s1_b1" in queued_jobs[0].block_id
@@ -201,10 +203,10 @@ def step_check_queue_job_effect(event_store):
 def step_complete_job(event_store):
     # Find the queued job_id from the event store
     effects = [e.effect for e in event_store.read_all()]
-    queued_jobs = [e for e in effects if e.kind == "queue_job" and e.agent == "audio"]
+    queued_jobs = [e for e in effects if e.kind in ("queue_job", "queue_audio_job") and e.agent == "audio"]
     job_id = queued_jobs[0].job_id if queued_jobs else "job_tts_1"
     
-    event_store.append(JobCompleted(
+    event_store.append(AudioJobCompleted(
         agent="provisioner",
         job_id=job_id,
         artifact_uri="/tmp/audio/s1_b1.wav",
@@ -230,7 +232,7 @@ def step_check_reconciliation_complete(audio_helper, event_store):
         try:
             resp = httpx.get(f"http://localhost:{audio_helper.agent_port}/", timeout=1.0)  # health probe
             if resp.status_code == 200 and resp.json().get("status") != "busy":
-                httpx.post(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
+                httpx.put(f"http://localhost:{audio_helper.agent_port}/", content="Wake up and check GSA")
         except Exception:
             pass
         

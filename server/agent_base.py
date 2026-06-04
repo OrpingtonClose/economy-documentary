@@ -41,16 +41,16 @@ active_tasks: dict[str, asyncio.Task[Any]] = {}
 
 class LoopBoundLock:
     def __init__(self):
-        self._lock = None
+        self._locks: dict[asyncio.AbstractEventLoop, asyncio.Lock] = {}
 
     def get_lock(self) -> asyncio.Lock:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return asyncio.Lock()
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+        if loop not in self._locks:
+            self._locks[loop] = asyncio.Lock()
+        return self._locks[loop]
 
 run_lock_manager = LoopBoundLock()
 

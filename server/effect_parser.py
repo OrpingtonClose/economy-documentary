@@ -101,7 +101,7 @@ class _ReorderScenesEffect(BaseModel):
 
 
 class _QueueJobEffect(BaseModel):
-    kind: str = "queue_job"
+    kind: Literal["queue_job"] = "queue_job"
     job_id: str
     job_type: str
     scene_num: int = Field(..., ge=1)
@@ -121,7 +121,7 @@ class _QueueVideoJobEffect(_QueueJobEffect):
 
 
 class _JobStartedEffect(BaseModel):
-    kind: str = "job_started"
+    kind: Literal["job_started"] = "job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
@@ -136,7 +136,7 @@ class _VideoJobStartedEffect(_JobStartedEffect):
 
 
 class _JobCompletedEffect(BaseModel):
-    kind: str = "job_completed"
+    kind: Literal["job_completed"] = "job_completed"
     job_id: str
     artifact_uri: str
     duration_sec: float = Field(..., ge=0.0)
@@ -158,7 +158,7 @@ class _VideoJobCompletedEffect(_JobCompletedEffect):
 
 
 class _JobFailedEffect(BaseModel):
-    kind: str = "job_failed"
+    kind: Literal["job_failed"] = "job_failed"
     job_id: str
     error_message: str
     failure_category: Literal["oom", "bad_prompt", "model_load_error", "disk_full", "network", "cuda_error", "unknown"]
@@ -176,7 +176,7 @@ class _VideoJobFailedEffect(_JobFailedEffect):
 
 
 class _JobRequeuedEffect(BaseModel):
-    kind: str = "job_requeued"
+    kind: Literal["job_requeued"] = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1)
     new_params: dict | None = None
@@ -191,7 +191,7 @@ class _VideoJobRequeuedEffect(_JobRequeuedEffect):
 
 
 class _JobApprovedEffect(BaseModel):
-    kind: str = "job_approved"
+    kind: Literal["job_approved"] = "job_approved"
     job_id: str
     artifact_uri: str
     quality_notes: str = ""
