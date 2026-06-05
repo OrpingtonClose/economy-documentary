@@ -98,7 +98,7 @@ def test_bdd_final_assembly_real_media():
         store._init_db()
 
         print('     ├─ [EventStore] Appending event to SQLite events database...')
-        store.append(PipelineStarted(agent="operator", output_path=f"{db_dir}/final.mp4"), "")
+        store.append(PipelineStarted(agent="operator", output_path=f"{db_dir}/final_documentary.mp4"), "")
         print('     ├─ [EventStore] Appending event to SQLite events database...')
         store.append(BudgetSet(agent="operator", budget_usd=5.0), "")
         print('     ├─ [EventStore] Appending event to SQLite events database...')
@@ -145,7 +145,7 @@ def test_bdd_final_assembly_real_media():
         assert resp.status_code == 200
 
         events = store.replay()
-        pipeline_complete = [e for e in events if e.effect.kind == "PipelineComplete"]
+        pipeline_complete = [e for e in events if e.effect.kind == "pipeline_complete"]
 
         scenario.evidence = collect_evidence_from_store(
             events,

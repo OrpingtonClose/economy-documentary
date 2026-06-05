@@ -38,6 +38,13 @@ import config
 logger = logging.getLogger(__name__)
 
 def get_active_log_dir() -> str:
+    print(f"DEBUG_SYS_ARGV: {sys.argv}", file=sys.stderr, flush=True)
+    # First search CLI arguments for a directory containing run_config.json
+    for arg in sys.argv:
+        if arg and os.path.isdir(arg):
+            if os.path.exists(os.path.join(arg, "run_config.json")):
+                return arg
+    
     path = "/tmp/active_pipeline_log_dir.txt"
     if os.path.exists(path):
         try:
@@ -50,6 +57,17 @@ def get_active_log_dir() -> str:
     return "/tmp/documentary-pipeline"
 
 def get_active_ports() -> dict[str, int]:
+    log_dir = get_active_log_dir()
+    config_path = os.path.join(log_dir, "run_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "ports" in data:
+                    return data["ports"]
+        except Exception:
+            pass
+
     path = "/tmp/active_pipeline_ports.json"
     if os.path.exists(path):
         try:
@@ -771,9 +789,12 @@ class DryRunModel(Model):
             active_vms = False
             active_vm_id = None
             active_vm_role = None
+            active_roles = set()
             all_completed = False
             pending_jobs = []
             preempted_vm_id = None
+            state_data = {}
+            slots = {}
             try:
                 async with httpx.AsyncClient() as client:
                     resp = await client.get(get_gsa_url())
@@ -784,11 +805,13 @@ class DryRunModel(Model):
                             if v.get("status") == "active":
                                 active_vm_id = v.get("instance_id")
                                 active_vm_role = v.get("role")
+                                if v.get("role"):
+                                    active_roles.add(v.get("role"))
                             if v.get("status") == "observed_gone" or v.get("observed_status") == "not_found":
                                 if v.get("status") != "destroyed":
                                     preempted_vm_id = v.get("instance_id")
                         jobs = list(state_data.get("jobs", {}).get("jobs", {}).values())
-                        pending_jobs = [j for j in jobs if j.get("status") in ("pending", "running")]
+                        pending_jobs = [j for j in jobs if j.get("status") in ("pending", "running", "failed")]
                         slots = state_data.get("otio", {}).get("slots", {})
                         if active_vm_role == "tts":
                             audio_slots = [s for k, s in slots.items() if k.startswith("A1:")]
@@ -801,15 +824,6 @@ class DryRunModel(Model):
             except Exception:
                 pass
 
-            mismatch = False
-            if active_vms and active_vm_role and pending_jobs:
-                if all(j.get("job_type") != active_vm_role for j in pending_jobs):
-                    mismatch = True
-            if active_vms and active_vm_id:
-                for v in state_data.get("vms", {}).get("vms", {}).values():
-                    if v.get("instance_id") == active_vm_id and v.get("observed_status") == "not_found":
-                        mismatch = True
-
             if preempted_vm_id:
                 if step == 0:
                     return ModelResponse(parts=[
@@ -819,16 +833,22 @@ class DryRunModel(Model):
                     text = f"effect: vm_deallocated(instance_id=\"{preempted_vm_id}\", reason=\"stale\")\nVM deallocated."
                     return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
 
-            if not active_vms:
-                vm_role = "tts"
+            # Check if there is any pending job type that does not have an active VM
+            unserved_roles = []
+            for j in pending_jobs:
+                jt = j.get("job_type")
+                if jt and jt not in active_roles and jt not in unserved_roles:
+                    unserved_roles.append(jt)
+
+            if unserved_roles:
+                vm_role = unserved_roles[0]
                 gpu_type = "RTX 4090"
                 for j in pending_jobs:
-                    if j.get("job_type") == "ltx":
-                        vm_role = "ltx"
-                        gpu_type = j.get("params", {}).get("gpu_type") or "RTX A6000"
+                    if j.get("job_type") == vm_role:
+                        gpu_type = j.get("params", {}).get("gpu_type") or ("RTX A6000" if vm_role == "ltx" else "RTX 4090")
                         break
-                    else:
-                        gpu_type = j.get("params", {}).get("gpu_type") or "RTX 4090"
+
+                new_instance_id = "7654321" if "1234567" in state_data.get("vms", {}).get("vms", {}) else "1234567"
 
                 if step == 0:
                     return ModelResponse(parts=[
@@ -840,9 +860,9 @@ class DryRunModel(Model):
                     ], model_name="dry_run_model")
                 elif step == 2:
                     if vm_role == "tts":
-                        cmd = "vastai copy b2.36862:/qwen3-tts-voicedesign/ C.1234567:/workspace/models/qwen3-tts-voicedesign/"
+                        cmd = f"vastai copy b2.36862:/qwen3-tts-voicedesign/ C.{new_instance_id}:/workspace/models/qwen3-tts-voicedesign/"
                     else:
-                        cmd = "vastai copy b2.36862:/ltx-2.3/ C.1234567:/workspace/models/ltx23/"
+                        cmd = f"vastai copy b2.36862:/ltx-2.3/ C.{new_instance_id}:/workspace/models/ltx23/"
                     return ModelResponse(parts=[
                         ToolCallPart("run_bash", {"command": cmd}, tool_call_id="call_copy")
                     ], model_name="dry_run_model")
@@ -851,27 +871,45 @@ class DryRunModel(Model):
                         ToolCallPart("run_bash", {"command": "vastai show instances"}, tool_call_id="call_show")
                     ], model_name="dry_run_model")
                 else:
-                    text = f"effect: vm_allocated(instance_id=\"1234567\", worker_url=\"http://127.0.0.1:8888\", role=\"{vm_role}\", offer_id=\"1001\", gpu_type=\"{gpu_type}\", cost_per_hour=0.40)\nVM allocated and ready."
+                    text = f"effect: vm_allocated(instance_id=\"{new_instance_id}\", worker_url=\"http://127.0.0.1:8888\", role=\"{vm_role}\", offer_id=\"1001\", gpu_type=\"{gpu_type}\", cost_per_hour=0.40)\nVM allocated and ready."
                     return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
             else:
-                if all_completed or mismatch:
-                    target_id = active_vm_id or "1234567"
-                    reason = "job_done" if all_completed else "stale"
+                idle_vm_to_destroy = None
+                for v in state_data.get("vms", {}).get("vms", {}).values():
+                    if v.get("status") == "active":
+                        role = v.get("role")
+                        has_pending_jobs = any(j.get("job_type") == role for j in pending_jobs)
+                        if not has_pending_jobs:
+                            if role == "tts":
+                                audio_slots = [s for k, s in slots.items() if k.startswith("A1:")]
+                                role_completed = len(audio_slots) > 0 and all(s.get("status") == "measured" for s in audio_slots)
+                            elif role == "ltx":
+                                video_slots = [s for k, s in slots.items() if k.startswith("V1:")]
+                                role_completed = len(video_slots) > 0 and all(s.get("status") == "delivered" for s in video_slots)
+                            else:
+                                role_completed = True
+                            
+                            if role_completed:
+                                idle_vm_to_destroy = v.get("instance_id")
+                                break
+
+                if idle_vm_to_destroy:
                     if step == 0:
                         return ModelResponse(parts=[
-                            ToolCallPart("run_bash", {"command": f"vastai destroy instance {target_id}"}, tool_call_id="call_destroy")
+                            ToolCallPart("run_bash", {"command": f"vastai destroy instance {idle_vm_to_destroy}"}, tool_call_id="call_destroy")
                         ], model_name="dry_run_model")
                     else:
-                        text = f"effect: vm_deallocated(instance_id=\"{target_id}\", reason=\"{reason}\")\nVM deallocated."
+                        text = f"effect: vm_deallocated(instance_id=\"{idle_vm_to_destroy}\", reason=\"job_done\")\nVM deallocated."
                         return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
                 else:
-                    matching_pending_jobs = [j for j in pending_jobs if j.get("job_type") == active_vm_role]
+                    matching_pending_jobs = [j for j in pending_jobs if j.get("job_type") in active_roles]
                     if matching_pending_jobs:
                         job_to_dispatch = matching_pending_jobs[0]
                         job_id = job_to_dispatch.get("job_id")
+                        role = job_to_dispatch.get("job_type")
                         if step == 0:
                             return ModelResponse(parts=[
-                                ToolCallPart("run_bash", {"command": f"curl -X POST http://127.0.0.1:8888/{active_vm_role}?job_id={job_id}"}, tool_call_id="call_dispatch_more")
+                                ToolCallPart("run_bash", {"command": f"curl -X POST http://127.0.0.1:8888/{role}?job_id={job_id}"}, tool_call_id="call_dispatch_more")
                             ], model_name="dry_run_model")
                         else:
                             text = f"effect: noop(reason=\"dispatched_job_{job_id}\")\nDispatched job {job_id}."
@@ -893,7 +931,7 @@ class DryRunModel(Model):
                     }, tool_call_id="call_assemble")
                 ], model_name="dry_run_model")
             else:
-                                return ModelResponse(parts=[TextPart("effect: noop(reason=\"assembly_complete\")\n")], model_name="dry_run_model")
+                return ModelResponse(parts=[TextPart(f'effect: pipeline_complete(output_path="{output_path}", duration_sec=90.0)\n')], model_name="dry_run_model")
 
         return ModelResponse(parts=[TextPart("Dry run turn.")], model_name="dry_run_model")
 

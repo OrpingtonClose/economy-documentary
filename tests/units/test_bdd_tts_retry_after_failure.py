@@ -125,7 +125,7 @@ def test_bdd_tts_retry_after_failure():
 
     # Mechanical: replay and verify sequence
     events = store.replay()
-    kinds = [e.effect.kind for e in events]
+    kinds = [type(e.effect).__name__ for e in events]
     print('     ├─ [Assert] Checking: \"JobFailed\" in kinds, \"Missing JobFailed event\"')
     assert "JobFailed" in kinds, "Missing JobFailed event"
     print('     ├─ [Assert] Checking: \"JobRequeued\" in kinds, \"Missing JobRequeued event\"')

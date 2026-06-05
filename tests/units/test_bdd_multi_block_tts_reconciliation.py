@@ -126,7 +126,7 @@ def test_bdd_multi_block_tts_reconciliation():
             ), "init")
 
         # Action: wake audio agent multiple times to process queue
-        for _ in range(3):
+        for _ in range(4):
             print('     ├─ [HTTP] Sending request to agent endpoint...')
             resp = httpx.post(f"http://127.0.0.1:{audio_port}/", content="Wakeup", timeout=None)
             print('     ├─ [Assert] Checking: resp.status_code == 200')
@@ -134,7 +134,7 @@ def test_bdd_multi_block_tts_reconciliation():
 
         # Mechanical: count completed jobs
         events = store.replay()
-        completed = [e for e in events if e.effect.kind == "JobCompleted"]
+        completed = [e for e in events if e.effect.kind == "job_completed"]
 
         # Collect WAV artifacts
         audio_dir = os.path.join(db_dir, "audio_outputs")

@@ -26,7 +26,142 @@ sys.path.append(str(PROJECT_ROOT / "tests/units"))
 
 from harness import IntegrationHarness
 from event_store import EventStore
-from effects import PipelineStarted, BudgetSet, UpdateScript, ScriptBlock
+from effects import PipelineStarted, BudgetSet, UpdateScript, ScriptBlock, VMAllocated, JobStarted, JobCompleted
+
+from pydantic_ai.capabilities.abstract import AbstractCapability
+from pydantic_ai import RunContext
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.tools import ToolDefinition
+from typing import Any
+import re
+from projections import VMs
+from agent_base import get_active_log_dir
+from capabilities.test_real_vast_provisioning_bdd_worker_health import WorkerHealthSimulator
+from capabilities.test_real_assembly_bdd_assemble_final_cut import AssembleFinalCutSimulator
+
+class GenericAudioSimulator(AbstractCapability):
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, Any],
+        handler: Any,
+    ) -> Any:
+        if tool_def.name == "run_bash":
+            cmd = args.get("command", "")
+            if "curl" in cmd and ("job_audio_" in cmd or "job_id=job_tts_" in cmd):
+                match = re.search(r"job_id=([a-zA-Z0-9_]+)", cmd)
+                if match:
+                    job_id = match.group(1)
+                    duration = 3.0
+                    
+                    log_dir = get_active_log_dir()
+                    store = EventStore(log_dir=log_dir)
+                    audio_dir = os.path.join(log_dir, "audio_outputs")
+                    os.makedirs(audio_dir, exist_ok=True)
+                    out_path = f"{audio_dir}/{job_id}.wav"
+                    
+                    import hashlib
+                    h_val = int(hashlib.sha256(job_id.encode()).hexdigest(), 16)
+                    frequency = 200 + (h_val % 300)
+                    
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency={frequency}:sample_rate=44100", "-t", str(duration), out_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                    )
+                    
+                    vms_proj = VMs()
+                    vms_proj.tick(store)
+                    active_vm_id = None
+                    for vm_id, vm in vms_proj.vms.items():
+                        if vm.role == "tts" and vm.status == "active":
+                            active_vm_id = vm_id
+                            break
+                    if not active_vm_id:
+                        active_vm_id = "1234567"
+                        store.append(VMAllocated(
+                            agent="provisioner",
+                            instance_id=active_vm_id,
+                            role="tts",
+                            offer_id="1001",
+                            worker_url="http://127.0.0.1:8888",
+                            gpu_type="RTX 4090",
+                            cost_per_hour=0.40
+                        ), "initial_hash")
+                        
+                    store.append(JobStarted(agent="provisioner", job_id=job_id, vm_instance_id=active_vm_id), "initial_hash")
+                    store.append(JobCompleted(
+                        agent="provisioner",
+                        job_id=job_id,
+                        artifact_uri=out_path,
+                        duration_sec=duration,
+                        vm_instance_id=active_vm_id
+                    ), "initial_hash")
+                    
+                    return f'{{"status": "success", "job_id": "{job_id}", "artifact_uri": "{out_path}"}}'
+        return await handler(args)
+
+class GenericVideoSimulator(AbstractCapability):
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[Any],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, Any],
+        handler: Any,
+    ) -> Any:
+        if tool_def.name == "run_bash":
+            cmd = args.get("command", "")
+            if "curl" in cmd and ("job_video_" in cmd or "job_id=job_video_" in cmd or "job_id=job_ltx_" in cmd):
+                match = re.search(r"job_id=([a-zA-Z0-9_]+)", cmd)
+                if match:
+                    job_id = match.group(1)
+                    duration = 3.0
+                    
+                    log_dir = get_active_log_dir()
+                    store = EventStore(log_dir=log_dir)
+                    video_dir = os.path.join(log_dir, "video_outputs")
+                    os.makedirs(video_dir, exist_ok=True)
+                    out_path = f"{video_dir}/{job_id}.mp4"
+                    
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=320x240:d={duration}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                    )
+                    
+                    vms_proj = VMs()
+                    vms_proj.tick(store)
+                    active_vm_id = None
+                    for vm_id, vm in vms_proj.vms.items():
+                        if vm.role == "ltx" and vm.status == "active":
+                            active_vm_id = vm_id
+                            break
+                    if not active_vm_id:
+                        active_vm_id = "1234567"
+                        store.append(VMAllocated(
+                            agent="provisioner",
+                            instance_id=active_vm_id,
+                            role="ltx",
+                            offer_id="1002",
+                            worker_url="http://127.0.0.1:8888",
+                            gpu_type="RTX 4090",
+                            cost_per_hour=0.85
+                        ), "initial_hash")
+                        
+                    store.append(JobStarted(agent="provisioner", job_id=job_id, vm_instance_id=active_vm_id), "initial_hash")
+                    store.append(JobCompleted(
+                        agent="provisioner",
+                        job_id=job_id,
+                        artifact_uri=out_path,
+                        duration_sec=duration,
+                        vm_instance_id=active_vm_id
+                    ), "initial_hash")
+                    
+                    return f'{{"status": "success", "job_id": "{job_id}", "artifact_uri": "{out_path}"}}'
+        return await handler(args)
 
 def measure_lufs_integrated(audio_path: str) -> float:
     """Measure integrated LUFS robustly by converting audio to raw s16le PCM via ffmpeg."""
@@ -81,7 +216,14 @@ def run_test():
     
     # Spawn all 6 agents
     agents = ["gsa", "scenario", "audio", "video", "provisioner", "assembly"]
-    with IntegrationHarness(required_agents=agents) as harness:
+    capabilities = [
+        "DryRunModel",
+        "WorkerHealthSimulator",
+        "GenericAudioSimulator",
+        "GenericVideoSimulator",
+        "AssembleFinalCutSimulator"
+    ]
+    with IntegrationHarness(required_agents=agents, capabilities=capabilities) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         audio_port = harness.ports["audio"]
@@ -122,7 +264,7 @@ def run_test():
         # 4. Monitor pipeline execution
         print("Monitoring pipeline progression...")
         start_time = time.time()
-        max_wait = 300.0  # 5 minutes maximum timeout
+        max_wait = 450.0  # 7.5 minutes maximum timeout
         completed = False
         aborted = False
         

@@ -73,7 +73,7 @@ class IntegrationHarness:
             capabilities: Custom list of capability strings.
         """
         self.required_agents = required_agents or ["gsa", "scenario", "audio", "video", "provisioner", "assembly"]
-        self.capabilities = capabilities
+        self.capabilities = capabilities if capabilities is not None else ["DryRunModel"]
         self.temp_dir = None
         self.ports = {}
         self.processes = []
@@ -96,29 +96,60 @@ class IntegrationHarness:
         print(f"      [Harness] Setup temporary isolated directory at: {db_dir}")
         
         # Get caller module name to pass to agent scripts
-        import inspect
         self.test_module = ""
-        frame = inspect.currentframe()
-        while frame:
-            glob = frame.f_globals
-            module_name = glob.get("__name__", "")
-            if "test_" in module_name or module_name.startswith("tests.units"):
-                self.test_module = module_name
-                break
-            frame = frame.f_back
+        env_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+        if env_test:
+            file_part = env_test.split("::")[0]
+            path_str = file_part.replace(".py", "")
+            parts = path_str.replace("\\", "/").split("/")
+            if "tests" in parts:
+                idx = parts.index("tests")
+                self.test_module = ".".join(parts[idx:])
+            else:
+                self.test_module = parts[-1]
+        
+        if not self.test_module:
+            import inspect
+            for frame_info in inspect.stack():
+                filename = frame_info.filename
+                if filename:
+                    basename = os.path.basename(filename)
+                    if basename.startswith("test_") and basename.endswith(".py"):
+                        try:
+                            rel_path = Path(filename).resolve().relative_to(PROJECT_ROOT)
+                            self.test_module = rel_path.with_suffix("").as_posix().replace("/", ".")
+                        except ValueError:
+                            self.test_module = Path(filename).stem
+                        break
+        
+        if not self.test_module:
+            for arg in sys.argv:
+                if "test_" in arg and arg.endswith(".py"):
+                    path_str = arg.replace(".py", "")
+                    parts = path_str.replace("\\", "/").split("/")
+                    if "tests" in parts:
+                        idx = parts.index("tests")
+                        self.test_module = ".".join(parts[idx:])
+                    else:
+                        self.test_module = parts[-1]
+                    break
+
+        # 2. Allocate dynamic ports
+        for agent in ["gsa", "scenario", "audio", "video", "provisioner", "assembly"]:
+            self.ports[agent] = self._find_free_port()
+        print(f"      [Harness] Allocated ports: {self.ports}")
 
         import json
         config_data = {
             "log_dir": db_dir,
             "max_concurrent_llm": 4,
             "gpu_concurrency": 4,
-            "tts_concurrency": 4
+            "tts_concurrency": 4,
+            "ports": self.ports
         }
         
-        # Default to DryRunModel if deepseek key is missing
-        deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
-        if not os.path.exists(deepseek_key_path):
-            config_data["capabilities"] = ["DryRunModel"]
+        # Seed configured capabilities (defaults to ['DryRunModel'])
+        config_data["capabilities"] = self.capabilities
             
         config_path = os.path.join(db_dir, "run_config.json")
         with open(config_path, "w") as f:
@@ -139,33 +170,37 @@ import subprocess
 args = sys.argv[1:]
 cmd_str = " ".join(args)
 
-log_dir = "/tmp/documentary-pipeline"
-if os.path.exists("/tmp/active_pipeline_log_dir.txt"):
-    try:
-        with open("/tmp/active_pipeline_log_dir.txt") as pf:
-            val = pf.read().strip()
-            if val:
-                log_dir = val
-    except Exception:
-        pass
+log_dir = "{db_dir}"
 log_path = os.path.join(log_dir, "vastai_invocations.log")
 with open(log_path, "a") as f:
     f.write(cmd_str + "\\n")
 
-# Check if real API key exists to delegate to real CLI
-vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
-if os.path.exists(vast_key_path):
-    with open(vast_key_path) as kf:
-        api_key = kf.read().strip()
-    real_vastai = "/Users/orpington/.letta-cli-venv/bin/vastai"
-    exec_args = [real_vastai]
-    if "--api-key" not in args:
-        exec_args += ["--api-key", api_key]
-    exec_args += args
-    res = subprocess.run(exec_args, capture_output=True, text=True)
-    sys.stdout.write(res.stdout)
-    sys.stderr.write(res.stderr)
-    sys.exit(res.returncode)
+# Check if we should delegate to real CLI
+use_real = False
+run_config_path = os.path.join(log_dir, "run_config.json")
+if os.path.exists(run_config_path):
+    try:
+        with open(run_config_path) as rf:
+            cfg = json.load(rf)
+            if "capabilities" in cfg and "VastRealCapability" in cfg["capabilities"]:
+                use_real = True
+    except Exception:
+        pass
+
+if use_real:
+    vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
+    if os.path.exists(vast_key_path):
+        with open(vast_key_path) as kf:
+            api_key = kf.read().strip()
+        real_vastai = "/Users/orpington/.letta-cli-venv/bin/vastai"
+        exec_args = [real_vastai]
+        if "--api-key" not in args:
+            exec_args += ["--api-key", api_key]
+        exec_args += args
+        res = subprocess.run(exec_args, capture_output=True, text=True)
+        sys.stdout.write(res.stdout)
+        sys.stderr.write(res.stderr)
+        sys.exit(res.returncode)
 
 if "search offers" in cmd_str:
     print("ID      CUDA   GPU_name       Num_GPUs  VRAM   Inet_up  Inet_down  Reliability  Price")
@@ -174,31 +209,53 @@ if "search offers" in cmd_str:
 elif "create instance" in cmd_str:
     print("Started. Instance ID: 1234567")
 elif "show instances" in cmd_str or "show instance" in cmd_str:
+    import sqlite3
+    db_path = os.path.join(log_dir, "events.db")
+    allocated = set()
+    deallocated = set()
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path)
+            c = conn.cursor()
+            c.execute("SELECT effect_data FROM events")
+            for row in c.fetchall():
+                try:
+                    evt = json.loads(row[0])
+                    inst_id = evt.get("instance_id")
+                    if inst_id:
+                        if evt.get("kind") == "vm_allocated":
+                            allocated.add(inst_id)
+                        elif evt.get("kind") == "vm_deallocated":
+                            deallocated.add(inst_id)
+                except Exception:
+                    pass
+            conn.close()
+        except Exception:
+            pass
+    active_instances = allocated - deallocated
+    if not active_instances:
+        active_instances = {"1234567"}
+    
     print("ID       Status   IP          Port  GPU       VRAM  Hourly")
-    print("1234567  running  127.0.0.1   9001  RTX 4090  24.0  0.85")
+    for inst in sorted(active_instances):
+        gpu = "RTX A6000" if inst == "7654321" else "RTX 4090"
+        rate = "0.40" if inst == "7654321" else "0.85"
+        print(f"{inst}  running  127.0.0.1   9001  {gpu}  24.0  {rate}")
 elif "copy" in cmd_str:
     print("Copying files from cloud sync connection... 100% complete.")
 elif "destroy instance" in cmd_str:
-    print("Destroying instance 1234567... Destroyed.")
+    inst_to_destroy = "1234567"
+    for word in args:
+        if word.isdigit():
+            inst_to_destroy = word
+    print(f"Destroying instance {inst_to_destroy}... Destroyed.")
 else:
     print("Mock vastai success")
-"""
+""".replace("{db_dir}", db_dir)
         with open(vastai_path, "w") as f:
             f.write(mock_vastai_script)
         os.chmod(vastai_path, 0o755)
         print(f"      [Harness] Mock vastai script installed at {vastai_path}")
-
-        # 2. Allocate dynamic ports
-        for agent in ["gsa", "scenario", "audio", "video", "provisioner", "assembly"]:
-            self.ports[agent] = self._find_free_port()
-        print(f"      [Harness] Allocated ports: {self.ports}")
-
-        # 3. Spawn background servers with process group isolation
-        import json
-        with open("/tmp/active_pipeline_log_dir.txt", "w", encoding="utf-8") as f:
-            f.write(db_dir)
-        with open("/tmp/active_pipeline_ports.json", "w", encoding="utf-8") as f:
-            json.dump(self.ports, f)
 
         env = os.environ.copy()
         env["PYTHONPATH"] = str(PROJECT_ROOT / "server")
@@ -212,7 +269,7 @@ else:
             stdout_path = os.path.join(db_dir, f"agent_{agent}_stdout.log")
             stderr_path = os.path.join(db_dir, f"agent_{agent}_stderr.log")
             
-            cmd = ["bash", "launch_agent.sh", sys.executable, agent, str(port), self.test_module or "", stdout_path, stderr_path]
+            cmd = ["bash", "launch_agent.sh", sys.executable, agent, str(port), self.test_module or "", stdout_path, stderr_path, db_dir]
             cwd = str(PROJECT_ROOT / "server")
             
             res = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, check=True)

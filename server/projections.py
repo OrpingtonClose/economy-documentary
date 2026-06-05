@@ -702,6 +702,9 @@ class BudgetProjection(Projection):
             if not self.exceeded and self.budget_cap_usd > 0 and self.spent_usd > self.budget_cap_usd:
                 self.exceeded = True
                 self.exceeded_at = getattr(event, "timestamp", 0.0)
+        elif event.kind == "budget_exceeded":
+            self.exceeded = True
+            self.spent_usd = getattr(event, "spent_usd", self.spent_usd)
         elif event.kind == "pipeline_aborted":
             if getattr(event, "reason", "") == "budget_exceeded":
                 self.exceeded = True

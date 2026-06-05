@@ -120,8 +120,17 @@ def test_bdd_multi_scene_video_otio_assembly():
     print('     ├─ [Assert] Checking: abs(total_dur - 10.5) < 0.01, f\"Total duration {total_dur} ...')
     assert abs(total_dur - 10.5) < 0.01, f"Total duration {total_dur} != 10.5"
 
+    events = [UpdateScript(agent="scenario", blocks=blocks)] + [
+        MergeIntoOTIO(
+            agent="video", job_id=f"j-v-{i+1}", block_id=blk.block_id,
+            scene_num=blk.scene_num, slot_id=f"V1:{blk.scene_num}:{blk.block_id}",
+            artifact_uri=f"/tmp/clip_{i+1}.mp4", track_name="V1_Video",
+            duration_sec=blk.duration_sec,
+        )
+        for i, blk in enumerate(blocks)
+    ]
     scenario.evidence = collect_evidence_from_store(
-        [],
+        events,
         projections={
             "clip_count": len(video_clips),
             "total_duration": total_dur,

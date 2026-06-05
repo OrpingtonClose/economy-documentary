@@ -72,6 +72,7 @@ def measure_lufs_integrated(audio_path: str) -> float:
 from capabilities.test_single_purpose_tts_simulators import TtsMultiBlockSimulator
 from capabilities.test_real_vast_provisioning_bdd_search_offers import VastSearchSimulator
 from capabilities.test_real_vast_provisioning_bdd_create_instance import VastCreateSimulator
+from capabilities.test_real_assembly_bdd_assemble_final_cut import AssembleFinalCutSimulator
 
 def test_accumulative_drift_correction():
 

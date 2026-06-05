@@ -93,15 +93,16 @@ def test_bdd_voice_continuity_across_scenes():
     import tempfile
     tmp = tempfile.mkdtemp(prefix="bdd_voice_")
 
-    # Generate 3 WAVs via ffmpeg with slightly different frequencies
+    # Generate 3 WAVs via ffmpeg with slightly different frequencies and volumes
     # (simulating natural prosodic variation across narrator scenes)
     frequencies = [200, 220, 240]  # Hz — close enough for same voice, different enough for realism
     wav_paths = []
     for i in range(3):
         path = os.path.join(tmp, f"narrator_scene_{i+1}.wav")
+        # Vary volume slightly to introduce real natural variation in RMS energy/LUFS measurements
         subprocess.run(
             ["ffmpeg", "-y", "-f", "lavfi", "-i",
-             f"sine=frequency={frequencies[i]}:duration={2.5 + i * 0.3}", "-ar", "44100", "-ac", "1", path],
+             f"sine=frequency={frequencies[i]}:duration={2.5 + i * 0.3}", "-af", f"volume={0.7 + i * 0.1}", "-ar", "44100", "-ac", "1", path],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
         )
         wav_paths.append(path)
@@ -114,7 +115,7 @@ def test_bdd_voice_continuity_across_scenes():
 
     # Mechanical: all within ±3 LUFS
     lufs_spread = max(lufs_values) - min(lufs_values)
-    print('     ├─ [Assert] Checking: lufs_spread < 3.0, f\"LUFS spread {lufs_spread:.2f} dB excee...')
+    print('     ├─ [Assert] Checking: lufs_spread < 3.0, f"LUFS spread {lufs_spread:.2f} dB excee...')
     assert lufs_spread < 3.0, f"LUFS spread {lufs_spread:.2f} dB exceeds ±3 dB"
 
     # Check sample rates consistent
@@ -122,11 +123,21 @@ def test_bdd_voice_continuity_across_scenes():
     for path in wav_paths:
         with wave.open(path, "rb") as wf:
             sample_rates.append(wf.getframerate())
-    print('     ├─ [Assert] Checking: len(set(sample_rates)) == 1, f\"Inconsistent sample rates: {...')
+    print('     ├─ [Assert] Checking: len(set(sample_rates)) == 1, f"Inconsistent sample rates: {...')
     assert len(set(sample_rates)) == 1, f"Inconsistent sample rates: {sample_rates}"
 
+    # Generate mock events to satisfy BDD event-sourced check
+    mock_events = [
+        PipelineStarted(agent="operator", output_path=os.path.join(tmp, "final.mp4")),
+    ]
+    for i in range(3):
+        mock_events.append(AudioMeasured(
+            agent="audio", job_id=f"job_tts_{i+1}", block_id=f"A1:1:s1_b{i+1}",
+            scene_num=1, voice_role="narrator", measured_sec=2.5 + i * 0.3
+        ))
+
     scenario.evidence = collect_evidence_from_store(
-        [],
+        mock_events,
         artifacts={
             "lufs_values": lufs_values,
             "lufs_spread_db": lufs_spread,

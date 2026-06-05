@@ -118,8 +118,21 @@ def test_bdd_audio_video_duration_alignment():
     print('     ├─ [Assert] Checking: ct.scenario_durations[\"s1_b1\"] == 3.7')
     assert ct.scenario_durations["s1_b1"] == 3.7
 
+    events = [
+        UpdateScript(agent="scenario", blocks=blocks),
+        MergeIntoOTIO(
+            agent="audio", job_id="j-a-1", block_id="s1_b1",
+            scene_num=1, slot_id="A1:1:s1_b1",
+            artifact_uri="/tmp/b1.wav", track_name="A1_Narration", duration_sec=3.0,
+        ),
+        DurationAdjusted(
+            agent="audio", block_id="s1_b1", slot_id="A1:1:s1_b1",
+            scene_num=1, voice_role="narrator",
+            scripted_sec=3.0, measured_sec=3.7,
+        )
+    ]
     scenario.evidence = collect_evidence_from_store(
-        [],
+        events,
         projections={
             "block1_duration": ct.scenario_durations["s1_b1"],
             "block2_offset": offset_b2,

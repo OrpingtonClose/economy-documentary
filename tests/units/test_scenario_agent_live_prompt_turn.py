@@ -83,7 +83,7 @@ def test_scenario_agent_live_prompt_turn():
         pytest.skip("api.deepseek.com is unreachable (offline/restricted network). Skipping live Scenario Agent prompt turn test.")
 
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa", "scenario"]) as harness:
+    with IntegrationHarness(required_agents=["gsa", "scenario"], capabilities=[]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         scenario_port = harness.ports["scenario"]

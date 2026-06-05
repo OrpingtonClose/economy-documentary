@@ -525,8 +525,10 @@ ROLE_PERMITTED_KINDS = {
 async def validate_state_invariants(agent_id: str, effect: Any) -> list[Effect]:
     try:
         import httpx
+        from agent_base import get_gsa_url
+        gsa_url = get_gsa_url()
         async with httpx.AsyncClient() as client:
-            resp = await client.get("http://127.0.0.1:8000/")
+            resp = await client.get(gsa_url)
             if resp.status_code == 200:
                 gsa_state = resp.json()
             else:

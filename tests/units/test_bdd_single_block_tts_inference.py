@@ -133,7 +133,7 @@ def test_bdd_single_block_tts_inference():
 
         # Check events for JobCompleted
         events = store.replay()
-        completed = [e for e in events if e.effect.kind == "JobCompleted"]
+        completed = [e for e in events if e.effect.kind == "job_completed"]
 
         # BDD judge
         artifacts = {}

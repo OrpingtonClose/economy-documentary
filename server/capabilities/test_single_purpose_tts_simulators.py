@@ -119,6 +119,8 @@ class TtsMultiBlockSimulator(AbstractCapability):
                     return _simulate_tts_job("job_tts_multi_1", 3.0)
                 elif "job_id=job_tts_multi_2" in cmd:
                     return _simulate_tts_job("job_tts_multi_2", 4.5)
+                elif "job_id=job_tts_multi_3" in cmd:
+                    return _simulate_tts_job("job_tts_multi_3", 4.0)
         return await handler(args)
 
 class TtsFailSimulator(AbstractCapability):

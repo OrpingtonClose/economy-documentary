@@ -106,7 +106,12 @@ def test_bdd_budget_gated_provisioning():
     ), "init")
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(VMDeallocated(
-        agent="provisioner", instance_id="1234567", reason="job_done",
+        agent="provisioner", instance_id="1234567", reason="job_done", final_cost=2.80,
+    ), "init")
+    print('     ├─ [EventStore] Appending event to SQLite events database...')
+    store.append(QueueJob(
+        agent="audio", job_id="job-2", job_type="tts",
+        scene_num=1, block_id="s1_b2", slot_id="A1:1:s1_b2"
     ), "init")
     # Signal that budget is close to exhaustion
     print('     ├─ [EventStore] Appending event to SQLite events database...')

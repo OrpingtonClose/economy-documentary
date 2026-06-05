@@ -124,7 +124,7 @@ def test_bdd_single_clip_video_generation():
         assert resp.status_code == 200
 
         events = store.replay()
-        completed = [e for e in events if e.effect.kind == "JobCompleted"]
+        completed = [e for e in events if e.effect.kind == "job_completed"]
 
         scenario.evidence = collect_evidence_from_store(
             events,
