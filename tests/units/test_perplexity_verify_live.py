@@ -89,10 +89,8 @@ def test_perplexity_verify_live():
             os.environ["PERPLEXITY_API_KEY"] = f.read().strip()
 
     # Check network reachability for perplexity API
-    import socket
     try:
-        socket.setdefaulttimeout(2.0)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.perplexity.ai", 443))
+        httpx.get("https://api.perplexity.ai/", timeout=2.0)
     except Exception:
         pytest.skip("api.perplexity.ai is unreachable (offline/restricted network). Skipping live fact-checking test.")
             

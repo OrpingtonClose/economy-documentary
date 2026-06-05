@@ -77,10 +77,8 @@ def test_scenario_agent_live_prompt_turn():
         pytest.skip("DeepSeek API key is missing. Skipping live Scenario Agent prompt turn test.")
 
     # Check network reachability for deepseek API
-    import socket
     try:
-        socket.setdefaulttimeout(2.0)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.deepseek.com", 443))
+        httpx.get("https://api.deepseek.com/", timeout=2.0)
     except Exception:
         pytest.skip("api.deepseek.com is unreachable (offline/restricted network). Skipping live Scenario Agent prompt turn test.")
 
