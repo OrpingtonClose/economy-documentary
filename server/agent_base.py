@@ -21,10 +21,13 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, 
 from pydantic_ai_provenance.capability import ProvenanceCapability
 from pydantic_ai_summarization import ContextManagerCapability
 from pydantic_ai_shields import CostTracking
+from pydantic_ai.capabilities.abstract import AbstractCapability
 from pydantic_deep import create_deep_agent, DeepAgentDeps, PeriodicReminderConfig, create_sliding_window_processor
 
 from effects import Effect, BudgetExceeded, KIND_TO_MODEL
 from event_store import EventStore
+from effect_parser import parse_agent_text_multi
+from config_schema import PipelineConfig
 
 # Setup python path to allow importing config.py from root
 import sys
@@ -33,11 +36,62 @@ import config
 
 logger = logging.getLogger(__name__)
 
+def get_active_log_dir() -> str:
+    path = "/tmp/active_pipeline_log_dir.txt"
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                val = f.read().strip()
+                if val:
+                    return val
+        except Exception:
+            pass
+    return "/tmp/documentary-pipeline"
+
+def get_active_ports() -> dict[str, int]:
+    path = "/tmp/active_pipeline_ports.json"
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
 # Base path of DB files
-LOG_DIR = "/tmp/documentary-pipeline"
+LOG_DIR = get_active_log_dir()
 event_store = EventStore(log_dir=LOG_DIR)
 latest_monologues = {}
 active_tasks: dict[str, asyncio.Task[Any]] = {}
+
+class AgentRegistry:
+    DEFAULT_PORTS = {
+        "gsa": 8000,
+        "scenario": 8001,
+        "audio": 8002,
+        "provisioner": 8003,
+        "video": 8004,
+        "assembly": 8005,
+    }
+
+    @classmethod
+    def get_port(cls, role: str) -> int:
+        role = role.lower()
+        ports = get_active_ports()
+        if role in ports:
+            try:
+                return int(ports[role])
+            except ValueError:
+                pass
+        return cls.DEFAULT_PORTS.get(role, 8000)
+
+    @classmethod
+    def get_url(cls, role: str) -> str:
+        port = cls.get_port(role)
+        return f"http://127.0.0.1:{port}/"
+
+def get_gsa_url() -> str:
+    return AgentRegistry.get_url("gsa")
 
 async def _sleep(seconds: float) -> None:
     await asyncio.sleep(seconds)
@@ -61,7 +115,7 @@ run_lock_manager = LoopBoundLock()
 @dataclass
 class PipelineDeps(DeepAgentDeps):
     """Dependencies for pipeline agents."""
-    gsa_url: str = "http://127.0.0.1:8000"
+    gsa_url: str = get_gsa_url()
     agent_role: str = ""
     max_tokens: int = 128_000
     compaction_model: OpenAIChatModel = field(default_factory=lambda: get_agent_model())
@@ -96,23 +150,16 @@ def get_agent_model() -> OpenAIChatModel:
     if os.path.exists(_deepseek_key_path):
         with open(_deepseek_key_path) as f:
             api_key = f.read().strip()
-    if api_key:
-        os.environ["DEEPSEEK_API_KEY"] = api_key
         
-    base_url = os.environ.get("DEEPSEEK_BASE_URL")
-    if base_url:
-        from pydantic_ai.providers.deepseek import DeepSeekProvider
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key or "mock_key")
-        provider_instance = DeepSeekProvider(openai_client=client)
-        return OpenAIChatModel(
-            "deepseek-chat",
-            provider=provider_instance,
-        )
-        
+    base_url = "https://api.deepseek.com/v1"
+    
+    from pydantic_ai.providers.deepseek import DeepSeekProvider
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "mock_key")
+    provider_instance = DeepSeekProvider(openai_client=client)
     return OpenAIChatModel(
         "deepseek-chat",
-        provider="deepseek",
+        provider=provider_instance,
     )
 
 
@@ -346,12 +393,25 @@ def _load_prompts() -> dict[str, str]:
 ROLE_INSTRUCTIONS = _load_prompts()
 
 
-def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
+def create_pipeline_agent(
+    role: str,
+    model_instance: OpenAIChatModel,
+    extra_capabilities: list[AbstractCapability] | None = None,
+) -> Any:
     """Create a pipeline deep agent with all required capabilities."""
     provenance = ProvenanceCapability(
         agent_name=role,
         source_tools=["bash_command"],
     )
+    caps = [
+        provenance,
+        ContextManagerCapability(
+            max_tokens=128000,
+        ),
+        CostTracking(budget_usd=10.0),
+    ]
+    if extra_capabilities:
+        caps.extend(extra_capabilities)
 
     agent = create_deep_agent(
         model=model_instance,
@@ -373,7 +433,7 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
         include_memory=False,
         include_checkpoints=False,
         web_search=False,
-        web_fetch=True,
+        web_fetch=False,
         include_skills=True,
         include_subagents=True,
         include_builtin_subagents=True,
@@ -383,13 +443,7 @@ def create_pipeline_agent(role: str, model_instance: OpenAIChatModel) -> Any:
         cost_budget_usd=10.0,
         stuck_loop_detection=True,
         periodic_reminder=PeriodicReminderConfig(every_n_turns=10, first_after=5),
-        capabilities=[
-            provenance,
-            ContextManagerCapability(
-                max_tokens=128000,
-            ),
-            CostTracking(budget_usd=10.0),
-        ],
+        capabilities=caps,
         deps_type=PipelineDeps,
     )
     return agent
@@ -442,11 +496,614 @@ def get_local_mem0():
         return None
 
 
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+from pydantic_ai.models import Model, StreamedResponse
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, TextPart, ModelRequest, ToolReturnPart
+
+class DryRunModel(Model):
+    def __init__(self, role: str):
+        self.role = role
+
+    @property
+    def model_name(self) -> str:
+        return "dry_run_model"
+
+    @property
+    def system(self) -> str:
+        return "dry_run"
+
+    async def _request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: Any,
+        model_request_parameters: Any,
+    ) -> ModelResponse:
+        import logging
+        logger = logging.getLogger("DryRunModel")
+        logger.error(f"DEBUG: DryRunModel messages: {messages}")
+        for i, msg in enumerate(messages):
+            logger.error(f"  msg {i}: {type(msg)}")
+            if hasattr(msg, "parts"):
+                for j, part in enumerate(msg.parts):
+                    logger.error(f"    part {j}: {type(part)} -> {part}")
+
+        tool_returns = []
+        for msg in messages:
+            if isinstance(msg, ModelRequest):
+                for part in msg.parts:
+                    if isinstance(part, ToolReturnPart):
+                        tool_returns.append(part)
+
+        step = len(tool_returns)
+
+        if self.role == "scenario":
+            text = (
+                "effect: update_script(blocks=[\n"
+                "  {\n"
+                "    \"scene_num\": 1,\n"
+                "    \"block_id\": \"s1_b1\",\n"
+                "    \"speaker\": \"narrator\",\n"
+                "    \"text\": \"Dopamine drives motivation.\",\n"
+                "    \"duration_sec\": 3.0\n"
+                "  }\n"
+                "])"
+            )
+            return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+
+        elif self.role == "audio":
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(get_gsa_url())
+                    if resp.status_code == 200:
+                        state_data = resp.json()
+                        slots = state_data.get("otio", {}).get("slots", {})
+                        jobs = state_data.get("jobs", {}).get("jobs", {}).values()
+                        
+                        # Find all audio slots (A1:...)
+                        audio_slots = {k: v for k, v in slots.items() if k.startswith("A1:")}
+                        sorted_keys = sorted(audio_slots.keys())
+                        
+                        # Check if any slot needs a job queued
+                        for slot_key in sorted_keys:
+                            slot = audio_slots[slot_key]
+                            scene_num = slot.get("scene_num", 1)
+                            block_id = slot.get("block_id", "s1_b1")
+                            
+                            # Find if job exists for this slot
+                            matching_job = None
+                            for j in jobs:
+                                if j.get("job_type") == "tts" and (
+                                    j.get("slot_id") == slot_key 
+                                    or j.get("slot_id") == block_id 
+                                    or j.get("job_id") == f"job_audio_{block_id}"
+                                ):
+                                    matching_job = j
+                                    break
+                                    
+                            if not matching_job:
+                                # Queue TTS job
+                                text = (
+                                    "effect: queue_job(\n"
+                                    f"  job_id=\"job_audio_{block_id}\",\n"
+                                    "  job_type=\"tts\",\n"
+                                    f"  scene_num={scene_num},\n"
+                                    f"  block_id=\"{block_id}\",\n"
+                                    f"  slot_id=\"{slot_key}\",\n"
+                                    f"  params={{\"text\": {json.dumps(slot.get('text', ''))}, \"voice\": \"{slot.get('speaker', 'narrator')}\", \"gpu_type\": \"RTX 4090\"}}\n"
+                                    ")"
+                                )
+                                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        
+                        # All TTS jobs have been queued. Let's see if any needs duration adjustment.
+                        for slot_key in sorted_keys:
+                            slot = audio_slots[slot_key]
+                            scene_num = slot.get("scene_num", 1)
+                            block_id = slot.get("block_id", "s1_b1")
+                            
+                            if slot.get("status") == "scripted":
+                                # Find the completed job
+                                completed_job = None
+                                for j in jobs:
+                                    if j.get("job_type") == "tts" and j.get("status") == "completed" and (
+                                        j.get("slot_id") == slot_key 
+                                        or j.get("slot_id") == block_id 
+                                        or j.get("job_id") == f"job_audio_{block_id}"
+                                    ):
+                                        completed_job = j
+                                        break
+                                if completed_job:
+                                    measured_sec = completed_job.get("duration_sec", slot.get("scripted_sec", 3.0))
+                                    text = (
+                                        f"effect: duration_adjusted(\n"
+                                        f"  block_id=\"{slot_key}\",\n"
+                                        f"  slot_id=\"{slot_key}\",\n"
+                                        f"  scene_num={scene_num},\n"
+                                        f"  voice_role=\"{slot.get('speaker', 'narrator')}\",\n"
+                                        f"  scripted_sec={slot.get('scripted_sec', 3.0)},\n"
+                                        f"  measured_sec={measured_sec}\n"
+                                        f")"
+                                    )
+                                    return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        
+                        # All are measured. Let's check if reconciliation is complete.
+                        all_measured = all(slot.get("status") == "measured" for slot in audio_slots.values())
+                        if all_measured:
+                            reconciled = state_data.get("jobs", {}).get("reconciliation_complete", False)
+                            if not reconciled:
+                                blocks_total = len(audio_slots)
+                                total_measured = sum(slot.get("measured_sec") or slot.get("scripted_sec", 3.0) for slot in audio_slots.values())
+                                text = (
+                                    "effect: reconciliation_complete(\n"
+                                    f"  blocks_total={blocks_total},\n"
+                                    f"  blocks_passed={blocks_total},\n"
+                                    f"  blocks_failed=0,\n"
+                                    f"  worst_delta_sec=0.0,\n"
+                                    f"  total_measured_sec={total_measured}\n"
+                                    ")"
+                                )
+                                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                            else:
+                                text = "effect: noop(reason=\"audio_complete\")\nAudio reconciliation is complete."
+                                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        else:
+                            text = "effect: noop(reason=\"waiting_for_tts_jobs\")\nWaiting for all TTS jobs to complete and adjust durations."
+                            return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+            except Exception as e:
+                text = f"effect: noop(reason=\"audio_error_{str(e)[:30]}\")"
+                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+
+        elif self.role == "video":
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(get_gsa_url())
+                    if resp.status_code == 200:
+                        state_data = resp.json()
+                        slots = state_data.get("otio", {}).get("slots", {})
+                        jobs = state_data.get("jobs", {}).get("jobs", {}).values()
+                        
+                        # Find all audio and video slots
+                        audio_slots = {k: v for k, v in slots.items() if k.startswith("A1:")}
+                        video_slots = {k: v for k, v in slots.items() if k.startswith("V1:")}
+                        sorted_keys = sorted(video_slots.keys())
+                        
+                        for slot_key in sorted_keys:
+                            slot = video_slots[slot_key]
+                            scene_num = slot.get("scene_num", 1)
+                            block_id = slot.get("block_id", "s1_b1")
+                            
+                            # Find matching job
+                            matching_job = None
+                            for j in jobs:
+                                if j.get("job_type") == "ltx" and (
+                                    j.get("slot_id") == slot_key 
+                                    or j.get("slot_id") == block_id 
+                                    or j.get("job_id") == f"job_video_{block_id}"
+                                ):
+                                    matching_job = j
+                                    break
+                                    
+                            # Determine expected duration matching corresponding audio
+                            audio_slot_key = f"A1:{scene_num}:{block_id}"
+                            audio_slot = audio_slots.get(audio_slot_key, {})
+                            audio_duration = audio_slot.get("measured_sec") or audio_slot.get("scripted_sec") or 4.0
+                            
+                            if not matching_job:
+                                # Queue video job
+                                job_id = f"job_video_{block_id}"
+                                text = (
+                                    "effect: queue_job(\n"
+                                    f"  job_id=\"{job_id}\",\n"
+                                    "  job_type=\"ltx\",\n"
+                                    f"  scene_num={scene_num},\n"
+                                    f"  block_id=\"{block_id}\",\n"
+                                    f"  slot_id=\"{slot_key}\",\n"
+                                    f"  params={{\"text\": {json.dumps(slot.get('text', ''))}, \"duration_sec\": {audio_duration}, \"gpu_type\": \"RTX A6000\"}}\n"
+                                    ")"
+                                )
+                                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        
+                        # Check for merging
+                        for slot_key in sorted_keys:
+                            slot = video_slots[slot_key]
+                            scene_num = slot.get("scene_num", 1)
+                            block_id = slot.get("block_id", "s1_b1")
+                            
+                            if slot.get("status") != "delivered":
+                                # Find completed job
+                                completed_job = None
+                                for j in jobs:
+                                    if j.get("job_type") == "ltx" and j.get("status") == "completed" and (
+                                        j.get("slot_id") == slot_key 
+                                        or j.get("slot_id") == block_id 
+                                        or j.get("job_id") == f"job_video_{block_id}"
+                                    ):
+                                        completed_job = j
+                                        break
+                                if completed_job:
+                                    audio_slot_key = f"A1:{scene_num}:{block_id}"
+                                    audio_slot = audio_slots.get(audio_slot_key, {})
+                                    audio_duration = audio_slot.get("measured_sec") or audio_slot.get("scripted_sec") or 4.0
+                                    duration_sec = completed_job.get("duration_sec") or audio_duration
+                                    
+                                    db_dir = state_data.get("state", {}).get("config", {}).get("log_dir")
+                                    if not db_dir:
+                                        db_dir = get_active_log_dir()
+                                    job_id = f"job_video_{block_id}"
+                                    artifact_uri = f"{db_dir}/video_outputs/{job_id}.mp4"
+                                    
+                                    text = (
+                                        "effect: merge_into_otio(\n"
+                                        f"  job_id=\"{job_id}\",\n"
+                                        f"  block_id=\"{slot_key}\",\n"
+                                        f"  scene_num={scene_num},\n"
+                                        f"  slot_id=\"{slot_key}\",\n"
+                                        f"  artifact_uri=\"{artifact_uri}\",\n"
+                                        f"  track_name=\"V1_Video\",\n"
+                                        f"  duration_sec={duration_sec}\n"
+                                        ")"
+                                    )
+                                    return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        
+                        # Check if all video slots are delivered
+                        all_delivered = all(slot.get("status") == "delivered" for slot in video_slots.values())
+                        if all_delivered:
+                            text = "effect: noop(reason=\"video_already_merged\")\nVideo is already merged."
+                            return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                        else:
+                            text = "effect: noop(reason=\"waiting_for_video_jobs\")\nWaiting for video jobs to complete and merge."
+                            return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+            except Exception as e:
+                text = f"effect: noop(reason=\"video_error_{str(e)[:30]}\")"
+                return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+
+        elif self.role == "provisioner":
+            active_vms = False
+            active_vm_id = None
+            active_vm_role = None
+            all_completed = False
+            pending_jobs = []
+            preempted_vm_id = None
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(get_gsa_url())
+                    if resp.status_code == 200:
+                        state_data = resp.json()
+                        active_vms = state_data.get("vms", {}).get("active_count", 0) > 0
+                        for v in state_data.get("vms", {}).get("vms", {}).values():
+                            if v.get("status") == "active":
+                                active_vm_id = v.get("instance_id")
+                                active_vm_role = v.get("role")
+                            if v.get("status") == "observed_gone" or v.get("observed_status") == "not_found":
+                                if v.get("status") != "destroyed":
+                                    preempted_vm_id = v.get("instance_id")
+                        jobs = list(state_data.get("jobs", {}).get("jobs", {}).values())
+                        pending_jobs = [j for j in jobs if j.get("status") in ("pending", "running")]
+                        slots = state_data.get("otio", {}).get("slots", {})
+                        if active_vm_role == "tts":
+                            audio_slots = [s for k, s in slots.items() if k.startswith("A1:")]
+                            all_completed = len(audio_slots) > 0 and all(s.get("status") == "measured" for s in audio_slots)
+                        elif active_vm_role == "ltx":
+                            video_slots = [s for k, s in slots.items() if k.startswith("V1:")]
+                            all_completed = len(video_slots) > 0 and all(s.get("status") == "delivered" for s in video_slots)
+                        else:
+                            all_completed = False
+            except Exception:
+                pass
+
+            mismatch = False
+            if active_vms and active_vm_role and pending_jobs:
+                if all(j.get("job_type") != active_vm_role for j in pending_jobs):
+                    mismatch = True
+            if active_vms and active_vm_id:
+                for v in state_data.get("vms", {}).get("vms", {}).values():
+                    if v.get("instance_id") == active_vm_id and v.get("observed_status") == "not_found":
+                        mismatch = True
+
+            if preempted_vm_id:
+                if step == 0:
+                    return ModelResponse(parts=[
+                        ToolCallPart("run_bash", {"command": f"vastai destroy instance {preempted_vm_id}"}, tool_call_id="call_destroy")
+                    ], model_name="dry_run_model")
+                else:
+                    text = f"effect: vm_deallocated(instance_id=\"{preempted_vm_id}\", reason=\"stale\")\nVM deallocated."
+                    return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+
+            if not active_vms:
+                vm_role = "tts"
+                gpu_type = "RTX 4090"
+                for j in pending_jobs:
+                    if j.get("job_type") == "ltx":
+                        vm_role = "ltx"
+                        gpu_type = j.get("params", {}).get("gpu_type") or "RTX A6000"
+                        break
+                    else:
+                        gpu_type = j.get("params", {}).get("gpu_type") or "RTX 4090"
+
+                if step == 0:
+                    return ModelResponse(parts=[
+                        ToolCallPart("run_bash", {"command": "vastai search offers"}, tool_call_id="call_search")
+                    ], model_name="dry_run_model")
+                elif step == 1:
+                    return ModelResponse(parts=[
+                        ToolCallPart("run_bash", {"command": f"vastai create instance 1001 --image worker-{vm_role}"}, tool_call_id="call_create")
+                    ], model_name="dry_run_model")
+                elif step == 2:
+                    if vm_role == "tts":
+                        cmd = "vastai copy b2.36862:/qwen3-tts-voicedesign/ C.1234567:/workspace/models/qwen3-tts-voicedesign/"
+                    else:
+                        cmd = "vastai copy b2.36862:/ltx-2.3/ C.1234567:/workspace/models/ltx23/"
+                    return ModelResponse(parts=[
+                        ToolCallPart("run_bash", {"command": cmd}, tool_call_id="call_copy")
+                    ], model_name="dry_run_model")
+                elif step == 3:
+                    return ModelResponse(parts=[
+                        ToolCallPart("run_bash", {"command": "vastai show instances"}, tool_call_id="call_show")
+                    ], model_name="dry_run_model")
+                else:
+                    text = f"effect: vm_allocated(instance_id=\"1234567\", worker_url=\"http://127.0.0.1:8888\", role=\"{vm_role}\", offer_id=\"1001\", gpu_type=\"{gpu_type}\", cost_per_hour=0.40)\nVM allocated and ready."
+                    return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+            else:
+                if all_completed or mismatch:
+                    target_id = active_vm_id or "1234567"
+                    reason = "job_done" if all_completed else "stale"
+                    if step == 0:
+                        return ModelResponse(parts=[
+                            ToolCallPart("run_bash", {"command": f"vastai destroy instance {target_id}"}, tool_call_id="call_destroy")
+                        ], model_name="dry_run_model")
+                    else:
+                        text = f"effect: vm_deallocated(instance_id=\"{target_id}\", reason=\"{reason}\")\nVM deallocated."
+                        return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                else:
+                    matching_pending_jobs = [j for j in pending_jobs if j.get("job_type") == active_vm_role]
+                    if matching_pending_jobs:
+                        job_to_dispatch = matching_pending_jobs[0]
+                        job_id = job_to_dispatch.get("job_id")
+                        if step == 0:
+                            return ModelResponse(parts=[
+                                ToolCallPart("run_bash", {"command": f"curl -X POST http://127.0.0.1:8888/{active_vm_role}?job_id={job_id}"}, tool_call_id="call_dispatch_more")
+                            ], model_name="dry_run_model")
+                        else:
+                            text = f"effect: noop(reason=\"dispatched_job_{job_id}\")\nDispatched job {job_id}."
+                            return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+                    else:
+                        text = "effect: noop(reason=\"vm_active_executing_jobs\")\nVM is active and executing jobs."
+                        return ModelResponse(parts=[TextPart(text)], model_name="dry_run_model")
+
+        elif self.role == "assembly":
+            output_path = os.path.join(get_active_log_dir(), "final_documentary.mp4")
+            if step == 0:
+                return ModelResponse(parts=[
+                    ToolCallPart("assemble_final_cut", {
+                        "output_path": output_path,
+                        "timeline_path": "timeline.otio",
+                        "include_placeholders": True,
+                        "target_duration": 7.0,
+                        "run_id": "dry_run"
+                    }, tool_call_id="call_assemble")
+                ], model_name="dry_run_model")
+            else:
+                                return ModelResponse(parts=[TextPart("effect: noop(reason=\"assembly_complete\")\n")], model_name="dry_run_model")
+
+        return ModelResponse(parts=[TextPart("Dry run turn.")], model_name="dry_run_model")
+
+    async def request(self, messages, model_settings, model_request_parameters):
+        return await self._request(messages, model_settings, model_request_parameters)
+
+    @asynccontextmanager
+    async def request_stream(self, messages, model_settings, model_request_parameters, run_context=None):
+        response = await self._request(messages, model_settings, model_request_parameters)
+        class DryRunStreamedResponse(StreamedResponse):
+            def __init__(self, resp):
+                self._resp = resp
+            async def __aiter__(self):
+                for part in self._resp.parts:
+                    yield part
+            @property
+            def model_name(self) -> str:
+                return "dry_run_model"
+            @property
+            def system(self) -> str:
+                return "dry_run"
+        yield DryRunStreamedResponse(response)
+
+
+def run_movie_assembly(
+    output_path: str,
+    timeline_path: str,
+    include_placeholders: bool,
+    target_duration: float,
+    event_store_instance,
+    log_dir: str,
+) -> str:
+    """Core function to assemble a final cut movie from an OTIO timeline.
+    Extracted from the agent tool for independent testability.
+    """
+    import sys
+    import os
+    import json
+    import subprocess
+    import opentimelineio as otio
+    from effects import PipelineComplete
+
+    def generate_audio_placeholder(dur: float, out_path: str) -> None:
+        print(f"CRITICAL: Generating audio placeholder of duration {dur}s at {out_path}", file=sys.stderr)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=1000:sample_rate=44100", "-t", str(dur), out_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+
+    def generate_video_placeholder(dur: float, out_path: str) -> None:
+        print(f"CRITICAL: Generating black video placeholder of duration {dur}s at {out_path}", file=sys.stderr)
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1280x720:d={dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+
+    def probe_duration(filepath: str) -> float:
+        try:
+            res = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
+                capture_output=True, text=True, check=True
+            )
+            return float(res.stdout.strip())
+        except Exception:
+            return 0.0
+
+    try:
+        # Load timeline
+        if not os.path.exists(timeline_path):
+            # Try to resolve relative to log_dir/timelines
+            alt_path = os.path.join(log_dir, "timelines", os.path.basename(timeline_path))
+            if os.path.exists(alt_path):
+                timeline_path = alt_path
+
+        timeline = otio.adapters.read_from_file(timeline_path)
+        video_track = None
+        audio_track = None
+        for track in timeline.tracks:
+            if track.name == "V1_Video":
+                video_track = track
+            elif track.name == "A1_Narration":
+                audio_track = track
+
+        video_clips = []
+        if video_track:
+            for item in video_track:
+                if isinstance(item, otio.schema.Clip):
+                    path = ""
+                    if isinstance(item.media_reference, otio.schema.ExternalReference):
+                        path = item.media_reference.target_url
+                    elif isinstance(item.media_reference, otio.schema.MissingReference):
+                        path = ""
+
+                    if not path or not os.path.exists(path):
+                        if include_placeholders:
+                            dur = item.source_range.duration.to_seconds()
+                            placeholder_path = f"/tmp/placeholders/{item.name}.mp4"
+                            generate_video_placeholder(dur, placeholder_path)
+                            path = placeholder_path
+                        else:
+                            raise RuntimeError(f"Missing video media file: {path} for clip {item.name}")
+                    video_clips.append(path)
+
+        audio_clips = []
+        if audio_track:
+            for item in audio_track:
+                if isinstance(item, otio.schema.Clip):
+                    path = ""
+                    if isinstance(item.media_reference, otio.schema.ExternalReference):
+                        path = item.media_reference.target_url
+                    elif isinstance(item.media_reference, otio.schema.MissingReference):
+                        path = ""
+
+                    if not path or not os.path.exists(path):
+                        if include_placeholders:
+                            dur = item.source_range.duration.to_seconds()
+                            placeholder_path = f"/tmp/placeholders/{item.name}.wav"
+                            generate_audio_placeholder(dur, placeholder_path)
+                            path = placeholder_path
+                        else:
+                            raise RuntimeError(f"Missing audio media file: {path} for clip {item.name}")
+                    audio_clips.append(path)
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        # 1. Render final video track
+        final_video_path = "/tmp/final_video.mp4"
+        if len(video_clips) == 1:
+            final_video_path = video_clips[0]
+        elif len(video_clips) > 1:
+            concat_file = "/tmp/concat_video.txt"
+            with open(concat_file, "w") as f:
+                for c in video_clips:
+                    f.write(f"file '{c}'\n")
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_video_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            )
+        else:
+            generate_video_placeholder(target_duration, final_video_path)
+
+        # 2. Render final audio track
+        final_audio_path = "/tmp/final_audio.wav"
+        if len(audio_clips) == 1:
+            final_audio_path = audio_clips[0]
+        elif len(audio_clips) > 1:
+            concat_file = "/tmp/concat_audio.txt"
+            with open(concat_file, "w") as f:
+                for c in audio_clips:
+                    f.write(f"file '{c}'\n")
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_audio_path],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            )
+        else:
+            generate_audio_placeholder(target_duration, final_audio_path)
+
+        import sys
+        sys.__stdout__.write(f"DEBUG ASSEMBLY: final_audio_path={final_audio_path} size={os.path.getsize(final_audio_path) if os.path.exists(final_audio_path) else 'not exist'} final_video_path={final_video_path} size={os.path.getsize(final_video_path) if os.path.exists(final_video_path) else 'not exist'}\n")
+        sys.__stdout__.flush()
+
+        # Apply loudness normalization (-16.0 LUFS target, -1.0 dBTP max true peak)
+        normalized_audio_path = "/tmp/normalized_audio.wav"
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", final_audio_path, "-af", "loudnorm=I=-16:TP=-1.0:LRA=11", normalized_audio_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+        final_audio_path = normalized_audio_path
+
+        sys.__stdout__.write(f"DEBUG ASSEMBLY: normalized_audio_path={normalized_audio_path} size={os.path.getsize(normalized_audio_path) if os.path.exists(normalized_audio_path) else 'not exist'}\n")
+        sys.__stdout__.flush()
+
+        # 3. Mux them together
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", final_video_path, "-i", final_audio_path, "-c:v", "copy", "-c:a", "aac", "-shortest", output_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+
+        actual_dur = probe_duration(output_path) or target_duration
+
+        # Emit PipelineComplete effect
+        otio_hash = "initial_hash"
+        try:
+            slots_dict = {}
+            for addr, s in timeline.slots.items():
+                slots_dict[addr] = s
+            import hashlib
+            sorted_slots = sorted(slots_dict.items())
+            otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
+        except Exception:
+            pass  # Fall back to default initial_hash on failure
+
+        event_store_instance.append(
+            PipelineComplete(
+                agent="assembly",
+                output_path=output_path,
+                duration_sec=actual_dur,
+            ),
+            otio_hash
+        )
+
+        return f"SUCCESS: Final documentary assembled at {output_path}. Duration: {actual_dur}s."
+
+    except Exception as e:
+        return f"ERROR: Assembly failed: {e}"
+
+
+# Capability simulator registry and loaders are removed.
+# Test-only capabilities are loaded statically via harness and make_agent_app.
+
+
 async def execute_agent_turn(
     role: str,
     gsa_url: str,
     notification_type: str = "instruction",
     context: dict[Any, Any] | None = None,
+    config: PipelineConfig | None = None,
+    extra_capabilities: list[Any] | None = None,
 ) -> list[Effect]:
     """Execute a single reasoning turn for the agent and append parsed effects."""
     lock = run_lock_manager.get_lock()
@@ -455,7 +1112,7 @@ async def execute_agent_turn(
         gsa_state = {}
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                resp = await client.get(gsa_url)  # health probe
                 if resp.status_code == 200:
                     gsa_state = resp.json()
         except Exception:
@@ -472,6 +1129,8 @@ async def execute_agent_turn(
                 pass  # Ignore invalid/malformed history models
         memory_text = format_memory(memory)
 
+        lt_memories = []
+        mem0_instance = None
         lt_memories = []
         mem0_instance = get_local_mem0()
         if mem0_instance:
@@ -500,8 +1159,51 @@ Available Skills:
             prompt += f"\n=== ADDITIONAL CONTEXT/INSTRUCTION ===\n{json.dumps(context, indent=2)}\n"
 
         # 3. Create agent and model
+
+        extra_caps = []
+        use_dry_run_model = False
+        caps_list = []
+        if config and config.capabilities:
+            caps_list = config.capabilities
+        elif gsa_state:
+            gsa_config = gsa_state.get("state", {}).get("config", {})
+            if isinstance(gsa_config, dict):
+                if gsa_config.get("capabilities"):
+                    caps_list = gsa_config.get("capabilities")
+                elif gsa_config.get("simulation_mode") is True:
+                    caps_list = [
+                        "DryRunModel",
+                        "VastSearchSimulator",
+                        "VastCreateSimulator",
+                        "VastShowSimulator",
+                        "VastDestroySimulator",
+                        "WorkerHealthSimulator",
+                        "TtsJob1Simulator",
+                        "TtsColdStartSimulator",
+                        "TtsSingleBlockSimulator",
+                        "TtsMultiBlockSimulator",
+                        "TtsFailSimulator",
+                        "TtsPreemptSimulator",
+                        "LtxScaleSimulator",
+                        "LtxSingleSimulator",
+                        "VastCopySimulator",
+                        "AssembleFinalCutSimulator"
+                    ]
+
+        if caps_list and "DryRunModel" in caps_list:
+            use_dry_run_model = True
+
+        if extra_capabilities:
+            for cap in extra_capabilities:
+                if isinstance(cap, type):
+                    extra_caps.append(cap())
+                else:
+                    extra_caps.append(cap)
+
         model_instance = get_agent_model()
-        agent = create_pipeline_agent(role, model_instance)
+        if use_dry_run_model:
+            model_instance = DryRunModel(role)
+        agent = create_pipeline_agent(role, model_instance, extra_capabilities=extra_caps)
 
         # 4. Register tool
         @agent.tool
@@ -528,163 +1230,14 @@ Available Skills:
                     target_duration: Target duration in seconds.
                     run_id: Unique execution run identifier.
                 """
-                import sys
-                import os
-                import json
-                import subprocess
-                import opentimelineio as otio
-                from effects import PipelineComplete
-
-                def generate_audio_placeholder(dur: float, out_path: str) -> None:
-                    print(f"CRITICAL: Generating silent audio placeholder of duration {dur}s at {out_path}", file=sys.stderr)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=mono", "-t", str(dur), out_path],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
-                    )
-
-                def generate_video_placeholder(dur: float, out_path: str) -> None:
-                    print(f"CRITICAL: Generating black video placeholder of duration {dur}s at {out_path}", file=sys.stderr)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1280x720:d={dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
-                    )
-
-                def probe_duration(filepath: str) -> float:
-                    try:
-                        res = subprocess.run(
-                            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
-                            capture_output=True, text=True, check=True
-                        )
-                        return float(res.stdout.strip())
-                    except Exception:
-                        return 0.0
-
-                try:
-                    # Load timeline
-                    if not os.path.exists(timeline_path):
-                        # Try to resolve relative to LOG_DIR/timelines
-                        alt_path = os.path.join(LOG_DIR, "timelines", os.path.basename(timeline_path))
-                        if os.path.exists(alt_path):
-                            timeline_path = alt_path
-
-                    timeline = otio.adapters.read_from_file(timeline_path)
-                    video_track = None
-                    audio_track = None
-                    for track in timeline.tracks:
-                        if track.name == "V1_Video":
-                            video_track = track
-                        elif track.name == "A1_Narration":
-                            audio_track = track
-
-                    video_clips = []
-                    if video_track:
-                        for item in video_track:
-                            if isinstance(item, otio.schema.Clip):
-                                path = ""
-                                if isinstance(item.media_reference, otio.schema.ExternalReference):
-                                    path = item.media_reference.target_url
-                                elif isinstance(item.media_reference, otio.schema.MissingReference):
-                                    path = ""
-
-                                if not path or not os.path.exists(path):
-                                    if include_placeholders:
-                                        dur = item.source_range.duration.to_seconds()
-                                        placeholder_path = f"/tmp/placeholders/{item.name}.mp4"
-                                        generate_video_placeholder(dur, placeholder_path)
-                                        path = placeholder_path
-                                    else:
-                                        raise RuntimeError(f"Missing video media file: {path} for clip {item.name}")
-                                video_clips.append(path)
-
-                    audio_clips = []
-                    if audio_track:
-                        for item in audio_track:
-                            if isinstance(item, otio.schema.Clip):
-                                path = ""
-                                if isinstance(item.media_reference, otio.schema.ExternalReference):
-                                    path = item.media_reference.target_url
-                                elif isinstance(item.media_reference, otio.schema.MissingReference):
-                                    path = ""
-
-                                if not path or not os.path.exists(path):
-                                    if include_placeholders:
-                                        dur = item.source_range.duration.to_seconds()
-                                        placeholder_path = f"/tmp/placeholders/{item.name}.wav"
-                                        generate_audio_placeholder(dur, placeholder_path)
-                                        path = placeholder_path
-                                    else:
-                                        raise RuntimeError(f"Missing audio media file: {path} for clip {item.name}")
-                                audio_clips.append(path)
-
-                    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-
-                    # 1. Render final video track
-                    final_video_path = "/tmp/final_video.mp4"
-                    if len(video_clips) == 1:
-                        final_video_path = video_clips[0]
-                    elif len(video_clips) > 1:
-                        concat_file = "/tmp/concat_video.txt"
-                        with open(concat_file, "w") as f:
-                            for c in video_clips:
-                                f.write(f"file '{c}'\n")
-                        subprocess.run(
-                            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_video_path],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
-                        )
-                    else:
-                        generate_video_placeholder(target_duration, final_video_path)
-
-                    # 2. Render final audio track
-                    final_audio_path = "/tmp/final_audio.wav"
-                    if len(audio_clips) == 1:
-                        final_audio_path = audio_clips[0]
-                    elif len(audio_clips) > 1:
-                        concat_file = "/tmp/concat_audio.txt"
-                        with open(concat_file, "w") as f:
-                            for c in audio_clips:
-                                f.write(f"file '{c}'\n")
-                        subprocess.run(
-                            ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_audio_path],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
-                        )
-                    else:
-                        generate_audio_placeholder(target_duration, final_audio_path)
-
-                    # 3. Mux them together
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-i", final_video_path, "-i", final_audio_path, "-c:v", "copy", "-c:a", "aac", "-shortest", output_path],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
-                    )
-
-                    actual_dur = probe_duration(output_path) or target_duration
-
-                    # Emit PipelineComplete effect
-                    otio_hash = "initial_hash"
-                    try:
-                        slots_dict = {}
-                        for addr, s in timeline.slots.items():
-                            slots_dict[addr] = s
-                        import hashlib
-                        sorted_slots = sorted(slots_dict.items())
-                        otio_hash = hashlib.sha256(json.dumps(sorted_slots, sort_keys=True).encode()).hexdigest()[:16]
-                    except Exception:
-                        pass  # Fall back to default initial_hash on failure
-
-                    event_store.append(
-                        PipelineComplete(
-                            agent="assembly",
-                            output_path=output_path,
-                            duration_sec=actual_dur,
-                        ),
-                        otio_hash
-                    )
-
-                    return f"SUCCESS: Final documentary assembled at {output_path}. Duration: {actual_dur}s."
-
-                except Exception as e:
-                    return f"ERROR: Assembly failed: {e}"
+                return run_movie_assembly(
+                    output_path=output_path,
+                    timeline_path=timeline_path,
+                    include_placeholders=include_placeholders,
+                    target_duration=target_duration,
+                    event_store_instance=event_store,
+                    log_dir=LOG_DIR,
+                )
 
         # 5. Run the agent
         deps = PipelineDeps(gsa_url=gsa_url, agent_role=role, compaction_model=model_instance)
@@ -711,14 +1264,13 @@ Available Skills:
             pass  # Ignore debug log write failures
 
         # 6. Parse effects
-        from effect_parser import parse_agent_text_multi
         effects = await parse_agent_text_multi(role, agent_text)
 
         # Compute hash from GSA otio slots
         import hashlib
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                resp = await client.get(gsa_url)  # health probe
                 gsa_state = resp.json()
             slots = gsa_state.get("otio", {}).get("slots", {})
             sorted_slots = sorted(slots.items())
@@ -761,9 +1313,21 @@ class StrictEndpointMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-def make_agent_app(role: str) -> FastAPI:
+def load_run_config() -> PipelineConfig:
+    config_path = os.path.join(LOG_DIR, "run_config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                return PipelineConfig.model_validate_json(f.read())
+        except Exception:
+            pass
+    return PipelineConfig()
+
+
+def make_agent_app(role: str, extra_capabilities: list[Any] | None = None) -> FastAPI:
     """FastAPI application builder for a pipeline agent."""
     app = FastAPI(title=f"{role.capitalize()} Agent Server")
+    app.extra_capabilities = extra_capabilities or []
     app.add_middleware(StrictEndpointMiddleware)
 
     _agent_health = {
@@ -783,9 +1347,9 @@ def make_agent_app(role: str) -> FastAPI:
         else:
             _agent_health["status"] = "healthy"
         try:
-            gsa_url = "http://127.0.0.1:8000/"
+            gsa_url = get_gsa_url()
             async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                resp = await client.get(gsa_url)  # health probe
                 if resp.status_code == 200:
                     state = resp.json()
                     _agent_health["current_task"] = _determine_focus(role, state)
@@ -817,6 +1381,8 @@ def make_agent_app(role: str) -> FastAPI:
 
         lock = run_lock_manager.get_lock()
         if lock.locked():
+            if not is_human:
+                return PlainTextResponse("Already busy", status_code=200)
             return PlainTextResponse("Conflict: Agent is busy", status_code=409)
 
         if is_human:
@@ -831,7 +1397,7 @@ def make_agent_app(role: str) -> FastAPI:
             otio_hash = "initial_hash"
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
+                    resp = await client.get(get_gsa_url())  # health probe
                     if resp.status_code == 200:
                         slots = resp.json().get("otio", {}).get("slots", {})
                         sorted_slots = sorted(slots.items())
@@ -843,11 +1409,14 @@ def make_agent_app(role: str) -> FastAPI:
         _agent_health["status"] = "busy"
         _agent_health["last_run"] = time.time()
         try:
+            run_config = load_run_config()
             await execute_agent_turn(
                 role=role,
-                gsa_url="http://127.0.0.1:8000/",
+                gsa_url=get_gsa_url(),
                 notification_type="human" if is_human else "instruction",
                 context={"instruction": inst_text} if is_human else None,
+                config=run_config,
+                extra_capabilities=app.extra_capabilities,
             )
             _agent_health["status"] = "healthy"
             _agent_health["idle_since"] = time.time()
@@ -910,7 +1479,7 @@ def make_agent_app(role: str) -> FastAPI:
                     otio_hash = "initial_hash"
                     try:
                         async with httpx.AsyncClient() as client:
-                            resp = await client.get("http://127.0.0.1:8000/", timeout=1.0)  # health probe
+                            resp = await client.get(get_gsa_url())  # health probe
                             if resp.status_code == 200:
                                 slots = resp.json().get("otio", {}).get("slots", {})
                                 sorted_slots = sorted(slots.items())
@@ -919,11 +1488,14 @@ def make_agent_app(role: str) -> FastAPI:
                         pass  # Fall back to default initial_hash on failure
                     event_store.append(inst_effect, otio_hash)
 
+                run_config = load_run_config()
                 await execute_agent_turn(
                     role=role,
-                    gsa_url="http://127.0.0.1:8000/",
+                    gsa_url=get_gsa_url(),
                     notification_type="human" if is_human else "instruction",
                     context={"instruction": inst_text} if is_human else None,
+                    config=run_config,
+                    extra_capabilities=app.extra_capabilities,
                 )
                 _agent_health["status"] = "healthy"
                 _agent_health["idle_since"] = time.time()
@@ -941,7 +1513,9 @@ def make_agent_app(role: str) -> FastAPI:
 
     @app.on_event("startup")
     async def start_autonomous_loop():
+        assembly_triggered = False
         async def run_loop():
+            nonlocal assembly_triggered
             if role == "provisioner":
                 key = os.environ.get("VAST_AI_KEY") or os.environ.get("VAST_KEY")
                 if not key:
@@ -955,21 +1529,13 @@ def make_agent_app(role: str) -> FastAPI:
                 if key:
                     try:
                         import subprocess
-                        subprocess.run(f"vastai login {key}", shell=True, capture_output=True)
+                        subprocess.run(f"vastai set api-key {key}", shell=True, capture_output=True)
                     except Exception:
                         pass  # Ignore login command execution failures
 
-            # Wait a few seconds to allow GSA start up in integration tests
-            await _sleep(2.0)
-
-            intervals = {
-                "scenario": 5.0,
-                "audio": 3.0,
-                "video": 3.0,
-                "assembly": 5.0,
-                "provisioner": 2.0,
-            }
-            poll_interval = intervals.get(role, 10.0)
+            # Sleep 0.5 seconds initially to allow GSA socket to open
+            await _sleep(0.5)
+            poll_interval = 0.5
 
             while True:
                 try:
@@ -981,10 +1547,10 @@ def make_agent_app(role: str) -> FastAPI:
                             await _sleep(poll_interval)
                             continue
 
-                        gsa_url = "http://127.0.0.1:8000/"
+                        gsa_url = get_gsa_url()
                         try:
                             async with httpx.AsyncClient() as client:
-                                resp = await client.get(gsa_url, timeout=1.0)  # health probe
+                                resp = await client.get(gsa_url)  # health probe
                                 if resp.status_code == 200:
                                     state = resp.json()
                                 else:
@@ -1013,24 +1579,36 @@ def make_agent_app(role: str) -> FastAPI:
                                     slots = state.get("otio", {}).get("slots", {})
                                     jobs = state.get("jobs", {}).get("jobs", {}).values()
                                     active_or_done_job_slots = {j.get("slot_id") for j in jobs if j.get("status") in ("pending", "running", "completed")}
-                                    has_unqueued_slots = any(s.get("status") == "scripted" and addr not in active_or_done_job_slots for addr, s in slots.items())
+                                    completed_tts_slots = {j.get("slot_id") for j in jobs if j.get("job_type") == "tts" and j.get("status") == "completed"}
+                                    has_unqueued_slots = any(addr.startswith("A1") and s.get("status") == "scripted" and addr not in active_or_done_job_slots for addr, s in slots.items())
+                                    has_completed_unmeasured = any(addr.startswith("A1") and addr in completed_tts_slots and s.get("status") == "scripted" for addr, s in slots.items())
                                     reconciled = state.get("jobs", {}).get("reconciliation_complete", False)
-                                    has_measured = any(s.get("status") == "measured" for s in slots.values())
-                                    if has_unqueued_slots or (has_measured and not reconciled):
+                                    has_measured = any(addr.startswith("A1") and s.get("status") == "measured" for addr, s in slots.items())
+                                    if has_unqueued_slots or has_completed_unmeasured or (has_measured and not reconciled):
                                         should_act = True
                                 elif role == "video":
                                     slots = state.get("otio", {}).get("slots", {})
                                     jobs = state.get("jobs", {}).get("jobs", {}).values()
                                     active_or_done_ltx = {j.get("slot_id") for j in jobs if j.get("job_type") == "ltx" and j.get("status") in ("pending", "running", "completed")}
-                                    unqueued_video = any(s.get("status") in ("measured", "delivered") and addr not in active_or_done_ltx for addr, s in slots.items())
-                                    completed_ltx = any(j.get("job_type") == "ltx" and j.get("status") == "completed" for j in jobs)
-                                    if unqueued_video or completed_ltx:
+                                    completed_ltx_slots = {j.get("slot_id") for j in jobs if j.get("job_type") == "ltx" and j.get("status") == "completed"}
+                                    unqueued_video = any(
+                                        addr.startswith("V1") and
+                                        s.get("status") != "delivered" and
+                                        slots.get(addr.replace("V1:", "A1:"), {}).get("status") == "measured" and
+                                        addr not in active_or_done_ltx
+                                        for addr, s in slots.items()
+                                    )
+                                    has_unmerged_completed_ltx = any(addr.startswith("V1") and addr in completed_ltx_slots and s.get("status") != "delivered" for addr, s in slots.items())
+                                    if unqueued_video or has_unmerged_completed_ltx:
                                         should_act = True
                                 elif role == "assembly":
                                     slots = state.get("otio", {}).get("slots", {})
-                                    all_filled = len(slots) > 0 and all(s.get("status") == "delivered" for s in slots.values())
-                                    if all_filled and current_phase != "done":
+                                    all_filled = len(slots) > 0 and all(s.get("status") == "delivered" or (addr.startswith("A1") and s.get("status") == "measured") for addr, s in slots.items())
+                                    import sys
+                                    print(f"DEBUG: assembly checking slots={ {k: v.get('status') for k, v in slots.items()} } all_filled={all_filled} current_phase={current_phase}", file=sys.stderr)
+                                    if all_filled and current_phase != "done" and not assembly_triggered:
                                         should_act = True
+                                        assembly_triggered = True
                                 elif role == "provisioner":
                                     jobs = state.get("jobs", {})
                                     pending_jobs = any(j.get("status") == "pending" for j in jobs.get("jobs", {}).values())
@@ -1044,20 +1622,26 @@ def make_agent_app(role: str) -> FastAPI:
                                     _agent_health["status"] = "busy"
                                     _agent_health["last_run"] = time.time()
                                     try:
+                                        run_config = load_run_config()
                                         await execute_agent_turn(
                                             role=role,
                                             gsa_url=gsa_url,
                                             notification_type="instruction",
                                             context={},
+                                            config=run_config,
+                                            extra_capabilities=app.extra_capabilities,
                                         )
                                         _agent_health["status"] = "healthy"
                                         _agent_health["idle_since"] = time.time()
                                     except Exception as exc:
+                                        import traceback
+                                        traceback.print_exc()
                                         _agent_health["status"] = "error"
                                         _agent_health["last_error"] = str(exc)
                                         _agent_health["idle_since"] = time.time()
-                except Exception:
-                    pass  # Ignore errors in autonomous loop turn execution
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
                 await _sleep(poll_interval)
 
         asyncio.create_task(run_loop())

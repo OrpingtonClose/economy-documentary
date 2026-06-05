@@ -42,8 +42,10 @@ class StrictEndpointMiddleware(BaseHTTPMiddleware):
 app = FastAPI(title="Global State Agent", description="Read-only projection server")
 app.add_middleware(StrictEndpointMiddleware)
 
+from agent_base import get_active_log_dir
+
 # Default logs directory matches DATA_DIR in config.py
-LOG_DIR = "/tmp/documentary-pipeline"
+LOG_DIR = get_active_log_dir()
 event_store = EventStore(log_dir=LOG_DIR)
 
 
@@ -140,6 +142,7 @@ def build_global_state() -> GlobalStateResponse:
             hourly_rate_usd=v.hourly_rate_usd,
             started_at=v.started_at,
             observed_status=v.observed_status,
+            gpu_type=v.gpu_type,
         )
         if v.status == "active":
             active_count += 1
@@ -169,6 +172,7 @@ def build_global_state() -> GlobalStateResponse:
         agents_tracked=list(state.recent_effects.keys()),
         latest_sequence=state.last_sequence,
         recent_effects={agent: list(events) for agent, events in state.recent_effects.items()},
+        config=state.config.model_dump() if hasattr(state.config, "model_dump") else state.config,
     )
 
     # 5. Map Budget
@@ -216,3 +220,11 @@ async def get_state():
             status_code=500,
             detail=f"Failed to build projection state: {exc}",
         )
+
+
+if __name__ == "__main__":
+    import sys
+    import uvicorn
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+
