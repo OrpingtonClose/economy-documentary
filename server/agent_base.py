@@ -931,7 +931,7 @@ class DryRunModel(Model):
                     }, tool_call_id="call_assemble")
                 ], model_name="dry_run_model")
             else:
-                return ModelResponse(parts=[TextPart(f'effect: pipeline_complete(output_path="{output_path}", duration_sec=90.0)\n')], model_name="dry_run_model")
+                return ModelResponse(parts=[TextPart("effect: noop(reason=\"assembly_complete\")\n")], model_name="dry_run_model")
 
         return ModelResponse(parts=[TextPart("Dry run turn.")], model_name="dry_run_model")
 

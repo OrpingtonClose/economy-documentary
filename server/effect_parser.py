@@ -513,12 +513,12 @@ def _ds_async_client() -> instructor.AsyncInstructor:
 
 # Permitted kinds mapping per role
 ROLE_PERMITTED_KINDS = {
-    "scenario": ["update_script", "delete_scene", "reorder_scenes", "clarification_request"],
-    "audio": ["queue_job", "job_approved", "job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request"],
-    "video": ["queue_job", "job_approved", "job_requeued", "merge_into_otio", "clarification_request"],
-    "assembly": ["pipeline_complete", "production_failed", "clarification_request"],
-    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "job_failed", "job_started", "clarification_request"],
-    "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "clarification_request"],
+    "scenario": ["update_script", "delete_scene", "reorder_scenes", "clarification_request", "noop"],
+    "audio": ["queue_job", "job_approved", "job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request", "noop"],
+    "video": ["queue_job", "job_approved", "job_requeued", "merge_into_otio", "clarification_request", "noop"],
+    "assembly": ["pipeline_complete", "production_failed", "clarification_request", "noop"],
+    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "job_failed", "job_started", "clarification_request", "noop"],
+    "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "clarification_request", "noop"],
 }
 
 
