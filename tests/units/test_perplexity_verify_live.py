@@ -69,47 +69,48 @@ def measure_lufs_integrated(audio_path: str) -> float:
         return -70.0
     return 20.0 * math.log10(rms) + 0.0
 
-def test_scenario_agent_live_prompt_turn():
+from capabilities.test_real_perplexity_verify import PerplexityVerifySimulator
 
-    print('\n▶️  [STARTING TEST] test_scenario_agent_live_prompt_turn')
-    deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
-    if not os.path.exists(deepseek_key_path):
-        pytest.skip("DeepSeek API key is missing. Skipping live Scenario Agent prompt turn test.")
+def test_perplexity_verify_live():
 
-    # Check network reachability for deepseek API
+    print('\n▶️  [STARTING TEST] test_perplexity_verify_live')
+    """Verify Perplexity API fact-checking tool using real credentials."""
+    import os
+    import pytest
+    import asyncio
+    
+    # 1. Load and inject API key into environment BEFORE importing tools module
+    key_path = "/Users/orpington/api_keys/LLMS/perplexity_api_key.txt"
+    if not os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
+        pytest.skip("Perplexity API key is missing. Skipping live fact-checking test.")
+        
+    if os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
+        with open(key_path) as f:
+            os.environ["PERPLEXITY_API_KEY"] = f.read().strip()
+
+    # Check network reachability for perplexity API
     import socket
     try:
         socket.setdefaulttimeout(2.0)
-        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.deepseek.com", 443))
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("api.perplexity.ai", 443))
     except Exception:
-        pytest.skip("api.deepseek.com is unreachable (offline/restricted network). Skipping live Scenario Agent prompt turn test.")
+        pytest.skip("api.perplexity.ai is unreachable (offline/restricted network). Skipping live fact-checking test.")
+            
+    # 2. Import the real tool from pipeline.swarm_extraction.tools (resolves key at import time)
+    from pipeline.swarm_extraction.tools import perplexity_verify
+    
+    # 3. Run fact-checking query
+    claim = "The capital city of France is Paris."
+    print(f"     ├─ [API] Sending live query to Perplexity Sonar Pro for claim: '{claim}'")
+    result = asyncio.run(perplexity_verify(claim))
+    print(f"     ├─ [API] Received response: {result}")
+    
+    # 4. Asserts
+    print('     ├─ [Assert] Checking: not result.startswith(\"[TOOL_ERROR]\")')
+    assert not result.startswith("[TOOL_ERROR]"), f"Perplexity API returned tool error: {result}"
+    print('     ├─ [Assert] Checking: \"VERIFIED\" in result or \"TRUE\" in result or \"Paris\" in result')
+    assert "VERIFIED" in result or "TRUE" in result or "Paris" in result, f"Expected verification statement, got: {result}"
+    print('     ├─ [Assert] Checking: \"Sources:\" in result')
+    assert "Sources:" in result, f"Expected citation sources, got: {result}"
+    print('    ✓ perplexity verify live passed')
 
-    print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa", "scenario"]) as harness:
-        db_dir = harness.temp_dir.name
-        gsa_port = harness.ports["gsa"]
-        scenario_port = harness.ports["scenario"]
-        
-        event_store = EventStore(log_dir=db_dir)
-        event_store._init_db()
-        
-        print('     ├─ [EventStore] Appending event to SQLite events database...')
-        event_store.append(PipelineStarted(agent="operator", output_path=f"{db_dir}/final.mp4"), "")
-        
-        # Prompt Scenario Agent to partition a short text into blocks
-        prompt = "Create a script with 2 blocks about global interest rates."
-        print('     ├─ [HTTP] Sending request to agent endpoint...')
-        resp = httpx.post(f"http://127.0.0.1:{scenario_port}/", content=prompt)
-        print('     ├─ [Assert] Checking: resp.status_code == 200')
-        assert resp.status_code == 200
-        
-        # Verify script block creation in GSA
-        print('     ├─ [HTTP] Sending request to agent endpoint...')
-        gsa_resp = httpx.get(f"http://127.0.0.1:{gsa_port}/").json()
-        print('     ├─ [Assert] Checking: len(gsa_resp[\"otio\"][\"slots\"]) >= 1')
-        assert len(gsa_resp["otio"]["slots"]) >= 1
-
-
-    # ===========================================================================
-    # 3. Audio Agent TTS Job Queueing
-    # ===========================================================================
