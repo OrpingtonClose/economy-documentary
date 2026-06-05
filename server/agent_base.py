@@ -156,7 +156,7 @@ def get_agent_model() -> OpenAIChatModel:
     
     from pydantic_ai.providers.deepseek import DeepSeekProvider
     from openai import AsyncOpenAI
-    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "mock_key")
+    client = AsyncOpenAI(base_url=base_url, api_key=api_key or "mock_key", timeout=60.0)
     provider_instance = DeepSeekProvider(openai_client=client)
     return OpenAIChatModel(
         "deepseek-chat",
