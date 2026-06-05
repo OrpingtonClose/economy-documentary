@@ -346,8 +346,16 @@ async def bash_command(ctx, command: str) -> str:
         preexec_fn=os.setsid,
     )
     try:
-        stdout, stderr = await proc.communicate()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
         return stdout.decode(errors="replace") + stderr.decode(errors="replace")
+    except asyncio.TimeoutError:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        return "[TIMEOUT] Command timed out after 15.0 seconds."
     except asyncio.CancelledError:
         try:
             pgid = os.getpgid(proc.pid)
