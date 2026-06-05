@@ -25,7 +25,7 @@ def print(*args, **kwargs):
         builtins.print(*args, **kwargs)
 
 
-def _forward_stream(stream, prefix, log_file):
+def _tail_file(file_path, prefix):
     colors = {
         "GSA": "\033[36m",
         "SCENARIO": "\033[34m",
@@ -38,17 +38,26 @@ def _forward_stream(stream, prefix, log_file):
     color = colors.get(agent_key, "\033[0m")
     reset = "\033[0m"
     try:
-        for line in iter(stream.readline, ""):
-            if not line:
+        import time
+        # Wait up to 5 seconds for file creation
+        for _ in range(100):
+            if os.path.exists(file_path):
                 break
-            log_file.write(line)
-            log_file.flush()
-            if sys.stdout is not None:
-                sys.stdout.write(f"{color}[{prefix}] {line}{reset}")
-                sys.stdout.flush()
-            else:
-                builtins.print(f"{color}[{prefix}] {line}{reset}", end="")
-
+            time.sleep(0.05)
+        if not os.path.exists(file_path):
+            return
+            
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            while True:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.05)
+                    continue
+                if sys.stdout is not None:
+                    sys.stdout.write(f"{color}[{prefix}] {line}{reset}")
+                    sys.stdout.flush()
+                else:
+                    builtins.print(f"{color}[{prefix}] {line}{reset}", end="")
     except Exception:
         pass
 
@@ -200,43 +209,45 @@ else:
         for agent in self.required_agents:
             port = self.ports[agent]
             
-            if agent == "gsa":
-                cmd = [sys.executable, "global_state_agent.py", str(port)]
-                cwd = str(PROJECT_ROOT / "server")
-            else:
-                cmd = [sys.executable, f"agents/{agent}/app.py", str(port), self.test_module]
-                cwd = str(PROJECT_ROOT / "server")
-            
-            # Create isolated log files for this agent
             stdout_path = os.path.join(db_dir, f"agent_{agent}_stdout.log")
             stderr_path = os.path.join(db_dir, f"agent_{agent}_stderr.log")
-            out_f = open(stdout_path, "w")
-            err_f = open(stderr_path, "w")
-            self.log_files.extend([out_f, err_f])
+            
+            cmd = ["bash", "launch_agent.sh", sys.executable, agent, str(port), self.test_module or "", stdout_path, stderr_path]
+            cwd = str(PROJECT_ROOT / "server")
+            
+            res = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, check=True)
+            pid = int(res.stdout.strip())
+            
+            class SpawnedProcess:
+                def __init__(self, pid):
+                    self.pid = pid
+                def wait(self):
+                    import time
+                    for _ in range(50):
+                        try:
+                            os.kill(self.pid, 0)
+                        except OSError:
+                            break
+                        time.sleep(0.05)
+                def kill(self):
+                    import signal
+                    try:
+                        os.kill(self.pid, signal.SIGKILL)
+                    except Exception:
+                        pass
 
-            # Start each process in its own group via preexec_fn=os.setsid
-            p = subprocess.Popen(
-                cmd,
-                cwd=cwd,
-                env=env,
-                preexec_fn=os.setsid,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
-            self.processes.append(p)
-            print(f"      [Harness]   - Spawned '{agent}' agent (PID: {p.pid}) on port {port}")
+            self.processes.append(SpawnedProcess(pid))
+            print(f"      [Harness]   - Spawned '{agent}' agent (PID: {pid}) on port {port} via launch_agent.sh")
 
-            # Start background forwarding threads to stream stdout and stderr
+            # Start background forwarding threads to stream log files in real-time
             t_out = threading.Thread(
-                target=_forward_stream,
-                args=(p.stdout, f"{agent.upper()}-OUT", out_f),
+                target=_tail_file,
+                args=(stdout_path, f"{agent.upper()}-OUT"),
                 daemon=True
             )
             t_err = threading.Thread(
-                target=_forward_stream,
-                args=(p.stderr, f"{agent.upper()}-ERR", err_f),
+                target=_tail_file,
+                args=(stderr_path, f"{agent.upper()}-ERR"),
                 daemon=True
             )
             t_out.start()
