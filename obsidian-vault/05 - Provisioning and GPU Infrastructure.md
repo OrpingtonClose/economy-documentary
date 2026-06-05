@@ -51,16 +51,13 @@ graph TD
 #### Fleet escalation policy via progressive doubling
 ⚡ VM fleet allocation must follow exponential doubling capped at a soft limit of 4 active GPU worker VMs per run
 
-⚡ VM fleet allocation must follow exponential doubling capped at a soft limit of 4 active GPU worker VMs per run
-
-⚡ VM fleet allocation must follow exponential doubling capped at a soft limit of 4 active GPU worker VMs per run
-
 The Provisioner must escalate the VM fleet size using a progressive doubling pattern (1 VM → 2 VMs → 4 VMs max soft limit per run). The fleet must start with a single instance to verify happy-path functionality before scaling.
 
 #### GPU VRAM matching constraints per job type
-The Provisioner must target specific GPU VRAM requirements and hourly cost limits depending on the job type:
-- **TTS Jobs (`job_type="tts"`):** Match RTX 4090 or RTX A6000 GPUs with VRAM ≥ 24 GB and a cost target < \$0.80/hr.
-- **Video Jobs (`job_type="ltx"`):** Match RTX A6000 GPUs with VRAM ≥ 48 GB and a cost target < \$1.20/hr.
+The Audio and Video Agents select the appropriate VM size / GPU model and specify it in the `QueueJob` params field as `gpu_type`. The Provisioner must target this specified GPU model when searching and renting Vast.ai instances:
+- **TTS Jobs (`job_type="tts"`):** The Audio Agent selects the GPU model (default recommended is `RTX 4090` or `RTX A6000` with VRAM ≥ 24 GB and a cost target < \$0.80/hr) and specifies it in the job params.
+- **Video Jobs (`job_type="ltx"`):** The Video Agent selects the GPU model (default recommended is `RTX A6000` with VRAM ≥ 48 GB and a cost target < \$1.20/hr) and specifies it in the job params.
+If no GPU type is explicitly specified (e.g. legacy fallback), the Provisioner defaults to the target specs above.
 
 ---
 

@@ -526,7 +526,7 @@ async def validate_state_invariants(agent_id: str, effect: Any) -> list[Effect]:
     try:
         import httpx
         async with httpx.AsyncClient() as client:
-            resp = await client.get("http://127.0.0.1:8000/", timeout=1.5)
+            resp = await client.get("http://127.0.0.1:8000/")
             if resp.status_code == 200:
                 gsa_state = resp.json()
             else:
@@ -572,6 +572,70 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     Returns a list of length 0 or 1 for uniform interface.
     """
     permitted = ROLE_PERMITTED_KINDS.get(agent_id, ["noop", "clarification_request"])
+
+    # Try deterministic parsing first (fast path for simulation/formatted calls)
+    det_parsed = None
+    try:
+        import re
+        import ast
+        # Look for effect: <name>(<args>)
+        match = re.search(r"effect:\s*([a-zA-Z0-9_]+)\s*\(", text)
+        if match:
+            func_name = match.group(1)
+            start_idx = match.end()
+            paren_count = 1
+            end_idx = start_idx
+            while end_idx < len(text) and paren_count > 0:
+                char = text[end_idx]
+                if char == '(':
+                    paren_count += 1
+                elif char == ')':
+                    paren_count -= 1
+                end_idx += 1
+            if paren_count == 0:
+                args_str = text[start_idx:end_idx-1].strip()
+                # Parse keyword arguments using AST
+                tree = ast.parse(f"f({args_str})")
+                call_node = tree.body[0].value
+                kwargs = {}
+                for kw in call_node.keywords:
+                    kwargs[kw.arg] = ast.literal_eval(kw.value)
+                det_parsed = {"kind": func_name, **kwargs}
+    except Exception as e:
+        logger.debug(f"Deterministic parser failed: {e}")
+
+    if det_parsed is not None:
+        parsed_kind = det_parsed.get("kind")
+        if parsed_kind not in permitted:
+            logger.warning(f"Agent {agent_id} tried to emit non-permitted kind '{parsed_kind}', falling back to noop")
+            return [NoOp(agent=agent_id, reason=f"Attempted non-permitted kind '{parsed_kind}'")]
+
+        model_class = KIND_TO_MODEL.get(parsed_kind)
+        if model_class is None:
+            return [NoOp(agent=agent_id, reason=f"Unknown effect kind: {parsed_kind}")]
+
+        # Construct the actual Effect subclass, injecting agent
+        data = dict(det_parsed)
+        data.pop("kind", None)
+        data["agent"] = agent_id
+
+        try:
+            effect = model_class.model_validate(data)
+            # Tier 3 validation: State Invariants
+            return await validate_state_invariants(agent_id, effect)
+        except Exception as e:
+            exc = e
+            return [
+                ClarificationRequest(
+                    agent=agent_id,
+                    target_agent="human",
+                    parser_category=agent_id,
+                    raw_text=text,
+                    failure_reason=f"Model validation failed: {exc}",
+                    question=f"The parsed event model validation failed: {exc}. Raw agent text: '{text}'"
+                )
+            ]
+
     sys_prompt = _SYSTEM_PROMPT.format(permitted_kinds=", ".join(permitted))
 
     client = _ds_async_client()
@@ -595,9 +659,10 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
 
     # Audit Logging
     try:
-        import os
-        os.makedirs("/tmp/documentary-pipeline", exist_ok=True)
-        with open("/tmp/documentary-pipeline/parser_runs.log", "a", encoding="utf-8") as f:
+        from agent_base import get_active_log_dir
+        parser_log_dir = get_active_log_dir()
+        os.makedirs(parser_log_dir, exist_ok=True)
+        with open(os.path.join(parser_log_dir, "parser_runs.log"), "a", encoding="utf-8") as f:
             f.write(f"\n\n--- PARSER RUN: {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
             f.write(f"AGENT: {agent_id}\n")
             f.write(f"INPUT PROSE:\n{text}\n")

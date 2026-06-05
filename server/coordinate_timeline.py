@@ -136,6 +136,21 @@ class CoordinateTimeline(Projection):
                         clip.span = span
             cursor += dur
 
+    def add_clip(self, track_name: str, clip_id: str, start_sec: float, duration_sec: float, artifact_uri: Optional[str] = None) -> None:
+        new_span = IntervalSpan(start_sec=start_sec, end_sec=start_sec + duration_sec)
+        new_clip = TimelineClip(
+            track_name=track_name,
+            span=new_span,
+            scenario_id=clip_id,
+            version_hash="v1",
+            artifact_uri=artifact_uri
+        )
+        self._upsert_clip(new_clip)
+
+    def get_spans(self, track_name: str) -> list[IntervalSpan]:
+        sorted_clips = sorted(self.clips.get(track_name, []), key=lambda c: c.span.start_sec)
+        return [clip.span for clip in sorted_clips]
+
     def query_sqlean_timespan(self, start: float, duration: float) -> int:
         """Prove sqlean-time loading and precision interval subtract in SQL database.
 

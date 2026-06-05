@@ -74,14 +74,10 @@ These effects handle exceptions, manual redirection, and fallback loops.
 
 ## 2. Event Store
 
-#### Cross-process safety via SQLite WAL mode and BEGIN IMMEDIATE
-⚡ All SQLite event store writes must open transactions with BEGIN IMMEDIATE and a 30-second busy timeout to serialize cross-process writes
+#### Single-process WAL direct-writes for durability
+⚡ All event store writes must be direct synchronous writes in SQLite WAL mode executed within the single coordinator process
 
-⚡ All SQLite event store writes must open transactions with BEGIN IMMEDIATE and a 30-second busy timeout to serialize cross-process writes
-
-⚡ All SQLite event store writes must open transactions with BEGIN IMMEDIATE and a 30-second busy timeout to serialize cross-process writes
-
-The event store must use a single SQLite database file configured in Write-Ahead Logging (WAL) mode. To prevent database locking errors and guarantee cross-process transaction atomicity, all writes must open transactions using `BEGIN IMMEDIATE`.
+The event store must use a single SQLite database file configured in Write-Ahead Logging (WAL) mode. To ensure simplicity and durability, all writes are direct and synchronous, executed within the single coordinator process, eliminating background writer loops or queue-based execution layers.
 
 #### Idempotent event writes via unique effect identifiers
 Every event must possess a client-side generated UUIDv7 (`effect_id`). The SQLite table must enforce a `UNIQUE(effect_id)` constraint on this field to guarantee idempotency and silently reject or handle duplicate inserts on retries.

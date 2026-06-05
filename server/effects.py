@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Annotated, Literal, Union, List, Dict
 from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
+from config_schema import PipelineConfig
 import uuid
 from uuid_utils import uuid7 as _uuid7
 
@@ -369,7 +370,7 @@ class DeleteFromOTIO(Effect):
 class PipelineStarted(Effect):
     """Signal that a new pipeline run has begun."""
     kind: Literal["pipeline_started"] = "pipeline_started"
-    config: dict = Field(default_factory=dict, description="pipeline configuration snapshot")
+    config: PipelineConfig = Field(default_factory=PipelineConfig, description="pipeline configuration snapshot")
     max_tts_budget_usd: float = Field(default=2.0, gt=0.0)
     max_attempts_per_block: int = Field(default=5, ge=1)
     max_run_budget_usd: float = Field(default=10.0, gt=0.0)

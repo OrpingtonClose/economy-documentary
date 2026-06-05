@@ -71,6 +71,9 @@ The testing suite consists of real-world integration tests driven over active ne
 > [!IMPORTANT]
 > **Uncompromised Thoroughness:** Developer convenience, cloud rental fees, and execution time must never compromise verification. All integration and BDD suites must exercise actual VM instantiation, SSH tunnels, worker endpoints, and media validation to mirror production loads.
 
+> [!IMPORTANT]
+> **Covered-Simulation:** If a simulator or mock implementation (e.g., `DryRunModel`, `TtsJobSimulator`, `LtxJobSimulator`) is utilized anywhere in any test suite for development convenience, performance, or isolation, the underlying real, non-simulated production process (the actual LLM API calls, live Vast.ai VM rental, SSH tunneling, and remote CUDA-based media synthesis) **must be tested in non-simulation form very robustly** to ensure live correctness. Mocks must never be used as a replacement for live, uncompromised boundary validation.
+
 ---
 
 ### 2.2 Active BDD Integration Test Suites
@@ -134,6 +137,16 @@ To maintain strict segregation of concerns and avoid polluting production agent 
 * **Inline Simulation**: Any test-specific simulated/fake behaviors (such as VM allocation mock responses or custom test screenplay seeding) are implemented locally within the test launcher script, driving the production agents via database events and HTTP requests.
 * **Teardown**: The script ensures complete, clean background process termination on exit.
 
+### 2.4 Bash-Guided Agent Script Bootstrapping
+
+To isolate testing-specific simulator implementations (such as mock TTS or Ltx GPU generators) from production ASGI servers with zero environment variables, temporary files, or central registry maps:
+
+1. **Direct Agent Execution:** Each agent application is defined to allow direct execution as a script (e.g. `python server/agents/audio/app.py <port> <test_module_name>`).
+2. **CommandLine Argument Passing:** The bash layer (or test runner) launches the required agent scripts in the background, passing the port and the current test module name (e.g. `tests.units.test_bdd_tts_fleet_cold_start`) as direct CLI arguments.
+3. **In-Memory Capability Resolution:** On startup, the agent script parses its arguments, dynamically imports the specified test module, scans for any classes ending with `Simulator` or `Capability`, instantiates them, and passes them to `make_agent_app(role, extra_capabilities=...)`.
+4. **Clean Production Isolation:** When imported normally (e.g., in a production pipeline run), the agent apps bypass command-line argument parsing and load with empty capabilities, keeping the production core completely clean.
+
+
 ---
 
 ## 3. Concurrency and Timeouts Invariants
@@ -145,17 +158,9 @@ The concurrency model is optimized for a single-run pipeline executing on a unif
 #### No runlevel concurrency
 ⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
 
-⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
-
-⚡ No runlevel concurrency is allowed; the events.db is dedicated to exactly one active self-contained run at a time
-
 The pipeline is strictly self-contained from start to finish. Runlevel concurrency is completely prohibited; there are no concurrent pipeline runs or parallel instances of the pipeline executing at the same time. The database `/tmp/documentary-pipeline/events.db` is strictly dedicated to the single, active, self-contained run to prevent data corruption and trace pollution.
 
 #### Concurrent agent execution within a run
-⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
-
-⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
-
 ⚡ Within a single pipeline run, agents may execute concurrently across separate ASGI processes
 
 Within a single active run, all agents (Scenario, Audio, Video, Assembly, and the Provisioner) can and should execute concurrently in their respective ASGI processes. They act concurrently by polling the GSA, submitting media jobs, managing VMs, processing tasks in parallel to maximize runtime efficiency, and performing inquisitive proactive investigation into the run for general checks.
@@ -163,14 +168,10 @@ Within a single active run, all agents (Scenario, Audio, Video, Assembly, and th
 #### Turn serialization via LoopBoundLock
 ⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
 
-⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
-
-⚡ Within each agent process, all reasoning turns must be serialized via a LoopBoundLock to prevent overlapping execution and state corruption
-
 Within each agent process, overlapping wakeups or concurrent background execution turns are strictly serialized using an in-process `LoopBoundLock` (`run_lock_manager`). Turns must be executed inside the lock boundary to prevent concurrent state corruption.
 
-#### Database transaction serialization via BEGIN IMMEDIATE
-Across independent agent processes, database write conflicts are prevented by executing all SQLite writes within `BEGIN IMMEDIATE` transactions. This serializes OS-level writes with a 30-second busy timeout.
+#### Direct synchronous database writes in WAL mode
+Database writes are executed as direct synchronous writes in SQLite Write-Ahead Logging (WAL) mode within the single coordinator process, ensuring immediate durability and eliminating the need for background writer threads or lock contention.
 
 #### Non-blocking agent busy safeguards
 If an agent is currently processing a turn, its HTTP endpoints must return an immediate response without blocking (e.g. 409 Conflict for POST, or busy status for GET). Integration test runners must wait passively until the agent's `GET /` health state returns `"healthy"` before issuing new wakeup requests.
@@ -178,21 +179,21 @@ If an agent is currently processing a turn, its HTTP endpoints must return an im
 #### Exponential VM scaling limits
 VM allocation must follow an exponential doubling pattern (1 VM -> 2 VMs -> 4 VMs). The maximum active GPU worker fleet is capped at a soft limit of 4 VMs per run.
 
+#### Zero test-mode branching (Permanent Invariant)
+⚡ Agents must never check, query, or branch their execution or startup paths based on whether they are running in "test", "simulation", or "production" mode. 
+* The server startup must be instantaneous with zero blocking loops or startup delay polls.
+* Background autonomous loops must run with a uniform, static `poll_interval = 0.5` seconds across all environments.
+* Capabilities are loaded into memory directly via `extra_capabilities` if provided, without the agent ever setting or checking a `is_testing` flag.
+
 ---
 
 ### 3.2 Timeout Policy
 
 #### Time-based timeouts are strictly forbidden across all execution and test code
-Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
+⚡ Time-based timeouts are strictly forbidden across all execution, platform, health checks, and test code. There are absolutely no exceptions, and all network calls, subprocesses, and test verification flows must execute without timeout parameters. Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly. Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT.
 
 #### Production execution paths must not use mock implementations
 Tests validating production pipeline scenarios must run against real agents querying active endpoints. Mocks are restricted to isolated, offline unit test files.
-
-#### Health / Diagnostic Probes Exception
-Timeouts are allowed on lightweight network check requests (e.g., pinging an endpoint to determine if a worker VM is active) to prevent the polling coordinator from blocking indefinitely on unreachable resources. Timeouts on agent wakeup POST triggers are strictly forbidden.
-
-#### Compliance Enforcement
-The compliance scanner (`cheat_check.py`) scans code for `timeout=` properties on HTTP requests. Probing exceptions must be marked with a `# health probe` comment or contain the word `health` / `probe` to pass verification.
 
 ---
 

@@ -215,7 +215,7 @@ def health() -> Response:
     
     # Check model files
     ready_status = []
-    if os.path.exists("/workspace/models/qwen3-tts-voicedesign"):
+    if os.path.exists("/workspace/models/qwen3-tts-voicedesign/model.safetensors"):
         ready_status.append("the Qwen3-TTS audio model is loaded and ready")
     else:
         ready_status.append("the Qwen3-TTS audio model is not loaded yet")

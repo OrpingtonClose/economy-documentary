@@ -7,6 +7,7 @@ read from files, or hardcoded.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -27,7 +28,7 @@ DOCUMENTARY_TOPIC = ""
 
 # ── Paths ────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent
-DATA_DIR = Path("/tmp/documentary-pipeline")
+DATA_DIR = Path(os.environ.get("DOCUMENTARY_LOG_DIR", "/tmp/documentary-pipeline"))
 CORPUS_DIR = DATA_DIR / "corpus"
 TRANSCRIPT_DIR = CORPUS_DIR / "transcripts"
 ENRICHMENT_DIR = DATA_DIR / "enrichment"

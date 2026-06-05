@@ -54,10 +54,6 @@ The pipeline must use OpenTimelineIO (OTIO) 0.16+ as the canonical timeline repr
 #### Narration text and screenplay scripts must not be subject to arbitrary length heuristics or trimming
 ⚡ Narration text and screenplay scripts must not be forced to fit fixed durations using crude character length limits or string trimming once downstream execution has commenced
 
-⚡ Narration text and screenplay scripts must not be forced to fit fixed durations using crude character length limits or string trimming once downstream execution has commenced
-
-⚡ Narration text and screenplay scripts must not be forced to fit fixed durations using crude character length limits or string trimming once downstream execution has commenced
-
 Screenplay scripts and narration blocks must not be forced to fit fixed duration intervals using crude character length limits or string trimming rules. Narration length evaluation must rely on semantic, model-based judgment or speech-rate duration heuristics. Additionally, narration text must not be repeatedly changed or edited once downstream execution has commenced.
 
 ### 3.1 Track Layout

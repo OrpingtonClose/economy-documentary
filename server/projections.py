@@ -149,16 +149,6 @@ class Timeline(Projection):
                 visual_notes = getattr(block, "visual_notes", "") or ""
                 visual_concepts = getattr(block, "visual_concepts", "") or ""
                 if not visual_concepts:
-                    import sys
-                    try:
-                        print(
-                            f"WARNING: [Visual Concepts Derivation Fallback] "
-                            f"visual_concepts is missing/empty for slot {slot_addr}. "
-                            f"Deriving dynamically from scene {block.scene_num} + visual_notes: '{visual_notes}'",
-                            file=sys.stderr
-                        )
-                    except OSError:
-                        pass  # /cheat: ignore OSError on print during stderr fallback
                     visual_concepts = f"Documentary scene {block.scene_num}: {visual_notes}"
 
                 existing = self.slots.get(slot_addr)
@@ -250,19 +240,34 @@ class Timeline(Projection):
             self.slots[slot_addr]["measured_sec"] = event.duration_sec
 
     def _adjust_slot_duration(self, event: DurationAdjusted) -> None:
-        slot_addr = event.block_id
-        clip = self._find_clip_by_name(slot_addr)
-        if clip is None:
-            return
+        # Determine both audio and video canonical slot addresses
+        audio_addr = f"A1:{event.scene_num}:{event.block_id}"
+        video_addr = f"V1:{event.scene_num}:{event.block_id}"
+        
+        slot_addrs = [audio_addr, video_addr]
+        if event.slot_id and event.slot_id not in slot_addrs:
+            slot_addrs.append(event.slot_id)
+            if event.slot_id.startswith("A1:"):
+                partner = event.slot_id.replace("A1:", "V1:", 1)
+                if partner not in slot_addrs:
+                    slot_addrs.append(partner)
+            elif event.slot_id.startswith("V1:"):
+                partner = event.slot_id.replace("V1:", "A1:", 1)
+                if partner not in slot_addrs:
+                    slot_addrs.append(partner)
+
         rate = 24
         new_duration = otio.opentime.RationalTime(event.measured_sec * rate, rate)
-        clip.source_range = otio.opentime.TimeRange(
-            start_time=clip.source_range.start_time,
-            duration=new_duration,
-        )
-        if slot_addr in self.slots:
-            self.slots[slot_addr]["measured_sec"] = event.measured_sec
-            self.slots[slot_addr]["status"] = "measured"
+        for slot_addr in slot_addrs:
+            clip = self._find_clip_by_name(slot_addr)
+            if clip is not None:
+                clip.source_range = otio.opentime.TimeRange(
+                    start_time=clip.source_range.start_time,
+                    duration=new_duration,
+                )
+            if slot_addr in self.slots:
+                self.slots[slot_addr]["measured_sec"] = event.measured_sec
+                self.slots[slot_addr]["status"] = "measured"
 
     def _delete_scene(self, event: DeleteScene) -> None:
         scene_num = event.scene_num
@@ -300,7 +305,7 @@ class Timeline(Projection):
                 clips.sort(key=lambda c: c.name)
                 new_clips.extend(clips)
 
-            track.clear_children()
+            track.clear()
             for clip in new_clips:
                 track.append(clip)
 
@@ -430,6 +435,10 @@ class JobState:
         self.created_at: float = 0.0
         self.completed_at: Optional[float] = None
         self.vm_instance_id: Optional[str] = None
+
+    @property
+    def attempts(self) -> int:
+        return self.requeue_count + 1
 
 
 
@@ -594,7 +603,7 @@ class Jobs(Projection):
 
 class VMRecord:
 
-    def __init__(self, instance_id: str, status: str = "active", role: str = "", offer_id: str = "", worker_url: str = "", hourly_rate_usd: float = 0.0, started_at: float = 0.0) -> None:
+    def __init__(self, instance_id: str, status: str = "active", role: str = "", offer_id: str = "", worker_url: str = "", hourly_rate_usd: float = 0.0, started_at: float = 0.0, gpu_type: str = "") -> None:
         self.instance_id: str = instance_id
         self.status: str = status
         self.role: str = role
@@ -603,6 +612,7 @@ class VMRecord:
         self.hourly_rate_usd: float = hourly_rate_usd
         self.started_at: float = started_at
         self.observed_status: Optional[str] = None
+        self.gpu_type: str = gpu_type
 
 
 class VMs(Projection):
@@ -610,6 +620,10 @@ class VMs(Projection):
     def __init__(self) -> None:
         super().__init__()
         self.vms: dict[str, VMRecord] = {}
+
+    @property
+    def active(self) -> dict[str, VMRecord]:
+        return self.vms
 
     def apply(self, event: Effect) -> None:
         if event.kind == "vm_allocated":
@@ -622,6 +636,7 @@ class VMs(Projection):
                 worker_url=getattr(vm_alloc, "worker_url", ""),
                 hourly_rate_usd=getattr(vm_alloc, "cost_per_hour", 0.0),
                 started_at=getattr(vm_alloc, "timestamp", 0.0),
+                gpu_type=getattr(vm_alloc, "gpu_type", ""),
             )
         elif event.kind == "vm_deallocated":
             vm_dealloc = cast(VMDeallocated, event)
@@ -668,6 +683,10 @@ class BudgetProjection(Projection):
         self.spent_usd: float = 0.0
         self.vm_costs: dict[str, float] = {}
         self.exceeded: bool = False
+
+    @property
+    def budget_usd(self) -> float:
+        return self.budget_cap_usd
         self.exceeded_at: Optional[float] = None
 
     def apply(self, event: Effect) -> None:
@@ -719,6 +738,11 @@ class StateProjection(Projection):
             lambda: deque(maxlen=loop_buffer_size)
         )
         self.loop_buffer_size: int = loop_buffer_size
+        self.config: dict = {}
+
+    @property
+    def phase(self) -> str:
+        return self.current_phase
 
 
     def apply(self, event: Effect) -> None:
@@ -730,6 +754,7 @@ class StateProjection(Projection):
             self.current_phase = "init"
             self.phase_history.clear()
             self.recent_effects.clear()
+            self.config = getattr(event, "config", {})
 
         elif event.kind == "reconciliation_complete":
             self._record_phase_change("audio_reconcile")
@@ -838,6 +863,7 @@ class VMResponseItem(BaseModel):
     hourly_rate_usd: float = 0.0
     started_at: float = 0.0
     observed_status: str | None = None
+    gpu_type: str = ""
 
 
 class VMResponse(BaseModel):
@@ -861,6 +887,7 @@ class StateResponse(BaseModel):
     agents_tracked: list[str] = Field(default_factory=list)
     latest_sequence: int = 0
     recent_effects: dict[str, list[EffectUnion]] = Field(default_factory=dict)
+    config: dict = Field(default_factory=dict)
 
 
 class BudgetResponse(BaseModel):

@@ -18,15 +18,8 @@ pip install -q --break-system-packages qwen-tts transformers accelerate whisperx
 # Best-effort flash-attention for faster inference - only pre-compiled wheels to avoid compilation timeouts
 pip install -q --break-system-packages --only-binary :all: flash-attn || true
 
-# Pre-download Qwen3-TTS model weights from HuggingFace
+# Create models directory (weights will be copied via vastai copy from B2)
 mkdir -p /workspace/models
-python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-    local_dir='/workspace/models/qwen3-tts-voicedesign',
-)
-"
 
 # Clone the documentary repo for runner scripts (idempotent)
 if [ ! -d /workspace/repo/.git ]; then
@@ -44,5 +37,6 @@ echo "$2" > /workspace/.vast_api_key
 nohup python repo/scripts/vm_agent.py --port 8880 \
     > /workspace/worker.log 2>&1 &
 
+touch /workspace/.bootstrap_complete
 echo "started"
 

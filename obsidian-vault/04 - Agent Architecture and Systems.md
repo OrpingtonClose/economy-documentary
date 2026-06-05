@@ -75,10 +75,6 @@ The parser extracts typed effects from the agent's prose post-turn. The post-tur
 #### Agents are prohibited from inline polling or blocking sleeps
 ⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
 
-⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
-
-⚡ Agents must never execute time.sleep or inline polling loops; if a resource is not ready, the agent must end its turn and rely on the external scheduler
-
 Agents must never execute `time.sleep` or loop-bound sleeps, nor run inline polling commands. If a resource or VM status is still initializing, the agent must output its current observations and end its turn immediately, relying on the platform's autonomous loop scheduler to trigger the next turn.
 
 #### Narration text and screenplay scripts must not be subject to arbitrary length heuristics or trimming
@@ -120,7 +116,8 @@ The hosting platform is prohibited from querying Mem0 Cloud or using online embe
 The pipeline's runtime safety and structural invariants are programmatically scanned and enforced by the `/cheat` checker in `server/cheat_check.py`. Every contribution must comply with the canonical conventions.
 
 #### Time-based timeouts are strictly forbidden across all execution and test code
-All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
+All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly. Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT.
+
 
 #### Fixed polling loops or sleeps are prohibited
 No `time.sleep()` or `await asyncio.sleep()` calls are allowed inside loops. All agent actions and state check intervals must rely on the watcher tick loop and reasoning-based status checks to prevent thread stalling and blocking behavior.

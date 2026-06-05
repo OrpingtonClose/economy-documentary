@@ -58,6 +58,7 @@ graph TD
 | 🔐 **[[07 - Security, Traceability, and Auditing|07. Security, Traceability, and Auditing]]** | Access controls, provenance DAG, execution audit trail, and dependency analysis. | Provenance capability, token budgeting, Pydantic ecosystems |
 | 🧪 **[[08 - Testing, Concurrency, and Rollout|08. Testing, Concurrency, and Rollout]]** | BDD integration tests, concurrency serialization via loop-bound lock, and progressive rollout. | BDD scenarios, `LoopBoundLock`, 1-to-60 minute scaling |
 | 📚 **[[09 - Glossary|09. Glossary]]** | Master vocabulary of terms and abbreviations used in the documentary pipeline codebase. | OTIO, GSA, WAL, LTX, Qwen-TTS, ESDB |
+| 🛡️ **[[10 - Simulation Covers|10. Simulation Covers]]** | Master registry mapping simulated features to real-world integration verification tests. | Covered-Simulation registry, SC-01 through SC-10 |
 
 ---
 
@@ -83,11 +84,16 @@ Every developer or agent modifying the codebase must preserve these 6 fundamenta
 
 > [!IMPORTANT]
 > **5. Time-based timeouts are strictly forbidden across all execution and test code**  
-> Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
+> Test execution flows must wait passively or determine timeout using domain-specific conditions. Hard timeouts (like wait loops capped at 15 minutes) are prohibited. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly. Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT.
+
 
 > [!IMPORTANT]
 > **6. Emerging Pipeline Phases**  
 > Pipeline execution phases (SCRIPT, AUDIO_RECONCILE, VIDEO_PRODUCTION, ASSEMBLY, DONE) are descriptive labels emerging from projection states, never hardcoded state machines.
+
+> [!IMPORTANT]
+> **7. Covered-Simulation**  
+> If a simulator or mock implementation (e.g. `DryRunModel`, `TtsJobSimulator`, `LtxJobSimulator`) is utilized anywhere in any test suite, the underlying real, non-simulated production process (the actual LLM API calls, live Vast.ai VM rental, SSH tunneling, and remote CUDA-based media synthesis) **must be tested in non-simulation form very robustly** to ensure live correctness. Mocks must never be used as a replacement for live, uncompromised boundary validation.
 
 ---
 

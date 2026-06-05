@@ -27,34 +27,62 @@ class EventStore:
 
     def _init_db(self) -> None:
         """Create schema if DB does not exist."""
-        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    effect_id TEXT UNIQUE NOT NULL,
-                    kind TEXT NOT NULL,
-                    effect_json TEXT NOT NULL,
-                    otio_hash_before TEXT NOT NULL,
-                    agent TEXT NOT NULL,
-                    timestamp REAL NOT NULL,
-                    appended_at REAL DEFAULT (unixepoch())
-                )
-            """)
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent)")
-            conn.commit()
+        import time
+        import random
+        for i in range(15):
+            try:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("PRAGMA busy_timeout=30000")
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS events (
+                            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                            effect_id TEXT UNIQUE NOT NULL,
+                            kind TEXT NOT NULL,
+                            effect_json TEXT NOT NULL,
+                            otio_hash_before TEXT NOT NULL,
+                            agent TEXT NOT NULL,
+                            timestamp REAL NOT NULL,
+                            appended_at REAL DEFAULT (unixepoch())
+                        )
+                    """)
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(kind)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent)")
+                    conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e).lower() and i < 14:
+                    time.sleep(0.02 * (2 ** i) + random.uniform(0, 0.03))
+                else:
+                    raise
 
     @contextmanager
     def _connect(self):
         """Yield a connection with WAL mode and busy-timeout."""
-        conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=30000")
+        import time
+        import random
+        conn = None
+        for i in range(15):
+            try:
+                conn = sqlite3.connect(self.db_path, isolation_level=None)
+                conn.execute("PRAGMA busy_timeout=30000")
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError as e:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                if "locked" in str(e).lower() and i < 14:
+                    time.sleep(0.02 * (2 ** i) + random.uniform(0, 0.03))
+                else:
+                    raise
         try:
             yield conn
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
     def append(self, effect: Effect, otio_hash_before: str) -> EventRecord:
         """Append an effect. Idempotent via UNIQUE(effect_id).

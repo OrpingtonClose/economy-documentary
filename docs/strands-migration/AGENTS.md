@@ -72,7 +72,8 @@ via `request_human_approval` before proceeding.
 10. **Never modify scenes mid-loop without re-evaluating.** If the scenario
     refiner adjusts durations, the next action must be
     `evaluate_timing` — not `launch_audio_render`, not `launch_visual_production`.
-11. **No clock timeouts or sleeps inside agent turns.** Agents must never run `sleep` commands or introduce artificial blocking delays in their bash commands (e.g. to wait for a VM to load/boot). If a resource or VM is loading, log the status, output a NoOp, and end the turn. The autonomous polling loop will automatically query and progress on the next turn.
+11. **No clock timeouts or sleeps inside agent turns.** Agents must never run `sleep` commands or introduce artificial blocking delays in their bash commands (e.g. to wait for a VM to load/boot). If a resource or VM is loading, log the status, output a NoOp, and end the turn. The autonomous polling loop will automatically query and progress on the next turn. Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT; they must also avoid hardcoded timeouts and wait loops.
+
 
 ---
 

@@ -56,9 +56,11 @@ The pipeline has no hardcoded state machine. Prioritization, control rules, and 
 
 #### Time-based timeouts are strictly forbidden across all execution and test code
 ⚡ Time-based timeouts are strictly forbidden in all execution code, test code, HTTP requests, and subprocess launches; operations must run to completion or wait indefinitely
+⚡ Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT; they must also avoid hardcoded timeouts and wait loops
 ⚡ Shell subprocesses such as ffmpeg or vastai must never be launched with timeout arguments; they must execute asynchronously and be observed externally
 
-All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly.
+All processes, tests, loop checks, agent tasks, HTTP queries (including lightweight GET health/readiness check queries), wakepost triggers, LLM inference, and test suites must never utilize time-based timeouts. They must run to completion or wait indefinitely. Crucially, shell subprocesses (such as `ffmpeg` or `vastai` operations) must never be launched with timeout limits; they must be executed asynchronously and observed for completion. Hang detection, resource unreachability, and execution delays are observed and reacted to dynamically by the helper LLM agent operating from outside the pipeline, usually connected to a human operator directly. Test runners and test harnesses are not exempt from the rule of NO-TIMEOUT.
+
 
 ---
 
@@ -111,15 +113,6 @@ Agents must never read the SQLite database directly. They query the read-only GS
 
 ---
 
-### 1.9 pydantic-deep
-
-#### Pre-processing context compaction
-⚡ Agent message history compaction must use pydantic-deep ContextManagerCapability with on_before_compress hooks, not external scripts or database watchers
-
-Agent message history compaction must be executed as a pre-processing step using the `on_before_compress` hooks of the context capability, rather than run as an external database or watcher-side compaction script. Token management is handled by the pydantic-deep `ContextManagerCapability`.
-
----
-
 ### 1.10 Prompt-Only Narrative HTTP Interface
 
 The HTTP boundary uses natural-language narrative text for all inputs and outputs. No JSON is consumed or returned in production. 
@@ -138,7 +131,8 @@ The HTTP contract is split into three specific behaviors:
 | 1 | **Event log is sole source of truth** | All state derived from events. No hidden state. No projection writes independently. | SQLite replaces SQLite; ESDB for distributed |
 | 2 | **Effects are only legal mutations** | Only Pydantic models enter event store. Parser validates against `EffectUnion`. | None |
 | 3 | **No state machine — prompt-based rules** | Prioritization lives in agent system prompts. Agents scan projections and decide. | None |
-| 4 | **No timeouts in code** | No `setTimeout`, `threading.Timer`, `asyncio.timeout`, or self-destruct logic in pipeline code. No timeout effects. Operator intervenes on hung jobs. | None |
+| 4 | **No timeouts in code** | No `setTimeout`, `threading.Timer`, `asyncio.timeout`, or self-destruct logic in pipeline code. No timeout effects. Operator intervenes on hung jobs. Test runners and harnesses are not exempt. | None |
+
 | 5 | **Real engines only** | Qwen3-TTS, LTX-2.3, DeepSeek API. No mocks, no stubs, no simulation. | None |
 | 6 | **Never regex** | Category-conditioned extraction via `instructor` + `deepseek-v4-flash`. | None |
 | 7 | **Natural language only** | Agents write free-form prose. No structured output, no markers, no JSON, no section labels. ALL extraction complexity lives in the semantic parser. | **NEW** — eliminates Phase 1/2 fast paths |
@@ -396,3 +390,16 @@ This section records design alternatives that were considered and rejected durin
 * **Proposition:** Use `.env` files and `os.environ` for API keys and endpoint URLs.
 * **Why discarded:** Environment variables are invisible state that changes between runs.
 * **What we kept instead:** Explicit Pydantic `Config` objects passed down programmatically.
+
+---
+
+## 4. Style
+
+### 4.1 Transitions Banned
+* **No transitions allowed**: The pipeline does not support visual or audio transition effects (e.g., cross-dissolves, fade-ins, fade-outs, or audio cross-fades) between clips. All scene transitions must be compiled as simple, clean cuts. Under-the-hood transitions introduce severe layout math and overlapping timespan complexities, and are strictly disabled.
+
+### 4.2 Quality-Destroying Timing Tricks Banned
+* **No stretching or shrinking**: Audio and video clips must never be stretched or shrunk using digital speed-adjustment filters (e.g. `atempo` or frame-dropping speed filters).
+* **No looping or reusing media**: Background music, visuals, or narration clips must not be looped or duplicated to fill time mismatches.
+* **No gap media padding**: Empty gap media placeholders must not be inserted between sequential narrative segments to pad duration.
+* **Preserving native media quality**: All duration discrepancies must be resolved by dynamically shifting timeline offsets (cascading offsets via `CoordinateTimeline`) and generating new clips matching the actual measured durations. Quality-destroying tricks are strictly prohibited.

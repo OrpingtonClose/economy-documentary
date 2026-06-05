@@ -39,7 +39,7 @@ sequenceDiagram
     Handler->>LLM: Run turn with narrative & memory
     LLM-->>Handler: natural language prose
     Handler->>Handler: parse_agent_text_multi() (instructor)
-    Handler->>SQLite: append extracted effects (BEGIN IMMEDIATE)
+    Handler->>SQLite: append extracted effects (Direct Write)
     Handler-->>Op: 200 OK with extracted kinds
 ```
 
@@ -64,11 +64,21 @@ The `Config` Pydantic model is the single source of truth for all parameters.
 #### No environment variable fallbacks in media tools
 ⚡ Configuration must use explicit Pydantic Config objects passed programmatically; environment variables and .env files are prohibited
 
-⚡ Configuration must use explicit Pydantic Config objects passed programmatically; environment variables and .env files are prohibited
-
-⚡ Configuration must use explicit Pydantic Config objects passed programmatically; environment variables and .env files are prohibited
-
 Media generation and rendering tools must not fall back to `os.environ` or read global settings. Directories and configuration parameters must be explicitly passed as inputs to keep tools modular and deterministic.
+
+### 2.1 Agent URL Registry
+
+To support process-isolated parallel integration test execution where ports are allocated dynamically to prevent network interface binding conflicts, the pipeline utilizes a central **Agent URL Registry** (`AgentRegistry` class in `agent_base.py`).
+
+* **Resolution Order**:
+  1. Check for a dynamic port environment override in the format `PORT_<ROLE>` (e.g., `PORT_GSA`, `PORT_SCENARIO`, `PORT_AUDIO`, `PORT_VIDEO`, `PORT_PROVISIONER`, `PORT_ASSEMBLY`).
+  2. Fall back to the canonical production ports:
+     - GSA: 8000
+     - Scenario Agent: 8001
+     - Audio Agent: 8002
+     - Provisioner Agent: 8003
+     - Video Agent: 8004
+     - Assembly Agent: 8005
 
 ---
 

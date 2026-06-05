@@ -73,7 +73,9 @@ The video generation workload is NOT one-size-fits-all. The GPU you provision MU
 | 704×480 production | 55GB | H100 80GB | Minimum for HD feel |
 | 704×480 premium | 72GB | H200 | Best quality at HD |
 
-**Instance Creation:**
+**Instance Creation & Model Synchronization:**
+
+1. Create the instance on Vast.ai:
 ```bash
 vastai create instance <offer_id> \
   --image pytorch/pytorch:2.7.0-cuda12.6-cudnn9-runtime \
@@ -82,9 +84,21 @@ vastai create instance <offer_id> \
   --onstart-cmd '<bootstrap>'
 ```
 
+2. Immediately after instance allocation, copy the pinned model weights from the B2 cloud connection (`b2.36862`) directly into the container instance:
+- For Qwen3-TTS:
+```bash
+vastai copy b2.36862:/qwen3-tts-voicedesign/ C.<instance_id>:/workspace/models/qwen3-tts-voicedesign/
+```
+- For LTX-Video:
+```bash
+vastai copy b2.36862:/ltx-2.3/ C.<instance_id>:/workspace/models/ltx23/
+```
+
 **Health Verification:**
-- After provisioning, poll `GET /` on worker URL
-- Expected response: `ok`
+- After provisioning and copying, poll `GET /` on worker URL.
+- Expected response: A 200 health text including:
+  - For Qwen3-TTS jobs: `"the Qwen3-TTS audio model is loaded and ready"`
+  - For LTX-Video jobs: `"the LTX-2.3 video model is loaded and ready"`
 - Avoid premature teardowns: TIME BASED TIMEOUTS ARE FORBIDDEN, TERMINATER PROCESS UPON OBJECTIVE CRITERIA. Do not destroy the VM if it is still loading or pulling the Docker image. Only terminate the process or VM if there is an objective, verified error (e.g. invalid Docker image tag or host hardware failure). If unreachable, check logs/diagnostics via SSH (like docker logs, nvidia-smi) to investigate the issue instead of destroying.
 
 **Cost Optimization:**

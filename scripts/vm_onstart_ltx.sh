@@ -34,18 +34,8 @@ cd /workspace
     exit 1
 }
 
-# Pre-download LTX-2.3 video model weights.
+# Create models directory (weights will be copied via vastai copy from B2)
 mkdir -p /workspace/models/ltx23
-/workspace/ltx-2-repo/.venv/bin/python -c "
-from huggingface_hub import hf_hub_download
-hf_hub_download(
-    repo_id='Lightricks/LTX-2.3',
-    revision='76730e634e70a28f4e8d51f5e29c08e40e2d8e74',
-    filename='ltx-2.3-22b-dev.safetensors',
-    local_dir='/workspace/models/ltx23',
-)
-print('LTX checkpoint ready')
-"
 
 # The text-encoder weights required by LTX-2.3 are NOT pre-downloaded here.
 # The VM agent downloads them on first use if missing, using its bash tool.
@@ -73,4 +63,5 @@ echo "$2" > /workspace/.vast_api_key
 nohup python repo/scripts/vm_agent.py --port 8880 \
     > /workspace/worker.log 2>&1 &
 
+touch /workspace/.bootstrap_complete
 echo "started"

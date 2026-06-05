@@ -79,10 +79,6 @@ gantt
 #### Unbounded cost prevention and budget limits
 ⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
 
-⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
-
-⚡ Budget tracking must accumulate LLM token costs, GPU rental costs, and egress costs against a per-run budget ceiling with a hard gate
-
 Every active run must track LLM token counts, GPU lease durations (calculated per-second), and network egress bandwidth against a per-run budget ceiling:
 - The default budget is capped at $10.00 USD per run (configurable via `budget_usd` with boundaries: min $0.01, max $1000.00).
 - If a projected tool charge or execution step violates the remaining budget, the agent must extract a `PipelineAborted` effect with `reason="budget_exceeded"`. The Provisioner must immediately issue API commands to terminate and destroy all running worker VMs.

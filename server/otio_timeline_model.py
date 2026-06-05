@@ -627,7 +627,6 @@ def _detect_finished_film(output_dir: str) -> Optional[FinishedFilm]:
                 ],
                 capture_output=True,
                 text=True,
-                timeout=30,
             )
             if result.returncode == 0:
                 return float(result.stdout.strip())
