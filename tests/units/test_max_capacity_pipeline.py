@@ -272,7 +272,7 @@ def run_test():
         peak_concurrent_ltx = 0
         last_seen_seq = -1
 
-        while True:
+        for _ in range(500):
             # 4.1 Read events database to count concurrent jobs
             try:
                 db_events = event_store.read_all()
