@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+os.environ["MEM0_TELEMETRY"] = "False"
 import time
 import json
 import asyncio
@@ -449,7 +450,7 @@ def create_pipeline_agent(
     return agent
 
 
-def get_local_mem0():
+def get_local_mem0(role: str | None = None):
     """Initialize local Mem0 Memory instance using Gemini embeddings and DeepSeek LLM."""
     try:
         from mem0 import Memory
@@ -465,6 +466,7 @@ def get_local_mem0():
         with open(deepseek_key_path) as f:
             deepseek_api_key = f.read().strip()
             
+        role_suffix = f"_{role}" if role else ""
         config = {
             "embedder": {
                 "provider": "gemini",
@@ -484,8 +486,8 @@ def get_local_mem0():
             "vector_store": {
                 "provider": "qdrant",
                 "config": {
-                    "collection_name": "agent_memories",
-                    "path": "/tmp/documentary-pipeline/mem0_qdrant",
+                    "collection_name": f"agent_memories{role_suffix}",
+                    "path": os.path.join(LOG_DIR, f"mem0_qdrant{role_suffix}"),
                     "embedding_model_dims": 768
                 }
             }
@@ -1132,7 +1134,7 @@ async def execute_agent_turn(
         lt_memories = []
         mem0_instance = None
         lt_memories = []
-        mem0_instance = get_local_mem0()
+        mem0_instance = get_local_mem0(role)
         if mem0_instance:
             try:
                 mem_res = mem0_instance.get_all(filters={"user_id": role})
