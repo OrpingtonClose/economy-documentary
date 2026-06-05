@@ -99,7 +99,7 @@ def test_scenario_agent_live_prompt_turn():
         # Prompt Scenario Agent to partition a short text into blocks
         prompt = "Create a script with 2 blocks about global interest rates."
         print('     ├─ [HTTP] Sending request to agent endpoint...')
-        resp = httpx.post(f"http://127.0.0.1:{scenario_port}/", content=prompt)
+        resp = httpx.post(f"http://127.0.0.1:{scenario_port}/", content=prompt, timeout=None)
         print('     ├─ [Assert] Checking: resp.status_code == 200')
         assert resp.status_code == 200
         
