@@ -1,0 +1,5 @@
+{
+  "name": "uppercase-enforcer",
+  "description": "Checks proposed agent actions against user's uppercase directives using an LLM",
+  "version": "1.0.0"
+}

@@ -1,0 +1,14 @@
+[
+  "read about the plugin for caps-lock prompts Identifying BDD Threat Analysis",
+  "APROVE",
+  "IF TESTS ARE RUNNING, THEY MUST GIVE INFORMATIVE OUTPUT",
+  "I DEMAND ALL TESTS PROVIDE ABUNDANT OUTPUT TO ANTIGRAVITY CONSOLE",
+  "is there something more severe than pretooluse? i dont want even see env vars in the IDE",
+  "i want a antigravity plugin that will take prompts that i write in uppercase and do a check of everythign the agents produces using a LLM to find instances where my upper case directive is ignored and CANCELING that output if it does. propose a implementation plan",
+  "so the agent directly disobeyed my exact order. what can I do for this to not happen as I'm losing HOURS of my life on this",
+  "print what the script does while it runs - it MUST NOT be a black box",
+  "print what the script does - it MUST NOT be a black box",
+  "why did the agent implement REAL_CLOUD=1 when i told it not to",
+  "what is being done in convo \"Identifying BDD Threat Analysis\"",
+  "MUST NOT VIEW REPETITIVE SMALL LINE SEGMENTS TO LOCATE SYMBOLS; USE GREP_SEARCH OR VIEW THE ENTIRE FILE TO DISCOVER DEFINTIONS AND IMPORTS"
+]

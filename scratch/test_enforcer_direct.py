@@ -1,0 +1,91 @@
+import os
+import sys
+import httpx
+from pathlib import Path
+
+# Set path relative to workspace
+sys.path.append("/Users/orpington/Documents/economy-documentary-work/server")
+from rules_enforcer_plugin import get_invariants, DEEPSEEK_KEY_PATH
+
+def main():
+    workspace_dir = Path("/Users/orpington/Documents/economy-documentary-work")
+    vault_dir = workspace_dir / "obsidian-vault"
+    invariants = get_invariants(vault_dir)
+    print(f"Loaded {len(invariants)} rules.")
+    
+    with open(DEEPSEEK_KEY_PATH, "r", encoding="utf-8") as f:
+        api_key = f.read().strip()
+
+    file_path = Path("server/agent_base.py")
+    content = file_path.read_text(encoding="utf-8")
+
+    invariants_text = "\n".join(f"- {rule}" for rule in invariants)
+    system_prompt = (
+        "You are an architecture enforcer. Check if the target code violates any of the provided rules. "
+        "Analyze all imports, function definitions, parameters, and expressions.\n"
+        "If there are any violations, reply with each violated rule and a one-line explanation.\n"
+        "If there are absolutely no violations, reply with PASS.\n\n"
+        "=== ARCHITECTURAL BOUNDARY CLARIFICATIONS (CRITICAL) ===\n"
+        "- The Python agent hosting/framework infrastructure (specifically the server endpoints, background handlers, "
+        "`execute_agent_turn`, and autonomous loop runner functions in files like `agent_base.py`) represents the "
+        "hosting harness/platform, not the agent itself. This harness is fully permitted to read the SQLite database "
+        "(e.g., via `event_store.read_all` or `read_last_n_effects`) to query history, check active execution, "
+        "build conversation memory, and to write/append parsed effects to the SQLite database. This does not violate "
+        "System Invariants 1 or 2, which govern the LLM agent's internal logic, tools, and behavior.\n"
+        "- All GET queries and POST requests to GSA, agents, or VM Workers must be bare requests to the root path / "
+        "with no query parameters and no custom headers. Request bodies/payload JSON fields must not be consumed by "
+        "handlers to pass semantic data; the HTTP interface serves solely to trigger execution or transmit prompts. "
+        "All context must be dynamically resolved from the environment/filesystem (e.g., scanning the directory for the events database).\n"
+        "- The standard AgentHealthResponse schema returned by agent `GET /` (containing status, agent, last_run, "
+        "current_task, last_error, idle_since) is the defined, compliant layout for agent health probes.\n"
+        "- The autonomous loop runner (started inside the hosting server process of each agent HTTP service to check "
+        "GSA and decide when that specific agent should act, and calls the turn executor) is the standard tick-driven "
+        "harness of the system. It is fully permitted to query state, read events, and append effects to execute the "
+        "agent's turn. It is not considered a central orchestrator under Principle 12.\n"
+        "- The simple checks in the autonomous loop runner to determine whether to trigger an agent turn (e.g. checking "
+        "for unfilled slots, failed jobs, or reconciliation needs) are simple activation triggers. They do not constitute "
+        "a state machine under Principle 3, because they do not manage transitions, maintain state variables, or define "
+        "business logic. All agent decisions and logical rules remain inside the agent's LLM prompt.\n"
+        "- Principle 6 (\"Never regex\") applies to the semantic parser and the extraction of structured effects from "
+        "agent outputs. It does NOT forbid utility string scanning or command validation using Python's regular "
+        "expressions inside platform functions (like path checks in `bash_command`).\n"
+        "- Test code, test suites, and test helper scripts (specifically files located in the `tests/` directory or "
+        "prefixed with `test_`) are completely exempt from the System Invariants and Core Principles, as they do not run "
+        "in production and are designed to inspect the database, filesystem, or ports directly to verify system behavior.\n"
+    )
+    user_content = f"""Rules to enforce:
+{invariants_text}
+
+Target File: {file_path.name}
+Target Code Content:
+```python
+{content}
+```
+"""
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
+        "temperature": 0.0,
+    }
+
+    print("=== SYSTEM PROMPT ===")
+    print(system_prompt)
+    print("\n=== USER CONTENT ===")
+    print(user_content)
+
+    resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=60.0)
+    print("\n=== RESPONSE STATUS ===")
+    print(resp.status_code)
+    print("\n=== RAW RESPONSE CONTENT ===")
+    print(resp.json()["choices"][0]["message"]["content"])
+
+if __name__ == "__main__":
+    main()

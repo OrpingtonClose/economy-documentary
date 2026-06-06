@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Uppercase Enforcer - Antigravity Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/index.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    <div class="container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">▲</span>
+                <div>
+                    <h1>Google Antigravity</h1>
+                    <p class="subtitle">UPPERCASE ENFORCER LOGS & RULES</p>
+                </div>
+            </div>
+            <div class="status-indicator">
+                <span class="pulse-dot"></span>
+                <span class="status-text">Active Protection</span>
+            </div>
+        </header>
+
+        <!-- Metrics Overview -->
+        <section class="metrics-grid">
+            <div class="metric-card glass">
+                <div class="metric-info">
+                    <p class="metric-label">Active Directives</p>
+                    <h2 class="metric-value" id="stat-directives-count">0</h2>
+                </div>
+                <div class="metric-icon blue">🛡️</div>
+            </div>
+            <div class="metric-card glass">
+                <div class="metric-info">
+                    <p class="metric-label">Blocked Actions</p>
+                    <h2 class="metric-value" id="stat-blocked-count">0</h2>
+                </div>
+                <div class="metric-icon red">🛑</div>
+            </div>
+            <div class="metric-card glass">
+                <div class="metric-info">
+                    <p class="metric-label">Protection Status</p>
+                    <h2 class="metric-value status-pass">Enforcing</h2>
+                </div>
+                <div class="metric-icon green">⚡</div>
+            </div>
+        </section>
+
+        <!-- Main Dashboard Split -->
+        <main class="dashboard-split">
+            <!-- Rules/Directives Section -->
+            <section class="panel directives-panel glass">
+                <div class="panel-header">
+                    <h2>Compliance Rules</h2>
+                    <p>Directives that trigger checks</p>
+                </div>
+
+                <!-- Caps Lock Protection Status Card -->
+                <div class="caps-lock-card" id="caps-lock-card">
+                    <div class="caps-lock-header">
+                        <span class="caps-pulse-dot" id="caps-pulse-dot"></span>
+                        <span class="caps-status-title" id="caps-status-title">Caps Lock Protection: Idle</span>
+                    </div>
+                    <div class="caps-lock-body hidden" id="caps-lock-body">
+                        <p class="caps-instruction-label">Active Global Superprompt:</p>
+                        <div class="caps-superprompt" id="caps-superprompt">NO DELETED SYSTEM FILES ALLOWED</div>
+                        <button class="btn btn-danger" id="cancel-capslock-btn">Cancel Protection</button>
+                    </div>
+                </div>
+
+                <!-- Question Mark Rule Toggle Card -->
+                <div class="question-rule-card" id="question-rule-card">
+                    <div class="toggle-container">
+                        <div class="toggle-info">
+                            <span class="toggle-title">❓ Question Mark Rule</span>
+                            <span class="toggle-desc">Block all tools if prompt ends in '?'</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="question-rule-toggle">
+                            <span class="slider round"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Unified Add Rule Container -->
+                <div class="add-rule-container">
+                    <form id="add-directive-form" class="add-rule-form">
+                        <div class="input-group">
+                            <input type="text" id="directive-input" placeholder="Type a custom UPPERCASE directive (e.g. MUST NOT write to README)" required>
+                            <button type="submit" class="btn btn-primary">Add Rule</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="rules-list-container">
+                    <ul class="rule-list" id="custom-rule-list">
+                        <!-- Custom rules will be injected here -->
+                    </ul>
+                </div>
+            </section>
+
+            <!-- Logs / Blocked History Section -->
+            <section class="panel logs-panel glass">
+                <div class="panel-header">
+                    <div class="panel-title-area">
+                        <h2>Compliance Activity & Audit Log</h2>
+                        <span class="badge" id="log-count-badge">0 Audits</span>
+                    </div>
+                    <div class="action-bar">
+                        <label class="auto-refresh-toggle">
+                            <input type="checkbox" id="auto-refresh" checked>
+                            <span>Live Sync</span>
+                        </label>
+                        <button id="refresh-logs-btn" class="btn btn-secondary btn-icon">↻</button>
+                    </div>
+                </div>
+
+                <div class="logs-container" id="logs-container">
+                    <!-- Blocked logs will be injected here as cards -->
+                    <div class="empty-state">
+                        <span class="empty-icon">🛡️</span>
+                        <h3>All Systems Compliant</h3>
+                        <p>No action has been blocked yet in this session.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <!-- Live Integration Test & Pipeline Monitor -->
+        <section class="panel test-monitor-panel glass" id="test-monitor-panel" style="height: auto; margin-top: 2rem; display: flex; flex-direction: column;">
+            <div class="panel-header">
+                <div class="test-header-area" style="display: flex; justify-content: space-between; align-items: center;">
+                    <h2>🧪 Live Integration Test & Pipeline Monitor</h2>
+                    <div class="test-suite-status" style="display: flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.05); padding: 0.4rem 0.8rem; border-radius: 20px;">
+                        <span class="test-pulse-dot" id="test-pulse-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; display: inline-block;"></span>
+                        <span class="test-status-text" id="test-status-text" style="font-size: 0.8rem; font-weight: 600; color: #9ca3af;">Status: Idle</span>
+                    </div>
+                </div>
+                <p>Real-time visual monitoring of test cases, active VMs, and media slots</p>
+            </div>
+            
+            <div class="test-monitor-body" style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1.5rem;">
+                <!-- Top Row: Phase flow and Test stats -->
+                <div class="monitor-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                    <!-- Phase Progress Flow -->
+                    <div class="phase-flow-container card-sub glass" style="padding: 1rem; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px; background: rgba(255,255,255,0.01);">
+                        <div class="card-sub-header" style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; margin-bottom: 0.8rem; letter-spacing: 0.05em;">Timeline Phase</div>
+                        <div class="phase-steps" style="display: flex; justify-content: space-between; align-items: center;">
+                            <div class="phase-step active" id="phase-init" style="font-size: 0.8rem; color: var(--accent-blue); font-weight: 600; display: flex; align-items: center; gap: 0.4rem;">
+                                <span style="display: inline-flex; width: 18px; height: 18px; background: var(--accent-blue); color: #000; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.7rem;">1</span>Init
+                            </div>
+                            <div class="phase-arrow" style="color: var(--text-secondary); font-size: 0.8rem;">➔</div>
+                            <div class="phase-step" id="phase-audio" style="font-size: 0.8rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem;">
+                                <span style="display: inline-flex; width: 18px; height: 18px; background: rgba(255,255,255,0.1); color: var(--text-secondary); border-radius: 50%; align-items: center; justify-content: center; font-size: 0.7rem;">2</span>Audio Reconcile
+                            </div>
+                            <div class="phase-arrow" style="color: var(--text-secondary); font-size: 0.8rem;">➔</div>
+                            <div class="phase-step" id="phase-video" style="font-size: 0.8rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem;">
+                                <span style="display: inline-flex; width: 18px; height: 18px; background: rgba(255,255,255,0.1); color: var(--text-secondary); border-radius: 50%; align-items: center; justify-content: center; font-size: 0.7rem;">3</span>Video Production
+                            </div>
+                            <div class="phase-arrow" style="color: var(--text-secondary); font-size: 0.8rem;">➔</div>
+                            <div class="phase-step" id="phase-done" style="font-size: 0.8rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem;">
+                                <span style="display: inline-flex; width: 18px; height: 18px; background: rgba(255,255,255,0.1); color: var(--text-secondary); border-radius: 50%; align-items: center; justify-content: center; font-size: 0.7rem;">4</span>Done
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Suite Stats & Progress Bar -->
+                    <div class="suite-progress-container card-sub glass" style="padding: 1rem; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div class="card-sub-header" style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; margin-bottom: 0.5rem; letter-spacing: 0.05em;">Test Suite Execution Progress</div>
+                        <div class="progress-bar-wrapper" style="width: 100%; height: 20px; background: rgba(255,255,255,0.05); border-radius: 10px; position: relative; overflow: hidden; display: flex; align-items: center; border: 1px solid rgba(255,255,255,0.05);">
+                            <div class="progress-bar-fill" id="suite-progress-fill" style="width: 0%; height: 100%; background: var(--gradient-primary); transition: width 0.3s ease;"></div>
+                            <span class="progress-percent" id="suite-progress-percent" style="position: absolute; right: 10px; font-size: 0.75rem; font-weight: 700; color: #ffffff;">0%</span>
+                        </div>
+                        <div class="test-stats-row" style="display: flex; gap: 0.8rem; margin-top: 0.6rem;">
+                            <span class="stat-badge green" style="font-size: 0.75rem; font-weight: 600; color: var(--accent-green); background: rgba(16, 185, 129, 0.08); padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.15);">Passed: <strong id="suite-stat-passed">0</strong></span>
+                            <span class="stat-badge red" style="font-size: 0.75rem; font-weight: 600; color: var(--accent-red); background: rgba(239, 68, 68, 0.08); padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.15);">Failed: <strong id="suite-stat-failed">0</strong></span>
+                            <span class="stat-badge yellow" style="font-size: 0.75rem; font-weight: 600; color: #fbbf24; background: rgba(251, 191, 36, 0.08); padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid rgba(251, 191, 36, 0.15);">Skipped: <strong id="suite-stat-skipped">0</strong></span>
+                            <span class="stat-badge grey" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); background: rgba(255, 255, 255, 0.04); padding: 0.2rem 0.5rem; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06);">Pending: <strong id="suite-stat-pending">0</strong></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Mid Row: Tracks and VM Fleet -->
+                <div class="monitor-row" style="display: grid; grid-template-columns: 3fr 2fr; gap: 1.5rem;">
+                    <!-- Media Tracks slots visualizer -->
+                    <div class="tracks-container card-sub glass" style="padding: 1rem; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; gap: 0.8rem;">
+                        <div class="card-sub-header" style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">OTIO Media Tracks (Maximum Capacity Test)</div>
+                        <div class="track-row" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <div class="track-label" style="font-size: 0.7rem; font-weight: 700; color: var(--accent-green); letter-spacing: 0.05em;">AUDIO NARRATION (A1)</div>
+                            <div class="track-slots-grid" id="audio-slots-grid" style="display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; min-height: 14px;">
+                                <!-- 30 slots dynamically populated -->
+                            </div>
+                        </div>
+                        <div class="track-row" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <div class="track-label" style="font-size: 0.7rem; font-weight: 700; color: var(--accent-blue); letter-spacing: 0.05em;">VIDEO B-ROLL (V1)</div>
+                            <div class="track-slots-grid" id="video-slots-grid" style="display: grid; grid-template-columns: repeat(30, 1fr); gap: 3px; min-height: 14px;">
+                                <!-- 30 slots dynamically populated -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active VM Fleet -->
+                    <div class="fleet-container card-sub glass" style="padding: 1rem; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px; background: rgba(255,255,255,0.01); display: flex; flex-direction: column;">
+                        <div class="card-sub-header" style="font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; margin-bottom: 0.6rem; letter-spacing: 0.05em;">Active VM Fleet</div>
+                        <div class="vm-list-wrapper" style="flex: 1; overflow-y: auto; max-height: 80px;">
+                            <table class="vm-table" style="width: 100%; border-collapse: collapse; font-size: 0.75rem; text-align: left;">
+                                <tbody id="vm-table-body">
+                                    <tr>
+                                        <td class="no-vms" style="color: var(--text-secondary); text-align: center; padding: 1rem 0;">No active VMs in simulation.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Row: Complete test cases grid -->
+                <div class="test-cases-wrapper card-sub glass" style="padding: 1rem; border: 1px solid rgba(255,255,255,0.04); border-radius: 12px; background: rgba(255,255,255,0.01); display: flex; flex-direction: column; gap: 0.8rem;">
+                    <div class="card-sub-header" style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.05em;">
+                        <span>Suite Test Case Outcomes</span>
+                        <span class="current-running-label" id="current-running-label" style="text-transform: none; color: #fbbf24; font-weight: 600; font-family: monospace;">Running: None</span>
+                    </div>
+                    <div class="test-grid" id="test-cases-grid" style="display: grid; grid-template-columns: repeat(26, 1fr); gap: 4px; min-height: 40px;">
+                        <!-- 52 or more test boxes dynamically populated -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    <script src="/index.js"></script>
+</body>
+</html>
