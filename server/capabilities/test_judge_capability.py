@@ -75,6 +75,13 @@ Note:
 - Therefore, simulated metrics (such as instant VM provisioning in <1ms, 0-byte or dummy asset sizes, identical or uniform durations, and consecutive timestamps) are FULLY expected, valid, and correct. Do NOT fail the test for these simulated values.
 - Focus your evaluation on the LOGICAL correctness of the BDD sequence (the Given/When/Then conditions, event types, event store ordering, and GSA state machine phase transitions) and check for cost accounting logic consistency when a budget is set (e.g. asserting vm deallocations occur when required).
 
+CRITICAL AUDIT REQUIREMENT:
+- You MUST cross-reference domain-level effects (such as VMAllocated, JobCompleted, AudioGenerated, or PipelineComplete) with physical execution trace effects (command_executed, network_request, file_written, and process_spawned) in the Event Store.
+- If a test claims a domain action completed but the event log lacks corresponding physical execution trace effects showing a real command run, HTTP query, or file write, you MUST mark the verdict as fail (Mocking Detected). For example:
+  * If a VMAllocated domain event is present, there must be a corresponding command_executed event (for "vastai") showing that the provisioner actually invoked the Vast.ai command tool.
+  * If an AudioGenerated or VideoMeasured domain event is present, there must be a corresponding command_executed/file_written event showing that the actual asset generation took place.
+  * If the event log lacks these corresponding trace effects or shows that they were bypassed / mocked out (or skipped entirely), fail the test with verdict "fail" and mention "Mocking Detected" in your reasoning.
+
 Respond with EXACTLY this JSON (no markdown fences, no explanation outside):
 {"verdict": "pass", "confidence": 0.95, "reasoning": "...", "issues": []}
 

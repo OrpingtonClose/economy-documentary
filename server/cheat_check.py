@@ -33,21 +33,36 @@ def get_invariants(vault_dir: Path) -> list[str]:
     return invariants
 
 def should_check_file(path: Path) -> bool:
-    """Filter files to only verify production Python source files."""
+    """Filter files to only verify production Python source files or Simulation Cover tests."""
     path_str = str(path.resolve())
     if "cheat_check.py" in path_str or "rules_enforcer_plugin.py" in path_str or "agent_base.py" in path_str:
         return False
     if "agent_memory" in path.parts or "/agent_memory/" in path_str or "agent_memory/" in path_str:
         return False
-    if "/tests/" in path_str or path.name.startswith("test_"):
-        return False
     if "__pycache__" in path_str or ".venv" in path_str or ".git" in path_str:
+        return False
+    if "server/capabilities" in path_str:
+        return path.suffix == ".py"
+    if "/tests/" in path_str or path.name.startswith("test_"):
         return False
     return path.suffix == ".py"
 
 
 def scan_file(file_path: Path, invariants: list[str], api_key: str) -> tuple[Path, str | None]:
-    """Scan a single Python file using DeepSeek LLM."""
+    """Scan a single Python file using DeepSeek LLM or local SC enforcer."""
+    path_str = str(file_path.resolve())
+    if "server/capabilities" in path_str:
+        try:
+            sys.path.append("/Users/orpington/.gemini/config/plugins/sc-guard-enforcer")
+            from sc_guard_enforcer import check_file
+            passed = check_file(str(file_path.resolve()))
+            if passed:
+                return file_path, None
+            else:
+                return file_path, "FAIL: Simulation Cover integrity violations detected (mocking, skipping or trivial assertions)."
+        except Exception as e:
+            return file_path, f"SC Guard Enforcer import/execution error: {e}"
+
     try:
         content = file_path.read_text(encoding="utf-8")
     except Exception as e:

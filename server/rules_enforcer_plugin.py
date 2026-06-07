@@ -62,6 +62,21 @@ def main():
 
     # Exclude test files and legacy agent memory
     path_str = str(file_path.resolve())
+    if "server/capabilities" in path_str:
+        try:
+            sys.path.append("/Users/orpington/.gemini/config/plugins/sc-guard-enforcer")
+            from sc_guard_enforcer import check_file
+            passed = check_file(path_str)
+            if passed:
+                print(f"✅ Antigravity Plugin: Simulation Cover file {file_path_str} passed SC integrity validation.")
+                sys.exit(0)
+            else:
+                print(f"❌ Antigravity Plugin: Simulation Cover integrity violations detected in {file_path_str} (mocking, skipping or trivial assertions).")
+                sys.exit(1)
+        except Exception as e:
+            print(f"❌ Antigravity Plugin: SC Guard Enforcer execution error: {e}")
+            sys.exit(1)
+
     if "/tests/" in path_str or file_path.name.startswith("test_") or "agent_memory" in file_path.parts or "/agent_memory/" in path_str or "agent_memory/" in path_str:
         print(f"✅ Antigravity Plugin: Test or legacy memory file {file_path_str} skipped. PASS.")
         sys.exit(0)

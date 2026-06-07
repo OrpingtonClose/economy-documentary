@@ -6,7 +6,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.capabilities.abstract import AbstractCapability
 from event_store import EventStore
-from effects import JobStarted, JobCompleted, VMAllocated
+from effects import JobStarted, JobCompleted, VMAllocated, run_subprocess_logged
 from agent_base import get_active_log_dir
 from projections import VMs
 
@@ -19,9 +19,9 @@ def _simulate_ltx_job(job_id: str, duration: float) -> str:
     out_path = f"{video_dir}/{job_id}.mp4"
     
     # Generate a real valid MP4 file with the resolved duration
-    subprocess.run(
+    run_subprocess_logged(
         ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=320x240:d={duration}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        agent="provisioner", check=True
     )
     
     # Check if VM is allocated

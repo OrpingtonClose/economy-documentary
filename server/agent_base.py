@@ -25,10 +25,55 @@ from pydantic_ai_shields import CostTracking
 from pydantic_ai.capabilities.abstract import AbstractCapability
 from pydantic_deep import create_deep_agent, DeepAgentDeps, PeriodicReminderConfig, create_sliding_window_processor
 
-from effects import Effect, BudgetExceeded, KIND_TO_MODEL
+from effects import (
+    Effect, BudgetExceeded, KIND_TO_MODEL, active_agent_var,
+    log_trace_effect, run_subprocess_logged, ProcessSpawned,
+    CommandExecuted, FileWritten, NetworkRequest
+)
 from event_store import EventStore
 from effect_parser import parse_agent_text_multi
 from config_schema import PipelineConfig
+
+# Patch httpx to log NetworkRequest effects
+import httpx
+_original_async_send = httpx.AsyncClient.send
+_original_sync_send = httpx.Client.send
+
+async def _patched_async_send(self, request, *args, **kwargs):
+    resp = await _original_async_send(self, request, *args, **kwargs)
+    try:
+        agent = active_agent_var.get()
+        url_str = str(request.url)
+        if not any(x in url_str for x in ["localhost", "127.0.0.1", "gsa:"]):
+            log_trace_effect(NetworkRequest(
+                agent=agent,
+                url=url_str,
+                method=request.method,
+                status_code=resp.status_code
+            ))
+    except Exception:
+        pass
+    return resp
+
+def _patched_sync_send(self, request, *args, **kwargs):
+    resp = _original_sync_send(self, request, *args, **kwargs)
+    try:
+        agent = active_agent_var.get()
+        url_str = str(request.url)
+        if not any(x in url_str for x in ["localhost", "127.0.0.1", "gsa:"]):
+            log_trace_effect(NetworkRequest(
+                agent=agent,
+                url=url_str,
+                method=request.method,
+                status_code=resp.status_code
+            ))
+    except Exception:
+        pass
+    return resp
+
+httpx.AsyncClient.send = _patched_async_send
+httpx.Client.send = _patched_sync_send
+
 
 # Setup python path to allow importing config.py from root
 import sys
@@ -346,10 +391,14 @@ def format_memory(effects: list[Effect]) -> str:
     return "\n".join(lines)
 
 
-async def bash_command(ctx, command: str) -> str:
+async def bash_command(ctx, command: str, agent: str = "unknown") -> str:
     """Run a bash command locally with a fallback host resolution for gsa."""
     import socket
     import signal
+    import hashlib
+    if agent == "unknown":
+        agent = active_agent_var.get()
+
     if "gsa:8000" in command:
         try:
             socket.gethostbyname("gsa")
@@ -363,9 +412,43 @@ async def bash_command(ctx, command: str) -> str:
         stderr=asyncio.subprocess.PIPE,
         preexec_fn=os.setsid,
     )
+    
+    # Log ProcessSpawned
+    target = command.strip().split()[0] if command.strip() else "bash"
+    log_trace_effect(ProcessSpawned(
+        agent=agent,
+        target=target,
+        pid=proc.pid
+    ))
+
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15.0)
-        return stdout.decode(errors="replace") + stderr.decode(errors="replace")
+        out_str = stdout.decode(errors="replace")
+        err_str = stderr.decode(errors="replace")
+        exit_code = proc.returncode if proc.returncode is not None else 0
+        
+        # Log CommandExecuted
+        h = hashlib.sha256(stdout + stderr).hexdigest()
+        log_trace_effect(CommandExecuted(
+            agent=agent,
+            command=command,
+            exit_code=exit_code,
+            stdout_hash=h
+        ))
+        
+        # Scan arguments for written files
+        for token in command.split():
+            if token.endswith(".mp4") or token.endswith(".wav") or token.endswith(".pcm") or token.endswith(".txt"):
+                cleaned_token = token.strip("'\"")
+                if os.path.exists(cleaned_token):
+                    size = os.path.getsize(cleaned_token)
+                    log_trace_effect(FileWritten(
+                        agent=agent,
+                        filepath=os.path.abspath(cleaned_token),
+                        size_bytes=size
+                    ))
+
+        return out_str + err_str
     except asyncio.TimeoutError:
         try:
             pgid = os.getpgid(proc.pid)
@@ -373,6 +456,12 @@ async def bash_command(ctx, command: str) -> str:
             await proc.wait()
         except ProcessLookupError:
             pass
+        log_trace_effect(CommandExecuted(
+            agent=agent,
+            command=command,
+            exit_code=-1,
+            stdout_hash=""
+        ))
         return "[TIMEOUT] Command timed out after 15.0 seconds."
     except asyncio.CancelledError:
         try:
@@ -381,7 +470,14 @@ async def bash_command(ctx, command: str) -> str:
             await proc.wait()
         except ProcessLookupError:
             pass  # process already dead
+        log_trace_effect(CommandExecuted(
+            agent=agent,
+            command=command,
+            exit_code=-2,
+            stdout_hash=""
+        ))
         raise
+
 
 
 # ===========================================================================
@@ -977,26 +1073,29 @@ def run_movie_assembly(
     def generate_audio_placeholder(dur: float, out_path: str) -> None:
         print(f"CRITICAL: Generating audio placeholder of duration {dur}s at {out_path}", file=sys.stderr)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        subprocess.run(
+        run_subprocess_logged(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=1000:sample_rate=44100", "-t", str(dur), out_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            agent="assembly", check=True
         )
 
     def generate_video_placeholder(dur: float, out_path: str) -> None:
         print(f"CRITICAL: Generating black video placeholder of duration {dur}s at {out_path}", file=sys.stderr)
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        subprocess.run(
+        run_subprocess_logged(
             ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1280x720:d={dur}", "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            agent="assembly", check=True
         )
 
     def probe_duration(filepath: str) -> float:
         try:
-            res = subprocess.run(
+            res = run_subprocess_logged(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", filepath],
-                capture_output=True, text=True, check=True
+                agent="assembly", text=True, check=True
             )
-            return float(res.stdout.strip())
+            out = res.stdout
+            if isinstance(out, bytes):
+                out = out.decode(errors="replace")
+            return float(out.strip())
         except Exception:
             return 0.0
 
@@ -1068,9 +1167,9 @@ def run_movie_assembly(
             with open(concat_file, "w") as f:
                 for c in video_clips:
                     f.write(f"file '{c}'\n")
-            subprocess.run(
+            run_subprocess_logged(
                 ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_video_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                agent="assembly", check=True
             )
         else:
             generate_video_placeholder(target_duration, final_video_path)
@@ -1084,9 +1183,9 @@ def run_movie_assembly(
             with open(concat_file, "w") as f:
                 for c in audio_clips:
                     f.write(f"file '{c}'\n")
-            subprocess.run(
+            run_subprocess_logged(
                 ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", final_audio_path],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+                agent="assembly", check=True
             )
         else:
             generate_audio_placeholder(target_duration, final_audio_path)
@@ -1097,9 +1196,9 @@ def run_movie_assembly(
 
         # Apply loudness normalization (-16.0 LUFS target, -1.0 dBTP max true peak)
         normalized_audio_path = "/tmp/normalized_audio.wav"
-        subprocess.run(
+        run_subprocess_logged(
             ["ffmpeg", "-y", "-i", final_audio_path, "-af", "loudnorm=I=-16:TP=-1.0:LRA=11", normalized_audio_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            agent="assembly", check=True
         )
         final_audio_path = normalized_audio_path
 
@@ -1107,9 +1206,9 @@ def run_movie_assembly(
         sys.__stdout__.flush()
 
         # 3. Mux them together
-        subprocess.run(
+        run_subprocess_logged(
             ["ffmpeg", "-y", "-i", final_video_path, "-i", final_audio_path, "-c:v", "copy", "-c:a", "aac", "-shortest", output_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+            agent="assembly", check=True
         )
 
         actual_dur = probe_duration(output_path) or target_duration
@@ -1156,45 +1255,47 @@ async def execute_agent_turn(
     """Execute a single reasoning turn for the agent and append parsed effects."""
     lock = run_lock_manager.get_lock()
     async with lock:
-        # 1. Fetch history and memory from GSA to bypass direct DB read
-        gsa_state = {}
+        token = active_agent_var.set(role)
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url)  # health probe
-                if resp.status_code == 200:
-                    gsa_state = resp.json()
-        except Exception:
-            pass  # GSA not available or returned non-200
-
-        recent_by_agent = gsa_state.get("state", {}).get("recent_effects", {}).get(role, [])
-        memory = []
-        for e_dict in recent_by_agent:
+            # 1. Fetch history and memory from GSA to bypass direct DB read
+            gsa_state = {}
             try:
-                kind = e_dict.get("kind")
-                if kind in KIND_TO_MODEL:
-                    memory.append(KIND_TO_MODEL[kind].model_validate(e_dict))
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(gsa_url)  # health probe
+                    if resp.status_code == 200:
+                        gsa_state = resp.json()
             except Exception:
-                pass  # Ignore invalid/malformed history models
-        memory_text = format_memory(memory)
+                pass  # GSA not available or returned non-200
 
-        lt_memories = []
-        mem0_instance = None
-        lt_memories = []
-        mem0_instance = get_local_mem0(role)
-        if mem0_instance:
-            try:
-                mem_res = mem0_instance.get_all(filters={"user_id": role})
-                lt_memories = [m["memory"] for m in mem_res.get("results", []) if "memory" in m]
-            except Exception as exc:
-                logger.error(f"Failed to fetch long-term memories from local Mem0 for {role}: {exc}")
+            recent_by_agent = gsa_state.get("state", {}).get("recent_effects", {}).get(role, [])
+            memory = []
+            for e_dict in recent_by_agent:
+                try:
+                    kind = e_dict.get("kind")
+                    if kind in KIND_TO_MODEL:
+                        memory.append(KIND_TO_MODEL[kind].model_validate(e_dict))
+                except Exception:
+                    pass  # Ignore invalid/malformed history models
+            memory_text = format_memory(memory)
 
-        lt_memories_text = ""
-        if lt_memories:
-            lt_memories_text = "\n=== LONG-TERM MEMORY ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
+            lt_memories = []
+            mem0_instance = None
+            lt_memories = []
+            mem0_instance = get_local_mem0(role)
+            if mem0_instance:
+                try:
+                    mem_res = mem0_instance.get_all(filters={"user_id": role})
+                    lt_memories = [m["memory"] for m in mem_res.get("results", []) if "memory" in m]
+                except Exception as exc:
+                    logger.error(f"Failed to fetch long-term memories from local Mem0 for {role}: {exc}")
 
-        # 2. Build prompt
-        skills = list_skills()
-        prompt = f"""\
+            lt_memories_text = ""
+            if lt_memories:
+                lt_memories_text = "\n=== LONG-TERM MEMORY ===\n" + "\n".join(f"- {m}" for m in lt_memories) + "\n"
+
+            # 2. Build prompt
+            skills = list_skills()
+            prompt = f"""\
 === CURRENT CONTEXT ===
 GSA URL: {gsa_url}
 Available Skills:
@@ -1203,151 +1304,153 @@ Available Skills:
 === RECENT HISTORY ===
 {memory_text}
 """
-        if context:
-            prompt += f"\n=== ADDITIONAL CONTEXT/INSTRUCTION ===\n{json.dumps(context, indent=2)}\n"
+            if context:
+                prompt += f"\n=== ADDITIONAL CONTEXT/INSTRUCTION ===\n{json.dumps(context, indent=2)}\n"
 
-        # 3. Create agent and model
+            # 3. Create agent and model
 
-        extra_caps = []
-        use_dry_run_model = False
-        caps_list = []
-        if config and config.capabilities:
-            caps_list = config.capabilities
-        elif gsa_state:
-            gsa_config = gsa_state.get("state", {}).get("config", {})
-            if isinstance(gsa_config, dict):
-                if gsa_config.get("capabilities"):
-                    caps_list = gsa_config.get("capabilities")
-                elif gsa_config.get("simulation_mode") is True:
-                    caps_list = [
-                        "DryRunModel",
-                        "VastSearchSimulator",
-                        "VastCreateSimulator",
-                        "VastShowSimulator",
-                        "VastDestroySimulator",
-                        "WorkerHealthSimulator",
-                        "TtsJob1Simulator",
-                        "TtsColdStartSimulator",
-                        "TtsSingleBlockSimulator",
-                        "TtsMultiBlockSimulator",
-                        "TtsFailSimulator",
-                        "TtsPreemptSimulator",
-                        "LtxScaleSimulator",
-                        "LtxSingleSimulator",
-                        "VastCopySimulator",
-                        "AssembleFinalCutSimulator"
-                    ]
+            extra_caps = []
+            use_dry_run_model = False
+            caps_list = []
+            if config and config.capabilities:
+                caps_list = config.capabilities
+            elif gsa_state:
+                gsa_config = gsa_state.get("state", {}).get("config", {})
+                if isinstance(gsa_config, dict):
+                    if gsa_config.get("capabilities"):
+                        caps_list = gsa_config.get("capabilities")
+                    elif gsa_config.get("simulation_mode") is True:
+                        caps_list = [
+                            "DryRunModel",
+                            "VastSearchSimulator",
+                            "VastCreateSimulator",
+                            "VastShowSimulator",
+                            "VastDestroySimulator",
+                            "WorkerHealthSimulator",
+                            "TtsJob1Simulator",
+                            "TtsColdStartSimulator",
+                            "TtsSingleBlockSimulator",
+                            "TtsMultiBlockSimulator",
+                            "TtsFailSimulator",
+                            "TtsPreemptSimulator",
+                            "LtxScaleSimulator",
+                            "LtxSingleSimulator",
+                            "VastCopySimulator",
+                            "AssembleFinalCutSimulator"
+                        ]
 
-        if caps_list and "DryRunModel" in caps_list:
-            use_dry_run_model = True
+            if caps_list and "DryRunModel" in caps_list:
+                use_dry_run_model = True
 
-        if extra_capabilities:
-            for cap in extra_capabilities:
-                if isinstance(cap, type):
-                    extra_caps.append(cap())
-                else:
-                    extra_caps.append(cap)
+            if extra_capabilities:
+                for cap in extra_capabilities:
+                    if isinstance(cap, type):
+                        extra_caps.append(cap())
+                    else:
+                        extra_caps.append(cap)
 
-        model_instance = get_agent_model()
-        if use_dry_run_model:
-            model_instance = DryRunModel(role)
-        agent = create_pipeline_agent(role, model_instance, extra_capabilities=extra_caps)
+            model_instance = get_agent_model()
+            if use_dry_run_model:
+                model_instance = DryRunModel(role)
+            agent = create_pipeline_agent(role, model_instance, extra_capabilities=extra_caps)
 
-        # 4. Register tool
-        @agent.tool
-        async def run_bash(ctx, command: str) -> str:
-            """Run an arbitrary bash command on the local machine."""
-            return await bash_command(ctx, command)
-
-        if role == "assembly":
+            # 4. Register tool
             @agent.tool
-            async def assemble_final_cut(
-                ctx,
-                output_path: str,
-                timeline_path: str,
-                include_placeholders: bool,
-                target_duration: float,
-                run_id: str,
-            ) -> str:
-                """Assemble the final documentary cut.
+            async def run_bash(ctx, command: str) -> str:
+                """Run an arbitrary bash command on the local machine."""
+                return await bash_command(ctx, command, agent=role)
 
-                Args:
-                    output_path: Path to the output mp4 file.
-                    timeline_path: Path to the input OTIO timeline file.
-                    include_placeholders: Whether to generate placeholders for missing clips.
-                    target_duration: Target duration in seconds.
-                    run_id: Unique execution run identifier.
-                """
-                return run_movie_assembly(
-                    output_path=output_path,
-                    timeline_path=timeline_path,
-                    include_placeholders=include_placeholders,
-                    target_duration=target_duration,
-                    event_store_instance=event_store,
-                    log_dir=LOG_DIR,
-                )
+            if role == "assembly":
+                @agent.tool
+                async def assemble_final_cut(
+                    ctx,
+                    output_path: str,
+                    timeline_path: str,
+                    include_placeholders: bool,
+                    target_duration: float,
+                    run_id: str,
+                ) -> str:
+                    """Assemble the final documentary cut.
 
-        # 5. Run the agent
-        deps = PipelineDeps(gsa_url=gsa_url, agent_role=role, compaction_model=model_instance)
-        from pydantic_ai import UsageLimits
-        result = await agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=300))
-        agent_text = result.output
-        latest_monologues[role] = agent_text
+                    Args:
+                        output_path: Path to the output mp4 file.
+                        timeline_path: Path to the input OTIO timeline file.
+                        include_placeholders: Whether to generate placeholders for missing clips.
+                        target_duration: Target duration in seconds.
+                        run_id: Unique execution run identifier.
+                    """
+                    return run_movie_assembly(
+                        output_path=output_path,
+                        timeline_path=timeline_path,
+                        include_placeholders=include_placeholders,
+                        target_duration=target_duration,
+                        event_store_instance=event_store,
+                        log_dir=LOG_DIR,
+                    )
 
-        # Update long-term memories using local Mem0 Memory client
-        if mem0_instance:
+            # 5. Run the agent
+            deps = PipelineDeps(gsa_url=gsa_url, agent_role=role, compaction_model=model_instance)
+            from pydantic_ai import UsageLimits
+            result = await agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=300))
+            agent_text = result.output
+            latest_monologues[role] = agent_text
+
+            # Update long-term memories using local Mem0 Memory client
+            if mem0_instance:
+                try:
+                    await asyncio.to_thread(mem0_instance.add, agent_text, user_id=role)
+                except Exception as exc:
+                    logger.error(f"Failed to update agentic memory for {role}: {exc}")
+
             try:
-                await asyncio.to_thread(mem0_instance.add, agent_text, user_id=role)
-            except Exception as exc:
-                logger.error(f"Failed to update agentic memory for {role}: {exc}")
+                with open(f"/tmp/documentary-pipeline/agent_debug_{role}.log", "a", encoding="utf-8") as f:
+                    f.write(f"\n\n========================================\n")
+                    f.write(f"TURN START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"PROMPT:\n{prompt}\n")
+                    f.write(f"RESPONSE:\n{agent_text}\n")
+                    f.write(f"========================================\n")
+            except Exception:
+                pass  # Ignore debug log write failures
 
-        try:
-            with open(f"/tmp/documentary-pipeline/agent_debug_{role}.log", "a", encoding="utf-8") as f:
-                f.write(f"\n\n========================================\n")
-                f.write(f"TURN START: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"PROMPT:\n{prompt}\n")
-                f.write(f"RESPONSE:\n{agent_text}\n")
-                f.write(f"========================================\n")
-        except Exception:
-            pass  # Ignore debug log write failures
+            # 6. Parse effects
+            effects = await parse_agent_text_multi(role, agent_text)
 
-        # 6. Parse effects
-        effects = await parse_agent_text_multi(role, agent_text)
+            # Compute hash from GSA otio slots
+            import hashlib
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(gsa_url)  # health probe
+                    gsa_state = resp.json()
+                slots = gsa_state.get("otio", {}).get("slots", {})
+                sorted_slots = sorted(slots.items())
+                payload = json.dumps(sorted_slots, sort_keys=True)
+                otio_hash = hashlib.sha256(payload.encode()).hexdigest()[:16]
+            except Exception:
+                otio_hash = "initial_hash"
 
-        # Compute hash from GSA otio slots
-        import hashlib
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(gsa_url)  # health probe
-                gsa_state = resp.json()
-            slots = gsa_state.get("otio", {}).get("slots", {})
-            sorted_slots = sorted(slots.items())
-            payload = json.dumps(sorted_slots, sort_keys=True)
-            otio_hash = hashlib.sha256(payload.encode()).hexdigest()[:16]
-        except Exception:
-            otio_hash = "initial_hash"
-
-        # Append effects
-        for effect in effects:
-            if effect.kind == "noop":
-                continue
-            event_store.append(effect, otio_hash)
-
-        # Post-turn budget checks
-        try:
-            # We can check budget exceeded by calling the helper or examining shields CostTracking
-            spent = getattr(result, "cost", 0.0)
-            if spent > 10.0:
-                effect = BudgetExceeded(
-                    agent=role,
-                    spent_usd=spent,
-                    limit_usd=10.0,
-                )
+            # Append effects
+            for effect in effects:
+                if effect.kind == "noop":
+                    continue
                 event_store.append(effect, otio_hash)
-        except Exception:
-            pass  # Ignore exceptions during budget tracking spent computation
 
-        return effects
+            # Post-turn budget checks
+            try:
+                # We can check budget exceeded by calling the helper or examining shields CostTracking
+                spent = getattr(result, "cost", 0.0)
+                if spent > 10.0:
+                    effect = BudgetExceeded(
+                        agent=role,
+                        spent_usd=spent,
+                        limit_usd=10.0,
+                    )
+                    event_store.append(effect, otio_hash)
+            except Exception:
+                pass  # Ignore exceptions during budget tracking spent computation
+
+            return effects
+        finally:
+            active_agent_var.reset(token)
 
 
 class StrictEndpointMiddleware(BaseHTTPMiddleware):

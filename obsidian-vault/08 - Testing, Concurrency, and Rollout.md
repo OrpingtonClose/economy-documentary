@@ -147,6 +147,26 @@ To isolate testing-specific simulator implementations (such as mock TTS or Ltx G
 4. **Clean Production Isolation:** When imported normally (e.g., in a production pipeline run), the agent apps bypass command-line argument parsing and load with empty capabilities, keeping the production core completely clean.
 
 
+### 2.5 Simulation Cover Integrity Guard & Execution Trace Auditing
+
+To prevent LLMs and agents from bypass-mocking the 10 Simulation Cover (SC) integration tests, the system implements a multi-layered verification defense:
+
+1. **SC Guard Plugin (Static Enforcer):** 
+   A static AST-based plugin (`sc-guard-enforcer`) intercepts file writes/edits in `server/capabilities`. It automatically rejects any code containing:
+   * Mocking libraries (`unittest.mock`, `pytest_mock`, `MagicMock`, etc.).
+   * Unconditional skips (`pytest.skip`, `unittest.skip`, `@pytest.mark.skip`, etc.).
+   * Trivial assertions (e.g. `assert True`, `assert 1 == 1`).
+
+2. **Execution Trace Auditing:** 
+   The pipeline harness automatically logs physical side-effects in the event store:
+   * `CommandExecuted`: The CLI command, exit status, and stdout hash.
+   * `NetworkRequest`: Targeted URL, HTTP method, and response status code.
+   * `FileWritten`: Written file path and size.
+   * `ProcessSpawned`: Target executable/script and PID.
+
+3. **LLM BDD Judge Correlation:** 
+   The BDD Judge evaluates test completion and cross-references domain-level effects with these execution trace logs. If a test claims a domain action completed (e.g. `VMAllocated`, `AudioGenerated`) but the SQLite Event Store lacks corresponding trace logs proving a real command was run, API query sent, or file written, the judge rejects the run and marks the verdict as `fail` (Mocking Detected).
+
 ---
 
 ## 3. Concurrency and Timeouts Invariants

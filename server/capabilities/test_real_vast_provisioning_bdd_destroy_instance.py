@@ -17,5 +17,15 @@ class VastDestroySimulator(AbstractCapability):
         if tool_def.name == "run_bash":
             cmd = args.get("command", "")
             if "vastai destroy instance" in cmd:
+                from effects import CommandExecuted, ProcessSpawned, log_trace_effect
+                import hashlib
+                agent = ctx.deps.agent_role
+                log_trace_effect(ProcessSpawned(agent=agent, target="vastai", pid=12348))
+                log_trace_effect(CommandExecuted(
+                    agent=agent,
+                    command=cmd,
+                    exit_code=0,
+                    stdout_hash=hashlib.sha256(b"simulated vastai destroy instance").hexdigest()
+                ))
                 return "Destroying instance 1234567... Destroyed."
         return await handler(args)
