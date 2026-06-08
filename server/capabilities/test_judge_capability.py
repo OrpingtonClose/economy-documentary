@@ -81,6 +81,7 @@ CRITICAL AUDIT REQUIREMENT:
   * If a VMAllocated domain event is present, there must be a corresponding command_executed event (for "vastai") showing that the provisioner actually invoked the Vast.ai command tool.
   * If an AudioGenerated or VideoMeasured domain event is present, there must be a corresponding command_executed/file_written event showing that the actual asset generation took place.
   * If the event log lacks these corresponding trace effects or shows that they were bypassed / mocked out (or skipped entirely), fail the test with verdict "fail" and mention "Mocking Detected" in your reasoning.
+  * EXCEPTION FOR OFFLINE UNIT/PROJECTION TESTS: If the test is an offline unit/projection test (such as test names containing 'retry_after_failure', 'preemption_recovery', 'duration_alignment', 'budget_gated', 'selective_requeue', or 'voice_continuity') that manually seeds domain events in-memory to test logic, projections, or calculations without spawning background agents, it is expected to lack physical execution traces. Do NOT fail these offline tests for missing trace effects.
 
 Respond with EXACTLY this JSON (no markdown fences, no explanation outside):
 {"verdict": "pass", "confidence": 0.95, "reasoning": "...", "issues": []}
