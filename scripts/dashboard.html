@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Antigravity - Developer Console</title>
+    <!-- Google Fonts for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #09090e;
+            --bg-surface: rgba(18, 18, 28, 0.7);
+            --bg-terminal: #050508;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --font-sans: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+            
+            /* Success State (Writeable) */
+            --color-success: #10b981;
+            --bg-success-glow: rgba(16, 185, 129, 0.08);
+            --border-success: rgba(16, 185, 129, 0.3);
+            
+            /* Danger State (Test Lock) */
+            --color-danger: #ef4444;
+            --bg-danger-glow: rgba(239, 68, 68, 0.08);
+            --border-danger: rgba(239, 68, 68, 0.3);
+
+            /* Interactive Transitions */
+            --transition-speed: 0.3s;
+        }
+
+        /* Base Reset */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: #f3f4f6;
+            font-family: var(--font-sans);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            position: relative;
+            transition: background 0.8s ease;
+        }
+
+        /* Ambient background glow depending on active state */
+        body.mode-test {
+            background-image: radial-gradient(circle at 50% -20%, rgba(239, 68, 68, 0.15) 0%, rgba(9, 9, 14, 1) 70%);
+        }
+        body.mode-notest {
+            background-image: radial-gradient(circle at 50% -20%, rgba(16, 185, 129, 0.15) 0%, rgba(9, 9, 14, 1) 70%);
+        }
+
+        header {
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(9, 9, 14, 0.8);
+            backdrop-filter: blur(12px);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-badge {
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            color: #ffffff;
+            font-weight: 800;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            letter-spacing: 0.5px;
+        }
+
+        h1 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
+
+        .api-badge {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: #8b5cf6;
+            background: rgba(139, 92, 246, 0.1);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            padding: 2px 8px;
+            border-radius: 9999px;
+        }
+
+        .container {
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 32px 24px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 28px;
+            flex: 1;
+        }
+
+        @media (max-width: 968px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards and Panels */
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(8px);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            position: relative;
+            overflow: hidden;
+            transition: border-color 0.5s ease, box-shadow 0.5s ease;
+        }
+
+        body.mode-test .panel-state-card {
+            border-color: var(--border-danger);
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.05), 0 10px 30px rgba(0, 0, 0, 0.25);
+        }
+        body.mode-notest .panel-state-card {
+            border-color: var(--border-success);
+            box-shadow: 0 0 30px rgba(16, 185, 129, 0.05), 0 10px 30px rgba(0, 0, 0, 0.25);
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #e5e7eb;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 12px;
+        }
+
+        /* Status UI */
+        .status-display {
+            text-align: center;
+            padding: 24px 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .status-indicator-ring {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.2rem;
+            position: relative;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body.mode-test .status-indicator-ring {
+            background: rgba(239, 68, 68, 0.1);
+            border: 3px solid var(--color-danger);
+            box-shadow: 0 0 25px rgba(239, 68, 68, 0.4);
+            animation: pulse-red 2s infinite;
+        }
+        body.mode-notest .status-indicator-ring {
+            background: rgba(16, 185, 129, 0.1);
+            border: 3px solid var(--color-success);
+            box-shadow: 0 0 25px rgba(16, 185, 129, 0.4);
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
+            50% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.6); }
+            100% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.3); }
+        }
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.3); }
+            50% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.6); }
+            100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.3); }
+        }
+
+        .status-label {
+            font-size: 1.6rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+        }
+        .status-badge {
+            font-size: 0.75rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            padding: 4px 12px;
+            border-radius: 9999px;
+        }
+        body.mode-test .status-label { color: #ffffff; }
+        body.mode-test .status-badge { 
+            background: rgba(239, 68, 68, 0.15); 
+            color: var(--color-danger); 
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        body.mode-notest .status-label { color: #ffffff; }
+        body.mode-notest .status-badge { 
+            background: rgba(16, 185, 129, 0.15); 
+            color: var(--color-success); 
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .description-box {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            padding: 18px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: #9ca3af;
+        }
+
+        .description-box strong {
+            color: #f3f4f6;
+        }
+
+        /* Buttons and Controls */
+        .btn {
+            font-family: var(--font-sans);
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 14px 28px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            transition: all var(--transition-speed) ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+        }
+
+        .btn-toggle {
+            background: #ffffff;
+            color: #000000;
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15);
+        }
+
+        .btn-toggle:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(255, 255, 255, 0.25);
+        }
+
+        body.mode-test .btn-toggle {
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: #ffffff;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+        body.mode-test .btn-toggle:hover {
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.5);
+        }
+
+        body.mode-notest .btn-toggle {
+            background: linear-gradient(135deg, #ef4444, #b91c1c);
+            color: #ffffff;
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3);
+        }
+        body.mode-notest .btn-toggle:hover {
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #d1d5db;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+        }
+
+        /* Terminal Window */
+        .terminal-container {
+            display: flex;
+            flex-direction: column;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            background-color: var(--bg-terminal);
+            height: 280px;
+        }
+
+        .terminal-header {
+            background-color: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .terminal-title {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            color: #6b7280;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .terminal-dots {
+            display: flex;
+            gap: 6px;
+        }
+
+        .terminal-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #374151;
+        }
+        .terminal-dot-red { background-color: #ef4444; }
+        .terminal-dot-yellow { background-color: #f59e0b; }
+        .terminal-dot-green { background-color: #10b981; }
+
+        .terminal-body {
+            padding: 16px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.6;
+            color: #d1d5db;
+            overflow-y: auto;
+            flex: 1;
+            white-space: pre-wrap;
+        }
+
+        /* JSON display */
+        .json-display {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 12px;
+            color: #38bdf8;
+            overflow-x: auto;
+            max-height: 120px;
+        }
+
+        /* Documentation & Programming Section */
+        .programming-panel {
+            grid-column: span 2;
+        }
+
+        @media (max-width: 968px) {
+            .programming-panel {
+                grid-column: span 1;
+            }
+        }
+
+        .code-snippet {
+            background-color: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: #e5e7eb;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .code-snippet .keyword { color: #f472b6; }
+        .code-snippet .string { color: #34d399; }
+        .code-snippet .function { color: #60a5fa; }
+        .code-snippet .comment { color: #6b7280; }
+
+        .nav-link {
+            color: #a78bfa;
+            text-decoration: none;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: color var(--transition-speed);
+        }
+
+        .nav-link:hover {
+            color: #c084fc;
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body class="mode-notest">
+
+    <header>
+        <div class="logo-section">
+            <span class="logo-badge">ANTIGRAVITY</span>
+            <h1>Test Enforcer & Lock Console</h1>
+        </div>
+        <span class="api-badge">http://localhost:19245</span>
+    </header>
+
+    <div class="container">
+        
+        <!-- Left Panel: State Dashboard -->
+        <div class="panel panel-state-card">
+            <div class="panel-title">
+                <span id="lock-icon">🔓</span> Status Control
+            </div>
+            
+            <div class="status-display">
+                <div class="status-indicator-ring" id="status-ring">🔓</div>
+                <div class="status-badge" id="status-badge">Writeable Mode</div>
+                <div class="status-label" id="status-label">NO TEST</div>
+            </div>
+
+            <div class="description-box" id="status-desc">
+                👉 <strong>Codebase is Writeable</strong>. The agent is permitted to make modifications to files. Running pytest commands is currently blocked.
+            </div>
+
+            <button class="btn btn-toggle" id="btn-toggle" onclick="toggleMode()">
+                Lock Codebase & Enable Tests
+            </button>
+            
+            <button class="btn btn-secondary" onclick="fetchState()">
+                Refresh Status
+            </button>
+        </div>
+
+        <!-- Right Panel: Test Executor & API Inspection -->
+        <div class="panel">
+            <div class="panel-title">
+                ⚙️ Live Test Terminal
+            </div>
+            
+            <div class="terminal-container">
+                <div class="terminal-header">
+                    <div class="terminal-title">
+                        <span class="terminal-dot terminal-dot-red"></span>
+                        <span class="terminal-dot terminal-dot-yellow"></span>
+                        <span class="terminal-dot terminal-dot-green"></span>
+                        <span>console ~ pytest</span>
+                    </div>
+                    <span style="font-size: 0.75rem; color: #4b5563;" id="term-status">idle</span>
+                </div>
+                <div class="terminal-body" id="terminal-output">Ready to execute tests. Click "Run Test Suite" to dispatch pytest execution. Output will be streamed here.</div>
+            </div>
+
+            <div style="display: flex; gap: 12px;">
+                <button class="btn btn-toggle" style="flex: 2;" id="btn-run-tests" onclick="runTests()">
+                    🚀 Run Test Suite
+                </button>
+                <button class="btn btn-secondary" style="flex: 1;" onclick="clearTerminal()">
+                    Clear Output
+                </button>
+            </div>
+
+            <div>
+                <p style="font-size: 0.85rem; color: #9ca3af; margin-bottom: 8px; font-weight: 500;">API JSON State Response:</p>
+                <pre class="json-display" id="json-state">Loading state...</pre>
+            </div>
+        </div>
+
+        <!-- Full-width Panel: How to Program This UI -->
+        <div class="panel programming-panel">
+            <div class="panel-title">
+                💻 Program This User Interface!
+            </div>
+            <p style="font-size: 0.9rem; color: #9ca3af; line-height: 1.6;">
+                This interface is served directly from your workspace repository at <code style="font-family: var(--font-mono); color: #c084fc;">scripts/dashboard.html</code>. Because it is connected to a local Python server on port <code style="font-family: var(--font-mono); color: #c084fc;">19245</code>, you can open and edit this HTML file in your IDE to fully program its behaviors, add custom scripts, or integrate new automation buttons!
+            </p>
+            
+            <p style="font-size: 0.9rem; color: #9ca3af; line-height: 1.6; margin-top: 8px;">
+                Here are the API endpoints you can target with simple JavaScript <code style="font-family: var(--font-mono); color: #e5e7eb;">fetch()</code> calls:
+            </p>
+
+            <div class="code-snippet">
+<span class="comment">// 1. Query the current lock and file permissions state</span>
+<span class="keyword">const</span> res = <span class="keyword">await</span> <span class="function">fetch</span>(<span class="string">'/api/state'</span>);
+<span class="keyword">const</span> data = <span class="keyword">await</span> res.<span class="function">json</span>();
+console.<span class="function">log</span>(data.state); <span class="comment">// "TEST" or "NO_TEST"</span>
+
+<span class="comment">// 2. Programmatically toggle the lock state</span>
+<span class="keyword">const</span> toggleRes = <span class="keyword">await</span> <span class="function">fetch</span>(<span class="string">'/api/toggle'</span>, { method: <span class="string">'POST'</span> });
+<span class="keyword">const</span> newState = <span class="keyword">await</span> toggleRes.<span class="function">json</span>();
+
+<span class="comment">// 3. Run the pytest integration suite</span>
+<span class="keyword">const</span> testRes = <span class="keyword">await</span> <span class="function">fetch</span>(<span class="string">'/api/run-tests'</span>, { method: <span class="string">'POST'</span> });
+<span class="keyword">const</span> testLogs = <span class="keyword">await</span> testRes.<span class="function">text</span>();
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // API Endpoints
+        const API_STATE = '/api/state';
+        const API_TOGGLE = '/api/toggle';
+        const API_RUN_TESTS = '/api/run-tests';
+
+        async function fetchState() {
+            try {
+                const res = await fetch(API_STATE);
+                const data = await res.json();
+                updateUI(data);
+            } catch (err) {
+                console.error("Failed to fetch state:", err);
+                document.getElementById('json-state').textContent = "Server connection lost.";
+                document.getElementById('json-state').style.color = '#ef4444';
+            }
+        }
+
+        function updateUI(data) {
+            const body = document.body;
+            const statusRing = document.getElementById('status-ring');
+            const statusBadge = document.getElementById('status-badge');
+            const statusLabel = document.getElementById('status-label');
+            const statusDesc = document.getElementById('status-desc');
+            const btnToggle = document.getElementById('btn-toggle');
+            const lockIcon = document.getElementById('lock-icon');
+
+            // Update JSON Box
+            document.getElementById('json-state').textContent = JSON.stringify(data, null, 4);
+            document.getElementById('json-state').style.color = '#38bdf8';
+
+            if (data.state === 'TEST') {
+                body.className = 'mode-test';
+                statusRing.textContent = '🔒';
+                lockIcon.textContent = '🔒';
+                statusBadge.textContent = 'Test Mode (Read-Only)';
+                statusLabel.textContent = 'TEST';
+                statusDesc.innerHTML = '🚨 <strong>Codebase is LOCKED</strong>. Python files under <code>server/</code> and <code>tests/</code> are read-only. File writes by the agent are blocked to prevent cheating. Running pytest commands is enabled.';
+                btnToggle.textContent = 'Unlock Codebase & Enable Writes';
+            } else {
+                body.className = 'mode-notest';
+                statusRing.textContent = '🔓';
+                lockIcon.textContent = '🔓';
+                statusBadge.textContent = 'Writeable Mode';
+                statusLabel.textContent = 'NO TEST';
+                statusDesc.innerHTML = '👉 <strong>Codebase is Writeable</strong>. The agent is permitted to make modifications to files. Running pytest commands is currently blocked.';
+                btnToggle.textContent = 'Lock Codebase & Enable Tests';
+            }
+        }
+
+        async function toggleMode() {
+            const btnToggle = document.getElementById('btn-toggle');
+            const originalText = btnToggle.textContent;
+            btnToggle.disabled = true;
+            btnToggle.textContent = "Processing state transition...";
+
+            try {
+                const res = await fetch(API_TOGGLE, { method: 'POST' });
+                const data = await res.json();
+                updateUI(data);
+                
+                // Print to terminal console
+                const term = document.getElementById('terminal-output');
+                const time = new Date().toLocaleTimeString();
+                term.textContent += `\n[${time}] System state transitioned to ${data.state}.\n`;
+                term.scrollTop = term.scrollHeight;
+            } catch (err) {
+                console.error("Failed to toggle mode:", err);
+                alert("Failed to connect to the backend server. Please verify lock_server.py is running.");
+            } finally {
+                btnToggle.disabled = false;
+            }
+        }
+
+        async function runTests() {
+            const btnRun = document.getElementById('btn-run-tests');
+            const term = document.getElementById('terminal-output');
+            const termStatus = document.getElementById('term-status');
+            
+            btnRun.disabled = true;
+            termStatus.textContent = "running...";
+            termStatus.style.color = '#ef4444';
+            
+            const time = new Date().toLocaleTimeString();
+            term.textContent = `[${time}] Spawning pytest suite runner...\n$ PYTHONPATH=server:server/capabilities python3 tests/units/run.py\n\n`;
+            term.scrollTop = term.scrollHeight;
+
+            try {
+                const res = await fetch(API_RUN_TESTS, { method: 'POST' });
+                
+                // Reader to stream/consume logs as they arrive
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    const chunk = decoder.decode(value);
+                    term.textContent += chunk;
+                    term.scrollTop = term.scrollHeight;
+                }
+                
+                termStatus.textContent = "done";
+                termStatus.style.color = '#10b981';
+            } catch (err) {
+                console.error("Failed to run tests:", err);
+                term.textContent += `\n❌ Failed to run tests: connection reset or rejected by server.\n`;
+                termStatus.textContent = "error";
+                termStatus.style.color = '#ef4444';
+            } finally {
+                btnRun.disabled = false;
+            }
+        }
+
+        function clearTerminal() {
+            document.getElementById('terminal-output').textContent = "Console cleared.\n";
+        }
+
+        // Initialize state check on page load
+        fetchState();
+    </script>
+</body>
+</html>
