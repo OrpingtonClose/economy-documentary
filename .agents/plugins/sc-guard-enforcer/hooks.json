@@ -1,0 +1,89 @@
+{
+  "sc-guard-enforcer": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_run --command \"${CommandLine}\""
+          }
+        ]
+      },
+      {
+        "matcher": "write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_write --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_write --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_write --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "view_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${AbsolutePath}\""
+          }
+        ]
+      },
+      {
+        "matcher": "grep_search",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${SearchPath}\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/sc_guard_enforcer.py --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/sc_guard_enforcer.py --file \"${TargetFile}\""
+          }
+        ]
+      },
+      {
+        "matcher": "multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/sc_guard_enforcer.py --file \"${TargetFile}\""
+          }
+        ]
+      }
+    ]
+  }
+}
