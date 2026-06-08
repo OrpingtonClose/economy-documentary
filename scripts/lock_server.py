@@ -32,11 +32,28 @@ def get_newest_brain_dir():
 
 def get_lock_state(newest_dir):
     if not newest_dir:
-        return "NO_TEST"
+        return "WRITE_ALLOWED"
+    
+    # Try reading the state file
+    state_file = newest_dir / ".lock_state"
+    if state_file.exists():
+        try:
+            val = state_file.read_text(encoding="utf-8").strip()
+            if val in ["TESTS_ONLY", "ANALYZE_ONLY", "WRITE_ALLOWED", "TEST", "NO_TEST"]:
+                # Map old values for backward compatibility
+                if val == "TEST":
+                    return "TESTS_ONLY"
+                if val == "NO_TEST":
+                    return "WRITE_ALLOWED"
+                return val
+        except Exception:
+            pass
+
+    # Fallback to transcript
     try:
         transcript_path = newest_dir / ".system_generated" / "logs" / "transcript.jsonl"
         if not transcript_path.exists():
-            return "NO_TEST"
+            return "WRITE_ALLOWED"
         with open(transcript_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         for line in reversed(lines):
@@ -45,44 +62,14 @@ def get_lock_state(newest_dir):
                 if data.get("type") == "USER_INPUT":
                     content = data.get("content", "")
                     if re.search(r'\bNO\s+TEST\b', content):
-                        return "NO_TEST"
+                        return "WRITE_ALLOWED"
                     elif re.search(r'\bTEST\b', content):
-                        return "TEST"
+                        return "TESTS_ONLY"
             except Exception:
                 pass
     except Exception:
         pass
-    return "NO_TEST"
-
-def toggle_lock_state(new_state, newest_dir):
-    if not newest_dir:
-        return False
-    try:
-        transcript_path = newest_dir / ".system_generated" / "logs" / "transcript.jsonl"
-        if transcript_path.exists():
-            date_str = "2026-06-08T10:00:00Z"
-            new_prompt = "TEST" if new_state == "TEST" else "NO TEST"
-            new_line = json.dumps({
-                "step_index": 999999,
-                "source": "USER_EXPLICIT",
-                "type": "USER_INPUT",
-                "status": "DONE",
-                "created_at": date_str,
-                "content": f"<USER_REQUEST>\n{new_prompt}\n</USER_REQUEST>"
-            }) + "\n"
-            with open(transcript_path, "a", encoding="utf-8") as f:
-                f.write(new_line)
-            return True
-    except Exception as e:
-        print(f"Error toggling state: {e}")
-    return False
-
-def apply_enforcer_changes(state):
-    action = "pre_run" if state == "TEST" else "pre_write"
-    cmd = [sys.executable, "/Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py", "--action", action]
-    if action == "pre_run":
-        cmd += ["--command", "pytest"]
-    subprocess.run(cmd, capture_output=True)
+    return "WRITE_ALLOWED"
 
 class LockServerHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -96,7 +83,9 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith("/toggle"):
+        if self.path.startswith("/change-state"):
+            self.handle_change_state()
+        elif self.path.startswith("/toggle"):  # Kept for backward compatibility
             self.handle_toggle()
         elif self.path.startswith("/run-tests"):
             self.handle_run_tests()
@@ -136,20 +125,68 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
     def handle_toggle(self):
         newest_dir = get_newest_brain_dir()
         current_state = get_lock_state(newest_dir)
-        new_state = "TEST" if current_state == "NO_TEST" else "NO_TEST"
-        
-        # Toggle state & apply enforcer permissions + vscode settings changes
-        toggle_lock_state(new_state, newest_dir)
-        apply_enforcer_changes(new_state)
-        
+        new_state = "TESTS_ONLY" if current_state == "WRITE_ALLOWED" else "WRITE_ALLOWED"
+        self.perform_state_change(new_state, newest_dir)
+
+    def handle_change_state(self):
+        from urllib.parse import urlparse, parse_qs
+        parsed_url = urlparse(self.path)
+        params = parse_qs(parsed_url.query)
+        new_state = params.get("state", ["WRITE_ALLOWED"])[0]
+        newest_dir = get_newest_brain_dir()
+        self.perform_state_change(new_state, newest_dir)
+
+    def perform_state_change(self, new_state, newest_dir):
+        if newest_dir:
+            state_file = newest_dir / ".lock_state"
+            state_file.write_text(new_state, encoding="utf-8")
+            
+            # Write simulated USER_INPUT to transcript so we log state transitions
+            transcript_path = newest_dir / ".system_generated" / "logs" / "transcript.jsonl"
+            if transcript_path.exists():
+                date_str = "2026-06-08T10:00:00Z"
+                new_prompt = "TEST" if new_state == "TESTS_ONLY" else "NO TEST"
+                new_line = json.dumps({
+                    "step_index": 999999,
+                    "source": "USER_EXPLICIT",
+                    "type": "USER_INPUT",
+                    "status": "DONE",
+                    "created_at": date_str,
+                    "content": f"<USER_REQUEST>\n{new_prompt}\n</USER_REQUEST>"
+                }) + "\n"
+                try:
+                    with open(transcript_path, "a", encoding="utf-8") as f:
+                        f.write(new_line)
+                except Exception:
+                    pass
+
+            # Sync enforcer permission changes and VS Code colors
+            cmd = [
+                sys.executable,
+                "/Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py",
+                "--action", "pre_write",
+                "--file", str(newest_dir / "lock_status.md")
+            ]
+            subprocess.run(cmd, capture_output=True)
+            
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.end_headers()
         
-        msg = "Locked (TEST Mode Active)" if new_state == "TEST" else "Unlocked (NO TEST Mode Active)"
-        bg = "#240000" if new_state == "TEST" else "#061f0d"
-        text_color = "#ff4d4f" if new_state == "TEST" else "#2ecc71"
-        
+        msg = f"State Changed to: {new_state}"
+        if new_state in ["TESTS_ONLY", "TEST"]:
+            msg = "Locked in TESTS ONLY mode"
+            bg = "#240000"
+            text_color = "#ff4d4f"
+        elif new_state == "ANALYZE_ONLY":
+            msg = "Locked in ANALYZE CODE mode"
+            bg = "#291a03"
+            text_color = "#f59e0b"
+        else:
+            msg = "Unlocked in WRITE mode"
+            bg = "#061f0d"
+            text_color = "#2ecc71"
+            
         html = f"""<!DOCTYPE html>
         <html>
         <head>
@@ -207,7 +244,25 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b"Error: Virtual environment python interpreter not found.\n")
             return
 
+        newest_dir = get_newest_brain_dir()
+        if not newest_dir:
+            self.wfile.write(b"Error: Newest brain directory not found.\n")
+            return
+
+        # Create test_outputs directory
+        test_outputs_dir = newest_dir / "test_outputs"
+        test_outputs_dir.mkdir(parents=True, exist_ok=True)
+        log_file_path = test_outputs_dir / "pytest_output.log"
+        
+        try:
+            log_file = open(log_file_path, "w", encoding="utf-8")
+        except Exception:
+            log_file = None
+
         self.wfile.write(b"Executing test suite via pytest...\n\n")
+        if log_file:
+            log_file.write("Executing test suite via pytest...\n\n")
+            
         try:
             env = dict(os.environ, PYTHONPATH=f"{project_root}/server:{project_root}/server/capabilities")
             process = subprocess.Popen(
@@ -222,11 +277,48 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
             for line in iter(process.stdout.readline, ""):
                 self.wfile.write(line.encode('utf-8'))
                 self.wfile.flush()
+                if log_file:
+                    log_file.write(line)
+                    log_file.flush()
             process.stdout.close()
             process.wait()
-            self.wfile.write(f"\n[Test process exited with code {process.returncode}]\n".encode('utf-8'))
+            
+            exit_msg = f"\n[Test process exited with code {process.returncode}]\n"
+            self.wfile.write(exit_msg.encode('utf-8'))
+            if log_file:
+                log_file.write(exit_msg)
+                log_file.close()
+                
+            # Copy recently updated bdd_verdicts JSON files
+            import tempfile
+            import shutil
+            from datetime import datetime, timedelta
+            sys_temp = tempfile.gettempdir()
+            now = datetime.now()
+            copied_count = 0
+            for root, dirs, files in os.walk(sys_temp):
+                if "bdd_verdicts" in root:
+                    for f in files:
+                        if f.endswith(".json"):
+                            src_path = os.path.join(root, f)
+                            try:
+                                mtime = datetime.fromtimestamp(os.path.getmtime(src_path))
+                                # Copy files modified in the last 15 minutes
+                                if now - mtime < timedelta(minutes=15):
+                                    dest_dir = test_outputs_dir / "bdd_verdicts"
+                                    dest_dir.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(src_path, dest_dir / f)
+                                    copied_count += 1
+                            except Exception:
+                                pass
+            if copied_count > 0:
+                print(f"✅ Copied {copied_count} BDD verdict files to {test_outputs_dir / 'bdd_verdicts'}")
+                
         except Exception as e:
             self.wfile.write(f"\nException: {e}\n".encode('utf-8'))
+            if log_file:
+                log_file.write(f"\nException: {e}\n")
+                log_file.close()
 
 def main():
     socketserver.TCPServer.allow_reuse_address = True
