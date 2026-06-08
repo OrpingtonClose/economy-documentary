@@ -210,6 +210,126 @@ def get_llm_summary(recent_logs: str) -> str:
     except Exception:
         return "AI Copilot: Analyzing execution pipeline..."
 
+def run_subagent_audit(test_name: str) -> dict:
+    if not api_key:
+        return {"verdict": "FAIL", "reasoning": "DeepSeek API key not found. Congruence audit disabled."}
+
+    # 1. Read documentation
+    docs_content = ""
+    
+    # Try reading simulation_coverage_definition.md from brain dir
+    brain_dir = None
+    try:
+        brain_root = pathlib.Path("/Users/orpington/.gemini/antigravity/brain")
+        conv_id = os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+        if conv_id and (brain_root / conv_id).exists():
+            brain_dir = brain_root / conv_id
+        else:
+            # fallback to newest
+            newest_mtime = 0
+            for subdir in brain_root.iterdir():
+                if subdir.is_dir() and not subdir.name.startswith("."):
+                    state_file = subdir / ".lock_state"
+                    mtime = state_file.stat().st_mtime if state_file.exists() else subdir.stat().st_mtime
+                    if mtime > newest_mtime:
+                        newest_mtime = mtime
+                        brain_dir = subdir
+    except Exception:
+        pass
+
+    if brain_dir:
+        cov_def_path = brain_dir / "simulation_coverage_definition.md"
+        if cov_def_path.exists():
+            try:
+                docs_content += "=== DOCUMENTATION: simulation_coverage_definition.md ===\n"
+                docs_content += cov_def_path.read_text(encoding="utf-8") + "\n\n"
+            except Exception:
+                pass
+
+    # Also check if there's tests/units/simulation_covers_implementation_plan.md
+    impl_plan_path = PROJECT_ROOT / "tests" / "units" / "simulation_covers_implementation_plan.md"
+    if impl_plan_path.exists():
+        try:
+            docs_content += "=== DOCUMENTATION: simulation_covers_implementation_plan.md ===\n"
+            docs_content += impl_plan_path.read_text(encoding="utf-8") + "\n\n"
+        except Exception:
+            pass
+
+    # If no doc content was read, let's search for any other markdown file in docs/ or tests/
+    if not docs_content:
+        docs_content = "No specific documentation file found."
+
+    # 2. Read test code file
+    test_code = ""
+    # Map test name to code file
+    test_file_path = PROJECT_ROOT / "tests" / "units" / f"{test_name}.py"
+    if test_name == "Maximum Capacity Test":
+        test_file_path = PROJECT_ROOT / "tests" / "units" / "test_max_capacity_pipeline.py"
+
+    if test_file_path.exists():
+        try:
+            test_code = test_file_path.read_text(encoding="utf-8")
+        except Exception as e:
+            test_code = f"Error reading test file: {e}"
+    else:
+        test_code = f"Test file {test_file_path} not found on disk."
+
+    # 3. Call DeepSeek
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    system_prompt = (
+        "You are a fresh QA subagent auditor verifying test congruence.\n"
+        "Your task is to compare the implementation of a specific test case (Python code) "
+        "with the official documentation/specification (like Given/When/Then requirements, BDD scenarios, and coverage plans).\n"
+        "Verify if the test code is congruent with the documentation. Check for:\n"
+        "1. Does the test code actually implement the scenario described in the docs?\n"
+        "2. Are the assertions, events, and logic in the test code matching the requirements in the docs?\n"
+        "3. Is there any mismatch, mocking where real behavior is required, or missing verification steps?\n"
+        "Note: The tests are integration/unit tests. If they use mocks or simulators where the docs specify real behavior, point that out.\n\n"
+        "Respond with EXACTLY a JSON object containing the keys 'verdict' (must be either 'PASS' or 'FAIL') "
+        "and 'reasoning' (a detailed explanation of the verdict). "
+        "Do not include any explanation or markdown backticks outside the JSON."
+    )
+    
+    user_prompt = (
+        f"Test Case: {test_name}\n\n"
+        f"--- DOCUMENTATION ---\n{docs_content}\n\n"
+        f"--- TEST CODE ---\n{test_code}\n\n"
+        f"Evaluate the congruence of the test code with the documentation and output JSON."
+    )
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 1000
+    }
+    
+    try:
+        resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=60.0)
+        if resp.status_code == 200:
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            # Strip markdown fences
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
+            res = json.loads(raw)
+            if "verdict" in res and "reasoning" in res:
+                return res
+            return {"verdict": "FAIL", "reasoning": f"Invalid response format from LLM: {raw}"}
+        else:
+            return {"verdict": "FAIL", "reasoning": f"DeepSeek API request failed (HTTP {resp.status_code})"}
+    except Exception as e:
+        return {"verdict": "FAIL", "reasoning": f"Error during subagent audit execution: {e}"}
+
 def trigger_ai_summary_refresh():
     def run():
         global ai_summary
@@ -1962,6 +2082,27 @@ INDEX_HTML = """<!DOCTYPE html>
                             </div>
                         </div>
                     `;
+                   // 2b. Subagent Congruence Audit Verdict
+                let auditCardHtml = "";
+                if (data.congruence_audit) {
+                    const a = data.congruence_audit;
+                    const aClass = (a.verdict || "fail").toLowerCase();
+                    auditCardHtml = `
+                        <div class="info-card" id="detail-audit-card">
+                            <div class="card-title">🔍 Subagent Congruence Audit</div>
+                            <div class="bdd-verdict-grid">
+                                <div style="display: flex; flex-direction: column; gap: 4px; width: 100%;">
+                                    <div class="verdict-header-row">
+                                        <span style="font-size: 0.8rem; font-weight: 700; color: #fff;">Congruence Verification</span>
+                                        <span class="badge-large ${aClass}">VERDICT: ${a.verdict}</span>
+                                    </div>
+                                    <div class="verdict-reasoning" style="max-height: 120px;">
+                                        <strong>Reasoning:</strong> ${a.reasoning}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
                 }
 
                 // 3. Error Callout
@@ -1997,7 +2138,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </div>
                     
                     ${errorHtml}
-
+ 
                     <div class="test-details-grid">
                         <div class="details-left-col">
                             <div class="info-card">
@@ -2007,6 +2148,7 @@ INDEX_HTML = """<!DOCTYPE html>
                                 </div>
                             </div>
                             ${verdictCardHtml}
+                            ${auditCardHtml}
                         </div>
                         
                         <div class="details-right-col">
@@ -2327,6 +2469,7 @@ def get_test_details(test_name: str):
         "traceback": ts.get("traceback"),
         "logs": "".join(test_logs.get(test_name, [])),
         "verdict": verdict,
+        "congruence_audit": ts.get("congruence_audit"),
         "events": events
     }
 
@@ -2425,6 +2568,17 @@ def run_suite_in_thread():
             recompute_stats()
             
             trigger_ai_summary_refresh()
+            
+            # Run the fresh subagent congruence audit first
+            print(f"🔍 Running fresh subagent congruence audit for '{name}'...")
+            try:
+                audit_res = run_subagent_audit(name)
+                test_status[name]["congruence_audit"] = audit_res
+                print(f"🔍 Subagent congruence audit verdict for '{name}': {audit_res.get('verdict')}")
+            except Exception as ae:
+                test_status[name]["congruence_audit"] = {"verdict": "FAIL", "reasoning": f"Audit exception: {ae}"}
+                print(f"❌ Subagent congruence audit failed: {ae}")
+                
             start = time.time()
             try:
                 func()
