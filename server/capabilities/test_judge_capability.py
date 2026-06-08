@@ -180,35 +180,23 @@ async def evaluate_bdd(scenario: BddScenario, log_dir: str | None = None) -> dic
     """
     model = _get_judge_model()
     if model is None:
-        verdict = {
-            "verdict": "warn",
-            "confidence": 0.0,
-            "reasoning": "LLM judge unavailable — no DeepSeek API key found.",
-            "issues": ["no_api_key"],
-            "test_name": scenario.test_name,
-        }
-    else:
-        try:
-            agent = Agent(model, system_prompt=_JUDGE_SYSTEM)
-            prompt = _build_judge_prompt(scenario)
-            result = await agent.run(prompt)
-            raw = result.output.strip()
-            # Strip markdown fences if the LLM wraps them
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                raw = raw.strip()
-            verdict = json.loads(raw)
-            verdict["test_name"] = scenario.test_name
-        except Exception as exc:
-            verdict = {
-                "verdict": "warn",
-                "confidence": 0.0,
-                "reasoning": f"LLM judge call failed: {exc}",
-                "issues": [str(exc)],
-                "test_name": scenario.test_name,
-            }
+        raise RuntimeError("CRITICAL FAILURE: DeepSeek API key is missing! LLM judge requires live execution.")
+    
+    try:
+        agent = Agent(model, system_prompt=_JUDGE_SYSTEM)
+        prompt = _build_judge_prompt(scenario)
+        result = await agent.run(prompt)
+        raw = result.output.strip()
+        # Strip markdown fences if the LLM wraps them
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+        verdict = json.loads(raw)
+        verdict["test_name"] = scenario.test_name
+    except Exception as exc:
+        raise RuntimeError(f"CRITICAL FAILURE: LLM judge call failed: {exc}") from exc
 
     # Persist verdict to disk
     if log_dir:
