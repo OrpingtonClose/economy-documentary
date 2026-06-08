@@ -78,7 +78,7 @@ def test_vast_create_and_destroy_lifecycle():
     """Verify renting and immediate destruction of a real low-cost GPU instance."""
     vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
     if not os.path.exists(vast_key_path):
-        pytest.skip("Vast.ai API key is missing. Skipping live VM creation test.")
+        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. vast_ai_key.txt is missing!")
         
     with open(vast_key_path) as f:
         api_key = f.read().strip()
@@ -87,7 +87,7 @@ def test_vast_create_and_destroy_lifecycle():
     cmd_search = f"vastai --api-key {api_key} search offers 'rentable=true num_gpus=1' -o 'price' --raw"
     res = subprocess.run(cmd_search, shell=True, capture_output=True, text=True)
     if res.returncode != 0 or not res.stdout.strip():
-        pytest.skip("Failed to fetch search offers from Vast.ai API.")
+        raise RuntimeError(f"Vast.ai API connection failed: {res.stderr}")
         
     # Rent the cheapest matching machine
     import json
@@ -95,32 +95,27 @@ def test_vast_create_and_destroy_lifecycle():
         offers = json.loads(res.stdout.strip())
         offer_id = offers[0]["id"]
     except Exception as e:
-        pytest.skip(f"Could not parse Vast.ai raw search output: {e}")
+        raise RuntimeError(f"Could not parse Vast.ai search output: {e}. Raw: {res.stdout}")
         
     print(f"Renting cheapest Vast.ai offer: {offer_id}")
     cmd_create = f"vastai --api-key {api_key} create instance {offer_id} --image ubuntu:22.04 --disk 20 --raw"
     create_res = subprocess.run(cmd_create, shell=True, capture_output=True, text=True)
     if create_res.returncode != 0:
-        pytest.skip(f"Lease creation failed: {create_res.stderr}. Skipping live lease test.")
+        raise RuntimeError(f"Cheapest VM lease creation failed: {create_res.stderr}")
     
     if not create_res.stdout.strip():
-        pytest.skip("Empty stdout from vastai create instance. Skipping live lease test.")
+        raise RuntimeError("Cheapest VM lease creation returned empty output")
         
     try:
         create_data = json.loads(create_res.stdout.strip())
         instance_id = create_data["new_contract"]
         print(f"VM successfully leased: {instance_id}")
     except Exception as e:
-        pytest.skip(f"Failed to parse contract ID: {e}. Output was: {create_res.stdout}. Skipping live lease test.")
+        raise RuntimeError(f"Failed to parse leased VM contract ID: {e}. Output: {create_res.stdout}")
         
     # Wait and then destroy to ensure clean teardown
     print(f"Cleaning up and destroying Vast.ai instance {instance_id}...")
     cmd_destroy = f"vastai --api-key {api_key} destroy instance {instance_id}"
     destroy_res = subprocess.run(cmd_destroy, shell=True, capture_output=True)
-    print('     ├─ [Assert] Checking: destroy_res.returncode == 0, f\"VM teardown leaked: {destroy...')
+    print('     ├─ [Assert] Checking: destroy_res.returncode == 0')
     assert destroy_res.returncode == 0, f"VM teardown leaked: {destroy_res.stderr}"
-
-
-    # ===========================================================================
-    # 7. SSH Handshake & Docker Worker Health Check
-    # ===========================================================================

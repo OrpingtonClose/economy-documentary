@@ -103,9 +103,10 @@ A **Simulation Cover (SC)** is an individual integration or unit test case $t$ d
 
 For test case $t$ to qualify as a valid **Simulation Cover** for capability $c$, it must satisfy four structural criteria:
 1. **Target Production Execution:** $t$ must invoke the actual production script, module, or code path that implements $c$ (rather than a mock wrapper or test-only replica).
-2. **Live Boundary Interaction:** $t$ must communicate directly with the real-world/physical dependency of $c$ (e.g., executing a live shell command, calling a live external API, writing to physical disk, or executing a physical binary like `ffmpeg`).
-3. **No Boundary Mocking:** $t$ must **not** intercept, mock, or monkey-patch the production code path or the external/physical boundary under test.
+2. **Live Boundary Interaction (Mandatory Live Execution):** $t$ must communicate directly with the real-world/physical dependency of $c$ by executing a live shell command, calling a live external API, writing to physical disk, or executing a physical binary like `ffmpeg`. **There are absolutely no exceptions for offline or dry-run fallbacks.**
+3. **No Boundary Mocking:** $t$ must **not** intercept, mock, or monkey-patch the production code path or the external/physical boundary under test. Any test that falls back to a mock, stub, or simulated response when running offline (such as mock vastai, mock LLMs, or mock search endpoints) fails Condition 2 and Condition 3 and is strictly **DISQUALIFIED** as a valid Simulation Cover. To be valid, a Simulation Cover must fail immediately (raising a fatal error or assertion failure) if the live network, external API credentials, or physical binaries are missing.
 4. **Scoped Verification:** $t$ is **not** required to execute the entire system workflow or agent loop end-to-end. It is strictly a scoped test validating that a single live production element's interface and behavior match the simulator's mock assumptions.
+
 
 ### The Metric: Simulation Coverage
 **Simulation Coverage** is the percentage of all simulated boundaries in the test suite that are backed by at least one valid **Simulation Cover**.
