@@ -20,7 +20,8 @@ def get_newest_brain_dir():
         for subdir in brain_root.iterdir():
             if subdir.is_dir() and not subdir.name.startswith("."):
                 try:
-                    mtime = subdir.stat().st_mtime
+                    state_file = subdir / ".lock_state"
+                    mtime = state_file.stat().st_mtime if state_file.exists() else subdir.stat().st_mtime
                     if mtime > newest_mtime:
                         newest_mtime = mtime
                         newest_dir = subdir

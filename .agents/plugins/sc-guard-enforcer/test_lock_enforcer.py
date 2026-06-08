@@ -14,16 +14,18 @@ TEST_PATTERNS = ["pytest", "tests.units.run", "tests/units/run", "run.py"]
 def get_newest_brain_dir():
     try:
         brain_root = Path("/Users/orpington/.gemini/antigravity/brain")
+        conv_id = os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+        if conv_id and (brain_root / conv_id).exists():
+            return brain_root / conv_id
         if not brain_root.exists():
             return None
-        
-        # Find the newest directory
         newest_dir = None
         newest_mtime = 0
         for subdir in brain_root.iterdir():
             if subdir.is_dir() and not subdir.name.startswith("."):
                 try:
-                    mtime = subdir.stat().st_mtime
+                    state_file = subdir / ".lock_state"
+                    mtime = state_file.stat().st_mtime if state_file.exists() else subdir.stat().st_mtime
                     if mtime > newest_mtime:
                         newest_mtime = mtime
                         newest_dir = subdir
@@ -261,6 +263,56 @@ def update_html_artifact(state, newest_dir):
         else:
             target_content = write_allowed_md
         
+        # Append test report
+        try:
+            test_outputs = newest_dir / "test_outputs"
+            if test_outputs.exists():
+                bdd_dir = test_outputs / "bdd_verdicts"
+                bdd_results = []
+                if bdd_dir.exists():
+                    for f_item in sorted(bdd_dir.iterdir()):
+                        if f_item.name.endswith(".json"):
+                            try:
+                                with open(f_item, "r", encoding="utf-8") as jf:
+                                    bdd_results.append(json.load(jf))
+                            except Exception:
+                                pass
+                
+                pytest_log = test_outputs / "pytest_output.log"
+                passed_count = 0
+                failed_count = 0
+                skipped_count = 0
+                if pytest_log.exists():
+                    with open(pytest_log, "r", encoding="utf-8") as lf:
+                        log_content = lf.read()
+                    passed_count = len(re.findall(r"SUMMARY: TEST CASE '([^']+)' COMPLETED SUCCESSFULLY AND PASSED", log_content))
+                    failed_count = len(re.findall(r"SUMMARY: TEST CASE '([^']+)' FAILED", log_content))
+                    skipped_count = len(re.findall(r"SUMMARY: TEST CASE '([^']+)' WAS SKIPPED", log_content))
+                
+                md = ["\n## 📊 Latest Test Run Report"]
+                total = passed_count + failed_count + skipped_count
+                if total > 0:
+                    md.append(f"\n### 📈 Summary: **{passed_count} Passed**, **{failed_count} Failed**, **{skipped_count} Skipped** (Total: {total} tests)\n")
+                else:
+                    md.append("\nNo recent test run summary found.\n")
+                
+                if bdd_results:
+                    md.append("\n### 🏷️ BDD Integration Tests Verdicts\n")
+                    md.append("| BDD Test Case | Verdict | Confidence | Key Issues / Reasoning |")
+                    md.append("| :--- | :---: | :---: | :--- |")
+                    for res in bdd_results:
+                        name = res.get("test_name", "Unknown")
+                        verdict = res.get("verdict", "Unknown").upper()
+                        conf = f"{int(res.get('confidence', 0) * 100)}%"
+                        reasoning = res.get("reasoning", "")
+                        reasoning = reasoning.replace("\n", " ").replace("|", "\\|")
+                        v_emoji = "✅ PASS" if verdict == "PASS" else "❌ FAIL"
+                        md.append(f"| `{name}` | {v_emoji} | {conf} | {reasoning} |")
+                
+                target_content += "\n" + "\n".join(md)
+        except Exception as e:
+            pass
+
         # Avoid writing if it is already identical
         if md_path.exists():
             with open(md_path, "r", encoding="utf-8") as f:

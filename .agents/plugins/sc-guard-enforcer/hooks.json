@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${AbsolutePath}\""
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${TargetFile}\""
           }
         ]
       },
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${SearchPath}\""
+            "command": "python3 /Users/orpington/.gemini/config/plugins/sc-guard-enforcer/test_lock_enforcer.py --action pre_read --file \"${TargetFile}\""
           }
         ]
       }
