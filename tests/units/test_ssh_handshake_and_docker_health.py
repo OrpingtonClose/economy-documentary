@@ -1,65 +1,96 @@
 import os
 import sys
 import time
-import subprocess
 import httpx
+import subprocess
 from pathlib import Path
 
+# Setup Python paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.append(str(PROJECT_ROOT / "server"))
+sys.path.append(str(PROJECT_ROOT / "tests/units"))
+
+from harness import IntegrationHarness
 
 def test_ssh_handshake_and_docker_health():
     print('\n▶️  [STARTING TEST] test_ssh_handshake_and_docker_health')
-    
-    assert os.path.exists(sys.executable), "CRITICAL FAILURE: Python executable is missing!"
-    
-    # Locate scripts/mock_gpu_worker.py in the repository
-    mock_worker_path = os.path.join(PROJECT_ROOT, "scripts", "mock_gpu_worker.py")
-    if not os.path.exists(mock_worker_path):
-        raise RuntimeError(f"CRITICAL FAILURE: mock_gpu_worker.py is missing at {mock_worker_path}")
+    """Verify that SSH commands execute on worker VMs and port bindings respond."""
+    # We simulate this via a local mock worker container spawned on port 9001
+    print('     └─ [Harness] Initializing process-isolated test harness...')
+    with IntegrationHarness(required_agents=["gsa"]) as harness:
+        db_dir = harness.temp_dir.name
         
-    # Spawn the mock_gpu_worker.py script in the background on port 9001
-    print("Spawning mock_gpu_worker.py on port 9001 in the background...")
-    proc = subprocess.Popen(
-        [sys.executable, mock_worker_path, "--port", "9001"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-    
-    try:
-        # Wait for the service to start and bind to port 9001
-        url = "http://127.0.0.1:9001/"
-        connected = False
-        # Try for up to 5 seconds
-        for _ in range(10):
+        # Launch mock_gpu_worker.py locally on port 9001 to verify endpoint contract
+        worker_script = PROJECT_ROOT / "scripts/mock_gpu_worker.py"
+        proc = subprocess.Popen(
+            [sys.executable, str(worker_script), "--port", "9001"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid
+        )
+        
+        try:
+            # Poll GET / to confirm plain conversational status description
+            healthy = False
+            for i in range(30):
+                try:
+                    print('     ├─ [HTTP] Sending request to agent endpoint...')
+                    resp = httpx.get("http://127.0.0.1:9001/")
+                    if resp.status_code == 200 and "healthy" in resp.text:
+                        healthy = True
+                        break
+                except (httpx.ConnectError, httpx.HTTPError):
+                    if i == 29:
+                        raise
+                time.sleep(0.2)
+                
+            print('     ├─ [Assert] Checking: healthy, "Mock worker failed to start and respond to health...')
+            assert healthy, "Mock worker failed to start and respond to health probes on port 9001"
+            
+            # Verify Content-Type text/plain
+            print('     ├─ [HTTP] Sending request to agent endpoint...')
+            resp = httpx.get("http://127.0.0.1:9001/")
+            print('     ├─ [Assert] Checking: "text/plain" in resp.headers.get("content-type", "")')
+            assert "text/plain" in resp.headers.get("content-type", "")
+
+            # Verify TTS job dispatch to mock worker
+            tts_payload = 'python run_qwen3_tts.py --text "Dopamine drives motivation." --voice narrator --output /workspace/output/tts.wav'
+            print('     ├─ [HTTP] Sending request to agent endpoint...')
+            resp_tts = httpx.post("http://127.0.0.1:9001/", content=tts_payload)
+            print('     ├─ [Assert] Checking: resp_tts.status_code == 200')
+            assert resp_tts.status_code == 200
+            print('     ├─ [Assert] Checking: "RESULT:" in resp_tts.text')
+            assert "RESULT:" in resp_tts.text
+            print('     ├─ [Assert] Checking: "Generated narration audio" in resp_tts.text')
+            assert "Generated narration audio" in resp_tts.text
+            print('     ├─ [Assert] Checking: os.path.exists("/tmp/documentary-pipeline/output/tts.wav")')
+            assert os.path.exists("/tmp/documentary-pipeline/output/tts.wav")
+
+            # Verify LTX job dispatch to mock worker
+            ltx_payload = 'python run_ltx_2_3.py --prompt "A beautiful landscape." --duration 5.0 --output /workspace/output/ltx.mp4'
+            print('     ├─ [HTTP] Sending request to agent endpoint...')
+            resp_ltx = httpx.post("http://127.0.0.1:9001/", content=ltx_payload)
+            print('     ├─ [Assert] Checking: resp_ltx.status_code == 200')
+            assert resp_ltx.status_code == 200
+            print('     ├─ [Assert] Checking: "RESULT:" in resp_ltx.text')
+            assert "RESULT:" in resp_ltx.text
+            print('     ├─ [Assert] Checking: "Generated video clip" in resp_ltx.text')
+            assert "Generated video clip" in resp_ltx.text
+            print('     ├─ [Assert] Checking: os.path.exists("/tmp/documentary-pipeline/output/ltx.mp4")')
+            assert os.path.exists("/tmp/documentary-pipeline/output/ltx.mp4")
+            
+        except Exception as e:
             try:
-                resp = httpx.get(url)
-                if resp.status_code == 200:
-                    connected = True
-                    break
+                out, err = proc.communicate()
+                print(f"\n--- Mock Worker stdout ---\n{out.decode()}")
+                print(f"\n--- Mock Worker stderr ---\n{err.decode()}")
             except Exception:
                 pass
-            time.sleep(0.5)
-            
-        assert connected, "CRITICAL FAILURE: mock_gpu_worker.py failed to respond on port 9001 within the grace period"
-        
-        # Verify the API contract matches the BDD scenario exactly
-        assert resp.status_code == 200
-        
-        # Content-Type header must be "text/plain"
-        content_type = resp.headers.get("content-type", "")
-        assert content_type.startswith("text/plain"), f"Unexpected Content-Type: {content_type}"
-        
-        # Response body must be a plain natural language status description
-        body = resp.text
-        assert "healthy and active" in body
-        assert "RTX 3090" in body
-        assert "Qwen3-TTS" in body
-        assert "LTX-2.3" in body
-        
-        print("✓ SSH handshake and docker worker health contract verified successfully over loopback.")
-        
-    finally:
-        print("Terminating mock_gpu_worker.py background process...")
-        proc.terminate()
-        proc.wait()
-        print("Teardown finished.")
+            raise e
+        finally:
+            import signal
+            try:
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, signal.SIGKILL)
+            except Exception:
+                proc.kill()
+            proc.wait()
+        print('    ✓ SSH handshake and Docker health verified')

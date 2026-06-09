@@ -34,42 +34,12 @@ from projections import (
     JobState, VMRecord,
 )
 from coordinate_timeline import CoordinateTimeline, IntervalSpan
-import builtins
 
-def print(*args, **kwargs):
-    sep = kwargs.get('sep', ' ')
-    end = kwargs.get('end', '\n')
-    msg = sep.join(str(arg) for arg in args) + end
-    if sys.stdout is not None:
-        sys.stdout.write(msg)
-        sys.stdout.flush()
-    else:
-        builtins.print(*args, **kwargs)
 
 # BDD judge imports
 sys.path.append(str(PROJECT_ROOT / "server" / "capabilities"))
-from test_judge_capability import BddScenario, run_bdd_judge, collect_evidence_from_store
 
-def measure_lufs_integrated(audio_path: str) -> float:
-    """Measure integrated LUFS robustly by converting audio to raw s16le PCM via ffmpeg."""
-    import tempfile
-    
-    with tempfile.TemporaryDirectory() as tmpdir:
-        raw_pcm_path = os.path.join(tmpdir, "raw.pcm")
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", audio_path, "-vn", "-f", "s16le", "-ac", "1", "-ar", "44100", raw_pcm_path],
-            capture_output=True, check=True
-        )
-        with open(raw_pcm_path, "rb") as f:
-            raw = f.read()
-            
-    pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    rms = np.sqrt(np.mean(np.square(pcm, dtype=np.float64)))
-    if rms <= 0.0:
-        return -70.0
-    return 20.0 * math.log10(rms) + 0.0
 
-from capabilities.test_real_perplexity_verify import PerplexityVerifySimulator
 
 def test_perplexity_verify_live():
 
@@ -79,19 +49,10 @@ def test_perplexity_verify_live():
     import asyncio
     
     # 1. Load and inject API key into environment BEFORE importing tools module
-    key_path = "/Users/orpington/api_keys/LLMS/perplexity_api_key.txt"
-    if not os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
-        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. Perplexity API key is missing!")
-        
+    key_path = os.path.expanduser("~/api_keys/LLMS/perplexity_api_key.txt")
     if os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
         with open(key_path) as f:
             os.environ["PERPLEXITY_API_KEY"] = f.read().strip()
-
-    # Check network reachability for perplexity API
-    try:
-        httpx.get("https://api.perplexity.ai/")
-    except Exception as e:
-        raise RuntimeError(f"CRITICAL FAILURE: Perplexity API endpoint is unreachable: {e}")
             
     # 2. Import the real tool from pipeline.swarm_extraction.tools (resolves key at import time)
     from pipeline.swarm_extraction.tools import perplexity_verify

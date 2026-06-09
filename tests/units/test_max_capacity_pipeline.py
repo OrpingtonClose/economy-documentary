@@ -6,18 +6,8 @@ import wave
 import math
 import subprocess
 import numpy as np
-import builtins
 from pathlib import Path
 
-def print(*args, **kwargs):
-    sep = kwargs.get('sep', ' ')
-    end = kwargs.get('end', '\n')
-    msg = sep.join(str(arg) for arg in args) + end
-    if sys.stdout is not None:
-        sys.stdout.write(msg)
-        sys.stdout.flush()
-    else:
-        builtins.print(*args, **kwargs)
 
 # Append paths so we can import harness and effects
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -36,8 +26,8 @@ from typing import Any
 import re
 from projections import VMs
 from agent_base import get_active_log_dir
-from capabilities.test_real_vast_provisioning_bdd_worker_health import WorkerHealthSimulator
-from capabilities.test_real_assembly_bdd_assemble_final_cut import AssembleFinalCutSimulator
+from capabilities.sim_vast_provisioning_bdd_worker_health import WorkerHealthSimulator
+from capabilities.sim_assembly_bdd_assemble_final_cut import AssembleFinalCutSimulator
 
 class GenericAudioSimulator(AbstractCapability):
     async def wrap_tool_execute(
@@ -258,7 +248,7 @@ def run_test():
 
         # 3. Wake up the Audio Agent to trigger autonomous loop execution
         print("Sending initial wakeup notification to Audio Agent...")
-        resp = httpx.post(f"http://127.0.0.1:{audio_port}/", content="Wakeup", timeout=None)
+        resp = httpx.post(f"http://127.0.0.1:{audio_port}/", content="Wakeup")
         assert resp.status_code == 200, f"Failed to wakeup Audio Agent: {resp.text}"
 
         # 4. Monitor pipeline execution
@@ -272,7 +262,7 @@ def run_test():
         peak_concurrent_ltx = 0
         last_seen_seq = -1
 
-        while True:
+        for iteration in range(300):
             # 4.1 Read events database to count concurrent jobs
             try:
                 db_events = event_store.read_all()
@@ -525,11 +515,11 @@ def run_test():
 </div>
 """
                     import pathlib
-                    current_active = pathlib.Path("/Users/orpington/.gemini/antigravity/brain/2396d2a7-2d70-42f0-8498-e40c70b10fa0")
+                    current_active = pathlib.Path(os.path.expanduser("~/.gemini/antigravity/brain/2396d2a7-2d70-42f0-8498-e40c70b10fa0"))
                     if current_active.exists():
                         active_brain = current_active
                     else:
-                        brain_root = pathlib.Path("/Users/orpington/.gemini/antigravity/brain")
+                        brain_root = pathlib.Path(os.path.expanduser("~/.gemini/antigravity/brain"))
                         active_brain = current_active
                         if brain_root.exists():
                             newest_dir = None
