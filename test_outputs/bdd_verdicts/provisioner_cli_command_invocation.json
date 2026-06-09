@@ -1,0 +1,7 @@
+{
+  "verdict": "pass",
+  "confidence": 0.98,
+  "reasoning": "The BDD scenario requires that after pipeline completion, both VMs are destroyed, VMDeallocated events are emitted for both, the active VM projection is 0, and budget shows total spent. The event log shows: pipeline_started, budget_set, two separate vastai create instance command_executed events followed by vm_allocated events (for instances 1234567 and 7654321), pipeline_complete, then two separate vastai destroy instance command_executed events followed by vm_deallocated events for each instance. Each VM deallocation includes final_cost and runtime_sec. The projections correctly show active_vms=0, total_vms_ever=2, pipeline_phase='done', budget_usd=10.0, and spent_usd=0.0073 (sum of the two final_costs). All domain events have corresponding physical command_executed trace effects (no mocking detected). The simulated timestamps and costs are expected for an integration test environment. The logical sequence of events and cost accounting are consistent.",
+  "issues": [],
+  "test_name": "full_fleet_teardown_cost_accounting"
+}

@@ -1,0 +1,7 @@
+{
+  "verdict": "pass",
+  "confidence": 1.0,
+  "reasoning": "The test fully satisfies the BDD scenario: (Given) pipeline_complete event present, 2 VMAllocated events with correct instance_ids; (When) both VMs destroyed via command_executed events ('vastai destroy instance ...') followed by corresponding VMDeallocated events for each; (Then) two VMDeallocated events emitted, projection shows 0 active VMs, pipeline_phase 'done', budget_set at 10.0, and spent_usd of 0.0073 (sum of final_costs 0.0035 + 0.0038). Physical execution traces (command_executed) accompany each VM allocation and deallocation, matching the requirement for real vastai commands. The test runs in a simulated/integration environment so instant timestamps and dummy costs are expected. No logical inconsistencies or missing traces.",
+  "issues": [],
+  "test_name": "full_fleet_teardown_cost_accounting"
+}

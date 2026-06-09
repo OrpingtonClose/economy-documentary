@@ -1,0 +1,11 @@
+{
+  "verdict": "fail",
+  "confidence": 1.0,
+  "reasoning": "Mocking Detected - The event log shows domain events like job_completed for TTS jobs, but critical physical execution trace effects (command_executed, file_written, network_request) are completely absent. For each TTS job completion, there should be corresponding command_executed events showing actual TTS command invocations and file_written events for the generated .wav files. The event log only contains domain-level events (queue_job, job_started, job_completed, etc.) without any underlying command execution or file system traces. This indicates the physical TTS generation was not actually performed but mocked.",
+  "issues": [
+    "Missing command_executed events for TTS generation commands",
+    "Missing file_written events for .wav artifact outputs",
+    "All job completions lack physical execution trace effects"
+  ],
+  "test_name": "partial_failure_isolated_recovery"
+}

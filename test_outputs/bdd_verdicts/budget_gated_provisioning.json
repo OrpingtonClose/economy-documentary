@@ -1,0 +1,11 @@
+{
+  "verdict": "fail",
+  "confidence": 0.99,
+  "reasoning": "Mocking Detected: The test claims budget-exceeded behavior after a VM deallocation, but the domain events lack corresponding physical execution trace effects (command_executed, network_request, file_written, process_spawned). Specifically, the vm_allocated event (seq 3) has no matching command_executed for 'vastai' or similar provisioning command. The vm_deallocated event (seq 4) and budget_exceeded event (seq 6) also lack any underlying physical trace effects showing real command execution or asset operations. Additionally, the sequence is logically inconsistent: the budget_exceeded event occurs after a queue_job event, but the scenario expects the provisioner to NOT allocate when budget is exceeded. Here, a VM was allocated and deallocated before the budget check, which contradicts the BDD intent. The test simulates the domain events without the required backend agent invocations.",
+  "issues": [
+    "Missing physical execution traces (command_executed, file_written, process_spawned) for all domain events",
+    "Logical inconsistency: VM allocated/deallocated before budget exceeded check, contrary to 'does NOT allocate' requirement",
+    "No corresponding provisioner command invocation for vm_allocated event"
+  ],
+  "test_name": "budget_gated_provisioning"
+}

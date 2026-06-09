@@ -1,0 +1,12 @@
+{
+  "verdict": "fail",
+  "confidence": 0.99,
+  "reasoning": "Mocking Detected: The test claims that scene 2 jobs become dirty after updating script, but there are no corresponding physical execution trace effects (command_executed, file_written, process_spawned, network_request) for any of the job_completed events. All 6 job_completed events lack trace effects showing actual TTS generation, video generation, or VM provisioning commands. The event log only contains domain events (queue_job, job_completed) without any underlying physical agent actions, indicating the job completion was mocked/simulated rather than executed through actual pipeline agents.",
+  "issues": [
+    "Missing physical execution traces for all job_completed events",
+    "No command_executed, file_written, or process_spawned effects present in any event for TTS/LTX job completions",
+    "VMAllocated effects (vm_instance_id references) have no corresponding provisioner command executions",
+    "The test is not an offline projection test that would legitimately skip trace effects"
+  ],
+  "test_name": "script_revision_selective_requeue"
+}
