@@ -40,6 +40,17 @@ _original_async_send = httpx.AsyncClient.send
 _original_sync_send = httpx.Client.send
 
 async def _patched_async_send(self, request, *args, **kwargs):
+    try:
+        url_str = str(request.url)
+        if any(x in url_str for x in ["localhost", "127.0.0.1"]):
+            request.extensions["timeout"] = {
+                "connect": None,
+                "read": None,
+                "write": None,
+                "pool": None
+            }
+    except Exception:
+        pass
     resp = await _original_async_send(self, request, *args, **kwargs)
     try:
         agent = active_agent_var.get()
@@ -56,6 +67,17 @@ async def _patched_async_send(self, request, *args, **kwargs):
     return resp
 
 def _patched_sync_send(self, request, *args, **kwargs):
+    try:
+        url_str = str(request.url)
+        if any(x in url_str for x in ["localhost", "127.0.0.1"]):
+            request.extensions["timeout"] = {
+                "connect": None,
+                "read": None,
+                "write": None,
+                "pool": None
+            }
+    except Exception:
+        pass
     resp = _original_sync_send(self, request, *args, **kwargs)
     try:
         agent = active_agent_var.get()
