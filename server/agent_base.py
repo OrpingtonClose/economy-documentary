@@ -708,9 +708,8 @@ class DryRunModel(Model):
                             if not matching_job:
                                 # Queue TTS job
                                 text = (
-                                    "effect: queue_job(\n"
+                                    "effect: queue_audio_job(\n"
                                     f"  job_id=\"job_audio_{block_id}\",\n"
-                                    "  job_type=\"tts\",\n"
                                     f"  scene_num={scene_num},\n"
                                     f"  block_id=\"{block_id}\",\n"
                                     f"  slot_id=\"{slot_key}\",\n"
@@ -816,9 +815,8 @@ class DryRunModel(Model):
                                 # Queue video job
                                 job_id = f"job_video_{block_id}"
                                 text = (
-                                    "effect: queue_job(\n"
+                                    "effect: queue_video_job(\n"
                                     f"  job_id=\"{job_id}\",\n"
-                                    "  job_type=\"ltx\",\n"
                                     f"  scene_num={scene_num},\n"
                                     f"  block_id=\"{block_id}\",\n"
                                     f"  slot_id=\"{slot_key}\",\n"

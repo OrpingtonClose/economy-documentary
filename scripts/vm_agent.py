@@ -26,9 +26,16 @@ from pydantic_ai import Agent
 # Config
 # ---------------------------------------------------------------------------
 
+def get_workspace_path(path: str) -> str:
+    if path.startswith("/workspace") and not os.path.exists("/workspace"):
+        tmp_workspace = "/tmp/workspace"
+        os.makedirs(tmp_workspace, exist_ok=True)
+        return path.replace("/workspace", tmp_workspace, 1)
+    return path
+
 _DEEPSEEK_API_KEY = ""
-if os.path.exists("/workspace/.deepseek_key"):
-    with open("/workspace/.deepseek_key") as f:
+if os.path.exists(get_workspace_path("/workspace/.deepseek_key")):
+    with open(get_workspace_path("/workspace/.deepseek_key")) as f:
         _DEEPSEEK_API_KEY = f.read().strip()
 if _DEEPSEEK_API_KEY:
     os.environ["DEEPSEEK_API_KEY"] = _DEEPSEEK_API_KEY
@@ -145,7 +152,7 @@ while true; do
   fi
 done
 """
-    path = "/workspace/self_destruct.sh"
+    path = get_workspace_path("/workspace/self_destruct.sh")
     with open(path, "w") as f:
         f.write(script)
     os.chmod(path, 0o755)
@@ -158,7 +165,7 @@ done
 
 def _touch_activity() -> None:
     try:
-        with open("/workspace/.vm_activity", "w") as f:
+        with open(get_workspace_path("/workspace/.vm_activity"), "w") as f:
             f.write(str(int(time.time())))
     except Exception:
         pass
@@ -211,16 +218,16 @@ def health() -> Response:
         pass
 
     gpu_desc = f"The active GPU is {gpu_info}." if gpu_info else "No active GPU was detected."
-    boot_desc = "The bootstrap process is fully complete." if os.path.exists("/workspace/.bootstrap_complete") else "The bootstrap process is still in progress."
+    boot_desc = "The bootstrap process is fully complete." if os.path.exists(get_workspace_path("/workspace/.bootstrap_complete")) else "The bootstrap process is still in progress."
     
     # Check model files
     ready_status = []
-    if os.path.exists("/workspace/models/qwen3-tts-voicedesign/model.safetensors"):
+    if os.path.exists(get_workspace_path("/workspace/models/qwen3-tts-voicedesign/model.safetensors")):
         ready_status.append("the Qwen3-TTS audio model is loaded and ready")
     else:
         ready_status.append("the Qwen3-TTS audio model is not loaded yet")
         
-    if os.path.exists("/workspace/models/ltx23/ltx-2.3-22b-dev.safetensors"):
+    if os.path.exists(get_workspace_path("/workspace/models/ltx23/ltx-2.3-22b-dev.safetensors")):
         ready_status.append("the LTX-2.3 video model is loaded and ready")
     else:
         ready_status.append("the LTX-2.3 video model is not loaded yet")
@@ -228,7 +235,7 @@ def health() -> Response:
 
     # Read latest log snippet
     log_snippet = "No logs found."
-    log_paths = ["/workspace/worker.log", "/workspace/agent.log", "/workspace/self_destruct.log"]
+    log_paths = [get_workspace_path(p) for p in ["/workspace/worker.log", "/workspace/agent.log", "/workspace/self_destruct.log"]]
     for path in log_paths:
         if os.path.exists(path):
             try:

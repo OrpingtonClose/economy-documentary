@@ -107,28 +107,45 @@ class ReorderScenes(Effect):
 # 3.3 Job Effects
 # ===========================================================================
 
-class QueueJob(Effect):
-    """Demand creation of a media artifact by a VM worker."""
-    kind: Literal["queue_job"] = "queue_job"
+class QueueAudioJob(Effect):
+    """Demand creation of a TTS narration audio artifact by a VM worker."""
+    kind: Literal["queue_audio_job"] = "queue_audio_job"
     job_id: str = Field(..., description="stable unique job identifier")
-    job_type: Literal["tts", "ltx"]
     scene_num: int = Field(..., ge=1)
     block_id: str
     slot_id: str = Field(..., description="OTIO slot where the result belongs")
     params: dict = Field(default_factory=dict, description="type-specific generation params")
 
 
-class JobStarted(Effect):
-    """VM worker accepted the job. Job is now running."""
-    kind: Literal["job_started"] = "job_started"
+class QueueVideoJob(Effect):
+    """Demand creation of a video clip artifact by a VM worker."""
+    kind: Literal["queue_video_job"] = "queue_video_job"
+    job_id: str = Field(..., description="stable unique job identifier")
+    scene_num: int = Field(..., ge=1)
+    block_id: str
+    slot_id: str = Field(..., description="OTIO slot where the result belongs")
+    params: dict = Field(default_factory=dict, description="type-specific generation params")
+
+
+class AudioJobStarted(Effect):
+    """VM worker accepted the audio job. Job is now running."""
+    kind: Literal["audio_job_started"] = "audio_job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
 
 
-class JobCompleted(Effect):
-    """VM worker finished successfully; artifact is ready for quality review."""
-    kind: Literal["job_completed"] = "job_completed"
+class VideoJobStarted(Effect):
+    """VM worker accepted the video job. Job is now running."""
+    kind: Literal["video_job_started"] = "video_job_started"
+    job_id: str
+    vm_instance_id: str
+    started_at: float = Field(default_factory=time.time)
+
+
+class AudioJobCompleted(Effect):
+    """VM worker finished audio job successfully; artifact is ready for quality review."""
+    kind: Literal["audio_job_completed"] = "audio_job_completed"
     job_id: str
     artifact_uri: str = Field(..., description="URI to generated file")
     duration_sec: float = Field(..., ge=0.0, description="actual media duration")
@@ -144,9 +161,23 @@ class JobCompleted(Effect):
     )
 
 
-class JobFailed(Effect):
-    """VM worker failed."""
-    kind: Literal["job_failed"] = "job_failed"
+class VideoJobCompleted(Effect):
+    """VM worker finished video job successfully; artifact is ready for quality review."""
+    kind: Literal["video_job_completed"] = "video_job_completed"
+    job_id: str
+    artifact_uri: str = Field(..., description="URI to generated file")
+    duration_sec: float = Field(..., ge=0.0, description="actual media duration")
+
+    @field_validator("duration_sec", mode="before")
+    @classmethod
+    def _parse_duration_sec(cls, val: Any) -> float:
+        return parse_duration(val)
+    vm_instance_id: str
+
+
+class AudioJobFailed(Effect):
+    """VM worker failed audio job."""
+    kind: Literal["audio_job_failed"] = "audio_job_failed"
     job_id: str
     error_message: str
     failure_category: Literal[
@@ -163,17 +194,53 @@ class JobFailed(Effect):
     retry_count: int = Field(default=0, ge=0, description="how many times this job has been retried")
 
 
-class JobRequeued(Effect):
-    """Artistry rejection: previous output did not meet quality bar."""
-    kind: Literal["job_requeued"] = "job_requeued"
+class VideoJobFailed(Effect):
+    """VM worker failed video job."""
+    kind: Literal["video_job_failed"] = "video_job_failed"
+    job_id: str
+    error_message: str
+    failure_category: Literal[
+        "oom",           # GPU out of memory
+        "bad_prompt",    # malformed generation params
+        "model_load_error",  # model weights failed to load
+        "disk_full",     # VM out of disk
+        "network",       # network error during model download or upload
+        "cuda_error",    # CUDA runtime failure
+        "unknown",       # uncategorized failure
+    ]
+    vm_instance_id: str
+    retryable: bool = True
+    retry_count: int = Field(default=0, ge=0, description="how many times this job has been retried")
+
+
+class AudioJobRequeued(Effect):
+    """Artistry rejection: previous audio output did not meet quality bar."""
+    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1, description="why the previous attempt was rejected")
     new_params: dict | None = None
 
 
-class JobApproved(Effect):
-    """Artistry approval: artifact passes quality review, ready for OTIO merge."""
-    kind: Literal["job_approved"] = "job_approved"
+class VideoJobRequeued(Effect):
+    """Artistry rejection: previous video output did not meet quality bar."""
+    kind: Literal["video_job_requeued"] = "video_job_requeued"
+    job_id: str
+    reason: str = Field(..., min_length=1, description="why the previous attempt was rejected")
+    new_params: dict | None = None
+
+
+class AudioJobApproved(Effect):
+    """Artistry approval: audio artifact passes quality review, ready for OTIO merge."""
+    kind: Literal["audio_job_approved"] = "audio_job_approved"
+    job_id: str
+    artifact_uri: str
+    quality_notes: str = ""
+    reviewed_by: str = Field(default="agent", description="'agent' or human name")
+
+
+class VideoJobApproved(Effect):
+    """Artistry approval: video artifact passes quality review, ready for OTIO merge."""
+    kind: Literal["video_job_approved"] = "video_job_approved"
     job_id: str
     artifact_uri: str
     quality_notes: str = ""
@@ -562,6 +629,53 @@ class ProcessSpawned(Effect):
     pid: int = Field(..., description="Process ID")
 
 
+# Legacy / Deprecated classes (for backward-compatible log parsing)
+class QueueJob(Effect):
+    kind: Literal["queue_job"] = "queue_job"
+    job_id: str
+    job_type: str = ""
+    scene_num: int = 1
+    block_id: str = ""
+    slot_id: str = ""
+    params: dict = Field(default_factory=dict)
+
+class JobStarted(Effect):
+    kind: Literal["job_started"] = "job_started"
+    job_id: str
+    vm_instance_id: str
+    started_at: float = 0.0
+
+class JobCompleted(Effect):
+    kind: Literal["job_completed"] = "job_completed"
+    job_id: str
+    artifact_uri: str
+    duration_sec: float = 0.0
+    vm_instance_id: str
+    measurements: list[float] = Field(default_factory=list)
+
+class JobFailed(Effect):
+    kind: Literal["job_failed"] = "job_failed"
+    job_id: str
+    error_message: str
+    failure_category: str
+    vm_instance_id: str
+    retryable: bool = True
+    retry_count: int = 0
+
+class JobRequeued(Effect):
+    kind: Literal["job_requeued"] = "job_requeued"
+    job_id: str
+    reason: str
+    new_params: dict | None = None
+
+class JobApproved(Effect):
+    kind: Literal["job_approved"] = "job_approved"
+    job_id: str
+    artifact_uri: str
+    quality_notes: str = ""
+    reviewed_by: str = "agent"
+
+
 # ===========================================================================
 # 3.10 EffectUnion and KIND_TO_MODEL
 # ===========================================================================
@@ -572,11 +686,23 @@ EffectUnion = Annotated[
         DeleteScene,
         ReorderScenes,
         QueueJob,
+        QueueAudioJob,
+        QueueVideoJob,
         JobStarted,
+        AudioJobStarted,
+        VideoJobStarted,
         JobCompleted,
+        AudioJobCompleted,
+        VideoJobCompleted,
         JobFailed,
+        AudioJobFailed,
+        VideoJobFailed,
         JobRequeued,
+        AudioJobRequeued,
+        VideoJobRequeued,
         JobApproved,
+        AudioJobApproved,
+        VideoJobApproved,
         AudioGenerated,
         AudioMeasured,
         DurationAdjusted,
@@ -616,11 +742,23 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "delete_scene":       DeleteScene,
     "reorder_scenes":     ReorderScenes,
     "queue_job":          QueueJob,
+    "queue_audio_job":    QueueAudioJob,
+    "queue_video_job":    QueueVideoJob,
     "job_started":        JobStarted,
+    "audio_job_started":  AudioJobStarted,
+    "video_job_started":  VideoJobStarted,
     "job_completed":      JobCompleted,
+    "audio_job_completed": AudioJobCompleted,
+    "video_job_completed": VideoJobCompleted,
     "job_failed":         JobFailed,
+    "audio_job_failed":   AudioJobFailed,
+    "video_job_failed":   VideoJobFailed,
     "job_requeued":       JobRequeued,
+    "audio_job_requeued": AudioJobRequeued,
+    "video_job_requeued": VideoJobRequeued,
     "job_approved":       JobApproved,
+    "audio_job_approved": AudioJobApproved,
+    "video_job_approved": VideoJobApproved,
     "audio_generated":    AudioGenerated,
     "audio_measured":     AudioMeasured,
     "duration_adjusted":  DurationAdjusted,

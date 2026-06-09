@@ -549,7 +549,7 @@ def run_subagent_audit(test_name: str) -> dict:
     }
     
     try:
-        resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=45.0)
+        resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=5.0)
         if resp.status_code == 200:
             raw = resp.json()["choices"][0]["message"]["content"].strip()
             if raw.startswith("```"):
