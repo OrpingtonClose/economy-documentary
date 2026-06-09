@@ -27,7 +27,7 @@ from effects import (
     AudioMeasured, AudioGenerated, NoOp, HumanInstruction,
     AgentLoopDetected, MeasurementRequested, VideoMeasured,
     ProductionFailed, SuggestedFix,
-    parse_duration, Effect, KIND_TO_MODEL, EffectUnion,
+    parse_duration, Effect, KIND_TO_MODEL, EffectUnion, CommandExecuted,
 )
 from projections import (
     Timeline, Jobs, VMs, BudgetProjection, StateProjection,
@@ -99,12 +99,23 @@ def test_bdd_full_fleet_teardown_cost_accounting():
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(BudgetSet(agent="operator", budget_usd=10.0), "")
 
-    # Two VMs allocated
+    # Seed physical trace commands to support the VM allocation events
+    print('     ├─ [EventStore] Appending event to SQLite events database...')
+    store.append(CommandExecuted(
+        agent="provisioner", command="vastai create instance 101 --image ubuntu:22.04 --disk 20 --raw",
+        exit_code=0, stdout_hash="hash101"
+    ), "init")
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(VMAllocated(
         agent="provisioner", instance_id="1234567", role="tts",
         offer_id="101", worker_url="http://127.0.0.1:9001",
         gpu_type="RTX 4090", cost_per_hour=0.85,
+    ), "init")
+
+    print('     ├─ [EventStore] Appending event to SQLite events database...')
+    store.append(CommandExecuted(
+        agent="provisioner", command="vastai create instance 102 --image ubuntu:22.04 --disk 20 --raw",
+        exit_code=0, stdout_hash="hash102"
     ), "init")
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(VMAllocated(
@@ -119,14 +130,27 @@ def test_bdd_full_fleet_teardown_cost_accounting():
         agent="assembly", output_path=f"{tmp}/final.mp4", duration_sec=15.0,
     ), "init")
 
-    # Teardown both
+    # Teardown both (with physical command executed events)
+    print('     ├─ [EventStore] Appending event to SQLite events database...')
+    store.append(CommandExecuted(
+        agent="provisioner", command="vastai destroy instance 1234567",
+        exit_code=0, stdout_hash="destroyed"
+    ), "init")
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(VMDeallocated(
         agent="provisioner", instance_id="1234567", reason="job_done",
+        runtime_sec=15.0, final_cost=0.0035
+    ), "init")
+
+    print('     ├─ [EventStore] Appending event to SQLite events database...')
+    store.append(CommandExecuted(
+        agent="provisioner", command="vastai destroy instance 7654321",
+        exit_code=0, stdout_hash="destroyed"
     ), "init")
     print('     ├─ [EventStore] Appending event to SQLite events database...')
     store.append(VMDeallocated(
         agent="provisioner", instance_id="7654321", reason="job_done",
+        runtime_sec=15.0, final_cost=0.0038
     ), "init")
 
     events = store.replay()
@@ -161,7 +185,8 @@ def test_bdd_full_fleet_teardown_cost_accounting():
     )
     print('     ├─ [BDD Judge] Executing LLM BDD Judge validation...')
     verdict = asyncio.run(run_bdd_judge(scenario, tmp))
-    print('     ├─ [Assert] Checking: verdict[\"verdict\"] != \"fail\", f\"BDD judge failed: {verd...')
+    print('     ├─ [Assert] Checking: verdict[\"verdict\"] != \"fail\", f\"BDD judge failed: {verdict[\'reasoning\']}\"')
+    assert verdict["verdict"] != "fail", f"BDD judge failed: {verdict['reasoning']}"
     print(f"    ✓ full fleet teardown — verdict: {verdict['verdict']}")
 
 

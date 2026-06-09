@@ -381,6 +381,32 @@ class _VideoMeasuredEffect(BaseModel):
         return parse_duration(val)
 
 
+class _CommandExecutedEffect(BaseModel):
+    kind: Literal["command_executed"] = "command_executed"
+    command: str
+    exit_code: int
+    stdout_hash: str = ""
+
+
+class _NetworkRequestEffect(BaseModel):
+    kind: Literal["network_request"] = "network_request"
+    url: str
+    method: str
+    status_code: int
+
+
+class _FileWrittenEffect(BaseModel):
+    kind: Literal["file_written"] = "file_written"
+    filepath: str
+    size_bytes: int
+
+
+class _ProcessSpawnedEffect(BaseModel):
+    kind: Literal["process_spawned"] = "process_spawned"
+    target: str
+    pid: int
+
+
 _EffectUnion = Annotated[
     Union[
         _NoOpEffect,
@@ -416,6 +442,11 @@ _EffectUnion = Annotated[
         _ProductionFailedEffect,
         _MeasurementRequestedEffect,
         _VideoMeasuredEffect,
+
+        _CommandExecutedEffect,
+        _NetworkRequestEffect,
+        _FileWrittenEffect,
+        _ProcessSpawnedEffect,
     ],
     Field(discriminator="kind"),
 ]

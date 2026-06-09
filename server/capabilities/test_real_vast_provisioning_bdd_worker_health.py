@@ -19,6 +19,14 @@ class WorkerHealthSimulator(AbstractCapability):
         if tool_def.name == "web_fetch":
             url = args.get("url", "")
             if "127.0.0.1" in url or "localhost" in url or "vm_instance" in url:
+                from effects import NetworkRequest, log_trace_effect
+                agent = ctx.deps.agent_role
+                log_trace_effect(NetworkRequest(
+                    agent=agent,
+                    url=url,
+                    method="GET",
+                    status_code=200
+                ))
                 model_loaded = "Qwen3-TTS"
                 worker_type = "tts"
                 try:

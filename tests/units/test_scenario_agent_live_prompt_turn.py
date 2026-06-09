@@ -74,13 +74,13 @@ def test_scenario_agent_live_prompt_turn():
     print('\n▶️  [STARTING TEST] test_scenario_agent_live_prompt_turn')
     deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
     if not os.path.exists(deepseek_key_path):
-        pytest.skip("DeepSeek API key is missing. Skipping live Scenario Agent prompt turn test.")
+        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. DeepSeek API key is missing!")
 
     # Check network reachability for deepseek API
     try:
-        httpx.get("https://api.deepseek.com/", timeout=2.0)
-    except Exception:
-        pytest.skip("api.deepseek.com is unreachable (offline/restricted network). Skipping live Scenario Agent prompt turn test.")
+        httpx.get("https://api.deepseek.com/", timeout=5.0)
+    except Exception as e:
+        raise RuntimeError(f"CRITICAL FAILURE: DeepSeek API endpoint is unreachable: {e}")
 
     print('     └─ [Harness] Initializing process-isolated test harness...')
     with IntegrationHarness(required_agents=["gsa", "scenario"], capabilities=[]) as harness:
@@ -106,8 +106,3 @@ def test_scenario_agent_live_prompt_turn():
         gsa_resp = httpx.get(f"http://127.0.0.1:{gsa_port}/").json()
         print('     ├─ [Assert] Checking: len(gsa_resp[\"otio\"][\"slots\"]) >= 1')
         assert len(gsa_resp["otio"]["slots"]) >= 1
-
-
-    # ===========================================================================
-    # 3. Audio Agent TTS Job Queueing
-    # ===========================================================================

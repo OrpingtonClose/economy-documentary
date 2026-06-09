@@ -17,6 +17,16 @@ class VastShowSimulator(AbstractCapability):
         if tool_def.name == "run_bash":
             cmd = args.get("command", "")
             if "vastai show instances" in cmd or "vastai show instance" in cmd:
+                from effects import CommandExecuted, ProcessSpawned, log_trace_effect
+                import hashlib
+                agent = ctx.deps.agent_role
+                log_trace_effect(ProcessSpawned(agent=agent, target="vastai", pid=12347))
+                log_trace_effect(CommandExecuted(
+                    agent=agent,
+                    command=cmd,
+                    exit_code=0,
+                    stdout_hash=hashlib.sha256(b"simulated vastai show instances").hexdigest()
+                ))
                 # Returns status table indicating running instance
                 return (
                     "ID       Status   IP          Port  GPU       VRAM  Hourly\n"

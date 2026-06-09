@@ -75,6 +75,14 @@ Note:
 - Therefore, simulated metrics (such as instant VM provisioning in <1ms, 0-byte or dummy asset sizes, identical or uniform durations, and consecutive timestamps) are FULLY expected, valid, and correct. Do NOT fail the test for these simulated values.
 - Focus your evaluation on the LOGICAL correctness of the BDD sequence (the Given/When/Then conditions, event types, event store ordering, and GSA state machine phase transitions) and check for cost accounting logic consistency when a budget is set (e.g. asserting vm deallocations occur when required).
 
+CRITICAL AUDIT REQUIREMENT:
+- You MUST cross-reference domain-level effects (such as VMAllocated, JobCompleted, AudioGenerated, or PipelineComplete) with physical execution trace effects (command_executed, network_request, file_written, and process_spawned) in the Event Store.
+- If a test claims a domain action completed but the event log lacks corresponding physical execution trace effects showing a real command run, HTTP query, or file write, you MUST mark the verdict as fail (Mocking Detected). For example:
+  * If a VMAllocated domain event is present, there must be a corresponding command_executed event (for "vastai") showing that the provisioner actually invoked the Vast.ai command tool.
+  * If an AudioGenerated or VideoMeasured domain event is present, there must be a corresponding command_executed/file_written event showing that the actual asset generation took place.
+  * If the event log lacks these corresponding trace effects or shows that they were bypassed / mocked out (or skipped entirely), fail the test with verdict "fail" and mention "Mocking Detected" in your reasoning.
+  * EXCEPTION FOR OFFLINE UNIT/PROJECTION TESTS: If the test is an offline unit/projection test (such as test names containing 'retry_after_failure', 'preemption_recovery', 'duration_alignment', 'budget_gated', 'selective_requeue', or 'voice_continuity') that manually seeds domain events in-memory to test logic, projections, or calculations without spawning background agents, it is expected to lack physical execution traces. Do NOT fail these offline tests for missing trace effects.
+
 Respond with EXACTLY this JSON (no markdown fences, no explanation outside):
 {"verdict": "pass", "confidence": 0.95, "reasoning": "...", "issues": []}
 
@@ -172,35 +180,23 @@ async def evaluate_bdd(scenario: BddScenario, log_dir: str | None = None) -> dic
     """
     model = _get_judge_model()
     if model is None:
-        verdict = {
-            "verdict": "warn",
-            "confidence": 0.0,
-            "reasoning": "LLM judge unavailable — no DeepSeek API key found.",
-            "issues": ["no_api_key"],
-            "test_name": scenario.test_name,
-        }
-    else:
-        try:
-            agent = Agent(model, system_prompt=_JUDGE_SYSTEM)
-            prompt = _build_judge_prompt(scenario)
-            result = await agent.run(prompt)
-            raw = result.output.strip()
-            # Strip markdown fences if the LLM wraps them
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                raw = raw.strip()
-            verdict = json.loads(raw)
-            verdict["test_name"] = scenario.test_name
-        except Exception as exc:
-            verdict = {
-                "verdict": "warn",
-                "confidence": 0.0,
-                "reasoning": f"LLM judge call failed: {exc}",
-                "issues": [str(exc)],
-                "test_name": scenario.test_name,
-            }
+        raise RuntimeError("CRITICAL FAILURE: DeepSeek API key is missing! LLM judge requires live execution.")
+    
+    try:
+        agent = Agent(model, system_prompt=_JUDGE_SYSTEM)
+        prompt = _build_judge_prompt(scenario)
+        result = await agent.run(prompt)
+        raw = result.output.strip()
+        # Strip markdown fences if the LLM wraps them
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[:-3]
+            raw = raw.strip()
+        verdict = json.loads(raw)
+        verdict["test_name"] = scenario.test_name
+    except Exception as exc:
+        raise RuntimeError(f"CRITICAL FAILURE: LLM judge call failed: {exc}") from exc
 
     # Persist verdict to disk
     if log_dir:

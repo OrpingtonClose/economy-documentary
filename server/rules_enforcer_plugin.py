@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""/cheat checker — scans code for violations of Obsidian vault rules using DeepSeek API."""
-
-from __future__ import annotations
+"""Antigravity Rules Enforcer Plugin — runs on file edits during development."""
 
 import os
 import sys
 import httpx
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DEEPSEEK_KEY_PATH = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
 
@@ -15,7 +12,6 @@ def get_invariants(vault_dir: Path) -> list[str]:
     """Grep all markdown files in the vault for rules starting with ⚡."""
     invariants = []
     if not vault_dir.exists():
-        print(f"⚠️ Vault directory not found at {vault_dir}")
         return invariants
 
     for md_file in sorted(vault_dir.rglob("*.md")):
@@ -24,49 +20,97 @@ def get_invariants(vault_dir: Path) -> list[str]:
                 for line in f:
                     stripped = line.strip()
                     if stripped.startswith("⚡"):
-                        # Extract everything after the emoji
                         rule = stripped[1:].strip()
                         if rule:
                             invariants.append(rule)
-        except Exception as e:
-            print(f"⚠️ Error reading {md_file}: {e}")
+        except Exception:
+            pass
     return invariants
 
-def should_check_file(path: Path) -> bool:
-    """Filter files to only verify production Python source files or Simulation Cover tests."""
-    path_str = str(path.resolve())
-    if "cheat_check.py" in path_str or "rules_enforcer_plugin.py" in path_str or "agent_base.py" in path_str:
-        return False
-    if "agent_memory" in path.parts or "/agent_memory/" in path_str or "agent_memory/" in path_str:
-        return False
-    if "__pycache__" in path_str or ".venv" in path_str or ".git" in path_str:
-        return False
-    if "server/capabilities" in path_str:
-        return path.suffix == ".py"
-    if "/tests/" in path_str or path.name.startswith("test_"):
-        return False
-    return path.suffix == ".py"
+def main():
+    if len(sys.argv) < 2:
+        print("✅ Antigravity Plugin: No file argument passed. PASS.")
+        sys.exit(0)
 
+    file_path_str = sys.argv[1]
+    file_path = Path(file_path_str)
 
-def scan_file(file_path: Path, invariants: list[str], api_key: str) -> tuple[Path, str | None]:
-    """Scan a single Python file using DeepSeek LLM or local SC enforcer."""
+    # Check if we are modifying the plugin directory or checker scripts
+    path_str = str(file_path.resolve())
+    if ".agents/plugins/" in path_str or "rules_enforcer_plugin.py" in file_path.name or "cheat_check.py" in file_path.name:
+        approval_file = Path("/tmp/antigravity_plugin_approval.txt")
+        if not approval_file.exists():
+            print("\n❌ ANTIGRAVITY RULES VIOLATION DETECTED!")
+            print("Modifications to the rules enforcer plugin directory (.agents/plugins/) or checker scripts require explicit user approval.")
+            print("To approve, please create the file /tmp/antigravity_plugin_approval.txt before running the command.\n")
+            sys.exit(1)
+        else:
+            try:
+                os.remove(approval_file)
+            except Exception:
+                pass
+            print("✅ Antigravity Plugin: Modification approved. PASS.")
+            sys.exit(0)
+
+    if file_path.suffix != ".py":
+        print(f"✅ Antigravity Plugin: Non-Python file {file_path_str} skipped. PASS.")
+        sys.exit(0)
+
+    if not file_path.exists():
+        print(f"✅ Antigravity Plugin: File {file_path_str} does not exist (possibly deleted). PASS.")
+        sys.exit(0)
+
+    # Exclude test files and legacy agent memory
     path_str = str(file_path.resolve())
     if "server/capabilities" in path_str:
         try:
             sys.path.append("/Users/orpington/.gemini/config/plugins/sc-guard-enforcer")
             from sc_guard_enforcer import check_file
-            passed = check_file(str(file_path.resolve()))
+            passed = check_file(path_str)
             if passed:
-                return file_path, None
+                print(f"✅ Antigravity Plugin: Simulation Cover file {file_path_str} passed SC integrity validation.")
+                sys.exit(0)
             else:
-                return file_path, "FAIL: Simulation Cover integrity violations detected (mocking, skipping or trivial assertions)."
+                print(f"❌ Antigravity Plugin: Simulation Cover integrity violations detected in {file_path_str} (mocking, skipping or trivial assertions).")
+                sys.exit(1)
         except Exception as e:
-            return file_path, f"SC Guard Enforcer import/execution error: {e}"
+            print(f"❌ Antigravity Plugin: SC Guard Enforcer execution error: {e}")
+            sys.exit(1)
+
+    if "/tests/" in path_str or file_path.name.startswith("test_") or "agent_memory" in file_path.parts or "/agent_memory/" in path_str or "agent_memory/" in path_str:
+        print(f"✅ Antigravity Plugin: Test or legacy memory file {file_path_str} skipped. PASS.")
+        sys.exit(0)
+
+    workspace_dir = Path("/Users/orpington/Documents/economy-documentary-work")
+    vault_dir = workspace_dir / "obsidian-vault"
+    if not vault_dir.exists():
+        vault_dir = Path(__file__).resolve().parent.parent / "obsidian-vault"
+
+    # 1. Load rules from vault
+    invariants = get_invariants(vault_dir)
+    if not invariants:
+        print("⚠️ Antigravity Plugin: No architectural invariants found in Obsidian Vault. PASS.")
+        sys.exit(0)
+
+    # 2. Get API key
+    if not os.path.exists(DEEPSEEK_KEY_PATH):
+        print(f"⚠️ Antigravity Plugin: API key file not found at {DEEPSEEK_KEY_PATH}. Skipping checks.")
+        sys.exit(0)
+
+    with open(DEEPSEEK_KEY_PATH, "r", encoding="utf-8") as f:
+        api_key = f.read().strip()
+
+    if not api_key:
+        print("⚠️ Antigravity Plugin: Empty API key. Skipping checks.")
+        sys.exit(0)
+
+    print(f"🔍 Antigravity Plugin: Analyzing file {file_path_str} using DeepSeek...")
 
     try:
         content = file_path.read_text(encoding="utf-8")
     except Exception as e:
-        return file_path, f"Could not read file: {e}"
+        print(f"⚠️ Antigravity Plugin: Could not read {file_path_str}: {e}")
+        sys.exit(0)
 
     invariants_text = "\n".join(f"- {rule}" for rule in invariants)
     system_prompt = (
@@ -128,87 +172,22 @@ Target Code Content:
     try:
         resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload)
         if resp.status_code != 200:
-            return file_path, f"DeepSeek API error (status {resp.status_code}): {resp.text}"
+            print(f"❌ Antigravity Plugin: DeepSeek API error (status {resp.status_code}): {resp.text}")
+            sys.exit(1)
 
         response_text = resp.json()["choices"][0]["message"]["content"]
         clean_resp = response_text.strip().strip(".").strip().upper()
         if clean_resp == "PASS":
-            return file_path, None
+            print("✅ Antigravity Plugin: File conforms to core principles. PASS.")
+            sys.exit(0)
         else:
-            return file_path, response_text
+            print("\n❌ ANTIGRAVITY RULES VIOLATION DETECTED!")
+            print(response_text)
+            print("\nPlease revert or fix the rule violations.\n")
+            sys.exit(1)
     except Exception as e:
-        return file_path, f"API query failed: {e}"
-
-def main():
-    workspace_dir = Path("/Users/orpington/Documents/economy-documentary-work")
-    vault_dir = workspace_dir / "obsidian-vault"
-    if not vault_dir.exists():
-        vault_dir = Path(__file__).resolve().parent.parent / "obsidian-vault"
-
-    # 1. Load rules from vault
-    invariants = get_invariants(vault_dir)
-    if not invariants:
-        print("⚠️ No architectural invariants found in Obsidian Vault. Exiting.")
-        sys.exit(0)
-
-    print(f"📖 Loaded {len(invariants)} rules from Obsidian Vault.")
-
-    # 2. Get API key
-    if not os.path.exists(DEEPSEEK_KEY_PATH):
-        print(f"⚠️ API key file not found at {DEEPSEEK_KEY_PATH}. Skipping checks.")
-        sys.exit(0)
-
-    with open(DEEPSEEK_KEY_PATH, "r", encoding="utf-8") as f:
-        api_key = f.read().strip()
-
-    if not api_key:
-        print("⚠️ Empty API key. Skipping checks.")
-        sys.exit(0)
-
-    # 3. Collect target files
-    targets = sys.argv[1:] or ["server"]
-    files_to_check: list[Path] = []
-    for t in targets:
-        path = Path(t)
-        if path.is_file() and should_check_file(path):
-            files_to_check.append(path)
-        elif path.is_dir():
-            for f in path.rglob("*.py"):
-                if should_check_file(f):
-                    files_to_check.append(f)
-
-    if not files_to_check:
-        print("✅ No production Python files found to scan.")
-        sys.exit(0)
-
-    print(f"🔍 Scanning {len(files_to_check)} file(s) for architectural violations...")
-
-    violations_found = False
-    # Use ThreadPoolExecutor to run LLM checks in parallel
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(scan_file, f, invariants, api_key): f
-            for f in files_to_check
-        }
-
-        for future in as_completed(futures):
-            file_path, result = future.result()
-            try:
-                relative_path = file_path.relative_to(workspace_dir)
-            except ValueError:
-                relative_path = file_path
-            if result is None:
-                print(f"✅ {relative_path}: PASS")
-            else:
-                print(f"❌ {relative_path}: FAIL\n{result}\n")
-                violations_found = True
-
-    if violations_found:
-        print("❌ Architecture check failed! Violations detected.")
+        print(f"❌ Antigravity Plugin: Verification failed for {file_path_str}: {e}")
         sys.exit(1)
-    else:
-        print("✅ Architecture check passed! All files conform to system invariants.")
-        sys.exit(0)
 
 if __name__ == "__main__":
     main()

@@ -76,13 +76,12 @@ def test_perplexity_verify_live():
     print('\n▶️  [STARTING TEST] test_perplexity_verify_live')
     """Verify Perplexity API fact-checking tool using real credentials."""
     import os
-    import pytest
     import asyncio
     
     # 1. Load and inject API key into environment BEFORE importing tools module
     key_path = "/Users/orpington/api_keys/LLMS/perplexity_api_key.txt"
     if not os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
-        pytest.skip("Perplexity API key is missing. Skipping live fact-checking test.")
+        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. Perplexity API key is missing!")
         
     if os.path.exists(key_path) and not os.environ.get("PERPLEXITY_API_KEY"):
         with open(key_path) as f:
@@ -90,9 +89,9 @@ def test_perplexity_verify_live():
 
     # Check network reachability for perplexity API
     try:
-        httpx.get("https://api.perplexity.ai/", timeout=2.0)
-    except Exception:
-        pytest.skip("api.perplexity.ai is unreachable (offline/restricted network). Skipping live fact-checking test.")
+        httpx.get("https://api.perplexity.ai/", timeout=5.0)
+    except Exception as e:
+        raise RuntimeError(f"CRITICAL FAILURE: Perplexity API endpoint is unreachable: {e}")
             
     # 2. Import the real tool from pipeline.swarm_extraction.tools (resolves key at import time)
     from pipeline.swarm_extraction.tools import perplexity_verify
@@ -111,4 +110,3 @@ def test_perplexity_verify_live():
     print('     ├─ [Assert] Checking: \"Sources:\" in result')
     assert "Sources:" in result, f"Expected citation sources, got: {result}"
     print('    ✓ perplexity verify live passed')
-

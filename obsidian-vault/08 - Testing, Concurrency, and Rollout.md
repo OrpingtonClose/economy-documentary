@@ -73,6 +73,9 @@ The testing suite consists of real-world integration tests driven over active ne
 
 > [!IMPORTANT]
 > **Covered-Simulation:** If a simulator or mock implementation (e.g., `DryRunModel`, `TtsJobSimulator`, `LtxJobSimulator`) is utilized anywhere in any test suite for development convenience, performance, or isolation, the underlying real, non-simulated production process (the actual LLM API calls, live Vast.ai VM rental, SSH tunneling, and remote CUDA-based media synthesis) **must be tested in non-simulation form very robustly** to ensure live correctness. Mocks must never be used as a replacement for live, uncompromised boundary validation.
+>
+> [!NOTE]
+> **Philosophy of Hard Failures:** If a Simulation Cover cannot run (due to missing credentials, offline status, or missing physical dependencies), then the simulators it covers cannot be verified, rendering any offline tests relying on them pointless. Therefore, the Simulation Cover must fail immediately (raising a fatal error or assertion failure) to prevent untrusted simulated runs from passing.
 
 ---
 
@@ -146,6 +149,26 @@ To isolate testing-specific simulator implementations (such as mock TTS or Ltx G
 3. **In-Memory Capability Resolution:** On startup, the agent script parses its arguments, dynamically imports the specified test module, scans for any classes ending with `Simulator` or `Capability`, instantiates them, and passes them to `make_agent_app(role, extra_capabilities=...)`.
 4. **Clean Production Isolation:** When imported normally (e.g., in a production pipeline run), the agent apps bypass command-line argument parsing and load with empty capabilities, keeping the production core completely clean.
 
+
+### 2.5 Simulation Cover Integrity Guard & Execution Trace Auditing
+
+To prevent LLMs and agents from bypass-mocking the 10 Simulation Cover (SC) integration tests, the system implements a multi-layered verification defense:
+
+1. **SC Guard Plugin (Static Enforcer):** 
+   A static AST-based plugin (`sc-guard-enforcer`) intercepts file writes/edits in `server/capabilities`. It automatically rejects any code containing:
+   * Mocking libraries (`unittest.mock`, `pytest_mock`, `MagicMock`, etc.).
+   * Unconditional skips (`pytest.skip`, `unittest.skip`, `@pytest.mark.skip`, etc.).
+   * Trivial assertions (e.g. `assert True`, `assert 1 == 1`).
+
+2. **Execution Trace Auditing:** 
+   The pipeline harness automatically logs physical side-effects in the event store:
+   * `CommandExecuted`: The CLI command, exit status, and stdout hash.
+   * `NetworkRequest`: Targeted URL, HTTP method, and response status code.
+   * `FileWritten`: Written file path and size.
+   * `ProcessSpawned`: Target executable/script and PID.
+
+3. **LLM BDD Judge Correlation:** 
+   The BDD Judge evaluates test completion and cross-references domain-level effects with these execution trace logs. If a test claims a domain action completed (e.g. `VMAllocated`, `AudioGenerated`) but the SQLite Event Store lacks corresponding trace logs proving a real command was run, API query sent, or file written, the judge rejects the run and marks the verdict as `fail` (Mocking Detected).
 
 ---
 

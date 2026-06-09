@@ -6,7 +6,7 @@ from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.capabilities.abstract import AbstractCapability
 from event_store import EventStore
-from effects import JobStarted, JobCompleted, VMAllocated
+from effects import JobStarted, JobCompleted, VMAllocated, run_subprocess_logged
 from agent_base import get_active_log_dir
 from projections import VMs
 
@@ -24,9 +24,9 @@ def _simulate_tts_job(job_id: str, duration: float) -> str:
     frequency = 200 + (h_val % 300)
     
     # Generate a real valid WAV file to test actual FFmpeg concatenation and normalization
-    subprocess.run(
+    run_subprocess_logged(
         ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency={frequency}:sample_rate=44100", "-t", str(duration), out_path],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        agent="provisioner", check=True
     )
     
     # Check if VM is allocated

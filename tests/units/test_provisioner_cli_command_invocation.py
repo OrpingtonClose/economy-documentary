@@ -73,9 +73,13 @@ def measure_lufs_integrated(audio_path: str) -> float:
 def test_provisioner_cli_command_invocation():
 
     print('\n▶️  [STARTING TEST] test_provisioner_cli_command_invocation')
-    """Verify that the Provisioner executes the correct CLI commands without simulator capabilities."""
+    # Require real vastai key for live execution simulation cover
+    vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
+    if not os.path.exists(vast_key_path):
+        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. vast_ai_key.txt is missing!")
+
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa", "provisioner"]) as harness:
+    with IntegrationHarness(required_agents=["gsa", "provisioner"], capabilities=["VastRealCapability"]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         provisioner_port = harness.ports["provisioner"]

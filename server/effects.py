@@ -536,6 +536,32 @@ class VideoMeasured(Effect):
         return parse_duration(val)
 
 
+class CommandExecuted(Effect):
+    kind: Literal["command_executed"] = "command_executed"
+    command: str = Field(..., description="CommandLine executed")
+    exit_code: int = Field(..., description="Subprocess return status")
+    stdout_hash: str = Field(default="", description="Snippet or hash of stdout to verify execution")
+
+
+class NetworkRequest(Effect):
+    kind: Literal["network_request"] = "network_request"
+    url: str = Field(..., description="HTTP URL targeted")
+    method: str = Field(..., description="HTTP method")
+    status_code: int = Field(..., description="HTTP response status code")
+
+
+class FileWritten(Effect):
+    kind: Literal["file_written"] = "file_written"
+    filepath: str = Field(..., description="Path to the file written")
+    size_bytes: int = Field(..., description="Size of the file in bytes")
+
+
+class ProcessSpawned(Effect):
+    kind: Literal["process_spawned"] = "process_spawned"
+    target: str = Field(..., description="Target script or module name")
+    pid: int = Field(..., description="Process ID")
+
+
 # ===========================================================================
 # 3.10 EffectUnion and KIND_TO_MODEL
 # ===========================================================================
@@ -576,6 +602,11 @@ EffectUnion = Annotated[
         ProductionFailed,
         MeasurementRequested,
         VideoMeasured,
+
+        CommandExecuted,
+        NetworkRequest,
+        FileWritten,
+        ProcessSpawned,
     ],
     Field(discriminator="kind"),
 ]
@@ -615,4 +646,86 @@ KIND_TO_MODEL: dict[str, type[Effect]] = {
     "production_failed":  ProductionFailed,
     "measurement_requested": MeasurementRequested,
     "video_measured":     VideoMeasured,
+
+    "command_executed":   CommandExecuted,
+    "network_request":    NetworkRequest,
+    "file_written":       FileWritten,
+    "process_spawned":    ProcessSpawned,
 }
+
+
+import contextvars
+
+active_agent_var = contextvars.ContextVar("active_agent", default="orchestrator")
+
+
+def log_trace_effect(effect: Effect):
+    """Safely append an execution trace effect directly to the SQLite event store."""
+    try:
+        import os
+        from event_store import EventStore
+        from agent_base import get_active_log_dir
+        log_dir = get_active_log_dir()
+        if os.path.exists(os.path.join(log_dir, "events.db")):
+            store = EventStore(log_dir=log_dir)
+            store.append(effect, "")
+    except Exception:
+        pass
+
+
+
+def run_subprocess_logged(args: list[str], agent: str = "unknown", check: bool = True, **kwargs) -> Any:
+    """Run a subprocess and automatically log ProcessSpawned, CommandExecuted, and FileWritten events."""
+    import subprocess
+    import os
+    import hashlib
+    
+    if agent == "unknown":
+        agent = active_agent_var.get()
+
+    # Form command string
+    cmd_str = " ".join(args)
+    
+    # Spawn process
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs)
+    pid = proc.pid
+    
+    # Log ProcessSpawned
+    log_trace_effect(ProcessSpawned(
+        agent=agent,
+        target=args[0],
+        pid=pid
+    ))
+    
+    stdout, stderr = proc.communicate()
+    ret = proc.returncode
+    
+    # Hash outputs
+    out_bytes = stdout if isinstance(stdout, bytes) else stdout.encode(errors="replace")
+    err_bytes = stderr if isinstance(stderr, bytes) else stderr.encode(errors="replace")
+    h = hashlib.sha256(out_bytes + err_bytes).hexdigest()
+    
+    # Log CommandExecuted
+    log_trace_effect(CommandExecuted(
+        agent=agent,
+        command=cmd_str,
+        exit_code=ret,
+        stdout_hash=h
+    ))
+    
+    # Scan arguments for written file paths
+    for arg in args:
+        if isinstance(arg, str) and (arg.endswith(".mp4") or arg.endswith(".wav") or arg.endswith(".pcm") or arg.endswith(".txt")):
+            if os.path.exists(arg):
+                size = os.path.getsize(arg)
+                log_trace_effect(FileWritten(
+                    agent=agent,
+                    filepath=os.path.abspath(arg),
+                    size_bytes=size
+                ))
+                
+    if check and ret != 0:
+        raise subprocess.CalledProcessError(ret, args, output=stdout, stderr=stderr)
+        
+    return subprocess.CompletedProcess(args, ret, stdout, stderr)
+
