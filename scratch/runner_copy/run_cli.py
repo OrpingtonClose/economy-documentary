@@ -14,16 +14,16 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "server"))
 
 # Import all tests
-from tests.units.test_gsa_wal_concurrency_isolation import test_gsa_wal_concurrency_isolation
-from tests.units.test_scenario_agent_live_prompt_turn import test_scenario_agent_live_prompt_turn
-from tests.units.test_audio_agent_tts_job_queueing import test_audio_agent_tts_job_queueing
-from tests.units.test_video_agent_ltx_job_queueing import test_video_agent_ltx_job_queueing
-from tests.units.test_provisioner_vast_offers_search import test_provisioner_vast_offers_search
-from tests.units.test_vast_create_and_destroy_lifecycle import test_vast_create_and_destroy_lifecycle
-from tests.units.test_ssh_handshake_and_docker_health import test_ssh_handshake_and_docker_health
-from tests.units.test_audio_loudness_normalizer_compilation import test_audio_loudness_normalizer_compilation
-from tests.units.test_coordinate_timeline_dynamic_drift import test_coordinate_timeline_dynamic_drift
-from tests.units.test_budget_limit_aborted_gate import test_budget_limit_aborted_gate
+from tests.units.test_covering_gsa_wal_concurrency_isolation import test_covering_gsa_wal_concurrency_isolation
+from tests.units.test_covering_scenario_agent_live_prompt_turn import test_covering_scenario_agent_live_prompt_turn
+from tests.units.test_covering_audio_agent_tts_job_queueing import test_covering_audio_agent_tts_job_queueing
+from tests.units.test_simulation_video_agent_ltx_job_queueing import test_simulation_video_agent_ltx_job_queueing
+from tests.units.test_covering_provisioner_vast_offers_search import test_covering_provisioner_vast_offers_search
+from tests.units.test_covering_vast_create_and_destroy_lifecycle import test_covering_vast_create_and_destroy_lifecycle
+from tests.units.test_covering_ssh_handshake_and_docker_health import test_covering_ssh_handshake_and_docker_health
+from tests.units.test_covering_audio_loudness_normalizer_compilation import test_covering_audio_loudness_normalizer_compilation
+from tests.units.test_covering_coordinate_timeline_dynamic_drift import test_covering_coordinate_timeline_dynamic_drift
+from tests.units.test_covering_budget_limit_aborted_gate import test_covering_budget_limit_aborted_gate
 from tests.units.test_agent_chooses_vm_size_and_provisioner_allocates import test_agent_chooses_vm_size_and_provisioner_allocates
 from tests.units.test_provisioner_escalation_policy import test_provisioner_escalation_policy
 from tests.units.test_preemption_and_recovery import test_preemption_and_recovery
@@ -33,40 +33,40 @@ from tests.units.test_provisioner_cli_command_invocation import test_provisioner
 from tests.units.test_assemble_final_cut_execution import test_assemble_final_cut_execution
 from tests.units.test_real_qwen3_tts_script_execution import test_real_qwen3_tts_script_execution
 from tests.units.test_real_ltx_video_script_execution import test_real_ltx_video_script_execution
-from tests.units.test_parse_duration_all_formats import test_parse_duration_all_formats
-from tests.units.test_effect_pydantic_round_trip import test_effect_pydantic_round_trip
-from tests.units.test_event_store_append_replay_ordering import test_event_store_append_replay_ordering
-from tests.units.test_event_store_idempotent_dedup import test_event_store_idempotent_dedup
-from tests.units.test_event_store_read_since_window import test_event_store_read_since_window
-from tests.units.test_timeline_projection_script_to_slots import test_timeline_projection_script_to_slots
-from tests.units.test_timeline_projection_merge_and_delivered import test_timeline_projection_merge_and_delivered
-from tests.units.test_timeline_projection_delete_scene import test_timeline_projection_delete_scene
-from tests.units.test_timeline_projection_reorder_scenes import test_timeline_projection_reorder_scenes
+from tests.units.test_simulation_parse_duration_all_formats import test_simulation_parse_duration_all_formats
+from tests.units.test_simulation_effect_pydantic_round_trip import test_simulation_effect_pydantic_round_trip
+from tests.units.test_simulation_event_store_append_replay_ordering import test_simulation_event_store_append_replay_ordering
+from tests.units.test_simulation_event_store_idempotent_dedup import test_simulation_event_store_idempotent_dedup
+from tests.units.test_simulation_event_store_read_since_window import test_simulation_event_store_read_since_window
+from tests.units.test_simulation_timeline_projection_script_to_slots import test_simulation_timeline_projection_script_to_slots
+from tests.units.test_simulation_timeline_projection_merge_and_delivered import test_simulation_timeline_projection_merge_and_delivered
+from tests.units.test_simulation_timeline_projection_delete_scene import test_simulation_timeline_projection_delete_scene
+from tests.units.test_simulation_timeline_projection_reorder_scenes import test_simulation_timeline_projection_reorder_scenes
 from tests.units.test_timeline_validation_suite import test_timeline_validation_suite
-from tests.units.test_jobs_projection_full_lifecycle import test_jobs_projection_full_lifecycle
-from tests.units.test_jobs_projection_dirty_clean_tracking import test_jobs_projection_dirty_clean_tracking
-from tests.units.test_vm_projection_multi_role_fleet import test_vm_projection_multi_role_fleet
-from tests.units.test_budget_projection_exceeded_detection import test_budget_projection_exceeded_detection
-from tests.units.test_state_projection_full_phase_machine import test_state_projection_full_phase_machine
-from tests.units.test_coordinate_timeline_cascade_and_overlap import test_coordinate_timeline_cascade_and_overlap
-from tests.units.test_bdd_tts_fleet_cold_start import test_bdd_tts_fleet_cold_start
-from tests.units.test_bdd_single_block_tts_inference import test_bdd_single_block_tts_inference
-from tests.units.test_bdd_multi_block_tts_reconciliation import test_bdd_multi_block_tts_reconciliation
-from tests.units.test_bdd_voice_continuity_across_scenes import test_bdd_voice_continuity_across_scenes
-from tests.units.test_bdd_ltx_fleet_scale_up import test_bdd_ltx_fleet_scale_up
-from tests.units.test_bdd_single_clip_video_generation import test_bdd_single_clip_video_generation
-from tests.units.test_bdd_multi_scene_video_otio_assembly import test_bdd_multi_scene_video_otio_assembly
-from tests.units.test_bdd_audio_video_duration_alignment import test_bdd_audio_video_duration_alignment
-from tests.units.test_bdd_tts_retry_after_failure import test_bdd_tts_retry_after_failure
-from tests.units.test_bdd_vm_preemption_recovery import test_bdd_vm_preemption_recovery
-from tests.units.test_bdd_budget_gated_provisioning import test_bdd_budget_gated_provisioning
-from tests.units.test_bdd_script_revision_selective_requeue import test_bdd_script_revision_selective_requeue
-from tests.units.test_bdd_final_assembly_real_media import test_bdd_final_assembly_real_media
-from tests.units.test_bdd_partial_failure_isolated_recovery import test_bdd_partial_failure_isolated_recovery
-from tests.units.test_bdd_full_fleet_teardown_cost_accounting import test_bdd_full_fleet_teardown_cost_accounting
-from tests.units.test_perplexity_verify_live import test_perplexity_verify_live
-from tests.units import test_max_capacity_pipeline
-from tests.units.test_sim_gsa_wal_expanded import (
+from tests.units.test_simulation_jobs_projection_full_lifecycle import test_simulation_jobs_projection_full_lifecycle
+from tests.units.test_simulation_jobs_projection_dirty_clean_tracking import test_simulation_jobs_projection_dirty_clean_tracking
+from tests.units.test_simulation_vm_projection_multi_role_fleet import test_simulation_vm_projection_multi_role_fleet
+from tests.units.test_simulation_budget_projection_exceeded_detection import test_simulation_budget_projection_exceeded_detection
+from tests.units.test_simulation_state_projection_full_phase_machine import test_simulation_state_projection_full_phase_machine
+from tests.units.test_simulation_coordinate_timeline_cascade_and_overlap import test_simulation_coordinate_timeline_cascade_and_overlap
+from tests.units.test_simulation_bdd_tts_fleet_cold_start import test_simulation_bdd_tts_fleet_cold_start
+from tests.units.test_simulation_bdd_single_block_tts_inference import test_simulation_bdd_single_block_tts_inference
+from tests.units.test_simulation_bdd_multi_block_tts_reconciliation import test_simulation_bdd_multi_block_tts_reconciliation
+from tests.units.test_simulation_bdd_voice_continuity_across_scenes import test_simulation_bdd_voice_continuity_across_scenes
+from tests.units.test_simulation_bdd_ltx_fleet_scale_up import test_simulation_bdd_ltx_fleet_scale_up
+from tests.units.test_simulation_bdd_single_clip_video_generation import test_simulation_bdd_single_clip_video_generation
+from tests.units.test_simulation_bdd_multi_scene_video_otio_assembly import test_simulation_bdd_multi_scene_video_otio_assembly
+from tests.units.test_simulation_bdd_audio_video_duration_alignment import test_simulation_bdd_audio_video_duration_alignment
+from tests.units.test_simulation_bdd_tts_retry_after_failure import test_simulation_bdd_tts_retry_after_failure
+from tests.units.test_simulation_bdd_vm_preemption_recovery import test_simulation_bdd_vm_preemption_recovery
+from tests.units.test_simulation_bdd_budget_gated_provisioning import test_simulation_bdd_budget_gated_provisioning
+from tests.units.test_simulation_bdd_script_revision_selective_requeue import test_simulation_bdd_script_revision_selective_requeue
+from tests.units.test_simulation_bdd_final_assembly_real_media import test_simulation_bdd_final_assembly_real_media
+from tests.units.test_simulation_bdd_partial_failure_isolated_recovery import test_simulation_bdd_partial_failure_isolated_recovery
+from tests.units.test_simulation_bdd_full_fleet_teardown_cost_accounting import test_simulation_bdd_full_fleet_teardown_cost_accounting
+from tests.units.test_covering_perplexity_verify_live import test_covering_perplexity_verify_live
+from tests.units import test_simulation_max_capacity_pipeline
+from tests.units.test_simulation_gsa_wal_expanded import (
     test_sim_gsa_wal_concurrent_appends,
     test_sim_gsa_wal_read_during_write,
     test_sim_gsa_wal_replay_ordering,
@@ -105,7 +105,7 @@ from tests.units.test_sim_gsa_wal_expanded import (
     test_sim_gsa_wal_concurrency_stress,
     test_sim_gsa_wal_isolation_guarantees,
 )
-from tests.units.test_sim_provisioner_expanded import (
+from tests.units.test_simulation_provisioner_expanded import (
     test_sim_provisioner_allocation_success,
     test_sim_provisioner_allocation_out_of_budget,
     test_sim_provisioner_escalation_triggers,
@@ -144,7 +144,7 @@ from tests.units.test_sim_provisioner_expanded import (
     test_sim_provisioner_budget_gate_verification,
     test_sim_provisioner_vast_api_retry_behavior,
 )
-from tests.units.test_sim_voice_continuity_expanded import (
+from tests.units.test_simulation_voice_continuity_expanded import (
     test_sim_voice_continuity_loudness_normalization,
     test_sim_voice_continuity_ffmpeg_compilation,
     test_sim_voice_continuity_alignment_drift,
@@ -183,7 +183,7 @@ from tests.units.test_sim_voice_continuity_expanded import (
     test_sim_voice_continuity_ffmpeg_error_handling,
     test_sim_voice_continuity_audio_channel_mixdown,
 )
-from tests.units.test_sim_otio_assembly_expanded import (
+from tests.units.test_simulation_otio_assembly_expanded import (
     test_sim_otio_assembly_track_creation,
     test_sim_otio_assembly_multi_scene_clips,
     test_sim_otio_assembly_timeline_cascade,
@@ -226,16 +226,16 @@ from tests.units.test_sim_otio_assembly_expanded import (
 # List of all test cases: (name, function, category)
 TEST_CASES = [
     # 1. Simulation Covers (Consequential Claims subset)
-    ("test_gsa_wal_concurrency_isolation", test_gsa_wal_concurrency_isolation, "Simulation Cover"),
-    ("test_scenario_agent_live_prompt_turn", test_scenario_agent_live_prompt_turn, "Simulation Cover"),
-    ("test_audio_agent_tts_job_queueing", test_audio_agent_tts_job_queueing, "Simulation Cover"),
-    ("test_video_agent_ltx_job_queueing", test_video_agent_ltx_job_queueing, "Simulation Cover"),
-    ("test_provisioner_vast_offers_search", test_provisioner_vast_offers_search, "Simulation Cover"),
-    ("test_vast_create_and_destroy_lifecycle", test_vast_create_and_destroy_lifecycle, "Simulation Cover"),
-    ("test_ssh_handshake_and_docker_health", test_ssh_handshake_and_docker_health, "Simulation Cover"),
-    ("test_audio_loudness_normalizer_compilation", test_audio_loudness_normalizer_compilation, "Simulation Cover"),
-    ("test_coordinate_timeline_dynamic_drift", test_coordinate_timeline_dynamic_drift, "Simulation Cover"),
-    ("test_budget_limit_aborted_gate", test_budget_limit_aborted_gate, "Simulation Cover"),
+    ("test_covering_gsa_wal_concurrency_isolation", test_covering_gsa_wal_concurrency_isolation, "Simulation Cover"),
+    ("test_covering_scenario_agent_live_prompt_turn", test_covering_scenario_agent_live_prompt_turn, "Simulation Cover"),
+    ("test_covering_audio_agent_tts_job_queueing", test_covering_audio_agent_tts_job_queueing, "Simulation Cover"),
+    ("test_simulation_video_agent_ltx_job_queueing", test_simulation_video_agent_ltx_job_queueing, "Simulation Cover"),
+    ("test_covering_provisioner_vast_offers_search", test_covering_provisioner_vast_offers_search, "Simulation Cover"),
+    ("test_covering_vast_create_and_destroy_lifecycle", test_covering_vast_create_and_destroy_lifecycle, "Simulation Cover"),
+    ("test_covering_ssh_handshake_and_docker_health", test_covering_ssh_handshake_and_docker_health, "Simulation Cover"),
+    ("test_covering_audio_loudness_normalizer_compilation", test_covering_audio_loudness_normalizer_compilation, "Simulation Cover"),
+    ("test_covering_coordinate_timeline_dynamic_drift", test_covering_coordinate_timeline_dynamic_drift, "Simulation Cover"),
+    ("test_covering_budget_limit_aborted_gate", test_covering_budget_limit_aborted_gate, "Simulation Cover"),
 
     # 1b. Consequential Claims (non-covering subset)
     ("test_agent_chooses_vm_size_and_provisioner_allocates", test_agent_chooses_vm_size_and_provisioner_allocates, "Consequential Claims"),
@@ -249,22 +249,22 @@ TEST_CASES = [
     ("test_real_ltx_video_script_execution", test_real_ltx_video_script_execution, "Consequential Claims"),
 
     # 2. Process Tests
-    ("test_parse_duration_all_formats", test_parse_duration_all_formats, "Process Tests"),
-    ("test_effect_pydantic_round_trip", test_effect_pydantic_round_trip, "Process Tests"),
-    ("test_event_store_append_replay_ordering", test_event_store_append_replay_ordering, "Process Tests"),
-    ("test_event_store_idempotent_dedup", test_event_store_idempotent_dedup, "Process Tests"),
-    ("test_event_store_read_since_window", test_event_store_read_since_window, "Process Tests"),
-    ("test_timeline_projection_script_to_slots", test_timeline_projection_script_to_slots, "Process Tests"),
-    ("test_timeline_projection_merge_and_delivered", test_timeline_projection_merge_and_delivered, "Process Tests"),
-    ("test_timeline_projection_delete_scene", test_timeline_projection_delete_scene, "Process Tests"),
-    ("test_timeline_projection_reorder_scenes", test_timeline_projection_reorder_scenes, "Process Tests"),
+    ("test_simulation_parse_duration_all_formats", test_simulation_parse_duration_all_formats, "Process Tests"),
+    ("test_simulation_effect_pydantic_round_trip", test_simulation_effect_pydantic_round_trip, "Process Tests"),
+    ("test_simulation_event_store_append_replay_ordering", test_simulation_event_store_append_replay_ordering, "Process Tests"),
+    ("test_simulation_event_store_idempotent_dedup", test_simulation_event_store_idempotent_dedup, "Process Tests"),
+    ("test_simulation_event_store_read_since_window", test_simulation_event_store_read_since_window, "Process Tests"),
+    ("test_simulation_timeline_projection_script_to_slots", test_simulation_timeline_projection_script_to_slots, "Process Tests"),
+    ("test_simulation_timeline_projection_merge_and_delivered", test_simulation_timeline_projection_merge_and_delivered, "Process Tests"),
+    ("test_simulation_timeline_projection_delete_scene", test_simulation_timeline_projection_delete_scene, "Process Tests"),
+    ("test_simulation_timeline_projection_reorder_scenes", test_simulation_timeline_projection_reorder_scenes, "Process Tests"),
     ("test_timeline_validation_suite", test_timeline_validation_suite, "Process Tests"),
-    ("test_jobs_projection_full_lifecycle", test_jobs_projection_full_lifecycle, "Process Tests"),
-    ("test_jobs_projection_dirty_clean_tracking", test_jobs_projection_dirty_clean_tracking, "Process Tests"),
-    ("test_vm_projection_multi_role_fleet", test_vm_projection_multi_role_fleet, "Process Tests"),
-    ("test_budget_projection_exceeded_detection", test_budget_projection_exceeded_detection, "Process Tests"),
-    ("test_state_projection_full_phase_machine", test_state_projection_full_phase_machine, "Process Tests"),
-    ("test_coordinate_timeline_cascade_and_overlap", test_coordinate_timeline_cascade_and_overlap, "Process Tests"),
+    ("test_simulation_jobs_projection_full_lifecycle", test_simulation_jobs_projection_full_lifecycle, "Process Tests"),
+    ("test_simulation_jobs_projection_dirty_clean_tracking", test_simulation_jobs_projection_dirty_clean_tracking, "Process Tests"),
+    ("test_simulation_vm_projection_multi_role_fleet", test_simulation_vm_projection_multi_role_fleet, "Process Tests"),
+    ("test_simulation_budget_projection_exceeded_detection", test_simulation_budget_projection_exceeded_detection, "Process Tests"),
+    ("test_simulation_state_projection_full_phase_machine", test_simulation_state_projection_full_phase_machine, "Process Tests"),
+    ("test_simulation_coordinate_timeline_cascade_and_overlap", test_simulation_coordinate_timeline_cascade_and_overlap, "Process Tests"),
 
     # GSA WAL Expanded Tests (37)
     ("test_sim_gsa_wal_concurrent_appends", test_sim_gsa_wal_concurrent_appends, "Process Tests"),
@@ -423,25 +423,25 @@ TEST_CASES = [
     ("test_sim_otio_assembly_final_render_validation", test_sim_otio_assembly_final_render_validation, "Process Tests"),
 
     # 3. Maximum Capacity
-    ("Maximum Capacity Test", test_max_capacity_pipeline.run_test, "Maximum Capacity"),
+    ("Maximum Capacity Test", test_simulation_max_capacity_pipeline.run_test, "Maximum Capacity"),
 
     # 4. BDD Integration Tests
-    ("test_bdd_tts_fleet_cold_start", test_bdd_tts_fleet_cold_start, "BDD Integration"),
-    ("test_bdd_single_block_tts_inference", test_bdd_single_block_tts_inference, "BDD Integration"),
-    ("test_bdd_multi_block_tts_reconciliation", test_bdd_multi_block_tts_reconciliation, "BDD Integration"),
-    ("test_bdd_voice_continuity_across_scenes", test_bdd_voice_continuity_across_scenes, "BDD Integration"),
-    ("test_bdd_ltx_fleet_scale_up", test_bdd_ltx_fleet_scale_up, "BDD Integration"),
-    ("test_bdd_single_clip_video_generation", test_bdd_single_clip_video_generation, "BDD Integration"),
-    ("test_bdd_multi_scene_video_otio_assembly", test_bdd_multi_scene_video_otio_assembly, "BDD Integration"),
-    ("test_bdd_audio_video_duration_alignment", test_bdd_audio_video_duration_alignment, "BDD Integration"),
-    ("test_bdd_tts_retry_after_failure", test_bdd_tts_retry_after_failure, "BDD Integration"),
-    ("test_bdd_vm_preemption_recovery", test_bdd_vm_preemption_recovery, "BDD Integration"),
-    ("test_bdd_budget_gated_provisioning", test_bdd_budget_gated_provisioning, "BDD Integration"),
-    ("test_bdd_script_revision_selective_requeue", test_bdd_script_revision_selective_requeue, "BDD Integration"),
-    ("test_bdd_final_assembly_real_media", test_bdd_final_assembly_real_media, "BDD Integration"),
-    ("test_bdd_partial_failure_isolated_recovery", test_bdd_partial_failure_isolated_recovery, "BDD Integration"),
-    ("test_bdd_full_fleet_teardown_cost_accounting", test_bdd_full_fleet_teardown_cost_accounting, "BDD Integration"),
-    ("test_perplexity_verify_live", test_perplexity_verify_live, "BDD Integration"),
+    ("test_simulation_bdd_tts_fleet_cold_start", test_simulation_bdd_tts_fleet_cold_start, "BDD Integration"),
+    ("test_simulation_bdd_single_block_tts_inference", test_simulation_bdd_single_block_tts_inference, "BDD Integration"),
+    ("test_simulation_bdd_multi_block_tts_reconciliation", test_simulation_bdd_multi_block_tts_reconciliation, "BDD Integration"),
+    ("test_simulation_bdd_voice_continuity_across_scenes", test_simulation_bdd_voice_continuity_across_scenes, "BDD Integration"),
+    ("test_simulation_bdd_ltx_fleet_scale_up", test_simulation_bdd_ltx_fleet_scale_up, "BDD Integration"),
+    ("test_simulation_bdd_single_clip_video_generation", test_simulation_bdd_single_clip_video_generation, "BDD Integration"),
+    ("test_simulation_bdd_multi_scene_video_otio_assembly", test_simulation_bdd_multi_scene_video_otio_assembly, "BDD Integration"),
+    ("test_simulation_bdd_audio_video_duration_alignment", test_simulation_bdd_audio_video_duration_alignment, "BDD Integration"),
+    ("test_simulation_bdd_tts_retry_after_failure", test_simulation_bdd_tts_retry_after_failure, "BDD Integration"),
+    ("test_simulation_bdd_vm_preemption_recovery", test_simulation_bdd_vm_preemption_recovery, "BDD Integration"),
+    ("test_simulation_bdd_budget_gated_provisioning", test_simulation_bdd_budget_gated_provisioning, "BDD Integration"),
+    ("test_simulation_bdd_script_revision_selective_requeue", test_simulation_bdd_script_revision_selective_requeue, "BDD Integration"),
+    ("test_simulation_bdd_final_assembly_real_media", test_simulation_bdd_final_assembly_real_media, "BDD Integration"),
+    ("test_simulation_bdd_partial_failure_isolated_recovery", test_simulation_bdd_partial_failure_isolated_recovery, "BDD Integration"),
+    ("test_simulation_bdd_full_fleet_teardown_cost_accounting", test_simulation_bdd_full_fleet_teardown_cost_accounting, "BDD Integration"),
+    ("test_covering_perplexity_verify_live", test_covering_perplexity_verify_live, "BDD Integration"),
 ]
 
 # Load DeepSeek API key
@@ -501,7 +501,7 @@ def run_subagent_audit(test_name: str) -> dict:
     # 2. Read test code file
     test_file_path = PROJECT_ROOT / "tests" / "units" / f"{test_name}.py"
     if test_name == "Maximum Capacity Test":
-        test_file_path = PROJECT_ROOT / "tests" / "units" / "test_max_capacity_pipeline.py"
+        test_file_path = PROJECT_ROOT / "tests" / "units" / "test_simulation_max_capacity_pipeline.py"
 
     if test_file_path.exists():
         try:

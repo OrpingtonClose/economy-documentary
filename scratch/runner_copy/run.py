@@ -17,16 +17,16 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.append(str(PROJECT_ROOT))
 sys.path.append(str(PROJECT_ROOT / "server"))
 
-from tests.units.test_gsa_wal_concurrency_isolation import test_gsa_wal_concurrency_isolation
-from tests.units.test_scenario_agent_live_prompt_turn import test_scenario_agent_live_prompt_turn
-from tests.units.test_audio_agent_tts_job_queueing import test_audio_agent_tts_job_queueing
-from tests.units.test_video_agent_ltx_job_queueing import test_video_agent_ltx_job_queueing
-from tests.units.test_provisioner_vast_offers_search import test_provisioner_vast_offers_search
-from tests.units.test_vast_create_and_destroy_lifecycle import test_vast_create_and_destroy_lifecycle
-from tests.units.test_ssh_handshake_and_docker_health import test_ssh_handshake_and_docker_health
-from tests.units.test_audio_loudness_normalizer_compilation import test_audio_loudness_normalizer_compilation
-from tests.units.test_coordinate_timeline_dynamic_drift import test_coordinate_timeline_dynamic_drift
-from tests.units.test_budget_limit_aborted_gate import test_budget_limit_aborted_gate
+from tests.units.test_covering_gsa_wal_concurrency_isolation import test_covering_gsa_wal_concurrency_isolation
+from tests.units.test_covering_scenario_agent_live_prompt_turn import test_covering_scenario_agent_live_prompt_turn
+from tests.units.test_covering_audio_agent_tts_job_queueing import test_covering_audio_agent_tts_job_queueing
+from tests.units.test_simulation_video_agent_ltx_job_queueing import test_simulation_video_agent_ltx_job_queueing
+from tests.units.test_covering_provisioner_vast_offers_search import test_covering_provisioner_vast_offers_search
+from tests.units.test_covering_vast_create_and_destroy_lifecycle import test_covering_vast_create_and_destroy_lifecycle
+from tests.units.test_covering_ssh_handshake_and_docker_health import test_covering_ssh_handshake_and_docker_health
+from tests.units.test_covering_audio_loudness_normalizer_compilation import test_covering_audio_loudness_normalizer_compilation
+from tests.units.test_covering_coordinate_timeline_dynamic_drift import test_covering_coordinate_timeline_dynamic_drift
+from tests.units.test_covering_budget_limit_aborted_gate import test_covering_budget_limit_aborted_gate
 from tests.units.test_agent_chooses_vm_size_and_provisioner_allocates import test_agent_chooses_vm_size_and_provisioner_allocates
 from tests.units.test_provisioner_escalation_policy import test_provisioner_escalation_policy
 from tests.units.test_preemption_and_recovery import test_preemption_and_recovery
@@ -36,40 +36,40 @@ from tests.units.test_provisioner_cli_command_invocation import test_provisioner
 from tests.units.test_assemble_final_cut_execution import test_assemble_final_cut_execution
 from tests.units.test_real_qwen3_tts_script_execution import test_real_qwen3_tts_script_execution
 from tests.units.test_real_ltx_video_script_execution import test_real_ltx_video_script_execution
-from tests.units.test_parse_duration_all_formats import test_parse_duration_all_formats
-from tests.units.test_effect_pydantic_round_trip import test_effect_pydantic_round_trip
-from tests.units.test_event_store_append_replay_ordering import test_event_store_append_replay_ordering
-from tests.units.test_event_store_idempotent_dedup import test_event_store_idempotent_dedup
-from tests.units.test_event_store_read_since_window import test_event_store_read_since_window
-from tests.units.test_timeline_projection_script_to_slots import test_timeline_projection_script_to_slots
-from tests.units.test_timeline_projection_merge_and_delivered import test_timeline_projection_merge_and_delivered
-from tests.units.test_timeline_projection_delete_scene import test_timeline_projection_delete_scene
-from tests.units.test_timeline_projection_reorder_scenes import test_timeline_projection_reorder_scenes
+from tests.units.test_simulation_parse_duration_all_formats import test_simulation_parse_duration_all_formats
+from tests.units.test_simulation_effect_pydantic_round_trip import test_simulation_effect_pydantic_round_trip
+from tests.units.test_simulation_event_store_append_replay_ordering import test_simulation_event_store_append_replay_ordering
+from tests.units.test_simulation_event_store_idempotent_dedup import test_simulation_event_store_idempotent_dedup
+from tests.units.test_simulation_event_store_read_since_window import test_simulation_event_store_read_since_window
+from tests.units.test_simulation_timeline_projection_script_to_slots import test_simulation_timeline_projection_script_to_slots
+from tests.units.test_simulation_timeline_projection_merge_and_delivered import test_simulation_timeline_projection_merge_and_delivered
+from tests.units.test_simulation_timeline_projection_delete_scene import test_simulation_timeline_projection_delete_scene
+from tests.units.test_simulation_timeline_projection_reorder_scenes import test_simulation_timeline_projection_reorder_scenes
 from tests.units.test_timeline_validation_suite import test_timeline_validation_suite
-from tests.units.test_jobs_projection_full_lifecycle import test_jobs_projection_full_lifecycle
-from tests.units.test_jobs_projection_dirty_clean_tracking import test_jobs_projection_dirty_clean_tracking
-from tests.units.test_vm_projection_multi_role_fleet import test_vm_projection_multi_role_fleet
-from tests.units.test_budget_projection_exceeded_detection import test_budget_projection_exceeded_detection
-from tests.units.test_state_projection_full_phase_machine import test_state_projection_full_phase_machine
-from tests.units.test_coordinate_timeline_cascade_and_overlap import test_coordinate_timeline_cascade_and_overlap
-from tests.units.test_bdd_tts_fleet_cold_start import test_bdd_tts_fleet_cold_start
-from tests.units.test_bdd_single_block_tts_inference import test_bdd_single_block_tts_inference
-from tests.units.test_bdd_multi_block_tts_reconciliation import test_bdd_multi_block_tts_reconciliation
-from tests.units.test_bdd_voice_continuity_across_scenes import test_bdd_voice_continuity_across_scenes
-from tests.units.test_bdd_ltx_fleet_scale_up import test_bdd_ltx_fleet_scale_up
-from tests.units.test_bdd_single_clip_video_generation import test_bdd_single_clip_video_generation
-from tests.units.test_bdd_multi_scene_video_otio_assembly import test_bdd_multi_scene_video_otio_assembly
-from tests.units.test_bdd_audio_video_duration_alignment import test_bdd_audio_video_duration_alignment
-from tests.units.test_bdd_tts_retry_after_failure import test_bdd_tts_retry_after_failure
-from tests.units.test_bdd_vm_preemption_recovery import test_bdd_vm_preemption_recovery
-from tests.units.test_bdd_budget_gated_provisioning import test_bdd_budget_gated_provisioning
-from tests.units.test_bdd_script_revision_selective_requeue import test_bdd_script_revision_selective_requeue
-from tests.units.test_bdd_final_assembly_real_media import test_bdd_final_assembly_real_media
-from tests.units.test_bdd_partial_failure_isolated_recovery import test_bdd_partial_failure_isolated_recovery
-from tests.units.test_bdd_full_fleet_teardown_cost_accounting import test_bdd_full_fleet_teardown_cost_accounting
-from tests.units.test_perplexity_verify_live import test_perplexity_verify_live
-from tests.units import test_max_capacity_pipeline
-from tests.units.test_sim_gsa_wal_expanded import (
+from tests.units.test_simulation_jobs_projection_full_lifecycle import test_simulation_jobs_projection_full_lifecycle
+from tests.units.test_simulation_jobs_projection_dirty_clean_tracking import test_simulation_jobs_projection_dirty_clean_tracking
+from tests.units.test_simulation_vm_projection_multi_role_fleet import test_simulation_vm_projection_multi_role_fleet
+from tests.units.test_simulation_budget_projection_exceeded_detection import test_simulation_budget_projection_exceeded_detection
+from tests.units.test_simulation_state_projection_full_phase_machine import test_simulation_state_projection_full_phase_machine
+from tests.units.test_simulation_coordinate_timeline_cascade_and_overlap import test_simulation_coordinate_timeline_cascade_and_overlap
+from tests.units.test_simulation_bdd_tts_fleet_cold_start import test_simulation_bdd_tts_fleet_cold_start
+from tests.units.test_simulation_bdd_single_block_tts_inference import test_simulation_bdd_single_block_tts_inference
+from tests.units.test_simulation_bdd_multi_block_tts_reconciliation import test_simulation_bdd_multi_block_tts_reconciliation
+from tests.units.test_simulation_bdd_voice_continuity_across_scenes import test_simulation_bdd_voice_continuity_across_scenes
+from tests.units.test_simulation_bdd_ltx_fleet_scale_up import test_simulation_bdd_ltx_fleet_scale_up
+from tests.units.test_simulation_bdd_single_clip_video_generation import test_simulation_bdd_single_clip_video_generation
+from tests.units.test_simulation_bdd_multi_scene_video_otio_assembly import test_simulation_bdd_multi_scene_video_otio_assembly
+from tests.units.test_simulation_bdd_audio_video_duration_alignment import test_simulation_bdd_audio_video_duration_alignment
+from tests.units.test_simulation_bdd_tts_retry_after_failure import test_simulation_bdd_tts_retry_after_failure
+from tests.units.test_simulation_bdd_vm_preemption_recovery import test_simulation_bdd_vm_preemption_recovery
+from tests.units.test_simulation_bdd_budget_gated_provisioning import test_simulation_bdd_budget_gated_provisioning
+from tests.units.test_simulation_bdd_script_revision_selective_requeue import test_simulation_bdd_script_revision_selective_requeue
+from tests.units.test_simulation_bdd_final_assembly_real_media import test_simulation_bdd_final_assembly_real_media
+from tests.units.test_simulation_bdd_partial_failure_isolated_recovery import test_simulation_bdd_partial_failure_isolated_recovery
+from tests.units.test_simulation_bdd_full_fleet_teardown_cost_accounting import test_simulation_bdd_full_fleet_teardown_cost_accounting
+from tests.units.test_covering_perplexity_verify_live import test_covering_perplexity_verify_live
+from tests.units import test_simulation_max_capacity_pipeline
+from tests.units.test_simulation_gsa_wal_expanded import (
     test_sim_gsa_wal_concurrent_appends,
     test_sim_gsa_wal_read_during_write,
     test_sim_gsa_wal_replay_ordering,
@@ -108,7 +108,7 @@ from tests.units.test_sim_gsa_wal_expanded import (
     test_sim_gsa_wal_concurrency_stress,
     test_sim_gsa_wal_isolation_guarantees,
 )
-from tests.units.test_sim_provisioner_expanded import (
+from tests.units.test_simulation_provisioner_expanded import (
     test_sim_provisioner_allocation_success,
     test_sim_provisioner_allocation_out_of_budget,
     test_sim_provisioner_escalation_triggers,
@@ -147,7 +147,7 @@ from tests.units.test_sim_provisioner_expanded import (
     test_sim_provisioner_budget_gate_verification,
     test_sim_provisioner_vast_api_retry_behavior,
 )
-from tests.units.test_sim_voice_continuity_expanded import (
+from tests.units.test_simulation_voice_continuity_expanded import (
     test_sim_voice_continuity_loudness_normalization,
     test_sim_voice_continuity_ffmpeg_compilation,
     test_sim_voice_continuity_alignment_drift,
@@ -186,7 +186,7 @@ from tests.units.test_sim_voice_continuity_expanded import (
     test_sim_voice_continuity_ffmpeg_error_handling,
     test_sim_voice_continuity_audio_channel_mixdown,
 )
-from tests.units.test_sim_otio_assembly_expanded import (
+from tests.units.test_simulation_otio_assembly_expanded import (
     test_sim_otio_assembly_track_creation,
     test_sim_otio_assembly_multi_scene_clips,
     test_sim_otio_assembly_timeline_cascade,
@@ -235,16 +235,16 @@ logs_list = []
 
 TEST_CASES = [
     # 1. Simulation Covers (Consequential Claims subset)
-    ("test_gsa_wal_concurrency_isolation", test_gsa_wal_concurrency_isolation, "Simulation Cover"),
-    ("test_scenario_agent_live_prompt_turn", test_scenario_agent_live_prompt_turn, "Simulation Cover"),
-    ("test_audio_agent_tts_job_queueing", test_audio_agent_tts_job_queueing, "Simulation Cover"),
-    ("test_video_agent_ltx_job_queueing", test_video_agent_ltx_job_queueing, "Simulation Cover"),
-    ("test_provisioner_vast_offers_search", test_provisioner_vast_offers_search, "Simulation Cover"),
-    ("test_vast_create_and_destroy_lifecycle", test_vast_create_and_destroy_lifecycle, "Simulation Cover"),
-    ("test_ssh_handshake_and_docker_health", test_ssh_handshake_and_docker_health, "Simulation Cover"),
-    ("test_audio_loudness_normalizer_compilation", test_audio_loudness_normalizer_compilation, "Simulation Cover"),
-    ("test_coordinate_timeline_dynamic_drift", test_coordinate_timeline_dynamic_drift, "Simulation Cover"),
-    ("test_budget_limit_aborted_gate", test_budget_limit_aborted_gate, "Simulation Cover"),
+    ("test_covering_gsa_wal_concurrency_isolation", test_covering_gsa_wal_concurrency_isolation, "Simulation Cover"),
+    ("test_covering_scenario_agent_live_prompt_turn", test_covering_scenario_agent_live_prompt_turn, "Simulation Cover"),
+    ("test_covering_audio_agent_tts_job_queueing", test_covering_audio_agent_tts_job_queueing, "Simulation Cover"),
+    ("test_simulation_video_agent_ltx_job_queueing", test_simulation_video_agent_ltx_job_queueing, "Simulation Cover"),
+    ("test_covering_provisioner_vast_offers_search", test_covering_provisioner_vast_offers_search, "Simulation Cover"),
+    ("test_covering_vast_create_and_destroy_lifecycle", test_covering_vast_create_and_destroy_lifecycle, "Simulation Cover"),
+    ("test_covering_ssh_handshake_and_docker_health", test_covering_ssh_handshake_and_docker_health, "Simulation Cover"),
+    ("test_covering_audio_loudness_normalizer_compilation", test_covering_audio_loudness_normalizer_compilation, "Simulation Cover"),
+    ("test_covering_coordinate_timeline_dynamic_drift", test_covering_coordinate_timeline_dynamic_drift, "Simulation Cover"),
+    ("test_covering_budget_limit_aborted_gate", test_covering_budget_limit_aborted_gate, "Simulation Cover"),
 
     # 1b. Consequential Claims (non-covering subset)
     ("test_agent_chooses_vm_size_and_provisioner_allocates", test_agent_chooses_vm_size_and_provisioner_allocates, "Consequential Claims"),
@@ -258,22 +258,22 @@ TEST_CASES = [
     ("test_real_ltx_video_script_execution", test_real_ltx_video_script_execution, "Consequential Claims"),
 
     # 2. Process Tests
-    ("test_parse_duration_all_formats", test_parse_duration_all_formats, "Process Tests"),
-    ("test_effect_pydantic_round_trip", test_effect_pydantic_round_trip, "Process Tests"),
-    ("test_event_store_append_replay_ordering", test_event_store_append_replay_ordering, "Process Tests"),
-    ("test_event_store_idempotent_dedup", test_event_store_idempotent_dedup, "Process Tests"),
-    ("test_event_store_read_since_window", test_event_store_read_since_window, "Process Tests"),
-    ("test_timeline_projection_script_to_slots", test_timeline_projection_script_to_slots, "Process Tests"),
-    ("test_timeline_projection_merge_and_delivered", test_timeline_projection_merge_and_delivered, "Process Tests"),
-    ("test_timeline_projection_delete_scene", test_timeline_projection_delete_scene, "Process Tests"),
-    ("test_timeline_projection_reorder_scenes", test_timeline_projection_reorder_scenes, "Process Tests"),
+    ("test_simulation_parse_duration_all_formats", test_simulation_parse_duration_all_formats, "Process Tests"),
+    ("test_simulation_effect_pydantic_round_trip", test_simulation_effect_pydantic_round_trip, "Process Tests"),
+    ("test_simulation_event_store_append_replay_ordering", test_simulation_event_store_append_replay_ordering, "Process Tests"),
+    ("test_simulation_event_store_idempotent_dedup", test_simulation_event_store_idempotent_dedup, "Process Tests"),
+    ("test_simulation_event_store_read_since_window", test_simulation_event_store_read_since_window, "Process Tests"),
+    ("test_simulation_timeline_projection_script_to_slots", test_simulation_timeline_projection_script_to_slots, "Process Tests"),
+    ("test_simulation_timeline_projection_merge_and_delivered", test_simulation_timeline_projection_merge_and_delivered, "Process Tests"),
+    ("test_simulation_timeline_projection_delete_scene", test_simulation_timeline_projection_delete_scene, "Process Tests"),
+    ("test_simulation_timeline_projection_reorder_scenes", test_simulation_timeline_projection_reorder_scenes, "Process Tests"),
     ("test_timeline_validation_suite", test_timeline_validation_suite, "Process Tests"),
-    ("test_jobs_projection_full_lifecycle", test_jobs_projection_full_lifecycle, "Process Tests"),
-    ("test_jobs_projection_dirty_clean_tracking", test_jobs_projection_dirty_clean_tracking, "Process Tests"),
-    ("test_vm_projection_multi_role_fleet", test_vm_projection_multi_role_fleet, "Process Tests"),
-    ("test_budget_projection_exceeded_detection", test_budget_projection_exceeded_detection, "Process Tests"),
-    ("test_state_projection_full_phase_machine", test_state_projection_full_phase_machine, "Process Tests"),
-    ("test_coordinate_timeline_cascade_and_overlap", test_coordinate_timeline_cascade_and_overlap, "Process Tests"),
+    ("test_simulation_jobs_projection_full_lifecycle", test_simulation_jobs_projection_full_lifecycle, "Process Tests"),
+    ("test_simulation_jobs_projection_dirty_clean_tracking", test_simulation_jobs_projection_dirty_clean_tracking, "Process Tests"),
+    ("test_simulation_vm_projection_multi_role_fleet", test_simulation_vm_projection_multi_role_fleet, "Process Tests"),
+    ("test_simulation_budget_projection_exceeded_detection", test_simulation_budget_projection_exceeded_detection, "Process Tests"),
+    ("test_simulation_state_projection_full_phase_machine", test_simulation_state_projection_full_phase_machine, "Process Tests"),
+    ("test_simulation_coordinate_timeline_cascade_and_overlap", test_simulation_coordinate_timeline_cascade_and_overlap, "Process Tests"),
 
     # GSA WAL Expanded Tests (37)
     ("test_sim_gsa_wal_concurrent_appends", test_sim_gsa_wal_concurrent_appends, "Process Tests"),
@@ -432,25 +432,25 @@ TEST_CASES = [
     ("test_sim_otio_assembly_final_render_validation", test_sim_otio_assembly_final_render_validation, "Process Tests"),
 
     # 3. Maximum Capacity
-    ("Maximum Capacity Test", test_max_capacity_pipeline.run_test, "Maximum Capacity"),
+    ("Maximum Capacity Test", test_simulation_max_capacity_pipeline.run_test, "Maximum Capacity"),
 
     # 4. BDD Integration Tests
-    ("test_bdd_tts_fleet_cold_start", test_bdd_tts_fleet_cold_start, "BDD Integration"),
-    ("test_bdd_single_block_tts_inference", test_bdd_single_block_tts_inference, "BDD Integration"),
-    ("test_bdd_multi_block_tts_reconciliation", test_bdd_multi_block_tts_reconciliation, "BDD Integration"),
-    ("test_bdd_voice_continuity_across_scenes", test_bdd_voice_continuity_across_scenes, "BDD Integration"),
-    ("test_bdd_ltx_fleet_scale_up", test_bdd_ltx_fleet_scale_up, "BDD Integration"),
-    ("test_bdd_single_clip_video_generation", test_bdd_single_clip_video_generation, "BDD Integration"),
-    ("test_bdd_multi_scene_video_otio_assembly", test_bdd_multi_scene_video_otio_assembly, "BDD Integration"),
-    ("test_bdd_audio_video_duration_alignment", test_bdd_audio_video_duration_alignment, "BDD Integration"),
-    ("test_bdd_tts_retry_after_failure", test_bdd_tts_retry_after_failure, "BDD Integration"),
-    ("test_bdd_vm_preemption_recovery", test_bdd_vm_preemption_recovery, "BDD Integration"),
-    ("test_bdd_budget_gated_provisioning", test_bdd_budget_gated_provisioning, "BDD Integration"),
-    ("test_bdd_script_revision_selective_requeue", test_bdd_script_revision_selective_requeue, "BDD Integration"),
-    ("test_bdd_final_assembly_real_media", test_bdd_final_assembly_real_media, "BDD Integration"),
-    ("test_bdd_partial_failure_isolated_recovery", test_bdd_partial_failure_isolated_recovery, "BDD Integration"),
-    ("test_bdd_full_fleet_teardown_cost_accounting", test_bdd_full_fleet_teardown_cost_accounting, "BDD Integration"),
-    ("test_perplexity_verify_live", test_perplexity_verify_live, "BDD Integration"),
+    ("test_simulation_bdd_tts_fleet_cold_start", test_simulation_bdd_tts_fleet_cold_start, "BDD Integration"),
+    ("test_simulation_bdd_single_block_tts_inference", test_simulation_bdd_single_block_tts_inference, "BDD Integration"),
+    ("test_simulation_bdd_multi_block_tts_reconciliation", test_simulation_bdd_multi_block_tts_reconciliation, "BDD Integration"),
+    ("test_simulation_bdd_voice_continuity_across_scenes", test_simulation_bdd_voice_continuity_across_scenes, "BDD Integration"),
+    ("test_simulation_bdd_ltx_fleet_scale_up", test_simulation_bdd_ltx_fleet_scale_up, "BDD Integration"),
+    ("test_simulation_bdd_single_clip_video_generation", test_simulation_bdd_single_clip_video_generation, "BDD Integration"),
+    ("test_simulation_bdd_multi_scene_video_otio_assembly", test_simulation_bdd_multi_scene_video_otio_assembly, "BDD Integration"),
+    ("test_simulation_bdd_audio_video_duration_alignment", test_simulation_bdd_audio_video_duration_alignment, "BDD Integration"),
+    ("test_simulation_bdd_tts_retry_after_failure", test_simulation_bdd_tts_retry_after_failure, "BDD Integration"),
+    ("test_simulation_bdd_vm_preemption_recovery", test_simulation_bdd_vm_preemption_recovery, "BDD Integration"),
+    ("test_simulation_bdd_budget_gated_provisioning", test_simulation_bdd_budget_gated_provisioning, "BDD Integration"),
+    ("test_simulation_bdd_script_revision_selective_requeue", test_simulation_bdd_script_revision_selective_requeue, "BDD Integration"),
+    ("test_simulation_bdd_final_assembly_real_media", test_simulation_bdd_final_assembly_real_media, "BDD Integration"),
+    ("test_simulation_bdd_partial_failure_isolated_recovery", test_simulation_bdd_partial_failure_isolated_recovery, "BDD Integration"),
+    ("test_simulation_bdd_full_fleet_teardown_cost_accounting", test_simulation_bdd_full_fleet_teardown_cost_accounting, "BDD Integration"),
+    ("test_covering_perplexity_verify_live", test_covering_perplexity_verify_live, "BDD Integration"),
 ]
 
 # State tracking
@@ -577,7 +577,7 @@ def run_subagent_audit(test_name: str) -> dict:
     # Map test name to code file
     test_file_path = PROJECT_ROOT / "tests" / "units" / f"{test_name}.py"
     if test_name == "Maximum Capacity Test":
-        test_file_path = PROJECT_ROOT / "tests" / "units" / "test_max_capacity_pipeline.py"
+        test_file_path = PROJECT_ROOT / "tests" / "units" / "test_simulation_max_capacity_pipeline.py"
 
     if test_file_path.exists():
         try:
@@ -1976,32 +1976,32 @@ INDEX_HTML = """<!DOCTYPE html>
 
         // Predefined BDD specifications for all tests
         const BEHAVIOR_SPECS = {
-            "test_scenario_agent_live_prompt_turn": { given: "Scenario Agent initialized with DeepSeek", when: "Ingesting screenplay prompts", then: "Appends UpdateScript event with valid blocks" },
-            "test_provisioner_vast_offers_search": { given: "Vast.ai CLI credentials loaded", when: "Provisioner agent executes search offers", then: "Cheapest rentable GPU instances returned and parsed" },
-            "test_vast_create_and_destroy_lifecycle": { given: "Cheapest GPU offer selected", when: "Create instance is issued, then destroy", then: "VM is leased, status transitions to running, and is destroyed" },
-            "test_ssh_handshake_and_docker_health": { given: "Running GPU VM container on port 9001", when: "HTTP health GET probe is sent", then: "Responds with 200 text/plain conversational health description" },
-            "test_audio_agent_tts_job_queueing": { given: "Audio slots with scripted prefix exist", when: "Audio agent polls GSA", then: "Queues a TTS job with chosen GPU type immediately" },
-            "test_video_agent_ltx_job_queueing": { given: "Video slots with scripted prefix exist", when: "Video agent polls GSA", then: "Queues an LTX job with chosen GPU type immediately" },
-            "test_audio_loudness_normalizer_compilation": { given: "Raw louder WAV file generated on disk", when: "Loudness normalizer compiles loudnorm filter", then: "Normalizes WAV file output exactly to -16.0 +/- 1.0 LUFS" },
-            "test_coordinate_timeline_dynamic_drift": { given: "Timeline with 3 blocks active", when: "Block 1 duration shifts by 2.0s", then: "Blocks 2/3 coordinates shift, timeline scales exactly 2.0s" },
-            "test_budget_limit_aborted_gate": { given: "Pipeline budget cap set to 1.0 USD", when: "Total spent charges cross 1.01 USD", then: "Phase transitions to aborted, all running VMs are destroyed" },
-            "test_gsa_wal_concurrency_isolation": { given: "GSA configured in SQLite WAL mode", when: "Multiple parallel microservices write to GSA", then: "State reconstructs from zero sequence without transaction locking" },
-            "test_perplexity_verify_live": { given: "Perplexity Sonar Pro API credentials loaded", when: "Verifying capital city fact checking claim", then: "Verifies claim successfully without [TOOL_ERROR], includes sources" },
-            "test_bdd_tts_fleet_cold_start": { given: "Documentary pipeline with 0 running TTS VMs", when: "Audio agent queues TTS jobs", then: "Provisioner scales up fleet from cold start and processes jobs" },
-            "test_bdd_single_block_tts_inference": { given: "A single scripted text block", when: "Audio agent processes it via TTS VM", then: "Generates correct WAV file and appends AudioGenerated event" },
-            "test_bdd_multi_block_tts_reconciliation": { given: "Multiple blocks queued for TTS", when: "Reconciliation runs after partial completions", then: "Correctly merges all blocks into active timeline state" },
-            "test_bdd_voice_continuity_across_scenes": { given: "3 generated WAV narration clips using same voice profile", when: "LUFS loudness is measured on each clip", then: "LUFS spread is within ±3 dB showing natural voice consistency" },
-            "test_bdd_ltx_fleet_scale_up": { given: "Multiple video generation jobs queued", when: "LTX VM provisioner checks fleet capacity", then: "Scales up VM instances to meet demand within budget limits" },
-            "test_bdd_single_clip_video_generation": { given: "A single video slot with descriptive prompts", when: "Video agent requests generation from LTX VM", then: "Returns valid MP4 video and registers VideoMeasured event" },
-            "test_bdd_multi_scene_video_otio_assembly": { given: "Multiple scene media clips generated", when: "Assembly agent builds OpenTimelineIO composition", then: "Creates correct timeline structure with valid scene transitions" },
-            "test_bdd_audio_video_duration_alignment": { given: "Timeline with duration differences between audio and script", when: "DurationAdjusted event is processed", then: "Cascades timeline offsets and corrects dynamic drift" },
-            "test_bdd_tts_retry_after_failure": { given: "TTS generation job fails due to network timeout", when: "Error recovery is triggered by Audio agent", then: "Requeues job up to max retry limit, then escalates if needed" },
-            "test_bdd_vm_preemption_recovery": { given: "A running VM is preempted by cloud provider", when: "VM status check detects offline heartbeat", then: "Provisioner re-allocates a new VM and resumes active jobs" },
-            "test_bdd_budget_gated_provisioning": { given: "Strict project budget constraint defined", when: "VM leasing requests exceed budget limits", then: "Blocks provisioning and aborts pipeline execution gracefully" },
-            "test_bdd_script_revision_selective_requeue": { given: "Screenplay revision updates specific text blocks", when: "Reconciliation checks script block hashes", then: "Only requeues modified blocks, preserving unmodified assets" },
-            "test_bdd_final_assembly_real_media": { given: "All narration audio and scene video clips generated", when: "Assembly agent executes final FFmpeg render", then: "Assembles complete documentary MP4 with aligned track feeds" },
-            "test_bdd_partial_failure_isolated_recovery": { given: "One of multiple parallel generation jobs fails", when: "Fault isolation recovery logic executes", then: "Only retries the failed block without interrupting active jobs" },
-            "test_bdd_full_fleet_teardown_cost_accounting": { given: "Documentary production pipeline finishes or aborts", when: "Fleet teardown command is issued", then: "Destroys all leased VMs and computes accurate final charges" },
+            "test_covering_scenario_agent_live_prompt_turn": { given: "Scenario Agent initialized with DeepSeek", when: "Ingesting screenplay prompts", then: "Appends UpdateScript event with valid blocks" },
+            "test_covering_provisioner_vast_offers_search": { given: "Vast.ai CLI credentials loaded", when: "Provisioner agent executes search offers", then: "Cheapest rentable GPU instances returned and parsed" },
+            "test_covering_vast_create_and_destroy_lifecycle": { given: "Cheapest GPU offer selected", when: "Create instance is issued, then destroy", then: "VM is leased, status transitions to running, and is destroyed" },
+            "test_covering_ssh_handshake_and_docker_health": { given: "Running GPU VM container on port 9001", when: "HTTP health GET probe is sent", then: "Responds with 200 text/plain conversational health description" },
+            "test_covering_audio_agent_tts_job_queueing": { given: "Audio slots with scripted prefix exist", when: "Audio agent polls GSA", then: "Queues a TTS job with chosen GPU type immediately" },
+            "test_simulation_video_agent_ltx_job_queueing": { given: "Video slots with scripted prefix exist", when: "Video agent polls GSA", then: "Queues an LTX job with chosen GPU type immediately" },
+            "test_covering_audio_loudness_normalizer_compilation": { given: "Raw louder WAV file generated on disk", when: "Loudness normalizer compiles loudnorm filter", then: "Normalizes WAV file output exactly to -16.0 +/- 1.0 LUFS" },
+            "test_covering_coordinate_timeline_dynamic_drift": { given: "Timeline with 3 blocks active", when: "Block 1 duration shifts by 2.0s", then: "Blocks 2/3 coordinates shift, timeline scales exactly 2.0s" },
+            "test_covering_budget_limit_aborted_gate": { given: "Pipeline budget cap set to 1.0 USD", when: "Total spent charges cross 1.01 USD", then: "Phase transitions to aborted, all running VMs are destroyed" },
+            "test_covering_gsa_wal_concurrency_isolation": { given: "GSA configured in SQLite WAL mode", when: "Multiple parallel microservices write to GSA", then: "State reconstructs from zero sequence without transaction locking" },
+            "test_covering_perplexity_verify_live": { given: "Perplexity Sonar Pro API credentials loaded", when: "Verifying capital city fact checking claim", then: "Verifies claim successfully without [TOOL_ERROR], includes sources" },
+            "test_simulation_bdd_tts_fleet_cold_start": { given: "Documentary pipeline with 0 running TTS VMs", when: "Audio agent queues TTS jobs", then: "Provisioner scales up fleet from cold start and processes jobs" },
+            "test_simulation_bdd_single_block_tts_inference": { given: "A single scripted text block", when: "Audio agent processes it via TTS VM", then: "Generates correct WAV file and appends AudioGenerated event" },
+            "test_simulation_bdd_multi_block_tts_reconciliation": { given: "Multiple blocks queued for TTS", when: "Reconciliation runs after partial completions", then: "Correctly merges all blocks into active timeline state" },
+            "test_simulation_bdd_voice_continuity_across_scenes": { given: "3 generated WAV narration clips using same voice profile", when: "LUFS loudness is measured on each clip", then: "LUFS spread is within ±3 dB showing natural voice consistency" },
+            "test_simulation_bdd_ltx_fleet_scale_up": { given: "Multiple video generation jobs queued", when: "LTX VM provisioner checks fleet capacity", then: "Scales up VM instances to meet demand within budget limits" },
+            "test_simulation_bdd_single_clip_video_generation": { given: "A single video slot with descriptive prompts", when: "Video agent requests generation from LTX VM", then: "Returns valid MP4 video and registers VideoMeasured event" },
+            "test_simulation_bdd_multi_scene_video_otio_assembly": { given: "Multiple scene media clips generated", when: "Assembly agent builds OpenTimelineIO composition", then: "Creates correct timeline structure with valid scene transitions" },
+            "test_simulation_bdd_audio_video_duration_alignment": { given: "Timeline with duration differences between audio and script", when: "DurationAdjusted event is processed", then: "Cascades timeline offsets and corrects dynamic drift" },
+            "test_simulation_bdd_tts_retry_after_failure": { given: "TTS generation job fails due to network timeout", when: "Error recovery is triggered by Audio agent", then: "Requeues job up to max retry limit, then escalates if needed" },
+            "test_simulation_bdd_vm_preemption_recovery": { given: "A running VM is preempted by cloud provider", when: "VM status check detects offline heartbeat", then: "Provisioner re-allocates a new VM and resumes active jobs" },
+            "test_simulation_bdd_budget_gated_provisioning": { given: "Strict project budget constraint defined", when: "VM leasing requests exceed budget limits", then: "Blocks provisioning and aborts pipeline execution gracefully" },
+            "test_simulation_bdd_script_revision_selective_requeue": { given: "Screenplay revision updates specific text blocks", when: "Reconciliation checks script block hashes", then: "Only requeues modified blocks, preserving unmodified assets" },
+            "test_simulation_bdd_final_assembly_real_media": { given: "All narration audio and scene video clips generated", when: "Assembly agent executes final FFmpeg render", then: "Assembles complete documentary MP4 with aligned track feeds" },
+            "test_simulation_bdd_partial_failure_isolated_recovery": { given: "One of multiple parallel generation jobs fails", when: "Fault isolation recovery logic executes", then: "Only retries the failed block without interrupting active jobs" },
+            "test_simulation_bdd_full_fleet_teardown_cost_accounting": { given: "Documentary production pipeline finishes or aborts", when: "Fleet teardown command is issued", then: "Destroys all leased VMs and computes accurate final charges" },
             "test_agent_chooses_vm_size_and_provisioner_allocates": { given: "Agent requires specific GPU memory size (e.g. 24GB)", when: "Provisioner allocates matching VM instance from Vast.ai", then: "Allocated VM matches resource requirements exactly" },
             "test_provisioner_escalation_policy": { given: "Cheapest GPU offers are sold out or fail to lease", when: "Provisioner triggers VM escalation policy", then: "Progressively attempts next cheapest available GPU tiers" },
             "test_preemption_and_recovery": { given: "Vast.ai spot instance VM running a generation job", when: "VM is preempted (abruptly terminated)", then: "Detects preemption, provisions replacement, and resumes job" },
@@ -2011,22 +2011,22 @@ INDEX_HTML = """<!DOCTYPE html>
             "test_assemble_final_cut_execution": { given: "OTIO composition assembly defined", when: "Assembling final cut audio/video feeds", then: "Generates valid FFmpeg assembly command arguments" },
             "test_real_qwen3_tts_script_execution": { given: "Real Qwen3 TTS capability enabled", when: "Executing TTS audio generation script", then: "Generates real narration audio matching script specifications" },
             "test_real_ltx_video_script_execution": { given: "Real LTX video generation capability enabled", when: "Executing LTX video generation script", then: "Generates real scene video matching prompt specifications" },
-            "test_parse_duration_all_formats": { given: "Various duration string formats (e.g., '12s', '1.5s', '00:02')", when: "Parsing durations through helper function", then: "Parses all formats to correct float seconds" },
-            "test_effect_pydantic_round_trip": { given: "Domain events (Effects) constructed", when: "Serializing to JSON and deserializing back", then: "Reconstructs identical model objects without data loss" },
-            "test_event_store_append_replay_ordering": { given: "Empty event store database", when: "Appending sequence of domain events and replaying", then: "Returns events in exact sequential append order" },
-            "test_event_store_idempotent_dedup": { given: "Event with unique effect_id already appended", when: "Appending duplicate event with same effect_id", then: "Ignores append request and returns existing event record" },
-            "test_event_store_read_since_window": { given: "Event store with historical events", when: "Reading events since specific sequence number", then: "Returns only events appended after the specified sequence" },
-            "test_timeline_projection_script_to_slots": { given: "Raw screenplay script text blocks input", when: "Projecting screenplay onto timeline slots", then: "Initializes correct scene slots and narrator roles" },
-            "test_timeline_projection_merge_and_delivered": { given: "Timeline with script slots initialized", when: "Merging audio/video assets into timeline slots", then: "Updates slot state to delivered with correct asset paths" },
-            "test_timeline_projection_delete_scene": { given: "Timeline with multiple scenes", when: "Deleting a scene from the timeline projection", then: "Removes scene slots and shifts subsequent offsets" },
-            "test_timeline_projection_reorder_scenes": { given: "Timeline with multiple scenes in sequence", when: "Reordering scenes within the timeline projection", then: "Updates scene sequence and cascades timeline offsets" },
+            "test_simulation_parse_duration_all_formats": { given: "Various duration string formats (e.g., '12s', '1.5s', '00:02')", when: "Parsing durations through helper function", then: "Parses all formats to correct float seconds" },
+            "test_simulation_effect_pydantic_round_trip": { given: "Domain events (Effects) constructed", when: "Serializing to JSON and deserializing back", then: "Reconstructs identical model objects without data loss" },
+            "test_simulation_event_store_append_replay_ordering": { given: "Empty event store database", when: "Appending sequence of domain events and replaying", then: "Returns events in exact sequential append order" },
+            "test_simulation_event_store_idempotent_dedup": { given: "Event with unique effect_id already appended", when: "Appending duplicate event with same effect_id", then: "Ignores append request and returns existing event record" },
+            "test_simulation_event_store_read_since_window": { given: "Event store with historical events", when: "Reading events since specific sequence number", then: "Returns only events appended after the specified sequence" },
+            "test_simulation_timeline_projection_script_to_slots": { given: "Raw screenplay script text blocks input", when: "Projecting screenplay onto timeline slots", then: "Initializes correct scene slots and narrator roles" },
+            "test_simulation_timeline_projection_merge_and_delivered": { given: "Timeline with script slots initialized", when: "Merging audio/video assets into timeline slots", then: "Updates slot state to delivered with correct asset paths" },
+            "test_simulation_timeline_projection_delete_scene": { given: "Timeline with multiple scenes", when: "Deleting a scene from the timeline projection", then: "Removes scene slots and shifts subsequent offsets" },
+            "test_simulation_timeline_projection_reorder_scenes": { given: "Timeline with multiple scenes in sequence", when: "Reordering scenes within the timeline projection", then: "Updates scene sequence and cascades timeline offsets" },
             "test_timeline_validation_suite": { given: "Timeline projections with various slot configurations", when: "Running validation check suite", then: "Identifies overlapping slots, negative offsets, or missing assets" },
-            "test_jobs_projection_full_lifecycle": { given: "Jobs projection tracking active queue", when: "Jobs transition from queued to started to completed", then: "Updates job status records and handles final duration tracking" },
-            "test_jobs_projection_dirty_clean_tracking": { given: "Jobs projection tracking dirty/clean states", when: "State changes update job parameters", then: "Accurately marks modified jobs as dirty for reconciliation" },
-            "test_vm_projection_multi_role_fleet": { given: "VM projection tracking multi-role fleet", when: "Adding/removing VMs with different roles (audio/video)", then: "Maintains correct count and status of active fleet instances" },
-            "test_budget_projection_exceeded_detection": { given: "Budget projection with specified cost limit", when: "VM lease and API charges accumulate", then: "Flags budget exceeded state as soon as spent crosses limit" },
-            "test_state_projection_full_phase_machine": { given: "State projection tracking documentary phases", when: "Applying phase transition events", then: "Correctly updates phase (planning, scripting, rendering, complete)" },
-            "test_coordinate_timeline_cascade_and_overlap": { given: "Coordinate timeline with overlapping audio/video blocks", when: "Aligning and cascading block offsets", then: "Resolves overlaps and cascades offsets to prevent collisions" },
+            "test_simulation_jobs_projection_full_lifecycle": { given: "Jobs projection tracking active queue", when: "Jobs transition from queued to started to completed", then: "Updates job status records and handles final duration tracking" },
+            "test_simulation_jobs_projection_dirty_clean_tracking": { given: "Jobs projection tracking dirty/clean states", when: "State changes update job parameters", then: "Accurately marks modified jobs as dirty for reconciliation" },
+            "test_simulation_vm_projection_multi_role_fleet": { given: "VM projection tracking multi-role fleet", when: "Adding/removing VMs with different roles (audio/video)", then: "Maintains correct count and status of active fleet instances" },
+            "test_simulation_budget_projection_exceeded_detection": { given: "Budget projection with specified cost limit", when: "VM lease and API charges accumulate", then: "Flags budget exceeded state as soon as spent crosses limit" },
+            "test_simulation_state_projection_full_phase_machine": { given: "State projection tracking documentary phases", when: "Applying phase transition events", then: "Correctly updates phase (planning, scripting, rendering, complete)" },
+            "test_simulation_coordinate_timeline_cascade_and_overlap": { given: "Coordinate timeline with overlapping audio/video blocks", when: "Aligning and cascading block offsets", then: "Resolves overlaps and cascades offsets to prevent collisions" },
             "Maximum Capacity Test": { given: "Stress test pipeline with high volume of concurrent jobs", when: "Running full production pipeline under maximum load", then: "Processes all jobs concurrently without database concurrency locks" }
         };
 
