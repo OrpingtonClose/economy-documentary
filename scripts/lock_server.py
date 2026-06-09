@@ -92,18 +92,6 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_run_tests()
         elif self.path.startswith("/images/"):
             self.handle_image()
-        elif self.path == "/dashboard" or self.path == "/dashboard/":
-            self.handle_dashboard()
-        elif self.path.startswith("/api/"):
-            self.handle_proxy("GET")
-        else:
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"Not Found")
-
-    def do_POST(self):
-        if self.path.startswith("/api/"):
-            self.handle_proxy("POST")
         else:
             self.send_response(404)
             self.end_headers()
@@ -245,120 +233,93 @@ class LockServerHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(html.encode('utf-8'))
 
     def handle_run_tests(self):
-        self.ensure_dashboard_running()
-        
-        # Trigger run of all tests on the dashboard
-        import urllib.request
-        import json
-        try:
-            project_root = "/Users/orpington/Documents/economy-documentary-work"
-            import sys
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
-            from tests.units.run import TEST_CASES
-            test_names = [tc[0] for tc in TEST_CASES]
-            
-            url = "http://127.0.0.1:19246/api/run"
-            req_data = json.dumps({"tests": test_names}).encode('utf-8')
-            req = urllib.request.Request(url, data=req_data, method="POST", headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                pass
-        except Exception as e:
-            print(f"⚠️ Failed to trigger test execution on dashboard: {e}")
-            
-        self.send_response(302)
-        self.send_header("Location", "/dashboard/")
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.end_headers()
 
-    def ensure_dashboard_running(self):
-        import socket
-        import subprocess
-        import time
-        # Check if port 19246 is already listening
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.connect(("127.0.0.1", 19246))
-                return # Already running!
-            except Exception:
-                pass
-        
-        # Start the dashboard server in the background
         project_root = "/Users/orpington/Documents/economy-documentary-work"
         python_exec = os.path.join(project_root, ".venv/bin/python")
         run_script = os.path.join(project_root, "tests/units/run.py")
-        
-        env = dict(os.environ, PYTHONPATH=f"{project_root}/server:{project_root}/server/capabilities")
-        cmd = [python_exec, run_script, "--port", "19246", "--no-browser", "--no-exit", "--host", "127.0.0.1"]
-        
-        # Spawn daemon process
-        subprocess.Popen(
-            cmd,
-            cwd=project_root,
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        
-        # Wait a moment for it to bind
-        for _ in range(30):
-            time.sleep(0.1)
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.connect(("127.0.0.1", 19246))
-                    print("🚀 Dashboard server started successfully in background by lock server.")
-                    return
-                except Exception:
-                    pass
 
-    def handle_dashboard(self):
-        self.ensure_dashboard_running()
-        self.handle_proxy("GET", target_path="/")
+        if not os.path.exists(python_exec):
+            self.wfile.write(b"Error: Virtual environment python interpreter not found.\n")
+            return
 
-    def handle_proxy(self, method, target_path=None):
-        import urllib.request
-        import urllib.error
+        newest_dir = get_newest_brain_dir()
+        if not newest_dir:
+            self.wfile.write(b"Error: Newest brain directory not found.\n")
+            return
+
+        # Create test_outputs directory
+        test_outputs_dir = newest_dir / "test_outputs"
+        test_outputs_dir.mkdir(parents=True, exist_ok=True)
+        log_file_path = test_outputs_dir / "pytest_output.log"
         
-        self.ensure_dashboard_running()
-        
-        path = target_path if target_path is not None else self.path
-        url = f"http://127.0.0.1:19246{path}"
-        
-        data = None
-        if method == "POST":
-            content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > 0:
-                data = self.rfile.read(content_length)
-                
-        req = urllib.request.Request(url, data=data, method=method)
-        for key, val in self.headers.items():
-            if key.lower() not in ['host', 'content-length']:
-                req.add_header(key, val)
-                
         try:
-            with urllib.request.urlopen(req, timeout=15.0) as response:
-                self.send_response(response.status)
-                for key, val in response.headers.items():
-                    if key.lower() not in ['content-length', 'transfer-encoding', 'connection']:
-                        self.send_header(key, val)
+            log_file = open(log_file_path, "w", encoding="utf-8")
+        except Exception:
+            log_file = None
+
+        self.wfile.write(b"Executing test suite via pytest...\n\n")
+        if log_file:
+            log_file.write("Executing test suite via pytest...\n\n")
+            
+        try:
+            env = dict(os.environ, PYTHONPATH=f"{project_root}/server:{project_root}/server/capabilities")
+            process = subprocess.Popen(
+                [python_exec, run_script],
+                cwd=project_root,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+            for line in iter(process.stdout.readline, ""):
+                self.wfile.write(line.encode('utf-8'))
+                self.wfile.flush()
+                if log_file:
+                    log_file.write(line)
+                    log_file.flush()
+            process.stdout.close()
+            process.wait()
+            
+            exit_msg = f"\n[Test process exited with code {process.returncode}]\n"
+            self.wfile.write(exit_msg.encode('utf-8'))
+            if log_file:
+                log_file.write(exit_msg)
+                log_file.close()
                 
-                resp_content = response.read()
-                self.send_header('Content-Length', str(len(resp_content)))
-                self.end_headers()
-                self.wfile.write(resp_content)
-        except urllib.error.HTTPError as e:
-            self.send_response(e.code)
-            for key, val in e.headers.items():
-                if key.lower() not in ['content-length', 'transfer-encoding', 'connection']:
-                    self.send_header(key, val)
-            resp_content = e.read()
-            self.send_header('Content-Length', str(len(resp_content)))
-            self.end_headers()
-            self.wfile.write(resp_content)
+            # Copy recently updated bdd_verdicts JSON files
+            import tempfile
+            import shutil
+            from datetime import datetime, timedelta
+            sys_temp = tempfile.gettempdir()
+            now = datetime.now()
+            copied_count = 0
+            for root, dirs, files in os.walk(sys_temp):
+                if "bdd_verdicts" in root:
+                    for f in files:
+                        if f.endswith(".json"):
+                            src_path = os.path.join(root, f)
+                            try:
+                                mtime = datetime.fromtimestamp(os.path.getmtime(src_path))
+                                # Copy files modified in the last 15 minutes
+                                if now - mtime < timedelta(minutes=15):
+                                    dest_dir = test_outputs_dir / "bdd_verdicts"
+                                    dest_dir.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(src_path, dest_dir / f)
+                                    copied_count += 1
+                            except Exception:
+                                pass
+            if copied_count > 0:
+                print(f"✅ Copied {copied_count} BDD verdict files to {test_outputs_dir / 'bdd_verdicts'}")
+                
         except Exception as e:
-            self.send_response(502)
-            self.end_headers()
-            self.wfile.write(f"Bad Gateway: {e}".encode('utf-8'))
+            self.wfile.write(f"\nException: {e}\n".encode('utf-8'))
+            if log_file:
+                log_file.write(f"\nException: {e}\n")
+                log_file.close()
 
 def main():
     socketserver.TCPServer.allow_reuse_address = True

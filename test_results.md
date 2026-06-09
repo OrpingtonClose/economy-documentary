@@ -9,7 +9,7 @@
             <p style="margin: 4px 0 0 0; font-size: 0.8rem; color: #94a3b8;">Maximum Capacity Stress Test Execution</p>
         </div>
         <div style="font-size: 0.8rem; color: #94a3b8; font-weight: 600;">
-            Elapsed: <strong style="color: #ffffff;">63.3s</strong> | Spent: <strong style="color: #10b981;">$0.00</strong>
+            Elapsed: <strong style="color: #ffffff;">64.8s</strong> | Spent: <strong style="color: #10b981;">$0.00</strong>
         </div>
     </div>
 
