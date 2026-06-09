@@ -1,0 +1,7 @@
+{
+  "verdict": "pass",
+  "confidence": 0.9,
+  "reasoning": "The test scenario requires 3 completed video jobs to be merged into an OTIO timeline via MergeIntoOTIO events, with the resulting timeline having 3 clips on V1_Video track with no overlaps and total duration \u2248 10.5 seconds. The evidence shows exactly 3 MergeIntoOTIO events, one per block (s1_b1: 3.0s, s1_b2: 3.5s, s2_b1: 4.0s), all targeting V1_Video track with cut transitions (no overlaps). The projection confirms 3 clips totaling 10.5 seconds in scenario order. The event log shows only update_script (seeding the script) and merge_into_otio events; no domain actions like VMAllocated or AudioGenerated are claimed, so there is no requirement for physical execution traces. This appears to be a timeline assembly test where MergeIntoOTIO events are applied directly to a CoordinateTimeline projection/view, not a full pipeline test. Therefore, no mocking detection is needed. All logical conditions are satisfied.",
+  "issues": [],
+  "test_name": "multi_scene_video_otio_assembly"
+}

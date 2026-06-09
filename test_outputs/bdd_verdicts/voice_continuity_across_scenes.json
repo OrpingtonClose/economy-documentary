@@ -1,0 +1,12 @@
+{
+  "verdict": "fail",
+  "confidence": 0.95,
+  "reasoning": "Mocking Detected: The test claims to measure LUFS on 3 WAV files with different frequencies and durations, but the event log shows only 'audio_measured' events with empty 'measurements' arrays (no LUFS, no RMS, no sample rate data). There are no 'file_written' or 'command_executed' trace effects showing actual WAV file generation or LUFS measurement commands (e.g., ffmpeg, pyloudnorm). The 'sample_rates' and 'lufs_values' in artifacts are synthetic and not backed by any physical execution trace. Additionally, the 'whisperx_confidence' is 0.0 across all events, and 'measured_sec' values (2.5, 2.8, 3.1) are unrealistic for any real audio processing pipeline. No audio_generated or pipeline_phase events exist to indicate real file creation or measurement execution.",
+  "issues": [
+    "Missing command_executed or file_written trace effects for WAV generation and LUFS measurement",
+    "Empty measurements arrays in all audio_measured events",
+    "No audio_generated events preceding measurements",
+    "artifacts data appears fabricated without corresponding trace evidence"
+  ],
+  "test_name": "voice_continuity_across_scenes"
+}

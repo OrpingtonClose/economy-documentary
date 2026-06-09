@@ -168,6 +168,7 @@ test_status = {}
 test_logs = {}
 bdd_verdicts_dict = {}
 user_interacted = False
+keep_alive = False
 current_running_test = None
 run_queue = [name for name, _, _ in TEST_CASES]  # Default runs all on startup
 
@@ -2651,26 +2652,81 @@ def run_suite_in_thread():
                                 v_data = json.load(vf)
                                 if "verdict" in v_data and "reasoning" in v_data:
                                     bdd_verdicts_dict[name] = v_data
+                                    try:
+                                        import shutil
+                                        brain_root = pathlib.Path("/Users/orpington/.gemini/antigravity/brain")
+                                        conv_id = os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+                                        brain_dir = None
+                                        if conv_id and (brain_root / conv_id).exists():
+                                            brain_dir = brain_root / conv_id
+                                        else:
+                                            newest_mtime = 0
+                                            for subdir in brain_root.iterdir():
+                                                if subdir.is_dir() and not subdir.name.startswith("."):
+                                                    state_file = subdir / ".lock_state"
+                                                    mtime = state_file.stat().st_mtime if state_file.exists() else subdir.stat().st_mtime
+                                                    if mtime > newest_mtime:
+                                                        newest_mtime = mtime
+                                                        brain_dir = subdir
+                                        if brain_dir:
+                                            dest_dir = brain_dir / "test_outputs" / "bdd_verdicts"
+                                            dest_dir.mkdir(parents=True, exist_ok=True)
+                                            s_name = name.replace("test_bdd_", "").replace("test_", "")
+                                            shutil.copy2(path, dest_dir / f"{s_name}.json")
+                                            
+                                            proj_dest_dir = PROJECT_ROOT / "test_outputs" / "bdd_verdicts"
+                                            proj_dest_dir.mkdir(parents=True, exist_ok=True)
+                                            shutil.copy2(path, proj_dest_dir / f"{s_name}.json")
+                                    except Exception as ce:
+                                        print(f"Error copying BDD verdict: {ce}")
                                     break
                         except Exception:
                             pass
             except Exception as e:
                 print(f"Error scanning temp dirs: {e}")
+
+            # Write/update pytest_output.log in brain test_outputs
+            try:
+                brain_root = pathlib.Path("/Users/orpington/.gemini/antigravity/brain")
+                conv_id = os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
+                brain_dir = None
+                if conv_id and (brain_root / conv_id).exists():
+                    brain_dir = brain_root / conv_id
+                else:
+                    newest_mtime = 0
+                    for subdir in brain_root.iterdir():
+                        if subdir.is_dir() and not subdir.name.startswith("."):
+                            state_file = subdir / ".lock_state"
+                            mtime = state_file.stat().st_mtime if state_file.exists() else subdir.stat().st_mtime
+                            if mtime > newest_mtime:
+                                newest_mtime = mtime
+                                brain_dir = subdir
+                if brain_dir:
+                    log_dir = brain_dir / "test_outputs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    log_file = log_dir / "pytest_output.log"
+                    import re
+                    raw_logs = "".join(logs_list)
+                    clean_logs = re.sub(r'<[^>]+>', '', raw_logs)
+                    with open(log_file, "w", encoding="utf-8") as lf:
+                        lf.write(clean_logs)
+            except Exception as le:
+                print(f"Error writing pytest_output.log: {le}")
                 
         current_running_test = None
         suite_completed = True
         any_failed = any(ts.get("status") == "failed" for ts in test_status.values())
         suite_status = "failed" if any_failed else "passed"
         
-        # Trigger countdown only if user hasn't interacted
-        if not user_interacted:
+        # Trigger countdown only if user hasn't interacted and no-exit isn't active
+        if not user_interacted and not keep_alive:
             for i in range(10, 0, -1):
                 if user_interacted or run_queue:
                     break
                 auto_close_countdown = i
                 time.sleep(1)
             else:
-                if not user_interacted:
+                if not user_interacted and not keep_alive:
                     sys.stdout = original_stdout
                     sys.stderr = original_stderr
                     print("\n" + "=" * 80)
@@ -2683,13 +2739,34 @@ def run_suite_in_thread():
                     os._exit(0 if suite_status == "passed" else 1)
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Documentary Pipeline Test Runner Dashboard")
+    parser.add_argument("--host", default="127.0.0.1", help="Host address to bind the server to (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=None, help="Port to run the dashboard server on (default: 19246 or find free port)")
+    parser.add_argument("--no-browser", action="store_true", help="Do not attempt to open a web browser on startup")
+    parser.add_argument("--no-exit", action="store_true", help="Do not automatically exit after the tests finish running")
+    args, unknown = parser.parse_known_args()
+
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(line_buffering=True)
 
-    port = find_free_port()
-    
+    # Determine port
+    port = args.port
+    if port is None:
+        # Try preferred port 19246 first
+        preferred_port = 19246
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((args.host, preferred_port))
+                port = preferred_port
+            except Exception:
+                port = find_free_port()
+
+    global keep_alive
+    keep_alive = args.no_exit or ("ANTIGRAVITY_NO_EXIT" in os.environ)
+
     sys.stdout = LiveStreamCapture(original_stdout)
     sys.stderr = LiveStreamCapture(original_stderr)
 
@@ -2699,12 +2776,23 @@ def main():
     suite_thread.start()
 
     def start_web_server():
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="error")
+        uvicorn.run(app, host=args.host, port=port, log_level="error")
 
     threading.Thread(target=start_web_server, daemon=True).start()
 
+    print("\n" + "=" * 80)
+    print(f"🚀  DASHBOARD SERVER IS STARTING...")
+    print(f"🔗  URL: http://{args.host}:{port}")
+    print(f"📖  Use this link to open the Test Runner GUI dashboard.")
+    print("=" * 80 + "\n")
+    sys.stdout.flush()
+
     time.sleep(0.8)
-    webbrowser.open(f"http://127.0.0.1:{port}")
+    if not args.no_browser:
+        try:
+            webbrowser.open(f"http://{args.host}:{port}")
+        except Exception:
+            pass
 
     while True:
         time.sleep(1)
