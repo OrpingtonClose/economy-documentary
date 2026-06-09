@@ -568,7 +568,114 @@ def run_subagent_audit(test_name: str) -> dict:
     except Exception as e:
         return {"verdict": "FAIL", "reasoning": f"Error during subagent audit execution: {e}"}
 
+def run_architecture_test():
+    import ast
+    import sys
+    from pathlib import Path
+    
+    print("🔍 Running Architecture Test on tests/units...")
+    tests_dir = PROJECT_ROOT / "tests" / "units"
+    if not tests_dir.exists():
+        print("✅ Architecture Test: No tests directory found.")
+        return
+        
+    py_files = list(tests_dir.glob("*.py"))
+    violations = []
+    
+    for py_file in py_files:
+        if py_file.name in ("__init__.py", "harness.py"):
+            continue
+        try:
+            content = py_file.read_text(encoding="utf-8")
+            tree = ast.parse(content)
+        except Exception as e:
+            violations.append(f"{py_file.name}: Failed to parse AST: {e}")
+            continue
+            
+        file_violations = []
+        
+        class SCVisitor(ast.NodeVisitor):
+            def visit_Import(self, node):
+                for alias in node.names:
+                    if any(x in alias.name for x in ["mock", "unittest.mock", "pytest_mock"]):
+                        file_violations.append(f"Line {node.lineno}: Forbidden mock import: 'import {alias.name}'")
+                self.generic_visit(node)
+                
+            def visit_ImportFrom(self, node):
+                if node.module and any(x in node.module for x in ["mock", "unittest.mock", "pytest_mock"]):
+                    file_violations.append(f"Line {node.lineno}: Forbidden mock import: 'from {node.module} import ...'")
+                for alias in node.names:
+                    if any(x in alias.name for x in ["mock", "MagicMock", "Mock", "PropertyMock"]):
+                        file_violations.append(f"Line {node.lineno}: Forbidden mock import: '{alias.name}' from '{node.module}'")
+                self.generic_visit(node)
+                
+            def visit_Attribute(self, node):
+                if isinstance(node.value, ast.Name):
+                    if node.value.id in ["mock", "unittest", "pytest"]:
+                        if any(x in node.attr for x in ["patch", "MagicMock", "Mock", "PropertyMock", "skip"]):
+                            file_violations.append(f"Line {node.lineno}: Forbidden mock/skip usage: '{node.value.id}.{node.attr}'")
+                self.generic_visit(node)
+                
+            def visit_Name(self, node):
+                if node.id in ["MagicMock", "Mock", "PropertyMock"]:
+                    file_violations.append(f"Line {node.lineno}: Forbidden mock usage: '{node.id}'")
+                self.generic_visit(node)
+                
+            def visit_Call(self, node):
+                if isinstance(node.func, ast.Attribute):
+                    if isinstance(node.func.value, ast.Name) and node.func.value.id == "pytest" and node.func.attr == "skip":
+                        file_violations.append(f"Line {node.lineno}: Forbidden skip call: 'pytest.skip(...)'")
+                elif isinstance(node.func, ast.Name) and node.func.id == "skip":
+                    file_violations.append(f"Line {node.lineno}: Forbidden skip call: 'skip(...)'")
+                self.generic_visit(node)
+                
+            def visit_Assert(self, node):
+                test = node.test
+                is_trivial = False
+                if isinstance(test, ast.Constant):
+                    is_trivial = True
+                elif isinstance(test, ast.Compare):
+                    if len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq):
+                        left = test.left
+                        right = test.comparators[0]
+                        if isinstance(left, ast.Constant) and isinstance(right, ast.Constant):
+                            is_trivial = True
+                if is_trivial:
+                    file_violations.append(f"Line {node.lineno}: Forbidden trivial assertion")
+                self.generic_visit(node)
+                
+            def visit_FunctionDef(self, node):
+                for dec in node.decorator_list:
+                    dec_str = ast.dump(dec)
+                    if "skip" in dec_str.lower():
+                        file_violations.append(f"Line {node.lineno}: Forbidden skip decorator on function '{node.name}'")
+                self.generic_visit(node)
+                
+            def visit_ClassDef(self, node):
+                for dec in node.decorator_list:
+                    dec_str = ast.dump(dec)
+                    if "skip" in dec_str.lower():
+                        file_violations.append(f"Line {node.lineno}: Forbidden skip decorator on class '{node.name}'")
+                self.generic_visit(node)
+                
+        visitor = SCVisitor()
+        visitor.visit(tree)
+        
+        if file_violations:
+            violations.append(f"File: {py_file.name}\n" + "\n".join(f"  - {v}" for v in file_violations))
+            
+    if violations:
+        print("\n❌ ARCHITECTURE TEST FAILURE! Test runner execution aborted.")
+        for violation in violations:
+            print(f"\n{violation}")
+        sys.exit(1)
+    else:
+        print("✅ Architecture Test: Passed (all tests compliant with simulation cover invariants).\n")
+
 def main():
+    # Execute the architecture validation check first
+    run_architecture_test()
+
     parser = argparse.ArgumentParser(description="Documentary Pipeline CLI Test Runner")
     parser.add_argument("tests", nargs="*", help="Filter test cases by name (exact or substring).")
     parser.add_argument("--category", help="Only run tests in a specific category.")
