@@ -827,6 +827,8 @@ class OTIOSlotState(BaseModel):
     artifact_uri: str | None = None
     visual_notes: str = ""
     visual_concepts: str = ""
+    start_sec: float | None = None
+    end_sec: float | None = None
 
 
 class OTIOResponse(BaseModel):

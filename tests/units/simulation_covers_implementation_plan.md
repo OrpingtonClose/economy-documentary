@@ -34,9 +34,8 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
   Scenario: Ingesting a screenplay and generating script blocks via LLM
     Given the Scenario Agent is initialized with the production DeepSeek model
     When a raw screenplay text prompt is POSTed to the Scenario Agent
-    Then the agent should query the live LLM API
-    And the response must be parsed into valid ScriptBlock models
-    And the Scenario Agent must append an UpdateScript effect to the event store
+    Then the agent should query the live LLM API and output its reasoning in the response
+    And the response must be parsed into valid ScriptBlock models and written to the event store
   ```
 * **Cover Test (`test_scenario_agent_live_prompt_turn`)**: Invokes a live turn of the Scenario Agent using the DeepSeek API key, verifies HTTPS round-trip, and parses the output script blocks using `instructor`.
 
@@ -78,7 +77,7 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 * **BDD Scenario 1**:
   ```gherkin
   Scenario: Queueing narration jobs via live LLM reasoning
-    Given a script block is appended to the event store and GSA is active
+    Given a script block is appended to the event store and GSA is running locally
     When the Audio Agent is run via execute_agent_turn with the live DeepSeek API
     Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
     And it must emit a QueueAudioJob event for the narration slot (A1:)
@@ -87,7 +86,7 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 * **BDD Scenario 2**:
   ```gherkin
   Scenario: Queueing video jobs via live LLM reasoning
-    Given a script block is appended to the event store and GSA is active
+    Given a script block is appended to the event store and GSA is running locally
     When the Video Agent is run via execute_agent_turn with the live DeepSeek API
     Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
     And it must emit a QueueVideoJob event for the visual slot (V1:)
@@ -99,11 +98,11 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 * **BDD Scenario**:
   ```gherkin
   Scenario: Recalculating slot timings on duration adjustment
-    Given a timeline containing 3 blocks is active and GSA is running
+    Given a timeline containing 3 blocks is active and GSA is running locally
     When a DurationAdjusted event increases block 1 duration by 2.0 seconds
     Then the live GSA HTTP GET response must show the total timeline duration increased exactly by 2.0 seconds
-    And a local CoordinateTimeline projection must verify that the start/end coordinates of blocks 2 and 3 are shifted accordingly
-    And the database-native high precision subtraction using sqlean must calculate the total duration correctly
+    And the live GSA slots response must show that the start/end coordinates of blocks 2 and 3 are shifted accordingly
+    And a direct sqlean query on the database must calculate the duration difference correctly
   ```
 * **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math using both the live GSA HTTP endpoint and the local CoordinateTimeline projection with sqlean.
 
@@ -127,8 +126,9 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
     And a VMDeallocated event with cost 1.05 USD is appended to accumulate charges crossing the limit
     And a running GPU VM is provisioned on Vast.ai
     When the Provisioner Agent turn is executed via execute_agent_turn to deallocate the active VM autonomously
+    Then the Provisioner must destroy the running Vast.ai VM instance by executing the vastai destroy command
+    And emit a VMDeallocated event for the active instance
     And a PipelineAborted event is appended by the operator
-    Then the Provisioner must destroy the running Vast.ai VM instance and emit a VMDeallocated event
     And GSA must transition the current phase to "aborted"
   ```
 * **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation, runs the Provisioner agent to autonomously destroy active VMs, and verifies the aborted phase transition.
