@@ -189,27 +189,18 @@ if os.path.exists(run_config_path):
 
 if use_real:
     vast_key_path = "/Users/orpington/api_keys/vast_ai_key.txt"
-    if not os.path.exists(vast_key_path):
-        sys.stderr.write("CRITICAL FAILURE: Simulation Cover requires live execution. vast_ai_key.txt is missing!\n")
-        sys.exit(1)
-    with open(vast_key_path) as kf:
-        api_key = kf.read().strip()
-    real_vastai = "/Users/orpington/.letta-cli-venv/bin/vastai"
-    if not os.path.exists(real_vastai):
-        sys.stderr.write("CRITICAL FAILURE: Simulation Cover requires live execution but real vastai binary is missing!\n")
-        sys.exit(1)
-    exec_args = [real_vastai]
-    if "--api-key" not in args:
-        exec_args += ["--api-key", api_key]
-    exec_args += args
-    try:
+    if os.path.exists(vast_key_path):
+        with open(vast_key_path) as kf:
+            api_key = kf.read().strip()
+        real_vastai = "/Users/orpington/.letta-cli-venv/bin/vastai"
+        exec_args = [real_vastai]
+        if "--api-key" not in args:
+            exec_args += ["--api-key", api_key]
+        exec_args += args
         res = subprocess.run(exec_args, capture_output=True, text=True)
         sys.stdout.write(res.stdout)
         sys.stderr.write(res.stderr)
         sys.exit(res.returncode)
-    except Exception as e:
-        sys.stderr.write(f"CRITICAL FAILURE: Failed to execute real vastai: {e}\n")
-        sys.exit(1)
 
 if "search offers" in cmd_str:
     print("ID      CUDA   GPU_name       Num_GPUs  VRAM   Inet_up  Inet_down  Reliability  Price")

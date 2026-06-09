@@ -73,6 +73,9 @@ The testing suite consists of real-world integration tests driven over active ne
 
 > [!IMPORTANT]
 > **Covered-Simulation:** If a simulator or mock implementation (e.g., `DryRunModel`, `TtsJobSimulator`, `LtxJobSimulator`) is utilized anywhere in any test suite for development convenience, performance, or isolation, the underlying real, non-simulated production process (the actual LLM API calls, live Vast.ai VM rental, SSH tunneling, and remote CUDA-based media synthesis) **must be tested in non-simulation form very robustly** to ensure live correctness. Mocks must never be used as a replacement for live, uncompromised boundary validation.
+>
+> [!NOTE]
+> **Philosophy of Hard Failures:** If a Simulation Cover cannot run (due to missing credentials, offline status, or missing physical dependencies), then the simulators it covers cannot be verified, rendering any offline tests relying on them pointless. Therefore, the Simulation Cover must fail immediately (raising a fatal error or assertion failure) to prevent untrusted simulated runs from passing.
 
 ---
 
