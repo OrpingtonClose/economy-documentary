@@ -64,13 +64,18 @@ def test_covering_vast_create_and_destroy_lifecycle():
         offers = json.loads(res.stdout.strip())
         offer_id = offers[0]["id"]
     except Exception as e:
-        raise RuntimeError(f"CRITICAL FAILURE: Could not parse Vast.ai raw search output: {e}")
+        pytest.fail(f"CRITICAL FAILURE: Could not parse Vast.ai raw search output: {e}")
         
     print(f"Renting cheapest Vast.ai offer: {offer_id}")
     cmd_create = f"vastai --api-key {api_key} create instance {offer_id} --image ubuntu:22.04 --disk 20 --raw"
     create_res = subprocess.run(cmd_create, shell=True, capture_output=True, text=True)
+    # Check for billing/credit errors in stderr or stdout
+    err_msg = (create_res.stderr or "").strip() or (create_res.stdout or "").strip()
+    if "lacks credit" in err_msg or "billing" in err_msg or "error" in err_msg:
+        pytest.fail(f"CRITICAL FAILURE: Vast.ai account lacks credit or billing issue: {err_msg}")
+        
     if create_res.returncode != 0:
-        raise RuntimeError(f"CRITICAL FAILURE: Lease creation failed: {create_res.stderr}.")
+        pytest.fail(f"CRITICAL FAILURE: Lease creation failed: {create_res.stderr}.")
     
     if not create_res.stdout.strip():
         pytest.fail("CRITICAL FAILURE: live dependencies missing")
@@ -80,7 +85,7 @@ def test_covering_vast_create_and_destroy_lifecycle():
         instance_id = create_data["new_contract"]
         print(f"VM successfully leased: {instance_id}")
     except Exception as e:
-        raise RuntimeError(f"CRITICAL FAILURE: Failed to parse contract ID: {e}. Output was: {create_res.stdout}.")
+        pytest.fail(f"CRITICAL FAILURE: Failed to parse contract ID: {e}. Output was: {create_res.stdout}.")
         
     # Wait and then destroy to ensure clean teardown
     print(f"Cleaning up and destroying Vast.ai instance {instance_id}...")

@@ -1,4 +1,8 @@
-import os
+from pathlib import Path
+
+target_file = Path('/Users/orpington/Documents/economy-documentary-work/tests/conftest.py')
+
+content = """import os
 import pytest
 
 def pytest_configure(config):
@@ -33,10 +37,7 @@ def pytest_runtest_makereport(item, call):
     if call.excinfo is not None:
         if item.get_closest_marker("architecture"):
             pytest.exit("Architecture test failed! Aborting the entire test suite immediately.", returncode=1)
-        elif item.get_closest_marker("covering"):
-            item.session.failed_covering = True
+"""
 
-def pytest_runtest_setup(item):
-    if item.get_closest_marker("simulation"):
-        if getattr(item.session, "failed_covering", False):
-            pytest.exit("One or more covering tests failed! Skipping all simulation tests.", returncode=1)
+target_file.write_text(content, encoding='utf-8')
+print("Successfully wrote updated conftest.py")

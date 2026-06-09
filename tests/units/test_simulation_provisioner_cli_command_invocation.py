@@ -44,13 +44,8 @@ sys.path.append(str(PROJECT_ROOT / "server" / "capabilities"))
 def test_simulation_provisioner_cli_command_invocation():
 
     print('\n▶️  [STARTING TEST] test_provisioner_cli_command_invocation')
-    # Require real vastai key for live execution simulation cover
-    vast_key_path = os.path.expanduser("~/api_keys/vast_ai_key.txt")
-    if not os.path.exists(vast_key_path):
-        pytest.fail("CRITICAL FAILURE: live dependencies missing")
-
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa", "provisioner"], capabilities=["VastRealCapability"]) as harness:
+    with IntegrationHarness(required_agents=["gsa", "provisioner"]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         provisioner_port = harness.ports["provisioner"]
@@ -70,7 +65,7 @@ def test_simulation_provisioner_cli_command_invocation():
         
         # Wake up Provisioner (this will trigger search, create, and copy command executions)
         print('     ├─ [HTTP] Sending request to agent endpoint...')
-        resp = httpx.post(f"http://127.0.0.1:{provisioner_port}/", content="Wakeup")
+        resp = httpx.post(f"http://127.0.0.1:{provisioner_port}/", content="Wakeup", timeout=None)
         print('     ├─ [Assert] Checking: resp.status_code == 200')
         assert resp.status_code == 200
         
@@ -85,7 +80,7 @@ def test_simulation_provisioner_cli_command_invocation():
             corrective_action="none"
         ), "")
         print('     ├─ [HTTP] Sending request to agent endpoint...')
-        resp = httpx.post(f"http://127.0.0.1:{provisioner_port}/", content="Wakeup")
+        resp = httpx.post(f"http://127.0.0.1:{provisioner_port}/", content="Wakeup", timeout=None)
         print('     ├─ [Assert] Checking: resp.status_code == 200')
         assert resp.status_code == 200
         

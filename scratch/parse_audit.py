@@ -1,64 +1,39 @@
-import re
+import sys
+import os
+import asyncio
 from pathlib import Path
 
-log_path = Path("/Users/orpington/.gemini/antigravity/brain/33beca10-33a6-47ac-915f-990b840d1541/.system_generated/tasks/task-546.log")
-artifact_path = Path("/Users/orpington/.gemini/antigravity/brain/33beca10-33a6-47ac-915f-990b840d1541/architecture_audit_report.md")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.append(str(PROJECT_ROOT))
+sys.path.append(str(PROJECT_ROOT / "server"))
 
-if not log_path.exists():
-    print(f"Error: Log file not found at {log_path}")
-    exit(1)
+from effect_parser import parse_agent_text_multi
 
-log_content = log_path.read_text(encoding="utf-8")
+# Load the text from the debug log
+with open('/tmp/documentary-pipeline/agent_debug_scenario.log') as f:
+    log_content = f.read()
 
-# Let's split the log by the separator "--------------------------------------------------"
-blocks = log_content.split("--------------------------------------------------")
+# The response starts after the second TURN START block
+# Let's split by the separator
+parts = log_content.split('RESPONSE:\n')
+if len(parts) >= 2:
+    agent_text = parts[-1].split('========================================')[0].strip()
+else:
+    agent_text = log_content
 
-report_md = []
-report_md.append("# 🕵️ Agentic Architecture Audit - Detailed Findings Report\n")
-report_md.append("This report lists the detailed findings from the **architecture tests** audit under the updated black hat threat model. The audit was conducted to verify if any test violates system invariants or attempts to make the **covering tests** ineffectual.\n")
-report_md.append("## Summary of Scanned Files\n")
+print("--- AGENT TEXT ---")
+print(agent_text[:500])
+print("...")
+print("------------------")
 
-# Let's parse each block
-parsed_blocks = []
-for block in blocks:
-    block = block.strip()
-    if not block:
-        continue
+async def main():
+    # Set mock LOG_DIR if needed
+    os.environ["DATA_DIR"] = "/tmp/documentary-pipeline"
     
-    # Try to find file name
-    file_match = re.search(r"File:\s*([a-zA-Z0-9_\-\.]+)", block)
-    if file_match:
-        filename = file_match.group(1)
-        # Check if PASS or FAIL
-        is_pass = "PASS" in block and "FAIL" not in block and "VIOLATION" not in block
-        status = "✅ PASS" if is_pass else "❌ FAIL"
-        
-        # Extract body (everything after the File: line)
-        body = block
-        # Clean up warnings from shell
-        body = re.sub(r"cat:.*No such file or directory\n?", "", body)
-        
-        parsed_blocks.append((filename, status, body))
+    effects = await parse_agent_text_multi("scenario", agent_text)
+    print("\n--- EXTRACTED EFFECTS ---")
+    for eff in effects:
+        print(f"Kind: {eff.kind}")
+        print(f"Data: {eff.model_dump()}")
 
-# Create table of files
-report_md.append("| Test File | Audit Status |")
-report_md.append("| :--- | :--- |")
-for filename, status, _ in parsed_blocks:
-    report_md.append(f"| {filename} | {status} |")
-report_md.append("\n---\n")
-
-# Write detailed sections
-report_md.append("## Detailed Violations and Analysis\n")
-for filename, status, body in parsed_blocks:
-    if "PASS" in status:
-        report_md.append(f"### ✅ {filename}\n")
-        report_md.append("This file passed the architectural audit with zero violations detected.\n")
-    else:
-        report_md.append(f"### ❌ {filename}\n")
-        report_md.append("```markdown")
-        report_md.append(body)
-        report_md.append("```\n")
-    report_md.append("---\n")
-
-artifact_path.write_text("\n".join(report_md), encoding="utf-8")
-print(f"Successfully compiled report to {artifact_path}")
+asyncio.run(main())

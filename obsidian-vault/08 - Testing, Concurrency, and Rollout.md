@@ -198,7 +198,7 @@ To ensure maximum safety and early detection of architectural deviations, the te
 
 2. **Covering Tests Second (Totality and Gatekeeper)**:
    * **Prefix**: `test_covering_`
-   * **Role**: Validates live-boundary components (network, physical databases, external CLI wrappers) without mocking.
+   * **Role**: Validates live-boundary components (network, physical boundaries, external CLI wrappers) without mocking.
    * **Execution Rule**: Runs after **architecture tests**. If any **covering test** fails, the runner continues executing the remaining **covering tests** in totality to get a complete report of live boundary failures. However, if *any* **covering test** fails, the suite will not proceed to the next stage.
 
 3. **Simulation Tests Third (Conditional Execution)**:

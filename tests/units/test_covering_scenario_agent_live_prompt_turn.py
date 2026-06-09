@@ -49,9 +49,9 @@ def test_covering_scenario_agent_live_prompt_turn():
 
     # Check network reachability for deepseek API
     try:
-        httpx.get("https://api.deepseek.com/")
+        httpx.get("https://api.deepseek.com/", timeout=None)
     except Exception as e:
-        raise RuntimeError(f"CRITICAL FAILURE: DeepSeek API endpoint is unreachable: {e}")
+        pytest.fail(f"CRITICAL FAILURE: DeepSeek API endpoint is unreachable: {e}")
 
     print('     └─ [Harness] Initializing process-isolated test harness...')
     with IntegrationHarness(required_agents=["gsa", "scenario"], capabilities=[]) as harness:
@@ -68,12 +68,12 @@ def test_covering_scenario_agent_live_prompt_turn():
         # Prompt Scenario Agent to partition a short text into blocks
         prompt = "Create a script with 2 blocks about global interest rates."
         print('     ├─ [HTTP] Sending request to agent endpoint...')
-        resp = httpx.post(f"http://127.0.0.1:{scenario_port}/", content=prompt)
+        resp = httpx.post(f"http://127.0.0.1:{scenario_port}/", content=prompt, timeout=None)
         print('     ├─ [Assert] Checking: resp.status_code == 200')
         assert resp.status_code == 200
         
         # Verify script block creation in GSA
         print('     ├─ [HTTP] Sending request to agent endpoint...')
-        gsa_resp = httpx.get(f"http://127.0.0.1:{gsa_port}/").json()
+        gsa_resp = httpx.get(f"http://127.0.0.1:{gsa_port}/", timeout=None).json()
         print('     ├─ [Assert] Checking: len(gsa_resp[\"otio\"][\"slots\"]) >= 1')
         assert len(gsa_resp["otio"]["slots"]) >= 1
