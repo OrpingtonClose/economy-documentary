@@ -1052,7 +1052,16 @@ INDEX_HTML = """<!DOCTYPE html>
             min-height: 0;
         }
 
-        .details-left-col, .details-right-col {
+        .details-left-col {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .details-right-col {
             display: flex;
             flex-direction: column;
             gap: 1rem;
@@ -1445,6 +1454,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .test-list-container::-webkit-scrollbar,
         .timeline-scroll::-webkit-scrollbar,
         .traceback-pre::-webkit-scrollbar,
+        .details-left-col::-webkit-scrollbar,
         .verdict-reasoning::-webkit-scrollbar {
             width: 5px;
             height: 5px;
@@ -1453,6 +1463,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .test-list-container::-webkit-scrollbar-track,
         .timeline-scroll::-webkit-scrollbar-track,
         .traceback-pre::-webkit-scrollbar-track,
+        .details-left-col::-webkit-scrollbar-track,
         .verdict-reasoning::-webkit-scrollbar-track {
             background: transparent;
         }
@@ -1460,6 +1471,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .test-list-container::-webkit-scrollbar-thumb,
         .timeline-scroll::-webkit-scrollbar-thumb,
         .traceback-pre::-webkit-scrollbar-thumb,
+        .details-left-col::-webkit-scrollbar-thumb,
         .verdict-reasoning::-webkit-scrollbar-thumb {
             background: #141b2d;
             border-radius: 4px;
@@ -1468,6 +1480,7 @@ INDEX_HTML = """<!DOCTYPE html>
         .test-list-container::-webkit-scrollbar-thumb:hover,
         .timeline-scroll::-webkit-scrollbar-thumb:hover,
         .traceback-pre::-webkit-scrollbar-thumb:hover,
+        .details-left-col::-webkit-scrollbar-thumb:hover,
         .verdict-reasoning::-webkit-scrollbar-thumb:hover {
             background: #1e2942;
         }
@@ -2084,7 +2097,9 @@ INDEX_HTML = """<!DOCTYPE html>
                             </div>
                         </div>
                     `;
-                   // 2b. Subagent Congruence Audit Verdict
+                }
+
+                // 2b. Subagent Congruence Audit Verdict
                 let auditCardHtml = "";
                 if (data.congruence_audit) {
                     const a = data.congruence_audit;
