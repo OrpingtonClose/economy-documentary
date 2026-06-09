@@ -21,6 +21,8 @@ from effects import (
     PipelineStarted, PipelineComplete, PipelineAborted,
     BudgetSet, BudgetExceeded, UpdateScript, ScriptBlock,
     QueueJob, JobStarted, JobCompleted, JobFailed, JobRequeued, JobApproved,
+    QueueAudioJob, QueueVideoJob, AudioJobStarted, VideoJobStarted,
+    AudioJobCompleted, VideoJobCompleted, AudioJobFailed, VideoJobFailed,
     VMAllocated, VMDeallocated, VMObserved, VMProvisionFailed,
     DurationAdjusted, ReconciliationComplete, ReconciliationFailed,
     MergeIntoOTIO, DeleteScene, DeleteFromOTIO, ReorderScenes,
@@ -136,8 +138,8 @@ def test_gsa_wal_concurrency_isolation():
                 local_store = EventStore(log_dir=db_dir)
                 for i in range(events_per_thread):
                     job_id = f"thread_{thread_id}_job_{i}"
-                    local_store.append(QueueJob(
-                        agent="audio", job_id=job_id, job_type="tts",
+                    local_store.append(QueueAudioJob(
+                        agent="audio", job_id=job_id,
                         scene_num=thread_id, block_id=job_id, slot_id=job_id,
                         params={"text": "Concurrent WAL check", "voice": "narrator"}
                     ), "")
@@ -241,18 +243,18 @@ def test_gsa_wal_concurrency_isolation():
             slot_id_tts = f"A1:{i // 10 + 1}:rec_b_{i}"
             slot_id_ltx = f"V1:{i // 10 + 1}:rec_b_{i}"
             
-            event_store.append(QueueJob(agent="audio", job_id=job_id_tts, job_type="tts", scene_num=i // 10 + 1, block_id=f"rec_b_{i}", slot_id=slot_id_tts), "")
-            event_store.append(QueueJob(agent="video", job_id=job_id_ltx, job_type="ltx", scene_num=i // 10 + 1, block_id=f"rec_b_{i}", slot_id=slot_id_ltx), "")
+            event_store.append(QueueAudioJob(agent="audio", job_id=job_id_tts, scene_num=i // 10 + 1, block_id=f"rec_b_{i}", slot_id=slot_id_tts), "")
+            event_store.append(QueueVideoJob(agent="video", job_id=job_id_ltx, scene_num=i // 10 + 1, block_id=f"rec_b_{i}", slot_id=slot_id_ltx), "")
             
-            event_store.append(JobStarted(agent="provisioner", job_id=job_id_tts, vm_instance_id="1234567"), "")
-            event_store.append(JobStarted(agent="provisioner", job_id=job_id_ltx, vm_instance_id="1234567"), "")
+            event_store.append(AudioJobStarted(agent="provisioner", job_id=job_id_tts, vm_instance_id="1234567"), "")
+            event_store.append(VideoJobStarted(agent="provisioner", job_id=job_id_ltx, vm_instance_id="1234567"), "")
             
             if i in (42, 88):
-                event_store.append(JobFailed(agent="provisioner", job_id=job_id_tts, error_message="TTS failed", failure_category="unknown", vm_instance_id="1234567"), "")
-                event_store.append(JobFailed(agent="provisioner", job_id=job_id_ltx, error_message="LTX failed", failure_category="unknown", vm_instance_id="1234567"), "")
+                event_store.append(AudioJobFailed(agent="provisioner", job_id=job_id_tts, error_message="TTS failed", failure_category="unknown", vm_instance_id="1234567"), "")
+                event_store.append(VideoJobFailed(agent="provisioner", job_id=job_id_ltx, error_message="LTX failed", failure_category="unknown", vm_instance_id="1234567"), "")
             else:
-                event_store.append(JobCompleted(agent="provisioner", job_id=job_id_tts, artifact_uri=f"rec_b_{i}.wav", duration_sec=2.0, vm_instance_id="1234567"), "")
-                event_store.append(JobCompleted(agent="provisioner", job_id=job_id_ltx, artifact_uri=f"rec_b_{i}.mp4", duration_sec=2.0, vm_instance_id="1234567"), "")
+                event_store.append(AudioJobCompleted(agent="provisioner", job_id=job_id_tts, artifact_uri=f"rec_b_{i}.wav", duration_sec=2.0, vm_instance_id="1234567"), "")
+                event_store.append(VideoJobCompleted(agent="provisioner", job_id=job_id_ltx, artifact_uri=f"rec_b_{i}.mp4", duration_sec=2.0, vm_instance_id="1234567"), "")
                 event_store.append(AudioMeasured(agent="audio", job_id=job_id_tts, block_id=f"A1:{i // 10 + 1}:rec_b_{i}", scene_num=i // 10 + 1, voice_role="narrator", measured_sec=2.0), "")
                 event_store.append(DurationAdjusted(agent="audio", block_id=f"A1:{i // 10 + 1}:rec_b_{i}", slot_id=f"A1:{i // 10 + 1}:rec_b_{i}", scene_num=i // 10 + 1, voice_role="narrator", scripted_sec=2.0, measured_sec=2.0), "")
                 event_store.append(VideoMeasured(agent="video", job_id=job_id_ltx, block_id=f"V1:{i // 10 + 1}:rec_b_{i}", measured_sec=2.0), "")

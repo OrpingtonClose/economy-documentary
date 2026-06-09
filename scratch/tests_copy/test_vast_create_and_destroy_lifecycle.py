@@ -69,8 +69,7 @@ def measure_lufs_integrated(audio_path: str) -> float:
         return -70.0
     return 20.0 * math.log10(rms) + 0.0
 
-from capabilities.test_real_vast_provisioning_bdd_create_instance import VastCreateSimulator
-from capabilities.test_real_vast_provisioning_bdd_destroy_instance import VastDestroySimulator
+
 
 def test_vast_create_and_destroy_lifecycle():
 
@@ -113,12 +112,37 @@ def test_vast_create_and_destroy_lifecycle():
     except Exception as e:
         raise RuntimeError(f"CRITICAL FAILURE: Failed to parse contract ID: {e}. Output was: {create_res.stdout}.")
         
+    # Poll instance status until it returns "running" (SC-03)
+    print(f"Waiting for VM instance {instance_id} to boot...")
+    start_time = time.time()
+    booted = False
+    while time.time() - start_time < 300: # 5 minute timeout
+        cmd_show = f"vastai --api-key {api_key} show instances --raw"
+        show_res = subprocess.run(cmd_show, shell=True, capture_output=True, text=True)
+        if show_res.returncode == 0:
+            try:
+                instances = json.loads(show_res.stdout.strip())
+                inst_info = next((inst for inst in instances if str(inst["id"]) == str(instance_id)), None)
+                if inst_info:
+                    status = inst_info.get("status", "")
+                    actual_status = inst_info.get("actual_status", "")
+                    print(f"VM status: {status}, actual_status: {actual_status}")
+                    if status == "running" or actual_status == "running":
+                        booted = True
+                        # Verify output schema correctness
+                        assert "num_gpus" in inst_info
+                        assert "gpu_name" in inst_info
+                        break
+            except Exception as e:
+                print(f"Error parsing show instances: {e}")
+        time.sleep(5)
+    assert booted, "VM instance failed to reach running status in time"
+    
     # Wait and then destroy to ensure clean teardown
     print(f"Cleaning up and destroying Vast.ai instance {instance_id}...")
     cmd_destroy = f"vastai --api-key {api_key} destroy instance {instance_id}"
     destroy_res = subprocess.run(cmd_destroy, shell=True, capture_output=True)
-    print('     ├─ [Assert] Checking: destroy_res.returncode == 0, f\"VM teardown leaked: {destroy...')
-    assert destroy_res.returncode == 0, f"VM teardown leaked: {destroy_res.stderr}"
+    assert destroy_res.returncode == 0, f"VM teardown leaked: {destroy_res.stderr}" 
 
 
     # ===========================================================================

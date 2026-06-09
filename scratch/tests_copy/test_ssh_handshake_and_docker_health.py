@@ -69,7 +69,7 @@ def measure_lufs_integrated(audio_path: str) -> float:
         return -70.0
     return 20.0 * math.log10(rms) + 0.0
 
-from capabilities.test_real_vast_provisioning_bdd_worker_health import WorkerHealthSimulator
+
 
 def test_ssh_handshake_and_docker_health():
 
@@ -80,8 +80,8 @@ def test_ssh_handshake_and_docker_health():
     with IntegrationHarness(required_agents=["gsa"]) as harness:
         db_dir = harness.temp_dir.name
         
-        # Launch mock_gpu_worker.py locally on port 9001 to verify endpoint contract
-        worker_script = PROJECT_ROOT / "scripts/mock_gpu_worker.py"
+        # Launch vm_agent.py locally on port 9001 to verify endpoint contract
+        worker_script = PROJECT_ROOT / "scripts/vm_agent.py"
         proc = subprocess.Popen(
             [sys.executable, str(worker_script), "--port", "9001"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, preexec_fn=os.setsid

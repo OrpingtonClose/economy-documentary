@@ -20,7 +20,7 @@ from event_store import EventStore
 from effects import (
     PipelineStarted, PipelineComplete, PipelineAborted,
     BudgetSet, BudgetExceeded, UpdateScript, ScriptBlock,
-    QueueJob, JobStarted, JobCompleted, JobFailed, JobRequeued, JobApproved,
+    QueueJob, QueueAudioJob, JobStarted, JobCompleted, JobFailed, JobRequeued, JobApproved,
     VMAllocated, VMDeallocated, VMObserved, VMProvisionFailed,
     DurationAdjusted, ReconciliationComplete, ReconciliationFailed,
     MergeIntoOTIO, DeleteScene, DeleteFromOTIO, ReorderScenes,
@@ -73,9 +73,12 @@ def measure_lufs_integrated(audio_path: str) -> float:
 def test_audio_agent_tts_job_queueing():
 
     print('\n▶️  [STARTING TEST] test_audio_agent_tts_job_queueing')
+    deepseek_key_path = "/Users/orpington/api_keys/LLMS/deepseek_api.txt"
+    if not os.path.exists(deepseek_key_path):
+        raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. DeepSeek API key is missing!")
     """Verify that Audio Agent scans GSA slots and queues TTS jobs."""
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa", "audio"]) as harness:
+    with IntegrationHarness(required_agents=["gsa", "audio"], capabilities=[]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         audio_port = harness.ports["audio"]

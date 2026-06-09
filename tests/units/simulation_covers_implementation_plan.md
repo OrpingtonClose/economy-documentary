@@ -97,6 +97,18 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
   ```
 * **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math directly on the GSA projection engine.
 
+### SC-29/SC-31/SC-34: Audio Loudness Normalization & Assembly
+* **BDD Scenario**:
+  ```gherkin
+  Scenario: Compiling media and applying loudness normalization
+    Given a timeline containing a loud narration clip is active
+    When the Assembly Agent renders the final cut movie
+    Then the output movie must contain a normalized audio track
+    And the loudness of the final track must measure -16.0 LUFS +/- 1.0 LUFS
+    And the emitted PipelineComplete event must conform to the expected schema
+  ```
+* **Cover Test (`test_audio_loudness_normalizer_compilation`)**: Invokes the actual production `run_movie_assembly` module, processes the loud wav through the real FFmpeg normalizer filter, measures final track LUFS, and verifies event schema.
+
 ### SC-09: Budget Gates
 * **BDD Scenario**:
   ```gherkin
@@ -113,10 +125,10 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
   ```gherkin
   Scenario: Replaying log events under parallel writes
     Given GSA is configured in SQLite WAL mode
-    When multiple microservices write events concurrently
+    When multiple microservices write events concurrently using direct SQLite connection queries
     Then GSA must reconstruct projections from sequence 0 without locking database transactions
   ```
-* **Cover Test (`test_gsa_wal_concurrency_isolation`)**: Asserts lock-free writes and state reconstruction under high event loads.
+* **Cover Test (`test_gsa_wal_concurrency_isolation`)**: Asserts lock-free writes and state reconstruction under high parallel database writes.
 
 ---
 

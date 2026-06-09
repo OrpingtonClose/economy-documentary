@@ -75,7 +75,7 @@ def test_coordinate_timeline_dynamic_drift():
     print('\n▶️  [STARTING TEST] test_coordinate_timeline_dynamic_drift')
     """Verify that DurationAdjusted events update start/end coordinates of slots."""
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa"]) as harness:
+    with IntegrationHarness(required_agents=["gsa"], capabilities=[]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         

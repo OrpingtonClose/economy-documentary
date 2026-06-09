@@ -75,7 +75,7 @@ def test_budget_limit_aborted_gate():
     print('\n▶️  [STARTING TEST] test_budget_limit_aborted_gate')
     """Verify that a run aborts immediately when spending crosses budget ceiling."""
     print('     └─ [Harness] Initializing process-isolated test harness...')
-    with IntegrationHarness(required_agents=["gsa"]) as harness:
+    with IntegrationHarness(required_agents=["gsa", "provisioner"], capabilities=[]) as harness:
         db_dir = harness.temp_dir.name
         gsa_port = harness.ports["gsa"]
         

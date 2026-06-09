@@ -106,3 +106,10 @@ def test_scenario_agent_live_prompt_turn():
         gsa_resp = httpx.get(f"http://127.0.0.1:{gsa_port}/").json()
         print('     ├─ [Assert] Checking: len(gsa_resp[\"otio\"][\"slots\"]) >= 1')
         assert len(gsa_resp["otio"]["slots"]) >= 1
+        
+        # Verify event store contains UpdateScript and check its blocks
+        events = event_store.replay()
+        update_script_events = [e for e in events if e.kind == "update_script"]
+        assert len(update_script_events) >= 1
+        us_event = update_script_events[0]
+        assert len(us_event.blocks) >= 1
