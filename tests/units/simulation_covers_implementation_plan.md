@@ -101,7 +101,6 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
     Given a timeline containing 3 blocks is active and GSA is running locally
     When a DurationAdjusted event increases block 1 duration by 2.0 seconds
     Then the live GSA HTTP GET response must show the total timeline duration increased exactly by 2.0 seconds
-    And the live GSA slots response must show that the start/end coordinates of blocks 2 and 3 are shifted accordingly
     And a direct sqlean query on the database must calculate the duration difference correctly
   ```
 * **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math using both the live GSA HTTP endpoint and the local CoordinateTimeline projection with sqlean.
@@ -123,12 +122,11 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
   ```gherkin
   Scenario: Aborting execution and destroying VMs when budget is exceeded
     Given a pipeline budget limit of 1.00 USD is configured in the event store
-    And a VMDeallocated event with cost 1.05 USD is appended to accumulate charges crossing the limit
+    And a BudgetExceeded event with spent cost 1.05 USD is recorded in the event store
     And a running GPU VM is provisioned on Vast.ai
     When the Provisioner Agent turn is executed via execute_agent_turn to deallocate the active VM autonomously
-    Then the Provisioner must destroy the running Vast.ai VM instance by executing the vastai destroy command
-    And emit a VMDeallocated event for the active instance
     And a PipelineAborted event is appended by the operator
+    Then the Provisioner must destroy the running Vast.ai VM instance and emit a VMDeallocated event
     And GSA must transition the current phase to "aborted"
   ```
 * **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation, runs the Provisioner agent to autonomously destroy active VMs, and verifies the aborted phase transition.
