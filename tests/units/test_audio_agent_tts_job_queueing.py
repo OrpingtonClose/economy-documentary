@@ -47,12 +47,19 @@ def test_audio_agent_tts_job_queueing():
         # Execute the production agent turn directly to query GSA and DeepSeek (SC-05)
         config = PipelineConfig(capabilities=[], log_dir=db_dir)
         
+        import agent_base
+        agent_base.latest_monologues.clear()
+        
         effects = asyncio.run(execute_agent_turn(
             role="audio",
             gsa_url=gsa_url,
             notification_type="instruction",
             config=config
         ))
+        
+        # Assert that the live DeepSeek API was queried and latest_monologues contains the reasoning
+        assert "audio" in agent_base.latest_monologues
+        assert agent_base.latest_monologues["audio"]
         
         # Append the emitted effects to the event store
         for effect in list(effects):

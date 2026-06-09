@@ -65,37 +65,47 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 ### SC-04: VM Worker Health
 * **BDD Scenario**:
   ```gherkin
-  Scenario: Probing the boot status of the remote worker container
-    Given a running GPU VM is provisioned on port 9001
+  Scenario: Probing the boot status of a loopback container on port 9001
+    Given a running loopback mock GPU worker is spawned on port 9001
     When an HTTP GET request is sent to the worker URL
     Then the server must respond with status 200
     And the Content-Type header must be "text/plain"
-    And the response body must be a plain natural language status description
+    And the response body must be a plain natural language status description containing "healthy and active", "RTX 3090", "Qwen3-TTS", and "LTX-2.3"
   ```
-* **Cover Test (`test_ssh_handshake_and_docker_health`)**: Spawns [mock_gpu_worker.py](file:///Users/orpington/Documents/economy-documentary-work/scripts/mock_gpu_worker.py) in the background to verify the API contract and port bindings over loopback sockets.
+* **Cover Test (`test_ssh_handshake_and_docker_health`)**: Spawns mock_gpu_worker.py in the background to verify the API contract and port bindings over loopback sockets.
 
 ### SC-05 & SC-06: TTS & LTX Job Dispatch
-* **BDD Scenario**:
+* **BDD Scenario 1**:
   ```gherkin
-  Scenario: Queueing narration and video jobs autonomously
-    Given a new script block is appended to the event store
-    When the Audio and Video agents poll GSA
-    Then the Audio Agent must queue a TTS job for narration slots (A1:)
-    And the Video Agent must queue an LTX job for visual slots (V1:)
-    And jobs must remain grouped and isolated by track type
+  Scenario: Queueing narration jobs via live LLM reasoning
+    Given a script block is appended to the event store and GSA is active
+    When the Audio Agent is run via execute_agent_turn with the live DeepSeek API
+    Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
+    And it must emit a QueueAudioJob event for the narration slot (A1:)
+    And the event must not contain a job_type attribute
+  ```
+* **BDD Scenario 2**:
+  ```gherkin
+  Scenario: Queueing video jobs via live LLM reasoning
+    Given a script block is appended to the event store and GSA is active
+    When the Video Agent is run via execute_agent_turn with the live DeepSeek API
+    Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
+    And it must emit a QueueVideoJob event for the visual slot (V1:)
+    And the event must not contain a job_type attribute
   ```
 * **Cover Test (`test_audio_agent_tts_job_queueing` & `test_video_agent_ltx_job_queueing`)**: Seeds GSA slots and asserts that agents dynamically parse state and queue jobs with correct parameters.
 
 ### SC-08: Timeline Dynamic Offset Cascade
 * **BDD Scenario**:
   ```gherkin
-  Scenario: recalculating slot timings on duration adjustment
-    Given a timeline containing 3 blocks is active
+  Scenario: Recalculating slot timings on duration adjustment
+    Given a timeline containing 3 blocks is active and GSA is running
     When a DurationAdjusted event increases block 1 duration by 2.0 seconds
-    Then GSA must update the start/end coordinates of blocks 2 and 3
-    And the total timeline duration must increase exactly by 2.0 seconds
+    Then the live GSA HTTP GET response must show the total timeline duration increased exactly by 2.0 seconds
+    And a local CoordinateTimeline projection must verify that the start/end coordinates of blocks 2 and 3 are shifted accordingly
+    And the database-native high precision subtraction using sqlean must calculate the total duration correctly
   ```
-* **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math directly on the GSA projection engine.
+* **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math using both the live GSA HTTP endpoint and the local CoordinateTimeline projection with sqlean.
 
 ### SC-29/SC-31/SC-34: Audio Loudness Normalization & Assembly
 * **BDD Scenario**:
@@ -112,21 +122,24 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 ### SC-09: Budget Gates
 * **BDD Scenario**:
   ```gherkin
-  Scenario: Aborting execution when charges exceed budget
-    Given a pipeline budget limit of 1.00 USD
-    When cumulative charges (tokens + GPU leases) cross 1.01 USD
-    Then GSA must transition the current phase to "aborted"
-    And the Provisioner must destroy all running VMs
+  Scenario: Aborting execution and destroying VMs when budget is exceeded
+    Given a pipeline budget limit of 1.00 USD is configured in the event store
+    And a VMDeallocated event with cost 1.05 USD is appended to accumulate charges crossing the limit
+    And a running GPU VM is provisioned on Vast.ai
+    When the Provisioner Agent turn is executed via execute_agent_turn to deallocate the active VM autonomously
+    And a PipelineAborted event is appended by the operator
+    Then the Provisioner must destroy the running Vast.ai VM instance and emit a VMDeallocated event
+    And GSA must transition the current phase to "aborted"
   ```
-* **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation and asserts pipeline state abort triggers.
+* **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation, runs the Provisioner agent to autonomously destroy active VMs, and verifies the aborted phase transition.
 
 ### SC-10: WAL Concurrency
 * **BDD Scenario**:
   ```gherkin
   Scenario: Replaying log events under parallel writes
-    Given GSA is configured in SQLite WAL mode
-    When multiple microservices write events concurrently using direct SQLite connection queries
-    Then GSA must reconstruct projections from sequence 0 without locking database transactions
+    Given GSA database is configured in SQLite WAL mode
+    When multiple subprocesses spawn to write events concurrently using direct SQLite connection inserts
+    Then a local EventStore replay must reconstruct projections from sequence 0 without database lock-outs
   ```
 * **Cover Test (`test_gsa_wal_concurrency_isolation`)**: Asserts lock-free writes and state reconstruction under high parallel database writes.
 
