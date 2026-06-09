@@ -1646,6 +1646,7 @@ INDEX_HTML = """<!DOCTYPE html>
         let testIsScrolled = true;
         let cachedState = null;
         let currentCategoryFilter = 'all';
+        let lastFetchedStatus = null;
 
         // Predefined BDD specifications for all tests
         const BEHAVIOR_SPECS = {
@@ -2265,9 +2266,15 @@ INDEX_HTML = """<!DOCTYPE html>
                 // If currently running active test details, poll its console logs continuously
                 if (selectedTestName) {
                     const selTc = data.test_cases.find(x => x.name === selectedTestName);
-                    if (selTc && (selTc.status === "running" || selTc.status === "pending")) {
-                        await updateTestDetails();
+                    if (selTc) {
+                        const currentStatus = selTc.status;
+                        if (currentStatus === "running" || currentStatus === "pending" || currentStatus !== lastFetchedStatus) {
+                            await updateTestDetails();
+                            lastFetchedStatus = currentStatus;
+                        }
                     }
+                } else {
+                    lastFetchedStatus = null;
                 }
 
                 // Auto closecountdown
