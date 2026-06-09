@@ -1,0 +1,5 @@
+{
+  "name": "sc-guard-enforcer",
+  "description": "Audits edits to Simulation Cover test files to prevent mock-based cheating",
+  "version": "1.0.0"
+}

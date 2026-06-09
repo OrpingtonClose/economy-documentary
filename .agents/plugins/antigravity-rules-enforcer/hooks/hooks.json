@@ -1,0 +1,36 @@
+{
+  "antigravity-rules-enforcer": {
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 server/rules_enforcer_plugin.py ${file}",
+            "condition": "file_extension in ['.py']"
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 server/rules_enforcer_plugin.py ${file}",
+            "condition": "file_extension in ['.py']"
+          }
+        ]
+      },
+      {
+        "matcher": "multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 server/rules_enforcer_plugin.py ${file}",
+            "condition": "file_extension in ['.py']"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+[
+  {
+    "timestamp": "2026-06-05T22:35:40.080371",
+    "tool": "run_command",
+    "arguments": {
+      "CommandLine": "ls",
+      "TargetFile": null,
+      "AbsolutePath": null
+    },
+    "directive": "Prompt ends in '?'",
+    "status": "FAIL",
+    "reason": "FAIL: The user's prompt ends in a question mark, and the question-mark tool block rule is active. The agent must answer without calling any tools."
+  },
+  {
+    "timestamp": "2026-06-05T16:03:38.906188",
+    "tool": "run_command",
+    "arguments": {
+      "CommandLine": "ls",
+      "TargetFile": null,
+      "AbsolutePath": null
+    },
+    "directive": "Prompt ends in '?'",
+    "status": "FAIL",
+    "reason": "FAIL: The user's prompt ends in a question mark, and the question-mark tool block rule is active. The agent must answer without calling any tools."
+  },
+  {
+    "timestamp": "2026-06-05T15:19:46.712325",
+    "tool": "run_command",
+    "arguments": {
+      "CommandLine": "ls",
+      "TargetFile": null,
+      "AbsolutePath": null
+    },
+    "directive": "DO NOT RUN DANGEROUS COMMANDS",
+    "status": "PASS",
+    "reason": "Action compliant with custom rule."
+  },
+  {
+    "timestamp": "2026-06-05T15:19:30.288940",
+    "tool": "view_file",
+    "arguments": {
+      "CommandLine": null,
+      "TargetFile": null,
+      "AbsolutePath": null
+    },
+    "directive": "None",
+    "status": "PASS",
+    "reason": "No active compliance rules matched. Action allowed by default."
+  },
+  {
+    "timestamp": "2026-06-05T15:18:05.705240",
+    "tool": "run_command",
+    "arguments": {
+      "CommandLine": "\"curl -s http://127.0.0.1:5800/api/logs\"",
+      "Cwd": "\"/Users/orpington/Documents/economy-documentary-work\"",
+      "WaitMsBeforeAsync": "2000",
+      "toolAction": "\"Querying audit logs API\"",
+      "toolSummary": "\"Query audit logs\""
+    },
+    "directive": "AFTER EACH FNISHED TEST PRINT SUMARY AND WILL DO NOTHING ELSE",
+    "status": "FAIL",
+    "reason": "FAIL: The user directive states that after each finished test, the agent should print a summary and will do nothing else. The proposed tool call is querying audit logs, which is not printing a summary and is doing something else, thus violating the directive."
+  }
+]

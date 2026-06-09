@@ -1,0 +1,11 @@
+{
+  "verdict": "fail",
+  "confidence": 1.0,
+  "reasoning": "The test claims to measure LUFS on three generated WAV files, but the event log contains only `pipeline_started` and three `audio_measured` events. There are no corresponding `file_written` events for the WAV files, no `command_executed` events for any audio generation or measurement tool (e.g., ffmpeg, sox, or a LUFS analysis command), and the `measurements` field in each `audio_measured` event is empty (an empty array `[]`), indicating no actual LUFS measurement was performed. The LUFS values reported in the artifacts appear to be invented/hardcoded rather than derived from real file analysis. This is a case of Mocking Detected \u2014 the test lacks the necessary physical execution traces to confirm real WAV file generation and real LUFS measurement. The test does not qualify as an offline unit/projection test that would be exempt from trace requirements.",
+  "issues": [
+    "No file_written or command_executed events for WAV generation or LUFS measurement",
+    "All audio_measured events have empty measurements array",
+    "No evidence of actual audio file creation or analysis"
+  ],
+  "test_name": "voice_continuity_across_scenes"
+}

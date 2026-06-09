@@ -1,0 +1,7 @@
+{
+  "verdict": "pass",
+  "confidence": 0.95,
+  "reasoning": "The test is an offline projection test (audio_video_duration_alignment) that manually seeds events to test timeline alignment logic. The event sequence is logically correct: update_script (blocks defined with 3.0s and 4.0s), merge_into_otio (block 1 placed at 3.0s offset), then duration_adjusted (measuring block 1 at 3.7s). The projections correctly show block 1's new duration as 3.7s, block 2's offset shifting from 3.0 to 3.7 to account for the drift, and a drift of 0.7s. No physical execution traces are expected for this offline projection test. No mocking detection applies.",
+  "issues": [],
+  "test_name": "audio_video_duration_alignment"
+}

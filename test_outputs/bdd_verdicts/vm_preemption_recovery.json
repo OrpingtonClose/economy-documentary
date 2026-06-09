@@ -1,0 +1,11 @@
+{
+  "verdict": "fail",
+  "confidence": 0.95,
+  "reasoning": "Mocking Detected: The test claims to test VM preemption recovery with a real provisioning pipeline, but the event log lacks any physical execution trace effects (command_executed, network_request, file_written, process_spawned). All events are domain-level effects only. For a preemption recovery test that involves actual VM allocation and deallocation, physical trace effects (e.g., command_executed for 'vastai' on allocation/deallocation, file_written for generated audio artifacts) must be present. The absence of these indicates the test is bypassing the real infrastructure layer. However, this test is NOT an offline unit/projection test (its name 'vm_preemption_recovery' does not match the exception list), so the lack of trace effects is a failure.",
+  "issues": [
+    "No physical execution trace effects (command_executed, network_request, file_written, process_spawned) present in event store",
+    "Domain events for VM operations and job processing occur without corresponding infrastructure commands or file I/O",
+    "Test simulates preemption recovery but lacks evidence of actual external system interactions"
+  ],
+  "test_name": "vm_preemption_recovery"
+}

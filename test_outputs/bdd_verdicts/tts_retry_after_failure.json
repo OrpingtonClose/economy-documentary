@@ -1,0 +1,7 @@
+{
+  "verdict": "pass",
+  "confidence": 0.95,
+  "reasoning": "The BDD scenario specifies: Given 1 TTS job failed (job_tts_fail_1) with reason 'timeout'; When JobRequeued event followed by JobStarted and JobCompleted; Then Event sequence: QueueJob\u2192JobFailed\u2192JobRequeued\u2192JobStarted\u2192JobCompleted. The observed event sequence (after pipeline_started) is: queue_job (seq 2), job_started (seq 3), job_failed (seq 4), job_requeued (seq 5), job_started (seq 6), job_completed (seq 7). This matches the required sequence exactly (the first job_started is an expected part of the execution before failure, consistent with production behavior). The scenario requires a failure with reason 'timeout'; the event shows 'GPU timeout after 60s', which is consistent. Projections show job_status 'completed' and job_attempts 2, which aligns with the retry flow. The test name 'tts_retry_after_failure' indicates it is an offline projection/unit test (seeding domain events in-memory), so the absence of physical execution traces (command_executed, file_written) is expected and valid per the exception rule. No mocking issues are detected. All logical conditions are satisfied.",
+  "issues": [],
+  "test_name": "tts_retry_after_failure"
+}

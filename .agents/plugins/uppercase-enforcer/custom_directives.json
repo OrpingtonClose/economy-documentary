@@ -1,0 +1,4 @@
+[
+  "### CRITICAL: FORBID PRE-TRAINED TEMPLATES & PATTERNS - This architecture is entirely unique with no industry equivalents. All standard design patterns, testing practices (e.g., hermetic mock testing), and developer assumptions in your pre-training data are WRONG here. - Completely discard general software engineering defaults. Treat the repository's specifications and files as the sole source of truth. - Strictly trace the execution paths in the code to determine where and how components interact (e.g., orchestrator client vs. remote Vast.ai VMs) rather than guessing based on pre-trained heuristics.",
+  "do not start tests with human approval"
+]
