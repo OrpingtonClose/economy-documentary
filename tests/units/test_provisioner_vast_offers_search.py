@@ -18,7 +18,7 @@ def test_provisioner_vast_offers_search():
         
     # Check live network reachability to vast.ai
     try:
-        socket.create_connection(("vast.ai", 80), timeout=5.0)
+        socket.create_connection(("vast.ai", 80))
     except Exception as e:
         raise RuntimeError(f"CRITICAL FAILURE: Vast.ai server is unreachable: {e}")
 

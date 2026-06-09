@@ -24,7 +24,7 @@ def test_vast_create_and_destroy_lifecycle():
         raise RuntimeError("CRITICAL FAILURE: Vast.ai API key is empty!")
 
     try:
-        socket.create_connection(("vast.ai", 80), timeout=5.0)
+        socket.create_connection(("vast.ai", 80))
     except Exception as e:
         raise RuntimeError(f"CRITICAL FAILURE: Vast.ai server is unreachable: {e}")
         
@@ -45,8 +45,7 @@ def test_vast_create_and_destroy_lifecycle():
     create_res = subprocess.run(cmd_create, capture_output=True, text=True)
     if create_res.returncode != 0 or not create_res.stdout.strip():
         if "lacks credit" in create_res.stderr or "billing" in create_res.stderr:
-            import pytest
-            pytest.skip("Vast.ai account lacks credit; skipping live VM lease lifecycle test.")
+            raise RuntimeError("Vast.ai account lacks credit; aborting live VM lease lifecycle test.")
         raise RuntimeError(f"CRITICAL FAILURE: Lease creation failed: {create_res.stderr}.")
     
     try:
@@ -61,7 +60,7 @@ def test_vast_create_and_destroy_lifecycle():
         print(f"Waiting for VM instance {instance_id} to boot...")
         start_time = time.time()
         booted = False
-        while time.time() - start_time < 300:
+        while True:
             cmd_show = ["/Users/orpington/.letta-cli-venv/bin/vastai", "--api-key", api_key, "show", "instances", "--raw"]
             show_res = subprocess.run(cmd_show, capture_output=True, text=True)
             if show_res.returncode == 0:

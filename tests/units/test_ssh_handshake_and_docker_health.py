@@ -32,7 +32,7 @@ def test_ssh_handshake_and_docker_health():
         # Try for up to 5 seconds
         for _ in range(10):
             try:
-                resp = httpx.get(url, timeout=2.0)
+                resp = httpx.get(url)
                 if resp.status_code == 200:
                     connected = True
                     break

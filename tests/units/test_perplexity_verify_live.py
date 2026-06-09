@@ -89,7 +89,7 @@ def test_perplexity_verify_live():
 
     # Check network reachability for perplexity API
     try:
-        httpx.get("https://api.perplexity.ai/", timeout=5.0)
+        httpx.get("https://api.perplexity.ai/")
     except Exception as e:
         raise RuntimeError(f"CRITICAL FAILURE: Perplexity API endpoint is unreachable: {e}")
             

@@ -30,7 +30,7 @@ def test_video_agent_ltx_job_queueing():
         raise RuntimeError("CRITICAL FAILURE: Simulation Cover requires live execution. DeepSeek API key is missing!")
 
     try:
-        httpx.get("https://api.deepseek.com/", timeout=5.0)
+        httpx.get("https://api.deepseek.com/")
     except Exception as e:
         raise RuntimeError(f"CRITICAL FAILURE: DeepSeek API endpoint is unreachable: {e}")
 

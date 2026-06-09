@@ -172,6 +172,21 @@ To prevent LLMs and agents from bypass-mocking the 10 Simulation Cover (SC) inte
 
 ---
 
+### 2.6 Legitimate BDD Simulators
+
+A legitimate BDD simulator is an in-memory or inline simulator capability designed strictly for **simulation tests** to model capability execution. To be legitimate, it must satisfy the following architectural criteria:
+
+1. **Fully Backed by Covering Tests**:
+   Every capability modeled by a BDD simulator in **simulation tests** must correspond to a live, non-simulated execution path. This execution path must be validated by one or more **covering tests** to verify that the simulator's logic matches real-world performance, API schemas, and physical operations.
+
+2. **Audited by Architecture Tests**:
+   All BDD simulators and the **simulation tests** that leverage them are subject to verification by **architecture tests**. These **architecture tests** run agentic audits to ensure the simulator is not bypassing invariants.
+
+3. **Compliant with Architecture Test Invariants**:
+   Under the rules checked by the **architecture tests**, BDD simulators in **simulation tests** must not use forbidden mocking libraries, unconditional skips, time-based timeouts, or trivial assertions. They must instead run as inline capability classes subclassing production interfaces, with their real-world behaviors validated via **covering tests**.
+
+---
+
 ## 3. Concurrency and Timeouts Invariants
 
 The concurrency model is optimized for a single-run pipeline executing on a unified coordinator host.

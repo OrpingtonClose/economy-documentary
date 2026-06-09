@@ -41,7 +41,7 @@ def test_budget_limit_aborted_gate():
     assert api_key, "CRITICAL FAILURE: Vast.ai API key is empty!"
     
     try:
-        socket.create_connection(("vast.ai", 80), timeout=5.0)
+        socket.create_connection(("vast.ai", 80))
     except Exception as e:
         raise AssertionError(f"CRITICAL FAILURE: Vast.ai server is unreachable: {e}")
         
@@ -67,8 +67,7 @@ def test_budget_limit_aborted_gate():
     create_res = subprocess.run(cmd_create, capture_output=True, text=True)
     if create_res.returncode != 0 or not create_res.stdout.strip():
         if "lacks credit" in create_res.stderr or "billing" in create_res.stderr:
-            import pytest
-            pytest.skip("Vast.ai account lacks credit; skipping live VM lease budget gate test.")
+            raise RuntimeError("Vast.ai account lacks credit; aborting live VM lease budget gate test.")
         raise RuntimeError(f"CRITICAL FAILURE: Lease creation failed: {create_res.stderr}.")
         
     try:
