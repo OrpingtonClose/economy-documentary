@@ -144,7 +144,7 @@ if os.path.exists(DEEPSEEK_KEY_PATH):
 
 def run_subagent_audit(test_name: str) -> dict:
     if not api_key:
-        return {"verdict": "FAIL", "reasoning": "DeepSeek API key not found. Congruence audit disabled."}
+        return {"verdict": "N/A", "reasoning": "DeepSeek API key not found. Congruence audit skipped."}
 
     # 1. Read documentation
     docs_content = ""
@@ -237,7 +237,7 @@ def run_subagent_audit(test_name: str) -> dict:
     }
     
     try:
-        resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=60.0)
+        resp = httpx.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=payload, timeout=5.0)
         if resp.status_code == 200:
             raw = resp.json()["choices"][0]["message"]["content"].strip()
             if raw.startswith("```"):
@@ -251,6 +251,8 @@ def run_subagent_audit(test_name: str) -> dict:
             return {"verdict": "FAIL", "reasoning": f"Invalid response format from LLM: {raw}"}
         else:
             return {"verdict": "FAIL", "reasoning": f"DeepSeek API request failed (HTTP {resp.status_code})"}
+    except httpx.RequestError as re:
+        return {"verdict": "N/A", "reasoning": f"DeepSeek API is offline/unreachable: {re}"}
     except Exception as e:
         return {"verdict": "FAIL", "reasoning": f"Error during subagent audit execution: {e}"}
 
@@ -259,7 +261,6 @@ def main():
     parser.add_argument("tests", nargs="*", help="Filter test cases by name (exact or substring).")
     parser.add_argument("--category", help="Only run tests in a specific category.")
     parser.add_argument("--list", action="store_true", help="List all available test cases and exit.")
-    parser.add_argument("--no-audit", action="store_true", help="Skip the subagent congruence audit.")
     args = parser.parse_args()
 
     # 1. Handle --list
@@ -307,17 +308,14 @@ def main():
         print(f"[{idx}/{len(selected_tests)}] RUNNING: {name} ({category})")
         print("=" * 80)
 
-        # Run Congruence Audit first unless skipped
-        audit_verdict = "N/A"
-        audit_reasoning = ""
-        if not args.no_audit:
-            print(f"🔍 Running fresh subagent congruence audit for '{name}'...")
-            audit_res = run_subagent_audit(name)
-            audit_verdict = audit_res.get("verdict", "FAIL")
-            audit_reasoning = audit_res.get("reasoning", "Audit failed or returned no explanation.")
-            print(f"🔍 Audit Verdict: {audit_verdict}")
-            if audit_verdict == "FAIL":
-                print(f"⚠️  Audit Reasoning: {audit_reasoning}")
+        # Run Congruence Audit first (unconditional)
+        print(f"🔍 Running fresh subagent congruence audit for '{name}'...")
+        audit_res = run_subagent_audit(name)
+        audit_verdict = audit_res.get("verdict", "FAIL")
+        audit_reasoning = audit_res.get("reasoning", "Audit failed or returned no explanation.")
+        print(f"🔍 Audit Verdict: {audit_verdict}")
+        if audit_verdict == "FAIL":
+            print(f"⚠️  Audit Reasoning: {audit_reasoning}")
 
         start_time = time.time()
         status = "PASSED"
@@ -370,7 +368,8 @@ def main():
     print(f"SUMMARY: {passed_count} Passed, {failed_count} Failed, {skipped_count} Skipped.")
     print("=" * 100 + "\n")
 
-    sys.exit(0 if failed_count == 0 else 1)
+    has_audit_failure = any(res["audit_verdict"] == "FAIL" for res in results)
+    sys.exit(0 if (failed_count == 0 and not has_audit_failure) else 1)
 
 if __name__ == "__main__":
     main()
