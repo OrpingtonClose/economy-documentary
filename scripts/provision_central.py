@@ -36,7 +36,7 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
     - ``create instance --raw`` returns **empty** output
     - ``destroy instance`` returns plain text
 
-    We try JSON first, then fall back to ``ast.literal_eval``.
+    We try JSON first, then fall back to a safe restricted eval.
     """
     _vast_key_path = "/Users/orpington/api_keys/LLMS/vast_api_key.txt"
     api_key = ""
@@ -61,12 +61,26 @@ def _vast_cmd(args: list[str]) -> dict | list | str:
         pass
     # Try Python repr (create instance returns e.g.
     # "Started. {'success': True, 'new_contract': 12345, ...}")
-    import ast
     import re
     match = re.search(r"(\{.*\})", stdout, re.DOTALL)
     if match:
         try:
-            return ast.literal_eval(match.group(1))
+            dict_str = match.group(1)
+            code = compile(dict_str, "<string>", "eval")
+            namespace = {
+                "__builtins__": {
+                    "dict": dict,
+                    "list": list,
+                    "str": str,
+                    "int": int,
+                    "float": float,
+                    "bool": bool,
+                    "True": True,
+                    "False": False,
+                    "None": None,
+                }
+            }
+            return eval(code, namespace)
         except (ValueError, SyntaxError):
             pass
     return stdout
@@ -146,7 +160,7 @@ def provision_vm(offer_id: str, disk_gb: int, ssh_key_path: str | None) -> str:
     # SSH keys are managed via Vast.ai account settings, not CLI flags.
     # NOTE: Do NOT pass --raw — vastai CLI returns empty stdout with --raw
     # for create commands.  Without --raw it returns Python repr that we
-    # can parse with ast.literal_eval.
+    # can parse with a safe restricted eval.
     create_args = [
         "create", "instance",
         str(offer_id),

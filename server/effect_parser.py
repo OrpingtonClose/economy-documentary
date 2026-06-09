@@ -578,7 +578,7 @@ You are an expert document parser for a documentary pipeline.
 Your job: read free-form agent text and extract structured EFFECTS.
 
 CRITICAL RULES:
-1. Agents write in natural prose. Your job is to FIND the concrete data.
+1. Agents write in natural prose or sometimes output Python-like function calls (e.g., `effect: update_script(blocks=[ScriptBlock(...)])`). Your job is to parse these format styles and extract the concrete data.
 2. NEVER hallucinate. If the agent mentions an action but doesn't give actual data, DO NOT invent it.
 3. Extract FULL CONTENT, not summaries. If the agent quotes narration, extract the complete quote.
 4. If no actionable data exists, return noop.
@@ -674,68 +674,6 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """
     permitted = ROLE_PERMITTED_KINDS.get(agent_id, ["noop", "clarification_request"])
 
-    # Try deterministic parsing first (fast path for simulation/formatted calls)
-    det_parsed = None
-    try:
-        import re
-        import ast
-        # Look for effect: <name>(<args>)
-        match = re.search(r"effect:\s*([a-zA-Z0-9_]+)\s*\(", text)
-        if match:
-            func_name = match.group(1)
-            start_idx = match.end()
-            paren_count = 1
-            end_idx = start_idx
-            while end_idx < len(text) and paren_count > 0:
-                char = text[end_idx]
-                if char == '(':
-                    paren_count += 1
-                elif char == ')':
-                    paren_count -= 1
-                end_idx += 1
-            if paren_count == 0:
-                args_str = text[start_idx:end_idx-1].strip()
-                # Parse keyword arguments using AST
-                tree = ast.parse(f"f({args_str})")
-                call_node = tree.body[0].value
-                kwargs = {}
-                for kw in call_node.keywords:
-                    kwargs[kw.arg] = ast.literal_eval(kw.value)
-                det_parsed = {"kind": func_name, **kwargs}
-    except Exception as e:
-        logger.debug(f"Deterministic parser failed: {e}")
-
-    if det_parsed is not None:
-        parsed_kind = det_parsed.get("kind")
-        if parsed_kind not in permitted:
-            logger.warning(f"Agent {agent_id} tried to emit non-permitted kind '{parsed_kind}', falling back to noop")
-            return [NoOp(agent=agent_id, reason=f"Attempted non-permitted kind '{parsed_kind}'")]
-
-        model_class = KIND_TO_MODEL.get(parsed_kind)
-        if model_class is None:
-            return [NoOp(agent=agent_id, reason=f"Unknown effect kind: {parsed_kind}")]
-
-        # Construct the actual Effect subclass, injecting agent
-        data = dict(det_parsed)
-        data.pop("kind", None)
-        data["agent"] = agent_id
-
-        try:
-            effect = model_class.model_validate(data)
-            # Tier 3 validation: State Invariants
-            return await validate_state_invariants(agent_id, effect)
-        except Exception as e:
-            exc = e
-            return [
-                ClarificationRequest(
-                    agent=agent_id,
-                    target_agent="human",
-                    parser_category=agent_id,
-                    raw_text=text,
-                    failure_reason=f"Model validation failed: {exc}",
-                    question=f"The parsed event model validation failed: {exc}. Raw agent text: '{text}'"
-                )
-            ]
 
     sys_prompt = _SYSTEM_PROMPT.format(permitted_kinds=", ".join(permitted))
 
