@@ -65,6 +65,17 @@ def build_global_state() -> GlobalStateResponse:
     budget.tick(event_store)
     state.tick(event_store)
 
+    # Calculate start and end times for all clips
+    import opentimelineio as otio
+    clip_spans = {}
+    for track in timeline.timeline.tracks:
+        current_time = 0.0
+        for item in track:
+            duration = item.duration().to_seconds()
+            if isinstance(item, otio.schema.Clip):
+                clip_spans[item.name] = (current_time, current_time + duration)
+            current_time += duration
+
     # 1. Map OTIO (Timeline)
     scenes = set()
     slots = {}
@@ -79,6 +90,7 @@ def build_global_state() -> GlobalStateResponse:
             delivered_slots += 1
         elif s["status"] == "scripted":
             dirty_slots += 1
+        span = clip_spans.get(addr)
         slots[addr] = OTIOSlotState(
             scene_num=s["scene_num"],
             block_id=s["block_id"],
@@ -90,6 +102,8 @@ def build_global_state() -> GlobalStateResponse:
             artifact_uri=s["artifact_uri"],
             visual_notes=s.get("visual_notes", ""),
             visual_concepts=s.get("visual_concepts", ""),
+            start_sec=span[0] if span else None,
+            end_sec=span[1] if span else None,
         )
     otio_res = OTIOResponse(
         scenes=len(scenes),

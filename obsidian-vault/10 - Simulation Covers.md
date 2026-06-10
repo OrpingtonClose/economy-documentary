@@ -25,17 +25,17 @@ This module establishes the master registry of all **35 Simulation Covers (SC)**
 
 | Cover ID | Consequential Invariant / Claim | Live Backing Integration Test | Core Boundary Verification Target |
 | :---: | :--- | :--- | :--- |
-| **SC-01** | Event Log as Sole Source of Truth | `test_gsa_wal_concurrency_isolation` | Proves GSA state is derived solely by replaying event log from sequence 0. |
-| **SC-02** | Mutations via typed Effects | `test_gsa_wal_concurrency_isolation` | Asserts direct updates to database write loops fail; all writes must go through Pydantic Effects. |
-| **SC-03** | Prompt-driven state (no state machine) | `test_scenario_agent_live_prompt_turn` | Asserts Scenario transitions are based on prompt reasoning blocks in deep agent, not hardcoded switches. |
-| **SC-04** | No timeouts in production code | `test_scenario_agent_live_prompt_turn` | Proves LLM HTTPS queries run to completion without hardcoded timeouts. |
-| **SC-05** | Real engines only in production | `test_scenario_agent_live_prompt_turn` | Runs actual DeepSeek chat API endpoints rather than simulated dry models. |
-| **SC-06** | Category-conditioned instructor extraction | `test_scenario_agent_live_prompt_turn` | Asserts natural language responses parse successfully using instructor without regex. |
-| **SC-07** | PlainTextResponse HTTP boundaries | `test_ssh_handshake_and_docker_health` | Asserts agent GET/POST responses return conversational text with `text/plain` headers. |
-| **SC-08** | Situation-driven agent tasking | `test_audio_agent_tts_job_queueing` | Proves agents discover tasks by reading state from GSA projection endpoint. |
-| **SC-09** | Stateless agent process turns | `test_audio_agent_tts_job_queueing` | Verifies agent ASGI processes hold no cached memory between wakeup requests. |
-| **SC-10** | Turn serialization via LoopBoundLock | `test_gsa_wal_concurrency_isolation` | Proves overlapping wakeups are queued and processed sequentially without DB lock failures. |
-| **SC-11** | PUT Interruption / electric bolt | `test_ssh_handshake_and_docker_health` | Verifies PUT requests cancel active asyncio tasks and spawned subprocesses immediately. |
+| **SC-01** | Event Log as Sole Source of Truth | `test_covering_gsa_wal_concurrency_isolation` | Proves GSA state is derived solely by replaying event log from sequence 0. |
+| **SC-02** | Mutations via typed Effects | `test_covering_gsa_wal_concurrency_isolation` | Asserts direct updates to database write loops fail; all writes must go through Pydantic Effects. |
+| **SC-03** | Prompt-driven state (no state machine) | `test_covering_scenario_agent_live_prompt_turn` | Asserts Scenario transitions are based on prompt reasoning blocks in deep agent, not hardcoded switches. |
+| **SC-04** | No timeouts in production code | `test_covering_scenario_agent_live_prompt_turn` | Proves LLM HTTPS queries run to completion without hardcoded timeouts. |
+| **SC-05** | Real engines only in production | `test_covering_scenario_agent_live_prompt_turn` | Runs actual DeepSeek chat API endpoints rather than simulated dry models. |
+| **SC-06** | Category-conditioned instructor extraction | `test_covering_scenario_agent_live_prompt_turn` | Asserts natural language responses parse successfully using instructor without regex. |
+| **SC-07** | PlainTextResponse HTTP boundaries | `test_covering_ssh_handshake_and_docker_health` | Asserts agent GET/POST responses return conversational text with `text/plain` headers. |
+| **SC-08** | Situation-driven agent tasking | `test_covering_audio_agent_tts_job_queueing` | Proves agents discover tasks by reading state from GSA projection endpoint. |
+| **SC-09** | Stateless agent process turns | `test_covering_audio_agent_tts_job_queueing` | Verifies agent ASGI processes hold no cached memory between wakeup requests. |
+| **SC-10** | Turn serialization via LoopBoundLock | `test_covering_gsa_wal_concurrency_isolation` | Proves overlapping wakeups are queued and processed sequentially without DB lock failures. |
+| **SC-11** | PUT Interruption / electric bolt | `test_covering_ssh_handshake_and_docker_health` | Verifies PUT requests cancel active asyncio tasks and spawned subprocesses immediately. |
 
 ---
 
@@ -43,11 +43,11 @@ This module establishes the master registry of all **35 Simulation Covers (SC)**
 
 | Cover ID | Consequential Invariant / Claim | Live Backing Integration Test | Core Boundary Verification Target |
 | :---: | :--- | :--- | :--- |
-| **SC-12** | OTIO Canonical representation | `test_coordinate_timeline_dynamic_drift` | Asserts GSA projection formats compile to compliant OpenTimelineIO schema slots. |
-| **SC-13** | No digital stretching or shrinking | `test_coordinate_timeline_dynamic_drift` | Asserts timing drift is resolved by shifting coordinates, never using `atempo` filters. |
-| **SC-14** | No looping or reusing media | `test_coordinate_timeline_dynamic_drift` | Asserts background music and narration clips are never looped or duplicated. |
-| **SC-15** | No gap media padding | `test_coordinate_timeline_dynamic_drift` | Asserts no empty placeholder tracks are injected to fill timeline gaps. |
-| **SC-16** | Track collision prevention checks | `test_coordinate_timeline_dynamic_drift` | Verifies that overlapping timespans on the same physical media track raise collision errors. |
+| **SC-12** | OTIO Canonical representation | `test_covering_coordinate_timeline_dynamic_drift` | Asserts GSA projection formats compile to compliant OpenTimelineIO schema slots. |
+| **SC-13** | No digital stretching or shrinking | `test_covering_coordinate_timeline_dynamic_drift` | Asserts timing drift is resolved by shifting coordinates, never using `atempo` filters. |
+| **SC-14** | No looping or reusing media | `test_covering_coordinate_timeline_dynamic_drift` | Asserts background music and narration clips are never looped or duplicated. |
+| **SC-15** | No gap media padding | `test_covering_coordinate_timeline_dynamic_drift` | Asserts no empty placeholder tracks are injected to fill timeline gaps. |
+| **SC-16** | Track collision prevention checks | `test_covering_coordinate_timeline_dynamic_drift` | Verifies that overlapping timespans on the same physical media track raise collision errors. |
 
 ---
 
@@ -55,11 +55,11 @@ This module establishes the master registry of all **35 Simulation Covers (SC)**
 
 | Cover ID | Consequential Invariant / Claim | Live Backing Integration Test | Core Boundary Verification Target |
 | :---: | :--- | :--- | :--- |
-| **SC-17** | Progressive doubling fleet escalation | `test_vast_create_and_destroy_lifecycle` | Asserts Provisioner starts with 1 VM, verifying happy-path before doubling. |
-| **SC-18** | GPU VRAM matching (TTS) | `test_provisioner_vast_offers_search` | Matches TTS jobs against RTX 4090/A6000 (VRAM >= 24GB, cost < $0.80/hr). |
-| **SC-19** | GPU VRAM matching (LTX) | `test_provisioner_vast_offers_search` | Matches LTX video jobs against A6000/H100 (VRAM >= 48GB, cost < $1.20/hr). |
-| **SC-20** | Unique VM HTTPS endpoints | `test_ssh_handshake_and_docker_health` | Asserts concurrent worker VMs bind to distinct ports (preventing overlap on 8888). |
-| **SC-21** | Destroy unreachable ghost VMs | `test_vast_create_and_destroy_lifecycle` | Verifies Provisioner destroys VMs failing to boot within grace period. |
+| **SC-17** | Progressive doubling fleet escalation | `test_covering_vast_create_and_destroy_lifecycle` | Asserts Provisioner starts with 1 VM, verifying happy-path before doubling. |
+| **SC-18** | GPU VRAM matching (TTS) | `test_covering_provisioner_vast_offers_search` | Matches TTS jobs against RTX 4090/A6000 (VRAM >= 24GB, cost < $0.80/hr). |
+| **SC-19** | GPU VRAM matching (LTX) | `test_covering_provisioner_vast_offers_search` | Matches LTX video jobs against A6000/H100 (VRAM >= 48GB, cost < $1.20/hr). |
+| **SC-20** | Unique VM HTTPS endpoints | `test_covering_ssh_handshake_and_docker_health` | Asserts concurrent worker VMs bind to distinct ports (preventing overlap on 8888). |
+| **SC-21** | Destroy unreachable ghost VMs | `test_covering_vast_create_and_destroy_lifecycle` | Verifies Provisioner destroys VMs failing to boot within grace period. |
 
 ---
 
@@ -67,9 +67,9 @@ This module establishes the master registry of all **35 Simulation Covers (SC)**
 
 | Cover ID | Consequential Invariant / Claim | Live Backing Integration Test | Core Boundary Verification Target |
 | :---: | :--- | :--- | :--- |
-| **SC-22** | Budget limit hard gate | `test_budget_limit_aborted_gate` | Aborts run and destroys leased VMs if cumulative costs cross budget cap ($10.00). |
-| **SC-23** | Duplicate-Effects Loop Detection | `test_budget_limit_aborted_gate` | Pauses turn and emits `ClarificationRequest` if 2 identical effects hash in 10 turns. |
-| **SC-24** | No-Progress Loop Detection | `test_budget_limit_aborted_gate` | Pauses turn and alerts Operator if checklist progress is zero for 5 turns. |
+| **SC-22** | Budget limit hard gate | `test_covering_budget_limit_aborted_gate` | Aborts run and destroys leased VMs if cumulative costs cross budget cap ($10.00). |
+| **SC-23** | Duplicate-Effects Loop Detection | `test_covering_budget_limit_aborted_gate` | Pauses turn and emits `ClarificationRequest` if 2 identical effects hash in 10 turns. |
+| **SC-24** | No-Progress Loop Detection | `test_covering_budget_limit_aborted_gate` | Pauses turn and alerts Operator if checklist progress is zero for 5 turns. |
 
 ---
 
@@ -77,18 +77,18 @@ This module establishes the master registry of all **35 Simulation Covers (SC)**
 
 | Cover ID | Consequential Invariant / Claim | Live Backing Integration Test | Core Boundary Verification Target |
 | :---: | :--- | :--- | :--- |
-| **SC-25** | Scale Timeline Integrity Test | `test_gsa_wal_concurrency_isolation` | Compiles 120-block timeline checking for perfect WAL database durability. |
-| **SC-26** | Multi-VM Fleet Coordination Test | `test_provisioner_vast_offers_search` | Asserts tasks route to correct VM configurations. |
-| **SC-27** | Localized Segment Recovery Test | `test_gsa_wal_concurrency_isolation` | Asserts that failing 2 blocks in a 100-block run retries only those 2 blocks. |
-| **SC-28** | Infrastructure Preemption Recovery | `test_vast_create_and_destroy_lifecycle` | Proves VM preemption triggers recovery by replaying event log. |
-| **SC-29** | Multi-Scene Visual Cuts Test | `test_audio_loudness_normalizer_compilation` | Asserts 10-scene transitions are simple cuts with zero blank frame gaps. |
-| **SC-30** | Accumulative Sync Drift Correction | `test_coordinate_timeline_dynamic_drift` | Asserts timing sync drift is trimmed below 0.05 seconds. |
-| **SC-31** | Audio Loudness Normalization | `test_audio_loudness_normalizer_compilation` | Verifies final audio gain normalization of -16.0 LUFS +/- 1.0 LUFS. |
-| **SC-32** | End-to-End Orchestration | `test_scenario_agent_live_prompt_turn` | Verifies pipeline phase progression from script to final cuts. |
-| **SC-33** | Scenario-to-Audio Happy Path | `test_audio_agent_tts_job_queueing` | Asserts Scenario block updates trigger immediate audio queueing. |
-| **SC-34** | Muxing and Timeline Composition | `test_audio_loudness_normalizer_compilation` | Asserts FFmpeg output container meets web specifications (H.264/AAC). |
-| **SC-35** | Integrated Dynamic Offset Shift | `test_coordinate_timeline_dynamic_drift` | Proves DurationAdjusted events shift movie length precisely by the delta change. |
-| **SC-36** | Perplexity Web Fact-checking | `test_perplexity_verify_live` | Verifies that perplexity_verify queries the live API and parses citations correctly. |
+| **SC-25** | Scale Timeline Integrity Test | `test_covering_gsa_wal_concurrency_isolation` | Compiles 120-block timeline checking for perfect WAL database durability. |
+| **SC-26** | Multi-VM Fleet Coordination Test | `test_covering_provisioner_vast_offers_search` | Asserts tasks route to correct VM configurations. |
+| **SC-27** | Localized Segment Recovery Test | `test_covering_gsa_wal_concurrency_isolation` | Asserts that failing 2 blocks in a 100-block run retries only those 2 blocks. |
+| **SC-28** | Infrastructure Preemption Recovery | `test_covering_vast_create_and_destroy_lifecycle` | Proves VM preemption triggers recovery by replaying event log. |
+| **SC-29** | Multi-Scene Visual Cuts Test | `test_covering_audio_loudness_normalizer_compilation` | Asserts 10-scene transitions are simple cuts with zero blank frame gaps. |
+| **SC-30** | Accumulative Sync Drift Correction | `test_covering_coordinate_timeline_dynamic_drift` | Asserts timing sync drift is trimmed below 0.05 seconds. |
+| **SC-31** | Audio Loudness Normalization | `test_covering_audio_loudness_normalizer_compilation` | Verifies final audio gain normalization of -16.0 LUFS +/- 1.0 LUFS. |
+| **SC-32** | End-to-End Orchestration | `test_covering_scenario_agent_live_prompt_turn` | Verifies pipeline phase progression from script to final cuts. |
+| **SC-33** | Scenario-to-Audio Happy Path | `test_covering_audio_agent_tts_job_queueing` | Asserts Scenario block updates trigger immediate audio queueing. |
+| **SC-34** | Muxing and Timeline Composition | `test_covering_audio_loudness_normalizer_compilation` | Asserts FFmpeg output container meets web specifications (H.264/AAC). |
+| **SC-35** | Integrated Dynamic Offset Shift | `test_covering_coordinate_timeline_dynamic_drift` | Proves DurationAdjusted events shift movie length precisely by the delta change. |
+| **SC-36** | Perplexity Web Fact-checking | `test_covering_perplexity_verify_live` | Verifies that perplexity_verify queries the live API and parses citations correctly. |
 
 ---
 

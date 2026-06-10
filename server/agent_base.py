@@ -40,6 +40,17 @@ _original_async_send = httpx.AsyncClient.send
 _original_sync_send = httpx.Client.send
 
 async def _patched_async_send(self, request, *args, **kwargs):
+    try:
+        url_str = str(request.url)
+        if any(x in url_str for x in ["localhost", "127.0.0.1"]):
+            request.extensions["timeout"] = {
+                "connect": None,
+                "read": None,
+                "write": None,
+                "pool": None
+            }
+    except Exception:
+        pass
     resp = await _original_async_send(self, request, *args, **kwargs)
     try:
         agent = active_agent_var.get()
@@ -56,6 +67,17 @@ async def _patched_async_send(self, request, *args, **kwargs):
     return resp
 
 def _patched_sync_send(self, request, *args, **kwargs):
+    try:
+        url_str = str(request.url)
+        if any(x in url_str for x in ["localhost", "127.0.0.1"]):
+            request.extensions["timeout"] = {
+                "connect": None,
+                "read": None,
+                "write": None,
+                "pool": None
+            }
+    except Exception:
+        pass
     resp = _original_sync_send(self, request, *args, **kwargs)
     try:
         agent = active_agent_var.get()
@@ -708,9 +730,8 @@ class DryRunModel(Model):
                             if not matching_job:
                                 # Queue TTS job
                                 text = (
-                                    "effect: queue_job(\n"
+                                    "effect: queue_audio_job(\n"
                                     f"  job_id=\"job_audio_{block_id}\",\n"
-                                    "  job_type=\"tts\",\n"
                                     f"  scene_num={scene_num},\n"
                                     f"  block_id=\"{block_id}\",\n"
                                     f"  slot_id=\"{slot_key}\",\n"
@@ -816,9 +837,8 @@ class DryRunModel(Model):
                                 # Queue video job
                                 job_id = f"job_video_{block_id}"
                                 text = (
-                                    "effect: queue_job(\n"
+                                    "effect: queue_video_job(\n"
                                     f"  job_id=\"{job_id}\",\n"
-                                    "  job_type=\"ltx\",\n"
                                     f"  scene_num={scene_num},\n"
                                     f"  block_id=\"{block_id}\",\n"
                                     f"  slot_id=\"{slot_key}\",\n"

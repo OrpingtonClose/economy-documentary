@@ -34,9 +34,8 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
   Scenario: Ingesting a screenplay and generating script blocks via LLM
     Given the Scenario Agent is initialized with the production DeepSeek model
     When a raw screenplay text prompt is POSTed to the Scenario Agent
-    Then the agent should query the live LLM API
-    And the response must be parsed into valid ScriptBlock models
-    And the Scenario Agent must append an UpdateScript effect to the event store
+    Then the agent should query the live LLM API and output its reasoning in the response
+    And the response must be parsed into valid ScriptBlock models and written to the event store
   ```
 * **Cover Test (`test_scenario_agent_live_prompt_turn`)**: Invokes a live turn of the Scenario Agent using the DeepSeek API key, verifies HTTPS round-trip, and parses the output script blocks using `instructor`.
 
@@ -65,58 +64,82 @@ For each of the 10 core simulated capabilities, we define the BDD scenario and i
 ### SC-04: VM Worker Health
 * **BDD Scenario**:
   ```gherkin
-  Scenario: Probing the boot status of the remote worker container
-    Given a running GPU VM is provisioned on port 9001
+  Scenario: Probing the boot status of a loopback container on port 9001
+    Given a running loopback mock GPU worker is spawned on port 9001
     When an HTTP GET request is sent to the worker URL
     Then the server must respond with status 200
     And the Content-Type header must be "text/plain"
-    And the response body must be a plain natural language status description
+    And the response body must be a plain natural language status description containing "healthy and active", "RTX 3090", "Qwen3-TTS", and "LTX-2.3"
   ```
-* **Cover Test (`test_ssh_handshake_and_docker_health`)**: Spawns [mock_gpu_worker.py](file:///Users/orpington/Documents/economy-documentary-work/scripts/mock_gpu_worker.py) in the background to verify the API contract and port bindings over loopback sockets.
+* **Cover Test (`test_ssh_handshake_and_docker_health`)**: Spawns mock_gpu_worker.py in the background to verify the API contract and port bindings over loopback sockets.
 
 ### SC-05 & SC-06: TTS & LTX Job Dispatch
-* **BDD Scenario**:
+* **BDD Scenario 1**:
   ```gherkin
-  Scenario: Queueing narration and video jobs autonomously
-    Given a new script block is appended to the event store
-    When the Audio and Video agents poll GSA
-    Then the Audio Agent must queue a TTS job for narration slots (A1:)
-    And the Video Agent must queue an LTX job for visual slots (V1:)
-    And jobs must remain grouped and isolated by track type
+  Scenario: Queueing narration jobs via live LLM reasoning
+    Given a script block is appended to the event store and GSA is running locally
+    When the Audio Agent is run via execute_agent_turn with the live DeepSeek API
+    Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
+    And it must emit a QueueAudioJob event for the narration slot (A1:)
+    And the event must not contain a job_type attribute
+  ```
+* **BDD Scenario 2**:
+  ```gherkin
+  Scenario: Queueing video jobs via live LLM reasoning
+    Given a script block is appended to the event store and GSA is running locally
+    When the Video Agent is run via execute_agent_turn with the live DeepSeek API
+    Then the agent must query the DeepSeek API and reflect its reasoning in latest_monologues
+    And it must emit a QueueVideoJob event for the visual slot (V1:)
+    And the event must not contain a job_type attribute
   ```
 * **Cover Test (`test_audio_agent_tts_job_queueing` & `test_video_agent_ltx_job_queueing`)**: Seeds GSA slots and asserts that agents dynamically parse state and queue jobs with correct parameters.
 
 ### SC-08: Timeline Dynamic Offset Cascade
 * **BDD Scenario**:
   ```gherkin
-  Scenario: recalculating slot timings on duration adjustment
-    Given a timeline containing 3 blocks is active
+  Scenario: Recalculating slot timings on duration adjustment
+    Given a timeline containing 3 blocks is active and GSA is running locally
     When a DurationAdjusted event increases block 1 duration by 2.0 seconds
-    Then GSA must update the start/end coordinates of blocks 2 and 3
-    And the total timeline duration must increase exactly by 2.0 seconds
+    Then the live GSA HTTP GET response must show the total timeline duration increased exactly by 2.0 seconds
+    And a direct sqlean query on the database must calculate the duration difference correctly
   ```
-* **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math directly on the GSA projection engine.
+* **Cover Test (`test_coordinate_timeline_dynamic_drift`)**: Verifies offset shifting math using both the live GSA HTTP endpoint and the local CoordinateTimeline projection with sqlean.
+
+### SC-29/SC-31/SC-34: Audio Loudness Normalization & Assembly
+* **BDD Scenario**:
+  ```gherkin
+  Scenario: Compiling media and applying loudness normalization
+    Given a timeline containing a loud narration clip is active
+    When the Assembly Agent renders the final cut movie
+    Then the output movie must contain a normalized audio track
+    And the loudness of the final track must measure -16.0 LUFS +/- 1.0 LUFS
+    And the emitted PipelineComplete event must conform to the expected schema
+  ```
+* **Cover Test (`test_audio_loudness_normalizer_compilation`)**: Invokes the actual production `run_movie_assembly` module, processes the loud wav through the real FFmpeg normalizer filter, measures final track LUFS, and verifies event schema.
 
 ### SC-09: Budget Gates
 * **BDD Scenario**:
   ```gherkin
-  Scenario: Aborting execution when charges exceed budget
-    Given a pipeline budget limit of 1.00 USD
-    When cumulative charges (tokens + GPU leases) cross 1.01 USD
-    Then GSA must transition the current phase to "aborted"
-    And the Provisioner must destroy all running VMs
+  Scenario: Aborting execution and destroying VMs when budget is exceeded
+    Given a pipeline budget limit of 1.00 USD is configured in the event store
+    And a BudgetExceeded event with spent cost 1.05 USD is recorded in the event store
+    And a running GPU VM is provisioned on Vast.ai
+    When the Provisioner Agent turn is executed via execute_agent_turn to deallocate the active VM autonomously
+    And a PipelineAborted event is appended by the operator
+    Then the Provisioner must destroy the running Vast.ai VM instance and emit a VMDeallocated event
+    And GSA must transition the current phase to "aborted"
   ```
-* **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation and asserts pipeline state abort triggers.
+* **Cover Test (`test_budget_limit_aborted_gate`)**: Seeds a cost cap violation, runs the Provisioner agent to autonomously destroy active VMs, and verifies the aborted phase transition.
 
 ### SC-10: WAL Concurrency
 * **BDD Scenario**:
   ```gherkin
   Scenario: Replaying log events under parallel writes
-    Given GSA is configured in SQLite WAL mode
-    When multiple microservices write events concurrently
-    Then GSA must reconstruct projections from sequence 0 without locking database transactions
+    Given GSA database is configured in SQLite WAL mode
+    When multiple subprocesses spawn to write events concurrently using direct SQLite connection inserts
+    Then a local EventStore replay must reconstruct projections from sequence 0 without database lock-outs
   ```
-* **Cover Test (`test_gsa_wal_concurrency_isolation`)**: Asserts lock-free writes and state reconstruction under high event loads.
+* **Cover Test (`test_gsa_wal_concurrency_isolation`)**: Asserts lock-free writes and state reconstruction under high parallel database writes.
 
 ---
 

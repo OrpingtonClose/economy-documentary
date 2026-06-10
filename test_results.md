@@ -9,7 +9,7 @@
             <p style="margin: 4px 0 0 0; font-size: 0.8rem; color: #94a3b8;">Maximum Capacity Stress Test Execution</p>
         </div>
         <div style="font-size: 0.8rem; color: #94a3b8; font-weight: 600;">
-            Elapsed: <strong style="color: #ffffff;">329.0s</strong> | Spent: <strong style="color: #10b981;">$0.00</strong>
+            Elapsed: <strong style="color: #ffffff;">64.8s</strong> | Spent: <strong style="color: #10b981;">$0.00</strong>
         </div>
     </div>
 
@@ -25,12 +25,12 @@
                 <span style="display: inline-flex; width: 16px; height: 16px; background: #64748b; color: #0f172a; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;">2</span>Audio Reconcile
             </div>
             <div style="color: #475569;">➔</div>
-            <div style="color: #64748b; background: transparent; border: 1px solid rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 0.4rem;">
-                <span style="display: inline-flex; width: 16px; height: 16px; background: #64748b; color: #0f172a; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;">3</span>Video Production
+            <div style="color: #ffffff; background: rgba(129, 140, 248, 0.15); border: 1px solid rgba(129, 140, 248, 0.3); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 0.4rem;">
+                <span style="display: inline-flex; width: 16px; height: 16px; background: #818cf8; color: #0f172a; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;">3</span>Video Production
             </div>
             <div style="color: #475569;">➔</div>
-            <div style="color: #ffffff; background: rgba(129, 140, 248, 0.15); border: 1px solid rgba(129, 140, 248, 0.3); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 0.4rem;">
-                <span style="display: inline-flex; width: 16px; height: 16px; background: #818cf8; color: #0f172a; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;">4</span>Done
+            <div style="color: #64748b; background: transparent; border: 1px solid rgba(255,255,255,0.05); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 0.4rem;">
+                <span style="display: inline-flex; width: 16px; height: 16px; background: #64748b; color: #0f172a; border-radius: 50%; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700;">4</span>Done
             </div>
         </div>
     </div>

@@ -30,7 +30,6 @@ inspection UI with no downstream fan-out.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import os
 import re
@@ -78,7 +77,22 @@ def _vast_cmd(args: list[str]) -> Any:
     match = re.search(r"(\{.*\})", stdout, re.DOTALL)
     if match:
         try:
-            return ast.literal_eval(match.group(1))
+            dict_str = match.group(1)
+            code = compile(dict_str, "<string>", "eval")
+            namespace = {
+                "__builtins__": {
+                    "dict": dict,
+                    "list": list,
+                    "str": str,
+                    "int": int,
+                    "float": float,
+                    "bool": bool,
+                    "True": True,
+                    "False": False,
+                    "None": None,
+                }
+            }
+            return eval(code, namespace)
         except (ValueError, SyntaxError):
             pass
     return stdout

@@ -145,7 +145,7 @@ To maintain strict segregation of concerns and avoid polluting production agent 
 To isolate testing-specific simulator implementations (such as mock TTS or Ltx GPU generators) from production ASGI servers with zero environment variables, temporary files, or central registry maps:
 
 1. **Direct Agent Execution:** Each agent application is defined to allow direct execution as a script (e.g. `python server/agents/audio/app.py <port> <test_module_name>`).
-2. **CommandLine Argument Passing:** The bash layer (or test runner) launches the required agent scripts in the background, passing the port and the current test module name (e.g. `tests.units.test_bdd_tts_fleet_cold_start`) as direct CLI arguments.
+2. **CommandLine Argument Passing:** The bash layer (or test runner) launches the required agent scripts in the background, passing the port and the current test module name (e.g. `tests.units.test_simulation_bdd_tts_fleet_cold_start`) as direct CLI arguments.
 3. **In-Memory Capability Resolution:** On startup, the agent script parses its arguments, dynamically imports the specified test module, scans for any classes ending with `Simulator` or `Capability`, instantiates them, and passes them to `make_agent_app(role, extra_capabilities=...)`.
 4. **Clean Production Isolation:** When imported normally (e.g., in a production pipeline run), the agent apps bypass command-line argument parsing and load with empty capabilities, keeping the production core completely clean.
 
@@ -169,6 +169,42 @@ To prevent LLMs and agents from bypass-mocking the 10 Simulation Cover (SC) inte
 
 3. **LLM BDD Judge Correlation:** 
    The BDD Judge evaluates test completion and cross-references domain-level effects with these execution trace logs. If a test claims a domain action completed (e.g. `VMAllocated`, `AudioGenerated`) but the SQLite Event Store lacks corresponding trace logs proving a real command was run, API query sent, or file written, the judge rejects the run and marks the verdict as `fail` (Mocking Detected).
+
+---
+
+### 2.6 Legitimate BDD Simulators
+
+A legitimate BDD simulator is an in-memory or inline simulator capability designed strictly for **simulation tests** to model capability execution. To be legitimate, it must satisfy the following architectural criteria:
+
+1. **Fully Backed by Covering Tests**:
+   Every capability modeled by a BDD simulator in **simulation tests** must correspond to a live, non-simulated execution path. This execution path must be validated by one or more **covering tests** to verify that the simulator's logic matches real-world performance, API schemas, and physical operations.
+
+2. **Audited by Architecture Tests**:
+   All BDD simulators and the **simulation tests** that leverage them are subject to verification by **architecture tests**. These **architecture tests** run agentic audits to ensure the simulator is not bypassing invariants.
+
+3. **Compliant with Architecture Test Invariants**:
+   Under the rules checked by the **architecture tests**, BDD simulators in **simulation tests** must not use forbidden mocking libraries, unconditional skips, time-based timeouts, or trivial assertions. They must instead run as inline capability classes subclassing production interfaces, with their real-world behaviors validated via **covering tests**.
+
+---
+
+### 2.7 Test Suite Execution Order & Early Stopping Rules
+
+To ensure maximum safety and early detection of architectural deviations, the test suite executes in a strict, sequenced pipeline managed by pytest markers and hooks (`tests/conftest.py`):
+
+1. **Architecture Tests First (Immediate Stop)**:
+   * **Prefix**: `test_architecture_`
+   * **Role**: Runs the agentic architecture auditor checking test files for cheating or mock bypasses.
+   * **Execution Rule**: This category must run first. If any **architecture tests** fail, execution aborts immediately (`pytest.exit`), preventing any subsequent tests from executing.
+
+2. **Covering Tests Second (Totality and Gatekeeper)**:
+   * **Prefix**: `test_covering_`
+   * **Role**: Validates live-boundary components (network, physical boundaries, external CLI wrappers) without mocking.
+   * **Execution Rule**: Runs after **architecture tests**. If any **covering test** fails, the runner continues executing the remaining **covering tests** in totality to get a complete report of live boundary failures. However, if *any* **covering test** fails, the suite will not proceed to the next stage.
+
+3. **Simulation Tests Third (Conditional Execution)**:
+   * **Prefix**: `test_simulation_`
+   * **Role**: Validates complex agent behaviors and recovery pathways in simulated in-memory/inline capability environments.
+   * **Execution Rule**: Runs only if all **covering tests** passed. If any **covering test** failed, all **simulation tests** are skipped entirely.
 
 ---
 

@@ -98,11 +98,35 @@ class _QueueJobEffect(BaseModel):
     params: dict = Field(default_factory=dict)
 
 
+class _BaseJobQueueEffect(BaseModel):
+    job_id: str
+    scene_num: int = Field(..., ge=1)
+    block_id: str = Field(..., description="The block ID (e.g., 's1_b1' or 's2_b3'). Do NOT include the track prefix.")
+    slot_id: str = Field(..., description="The canonical slot address in GSA (e.g., 'A1:1:s1_b1' or 'V1:2:s2_b3').")
+    params: dict = Field(default_factory=dict)
+
+
+class _QueueAudioJobEffect(_BaseJobQueueEffect):
+    kind: Literal["queue_audio_job"] = "queue_audio_job"
+
+
+class _QueueVideoJobEffect(_BaseJobQueueEffect):
+    kind: Literal["queue_video_job"] = "queue_video_job"
+
+
 class _JobStartedEffect(BaseModel):
     kind: Literal["job_started"] = "job_started"
     job_id: str
     vm_instance_id: str
     started_at: float = Field(default_factory=time.time)
+
+
+class _AudioJobStartedEffect(_JobStartedEffect):
+    kind: Literal["audio_job_started"] = "audio_job_started"
+
+
+class _VideoJobStartedEffect(_JobStartedEffect):
+    kind: Literal["video_job_started"] = "video_job_started"
 
 
 class _JobCompletedEffect(BaseModel):
@@ -119,6 +143,14 @@ class _JobCompletedEffect(BaseModel):
     measurements: list[float] = Field(default_factory=list)
 
 
+class _AudioJobCompletedEffect(_JobCompletedEffect):
+    kind: Literal["audio_job_completed"] = "audio_job_completed"
+
+
+class _VideoJobCompletedEffect(_JobCompletedEffect):
+    kind: Literal["video_job_completed"] = "video_job_completed"
+
+
 class _JobFailedEffect(BaseModel):
     kind: Literal["job_failed"] = "job_failed"
     job_id: str
@@ -129,11 +161,27 @@ class _JobFailedEffect(BaseModel):
     retry_count: int = 0
 
 
+class _AudioJobFailedEffect(_JobFailedEffect):
+    kind: Literal["audio_job_failed"] = "audio_job_failed"
+
+
+class _VideoJobFailedEffect(_JobFailedEffect):
+    kind: Literal["video_job_failed"] = "video_job_failed"
+
+
 class _JobRequeuedEffect(BaseModel):
     kind: Literal["job_requeued"] = "job_requeued"
     job_id: str
     reason: str = Field(..., min_length=1)
     new_params: dict | None = None
+
+
+class _AudioJobRequeuedEffect(_JobRequeuedEffect):
+    kind: Literal["audio_job_requeued"] = "audio_job_requeued"
+
+
+class _VideoJobRequeuedEffect(_JobRequeuedEffect):
+    kind: Literal["video_job_requeued"] = "video_job_requeued"
 
 
 class _JobApprovedEffect(BaseModel):
@@ -142,6 +190,14 @@ class _JobApprovedEffect(BaseModel):
     artifact_uri: str
     quality_notes: str = ""
     reviewed_by: str = "agent"
+
+
+class _AudioJobApprovedEffect(_JobApprovedEffect):
+    kind: Literal["audio_job_approved"] = "audio_job_approved"
+
+
+class _VideoJobApprovedEffect(_JobApprovedEffect):
+    kind: Literal["video_job_approved"] = "video_job_approved"
 
 
 class _AudioGeneratedEffect(BaseModel):
@@ -414,11 +470,23 @@ _EffectUnion = Annotated[
         _DeleteSceneEffect,
         _ReorderScenesEffect,
         _QueueJobEffect,
+        _QueueAudioJobEffect,
+        _QueueVideoJobEffect,
         _JobStartedEffect,
+        _AudioJobStartedEffect,
+        _VideoJobStartedEffect,
         _JobCompletedEffect,
+        _AudioJobCompletedEffect,
+        _VideoJobCompletedEffect,
         _JobFailedEffect,
+        _AudioJobFailedEffect,
+        _VideoJobFailedEffect,
         _JobRequeuedEffect,
+        _AudioJobRequeuedEffect,
+        _VideoJobRequeuedEffect,
         _JobApprovedEffect,
+        _AudioJobApprovedEffect,
+        _VideoJobApprovedEffect,
         _AudioGeneratedEffect,
         _AudioMeasuredEffect,
         _DurationAdjustedEffect,
@@ -510,7 +578,7 @@ You are an expert document parser for a documentary pipeline.
 Your job: read free-form agent text and extract structured EFFECTS.
 
 CRITICAL RULES:
-1. Agents write in natural prose. Your job is to FIND the concrete data.
+1. Agents write in natural prose or sometimes output Python-like function calls (e.g., `effect: update_script(blocks=[ScriptBlock(...)])`). Your job is to parse these format styles and extract the concrete data.
 2. NEVER hallucinate. If the agent mentions an action but doesn't give actual data, DO NOT invent it.
 3. Extract FULL CONTENT, not summaries. If the agent quotes narration, extract the complete quote.
 4. If no actionable data exists, return noop.
@@ -545,10 +613,10 @@ def _ds_async_client() -> instructor.AsyncInstructor:
 # Permitted kinds mapping per role
 ROLE_PERMITTED_KINDS = {
     "scenario": ["update_script", "delete_scene", "reorder_scenes", "clarification_request", "noop"],
-    "audio": ["queue_job", "job_approved", "job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request", "noop"],
-    "video": ["queue_job", "job_approved", "job_requeued", "merge_into_otio", "clarification_request", "noop"],
+    "audio": ["queue_job", "queue_audio_job", "job_approved", "audio_job_approved", "job_requeued", "audio_job_requeued", "duration_adjusted", "reconciliation_failed", "reconciliation_complete", "clarification_request", "noop"],
+    "video": ["queue_job", "queue_video_job", "job_approved", "video_job_approved", "job_requeued", "video_job_requeued", "merge_into_otio", "clarification_request", "noop"],
     "assembly": ["pipeline_complete", "production_failed", "clarification_request", "noop"],
-    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "job_failed", "job_started", "clarification_request", "noop"],
+    "provisioner": ["vm_allocated", "vm_deallocated", "vm_provision_failed", "vm_observed", "job_completed", "audio_job_completed", "video_job_completed", "job_failed", "audio_job_failed", "video_job_failed", "job_started", "audio_job_started", "video_job_started", "clarification_request", "noop"],
     "maintainer": ["human_instruction", "agent_loop_detected", "pipeline_aborted", "clarification_request", "noop"],
 }
 
@@ -606,68 +674,6 @@ async def parse_agent_text_multi(agent_id: str, text: str) -> list[Effect]:
     """
     permitted = ROLE_PERMITTED_KINDS.get(agent_id, ["noop", "clarification_request"])
 
-    # Try deterministic parsing first (fast path for simulation/formatted calls)
-    det_parsed = None
-    try:
-        import re
-        import ast
-        # Look for effect: <name>(<args>)
-        match = re.search(r"effect:\s*([a-zA-Z0-9_]+)\s*\(", text)
-        if match:
-            func_name = match.group(1)
-            start_idx = match.end()
-            paren_count = 1
-            end_idx = start_idx
-            while end_idx < len(text) and paren_count > 0:
-                char = text[end_idx]
-                if char == '(':
-                    paren_count += 1
-                elif char == ')':
-                    paren_count -= 1
-                end_idx += 1
-            if paren_count == 0:
-                args_str = text[start_idx:end_idx-1].strip()
-                # Parse keyword arguments using AST
-                tree = ast.parse(f"f({args_str})")
-                call_node = tree.body[0].value
-                kwargs = {}
-                for kw in call_node.keywords:
-                    kwargs[kw.arg] = ast.literal_eval(kw.value)
-                det_parsed = {"kind": func_name, **kwargs}
-    except Exception as e:
-        logger.debug(f"Deterministic parser failed: {e}")
-
-    if det_parsed is not None:
-        parsed_kind = det_parsed.get("kind")
-        if parsed_kind not in permitted:
-            logger.warning(f"Agent {agent_id} tried to emit non-permitted kind '{parsed_kind}', falling back to noop")
-            return [NoOp(agent=agent_id, reason=f"Attempted non-permitted kind '{parsed_kind}'")]
-
-        model_class = KIND_TO_MODEL.get(parsed_kind)
-        if model_class is None:
-            return [NoOp(agent=agent_id, reason=f"Unknown effect kind: {parsed_kind}")]
-
-        # Construct the actual Effect subclass, injecting agent
-        data = dict(det_parsed)
-        data.pop("kind", None)
-        data["agent"] = agent_id
-
-        try:
-            effect = model_class.model_validate(data)
-            # Tier 3 validation: State Invariants
-            return await validate_state_invariants(agent_id, effect)
-        except Exception as e:
-            exc = e
-            return [
-                ClarificationRequest(
-                    agent=agent_id,
-                    target_agent="human",
-                    parser_category=agent_id,
-                    raw_text=text,
-                    failure_reason=f"Model validation failed: {exc}",
-                    question=f"The parsed event model validation failed: {exc}. Raw agent text: '{text}'"
-                )
-            ]
 
     sys_prompt = _SYSTEM_PROMPT.format(permitted_kinds=", ".join(permitted))
 

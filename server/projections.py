@@ -485,12 +485,19 @@ class Jobs(Projection):
             self._resolve_failures_on_script_update(us_event)
             self._sync_from_otio(us_event)
 
-    def _on_queue(self, event: QueueJob) -> None:
+    def _on_queue(self, event: Any) -> None:
         job_id = event.job_id
         if job_id not in self.jobs:
+            if event.kind == "queue_audio_job" or event.__class__.__name__ == "QueueAudioJob":
+                job_type = "tts"
+            elif event.kind == "queue_video_job" or event.__class__.__name__ == "QueueVideoJob":
+                job_type = "ltx"
+            else:
+                job_type = getattr(event, "job_type", "tts")
+            
             job = JobState(
                 job_id=job_id,
-                job_type=event.job_type,
+                job_type=job_type,
                 slot_id=getattr(event, "slot_id", ""),
             )
             job.params = getattr(event, "params", {})
@@ -500,7 +507,7 @@ class Jobs(Projection):
             if block_id:
                 self.dirty_blocks.add(block_id)
                 self.clean_blocks.discard(block_id)
-                if event.job_type == "tts":
+                if job_type == "tts":
                     self.block_attempts[block_id] += 1
 
     def _on_start(self, event: JobStarted) -> None:
@@ -820,6 +827,8 @@ class OTIOSlotState(BaseModel):
     artifact_uri: str | None = None
     visual_notes: str = ""
     visual_concepts: str = ""
+    start_sec: float | None = None
+    end_sec: float | None = None
 
 
 class OTIOResponse(BaseModel):
